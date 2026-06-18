@@ -20,3 +20,6 @@ Thumbs.db
 
 # logs
 *.log
+
+# GSD planning docs (local-only)
+.planning/
