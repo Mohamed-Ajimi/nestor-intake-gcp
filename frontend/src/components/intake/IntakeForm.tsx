@@ -1,0 +1,478 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import type { IntakeField, IntakePayload, IntakeSection } from "@/lib/intake-types";
+import { FieldRenderer } from "./FieldRenderer";
+import { toast } from "sonner";
+import {
+  ValidationDiffForField,
+  sectionHasChange,
+  type Proposals,
+} from "./ValidationDiff";
+
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+function validateField(field: IntakeField, value: any): string | null {
+ const isEmpty =
+ value === undefined ||
+ value === null ||
+ value === "" ||
+ (Array.isArray(value) && value.length === 0);
+
+ if (field.required && isEmpty) return "Verplicht veld";
+ if (isEmpty) return null;
+
+ if (field.type === "email" && typeof value === "string") {
+ if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return "Ongeldig e-mailadres";
+ }
+ if (field.type === "longtext" && field.validation?.min_length) {
+ if (typeof value === "string" && value.length < field.validation.min_length)
+ return `Minstens ${field.validation.min_length} tekens`;
+ }
+ if (field.type === "list" && Array.isArray(value)) {
+ if (field.min_items && value.length < field.min_items)
+ return `Minstens ${field.min_items} items`;
+ }
+ return null;
+}
+
+function isFieldEmpty(value: any): boolean {
+ return (
+ value === undefined ||
+ value === null ||
+ value === "" ||
+ (Array.isArray(value) && value.length === 0)
+ );
+}
+
+function sectionMissingRequired(section: IntakeSection, answers: Record<string, any>): string[] {
+ const missing: string[] = [];
+ for (const f of section.fields) {
+ if (f.required && isFieldEmpty(answers[f.key])) missing.push(f.key);
+ }
+ return missing;
+}
+
+function sectionMissingSoft(section: IntakeSection, answers: Record<string, any>): IntakeField[] {
+ return section.fields.filter(
+ (f) => f.soft_required && isFieldEmpty(answers[f.key]),
+ );
+}
+
+export function IntakeForm({
+ payload,
+ token,
+}: {
+ payload: IntakePayload;
+ token: string;
+}) {
+ const schema = payload.template.schema;
+ const editable = payload.editable;
+ const intakeId = payload.intake.id;
+
+ const storageKey = `intake-${token}`;
+ const [answers, setAnswers] = useState<Record<string, any>>(() => {
+ if (typeof window !== "undefined") {
+ try {
+ const cached = localStorage.getItem(storageKey);
+ if (cached) return { ...payload.answers, ...JSON.parse(cached) };
+ } catch {}
+ }
+ return payload.answers ?? {};
+ });
+
+ const [currentStep, setCurrentStep] = useState(0);
+ const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+ const [errors, setErrors] = useState<Record<string, string>>({});
+ const [softWarning, setSoftWarning] = useState<IntakeField[]>([]);
+ const [submitting, setSubmitting] = useState(false);
+ const [submitted, setSubmitted] = useState(payload.intake.status === "submitted");
+  const [confirmDialog, setConfirmDialog] = useState(false);
+  const [proposals, setProposals] = useState<Proposals | null>(null);
+  const isValidationPhase = payload.phase === "validation";
+
+  useEffect(() => {
+    if (!isValidationPhase || !supabase) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .schema("nestor" as never)
+        .from("skill_runs")
+        .select("output_parsed")
+        .eq("intake_id", intakeId)
+        .eq("skill_name", "nestor-intake")
+        .eq("status", "succeeded")
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cancelled) return;
+      const parsed = (data as any)?.output_parsed;
+      if (parsed && typeof parsed === "object") setProposals(parsed as Proposals);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isValidationPhase, intakeId]);
+
+ const saveTimers = useRef<Record<string, any>>({});
+
+ const sections = useMemo(
+ () =>
+ schema.sections.filter((s) => {
+ if (s.admin_only) return false;
+ return !s.phase || s.phase === (payload.phase ?? "intake");
+ }),
+ [schema.sections, payload.phase],
+ );
+ const section = sections[currentStep];
+ const isLast = currentStep === sections.length - 1;
+
+ const completedSections = useMemo(() => {
+ return sections.map((s) => {
+ const allRequiredFilled = sectionMissingRequired(s, answers).length === 0;
+ const anyFilled = s.fields.some((f) => !isFieldEmpty(answers[f.key]));
+ return allRequiredFilled && anyFilled;
+ });
+ }, [sections, answers]);
+
+ const saveField = useCallback(
+ async (key: string, value: any, attempt = 0) => {
+ if (!supabase || !editable) return;
+ setSaveStatus("saving");
+ const { error } = await supabase.rpc("save_intake_answer", {
+ p_token: token,
+ p_field_key: key,
+ p_value: value,
+ });
+ if (error) {
+ if (attempt === 0) {
+ setTimeout(() => saveField(key, value, 1), 2000);
+ } else {
+ setSaveStatus("error");
+ toast.error("Opslaan mislukt: " + error.message);
+ }
+ return;
+ }
+ setSaveStatus("saved");
+ },
+ [token, editable],
+ );
+
+ const handleChange = useCallback(
+ (key: string, value: any) => {
+ setAnswers((prev) => {
+ const next = { ...prev, [key]: value };
+ try {
+ localStorage.setItem(storageKey, JSON.stringify(next));
+ } catch {}
+ return next;
+ });
+ setErrors((e) => {
+ const { [key]: _, ...rest } = e;
+ return rest;
+ });
+
+ clearTimeout(saveTimers.current[key]);
+ saveTimers.current[key] = setTimeout(() => saveField(key, value), 800);
+ },
+ [saveField, storageKey],
+ );
+
+ // clear localStorage when fully submitted
+ useEffect(() => {
+ if (submitted) {
+ try {
+ localStorage.removeItem(storageKey);
+ } catch {}
+ }
+ }, [submitted, storageKey]);
+
+ const goToSection = (idx: number) => {
+ setCurrentStep(idx);
+ setSoftWarning([]);
+ if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+ };
+
+ const validateCurrent = (): boolean => {
+ const newErrors: Record<string, string> = {};
+ for (const f of section.fields) {
+ const err = validateField(f, answers[f.key]);
+ if (err) newErrors[f.key] = err;
+ }
+ setErrors(newErrors);
+ if (Object.keys(newErrors).length > 0) return false;
+ const soft = sectionMissingSoft(section, answers);
+ setSoftWarning(soft);
+ return true;
+ };
+
+ const handleNext = () => {
+ if (!validateCurrent()) return;
+ goToSection(currentStep + 1);
+ };
+
+ const handleSubmit = async () => {
+ // validate all sections
+ let firstBadIdx = -1;
+ const allErrors: Record<string, string> = {};
+ sections.forEach((s, idx) => {
+ for (const f of s.fields) {
+ const err = validateField(f, answers[f.key]);
+ if (err) {
+ allErrors[f.key] = err;
+ if (firstBadIdx === -1) firstBadIdx = idx;
+ }
+ }
+ });
+ if (firstBadIdx !== -1) {
+ setErrors(allErrors);
+ setCurrentStep(firstBadIdx);
+ toast.error("Vul de verplichte velden in.");
+ return;
+ }
+ // soft check across all sections
+ const softMissing = sections.flatMap((s) =>
+ s.soft_gate ? sectionMissingSoft(s, answers) : [],
+ );
+ if (softMissing.length > 0 && !confirmDialog) {
+ setConfirmDialog(true);
+ return;
+ }
+ await doSubmit();
+ };
+
+ const doSubmit = async () => {
+ if (!supabase) return;
+ setSubmitting(true);
+ setConfirmDialog(false);
+ const { error } = await supabase.rpc("submit_intake", { p_token: token });
+ setSubmitting(false);
+ if (error) {
+ toast.error("Versturen mislukt: " + error.message);
+ return;
+ }
+ setSubmitted(true);
+ try {
+ localStorage.removeItem(storageKey);
+ } catch {}
+ };
+
+ if (submitted) {
+ const isValidation = payload.phase === "validation";
+ const title = isValidation
+ ? "Dank — je validatie is binnen."
+ : schema.submit.confirmation_title;
+ const msg = isValidation
+ ? "Nestor start nu met decompositie en research."
+ : (schema.submit.confirmation_message || "").replace(
+ /\{\{contact_email\}\}/g,
+ String(answers.contact_email ?? ""),
+ );
+ return (
+ <div className="flex min-h-screen items-center justify-center bg-paper px-6">
+ <div className="max-w-xl text-center">
+ <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-full bg-ink text-paper">
+ ✓
+ </div>
+ <h1 className="text-3xl font-semibold tracking-tight text-ink">
+ {title}
+ </h1>
+ <p className="mt-4 whitespace-pre-line leading-relaxed text-ink/60">{msg}</p>
+ </div>
+ </div>
+ );
+ }
+
+ const isValidation = payload.phase === "validation";
+ const displayTitle = isValidation
+ ? schema.title.replace(/\s*[—-]\s*Intake\s*$/i, "") + " — Validatie"
+ : schema.title;
+ const displaySubtitle = isValidation
+ ? "Bekijk Nestor's aanscherpingen, vink extra vragen aan, en geef akkoord."
+ : schema.subtitle;
+
+ return (
+ <div className="min-h-screen bg-paper text-ink">
+ <div className="mx-auto max-w-6xl px-6 py-12 md:py-16">
+        {/* Header */}
+        <header className="mb-10">
+          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">
+            Agenic
+          </p>
+          <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight md:text-4xl">
+            {displayTitle}
+          </h1>
+          {displaySubtitle && (
+            <p className="mt-3 max-w-2xl text-ink/60">{displaySubtitle}</p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 font-mono text-xs uppercase tracking-wider text-ink/60">
+            <span>Voor: {payload.client.name}</span>
+            {schema.estimated_minutes && !isValidation && <span>Richttijd: {schema.estimated_minutes} min</span>}
+          </div>
+ {isValidation && (
+ <div className="mt-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4 text-ink">
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">VALIDATIE</div>
+ <p className="font-sans text-sm text-ink">
+ Nestor heeft jullie intake aangescherpt. Loop hem éénmalig door,
+ vink eventuele extra vragen aan, en klik "Akkoord — verstuur" wanneer je klaar bent.
+ </p>
+ </div>
+ )}
+ </header>
+
+ <div className="grid gap-8 md:grid-cols-[320px_1fr]">
+ {/* Sidebar */}
+ <aside className="hidden md:block">
+ <nav className="sticky top-8 space-y-1">
+ {sections.map((s, idx) => {
+ const active = idx === currentStep;
+ const done = completedSections[idx];
+ const changed = isValidationPhase && sectionHasChange(s, answers, proposals);
+ return (
+   <button
+   key={s.id}
+   type="button"
+   onClick={() => goToSection(idx)}
+   className={
+   "flex w-full items-start gap-2 px-3 py-2 text-left font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors " +
+   (active
+   ? "bg-paper2 text-ink"
+   : "text-ink/60 hover:bg-ink/5 hover:text-ink")
+   }
+   >
+   <span className={"nav-mark " + (active ? "nav-mark-green" : "nav-mark-ink")} />
+   <span className="flex flex-1 flex-col gap-0.5">
+     <span className="break-words">{s.title}</span>
+     {changed && (
+       <span className="mt-0.5 inline-block self-start border border-agenic-yellow bg-paperLight px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink">
+         Aangepast
+       </span>
+     )}
+   </span>
+   </button>
+ );
+ })}
+ </nav>
+ </aside>
+
+ {/* Form area */}
+ <div>
+ <div className="mb-4 flex items-center justify-between">
+ <p className="text-sm text-ink/60">
+ Stap {currentStep + 1} / {sections.length}
+ </p>
+ <p className="text-xs text-ink/40">
+ {saveStatus === "saving" && "Opslaan…"}
+ {saveStatus === "saved" && "Alle wijzigingen opgeslagen"}
+ {saveStatus === "error" && <span className="text-red-600">Opslaan mislukt</span>}
+ </p>
+ </div>
+
+  <div className="border border-ink bg-paper p-6 md:p-10">
+  <div className="mb-6">
+  <h2 className="font-serif text-2xl font-normal lowercase tracking-tight text-ink">
+  {section.title}
+  {section.optional && (
+  <span className="ml-2 font-mono text-xs uppercase tracking-wider text-ink/40">
+  Optioneel
+  </span>
+  )}
+  </h2>
+ {section.description && (
+ <p className="mt-2 text-sm leading-relaxed text-ink/60">
+ {section.description}
+ </p>
+ )}
+ </div>
+
+ {softWarning.length > 0 && (
+ <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">LET OP</div>
+ <ul className="list-disc space-y-1 pl-5 text-ink font-sans">
+ {softWarning.map((f) => (
+ <li key={f.key}>{f.soft_required_message ?? `${f.label} is leeg`}</li>
+ ))}
+ </ul>
+ </div>
+ )}
+
+ <div className="space-y-6">
+ {section.fields.map((f) => (
+ <div key={f.key}>
+ <FieldRenderer
+ field={f}
+ value={answers[f.key]}
+ onChange={(v) => handleChange(f.key, v)}
+ intakeId={intakeId}
+ error={errors[f.key]}
+ disabled={!editable}
+ />
+ {isValidationPhase && (
+ <ValidationDiffForField
+ field={f}
+ answer={answers[f.key]}
+ proposals={proposals}
+ onRevert={async (key, value) => {
+ handleChange(key, value);
+ await saveField(key, value);
+ }}
+ />
+ )}
+ </div>
+ ))}
+ </div>
+ </div>
+
+  <div className="mt-6 flex items-center justify-between">
+  <button
+  type="button"
+  onClick={() => goToSection(Math.max(0, currentStep - 1))}
+  disabled={currentStep === 0}
+  className="btn-secondary disabled:opacity-40"
+  >
+  Vorige
+  </button>
+
+  {isLast ? (
+  <button
+  type="button"
+  onClick={handleSubmit}
+  disabled={submitting || !editable}
+  className="btn-primary"
+  >
+  {submitting ? "Versturen…" : isValidation ? "Akkoord — verstuur" : schema.submit.label}
+  </button>
+  ) : (
+  <button
+  type="button"
+  onClick={handleNext}
+  className="btn-primary"
+  >
+  Volgende
+  </button>
+  )}
+  </div>
+  </div>
+  </div>
+  </div>
+
+  {confirmDialog && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
+  <div className="max-w-md border border-ink bg-paper p-6">
+  <h3 className="font-serif text-xl lowercase">Weet je het zeker?</h3>
+  <p className="mt-2 text-sm text-ink/60">
+  Sommige aanbevolen velden zijn nog leeg. Wil je toch versturen?
+  </p>
+  <div className="mt-6 flex justify-end gap-2">
+  <button onClick={() => setConfirmDialog(false)} className="btn-secondary">
+  Annuleren
+  </button>
+  <button onClick={doSubmit} className="btn-primary">
+  Toch versturen
+  </button>
+  </div>
+  </div>
+  </div>
+  )}
+ </div>
+ );
+}

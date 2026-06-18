@@ -1,0 +1,22 @@
+# deps & builds
+node_modules/
+dist/
+.output/
+.vite/
+*.tsbuildinfo
+
+# env & secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+*.pat
+.pat
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# logs
+*.log
