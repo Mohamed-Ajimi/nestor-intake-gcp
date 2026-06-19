@@ -10,6 +10,11 @@ dependencies = [
     "pgvector==0.4.2",
     "cloud-sql-python-connector[pg8000]==1.20.2",
     "pg8000>=1.31,<1.32",
+    # Phase 2 runtime: FastAPI skeleton on Cloud Run (API-01) + typed env config.
+    # NOTE: the Cloud SQL connector + pg8000 driver are already declared above — do NOT re-add them.
+    "fastapi>=0.137",
+    "uvicorn[standard]>=0.49",
+    "pydantic-settings>=2.14",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +22,8 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "testcontainers[postgresql]",
+    # httpx backs fastapi.testclient.TestClient — declared explicitly (do not rely on transitive).
+    "httpx",
 ]
 
 # uv groups (preferred for `uv sync`). Mirrors the [project.optional-dependencies] dev set.
@@ -25,6 +32,8 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "testcontainers[postgresql]",
+    # httpx backs fastapi.testclient.TestClient — declared explicitly (do not rely on transitive).
+    "httpx",
 ]
 
 [tool.pytest.ini_options]
