@@ -43,7 +43,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from firebase_admin import auth
 
 from app.auth.dependencies import _bearer, get_current_identity
-from app.auth.session import sync_claims_from_membership
+from app.auth.session import SyncResult, sync_claims_from_membership
 
 # ANONYMOUS router: /auth/session must be reachable by an un-synced user (no role
 # claim yet), so this router carries NO get_current_identity dependency. The handler
@@ -84,14 +84,15 @@ def post_session(
     except auth.InvalidIdTokenError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
 
-    # sync_claims_from_membership returns True when it wrote a claim, False when the
-    # token already carried a role (already synced) OR no membership exists. The
-    # already-synced case carries a role claim, so distinguish it from the no-membership
-    # case by re-checking the decoded token: if a role is already present it is "synced".
-    wrote = sync_claims_from_membership(decoded)
-    if wrote or decoded.get("role") is not None:
+    # WR-04: branch on the AUTHORITATIVE 3-state SyncResult, never on a secondary
+    # re-inspection of `decoded`. The function alone decides synced-vs-unauthorized;
+    # WROTE and ALREADY_SYNCED are both "synced", NO_MEMBERSHIP is the only 403. This
+    # removes the fragile two-meanings-of-False disambiguation: a future change to the
+    # function cannot silently flip a no-membership 403 into a {"synced": true} 200.
+    result = sync_claims_from_membership(decoded)
+    if result in (SyncResult.WROTE, SyncResult.ALREADY_SYNCED):
         return {"synced": True}
 
-    # Verified user, but no membership row -> not authorized for any space (D-02: no
-    # account was created). 403, with NO claim written (T-03-11).
+    # Verified user, but no membership row (SyncResult.NO_MEMBERSHIP) -> not authorized
+    # for any space (D-02: no account was created). 403, NO claim written (T-03-11).
     raise HTTPException(status.HTTP_403_FORBIDDEN, "No membership — not authorized")

@@ -38,6 +38,7 @@ import pytest
 session_mod = pytest.importorskip("app.auth.session")
 
 sync_claims_from_membership = session_mod.sync_claims_from_membership
+SyncResult = session_mod.SyncResult
 
 
 @pytest.fixture(autouse=True)
@@ -94,11 +95,13 @@ def test_membership_found_writes_claim(engine):
                     )
                 )
 
-    decoded = {"uid": "uid-sync-1", "email": email}  # no role yet -> needs sync
+    # CR-01: the row has no provider_user_id yet (email-only seed), so this matches
+    # by email — which is now trusted ONLY when the token asserts email_verified.
+    decoded = {"uid": "uid-sync-1", "email": email, "email_verified": True}  # needs sync
     with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
         result = sync_claims_from_membership(decoded, session_factory=factory)
 
-    assert result is True
+    assert result is SyncResult.WROTE
     mock_set.assert_called_once()
     # The claim payload must carry the role (and the space_id) from the membership.
     _args, kwargs = mock_set.call_args
@@ -112,12 +115,57 @@ def test_no_membership_no_write(engine):
     """No membership row for the decoded email -> return False and NEVER write a
     claim (the caller responds 403)."""
     factory = _session_factory(engine)
-    decoded = {"uid": "uid-orphan", "email": "no-membership@example.com"}
+    decoded = {"uid": "uid-orphan", "email": "no-membership@example.com", "email_verified": True}
 
     with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
         result = sync_claims_from_membership(decoded, session_factory=factory)
 
-    assert result is False
+    assert result is SyncResult.NO_MEMBERSHIP
+    mock_set.assert_not_called()
+
+
+@pytest.mark.integration
+def test_unverified_email_does_not_match_seeded_row(engine):
+    """CR-01: a signature-valid token whose email matches a seeded row but whose
+    email is NOT verified must NOT inherit that row's claim. The attacker registers
+    a seeded member's email (e.g. the superadmin), gets a valid token with
+    email_verified=False, and must be treated as having NO membership (no claim
+    write, 403) — the uid does not match the seeded row either."""
+    from sqlalchemy import select
+
+    from app.db.models import Organization, OrganizationMembership
+
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000a002"
+    email = "victim-superadmin@example.com"
+
+    # Seed an email-only row (no provider_user_id yet) the attacker tries to hijack.
+    with factory() as s:
+        with s.begin():
+            if s.get(Organization, space_id) is None:
+                s.add(Organization(id=space_id, name="Victim Space", slug="victim-space"))
+            existing = s.execute(
+                select(OrganizationMembership).where(
+                    OrganizationMembership.organization_id == space_id,
+                    OrganizationMembership.email == email,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                s.add(
+                    OrganizationMembership(
+                        organization_id=space_id,
+                        email=email,
+                        role="superadmin",
+                    )
+                )
+
+    # Attacker token: matches the seeded email, but email_verified is falsy and the
+    # uid does NOT match any row.
+    decoded = {"uid": "uid-attacker", "email": email, "email_verified": False}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
     mock_set.assert_not_called()
 
 
@@ -133,5 +181,5 @@ def test_already_synced_is_noop():
     with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
         result = sync_claims_from_membership(decoded, session_factory=None)
 
-    assert result is False
+    assert result is SyncResult.ALREADY_SYNCED
     mock_set.assert_not_called()
