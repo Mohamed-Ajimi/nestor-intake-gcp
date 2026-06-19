@@ -1,0 +1,92 @@
+# cloudbuild.test.yaml — QA-01 REQUIRED cross-tenant denial gate (D-09 / T-04-19).
+#
+# This Cloud Build config is the merge gate that proves tenant isolation holds: it
+# stands up REAL Postgres (pgvector/pgvector:pg16, matching
+# backend/tests/conftest.py::PGVECTOR_IMAGE so vector(1536) + the schema build work),
+# creates the out-of-band `app_superadmin` LOGIN role the same way
+# conftest.py::_ensure_app_superadmin does, then runs `pytest backend/tests -m
+# integration`. A non-zero pytest exit FAILS the build, blocking the merge — a missing
+# or soft gate re-opens the cross-tenant hole the whole phase exists to close (T-04-19).
+#
+# conftest.py honors an explicit DATABASE_URL and BYPASSES testcontainers/Docker
+# entirely (no docker-in-docker needed for the test step), so we expose the pgvector
+# container to the test step via DATABASE_URL. The container's default `test`
+# superuser can CREATE ROLE, so conftest._ensure_app_superadmin provisions
+# `app_superadmin` out-of-band exactly as on real Cloud SQL
+# (`gcloud sql users create app_superadmin ...`).
+#
+# DEFERRED TO THE USER (RESEARCH Q2 — no CI runner exists in the repo yet): create a
+# Cloud Build trigger on this config and mark it a REQUIRED status check. See
+# infra/README.md § "Step 4d — wire the required cross-tenant denial CI gate".
+
+steps:
+  # 1. Pull the pgvector image up front (cached on the worker) and start it as a
+  #    long-lived container on the shared Cloud Build `cloudbuild` network. Bound to a
+  #    fixed name + creds so the test step can build a deterministic DATABASE_URL.
+  - id: start-postgres
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "run"
+      - "-d"
+      - "--name=nestor-test-pg"
+      - "--network=cloudbuild"
+      - "-e"
+      - "POSTGRES_USER=test"
+      - "-e"
+      - "POSTGRES_PASSWORD=test"
+      - "-e"
+      - "POSTGRES_DB=test"
+      - "pgvector/pgvector:pg16"
+
+  # 2. Wait until Postgres accepts connections (the container is up but the server
+  #    may still be initializing). `pg_isready` polls inside the db container.
+  - id: wait-for-postgres
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        for i in $(seq 1 60); do
+          if docker exec nestor-test-pg pg_isready -U test -d test >/dev/null 2>&1; then
+            echo "Postgres is ready."
+            exit 0
+          fi
+          echo "Waiting for Postgres ($i/60)..."
+          sleep 2
+        done
+        echo "ERROR: Postgres did not become ready in time." >&2
+        exit 1
+
+  # 3. Install backend deps (incl. the dev group: pytest + the integration suite's
+  #    needs) with uv, then run the integration denial suite against the real DB.
+  #    conftest._ensure_app_superadmin creates the app_superadmin role out-of-band
+  #    using this same DATABASE_URL (the `test` superuser can CREATE ROLE), then
+  #    `alembic upgrade head` builds the schema. A non-zero exit FAILS the build.
+  - id: pytest-integration
+    name: "python:3.12-slim"
+    entrypoint: "bash"
+    env:
+      # conftest honors DATABASE_URL and bypasses testcontainers. The db container is
+      # reachable by its --name on the shared `cloudbuild` network. The driver prefix
+      # is normalized to pg8000 by conftest._sync_pg8000_url.
+      - "DATABASE_URL=postgresql+pg8000://test:test@nestor-test-pg:5432/test"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        pip install --no-cache-dir uv
+        cd backend
+        # Install the project + the dev group (pytest, testcontainers, httpx). The
+        # integration suite uses the dev deps; testcontainers is installed but unused
+        # because DATABASE_URL is set (the container path is bypassed).
+        uv pip install --system --no-cache-dir -e '.[dev]'
+        # The QA-01 gate: run ONLY the integration-marked denial/isolation suite.
+        # A non-zero pytest exit propagates and fails the build (the required gate).
+        python -m pytest tests -m integration -v
+
+# Surface the test logs and keep the build self-contained.
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"
