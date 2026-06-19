@@ -133,15 +133,47 @@ def seed(email: str | None = None, password: str | None = None, session_factory=
             else:
                 summary["system_org"] = "exists"
 
-            # Superadmin membership — UPSERT keyed on uq_membership_org_user
-            # (organization_id + user_id). We match on the org + provider_user_id/email
-            # so a re-run promotes the existing row rather than inserting a duplicate.
-            membership = session.execute(
-                select(OrganizationMembership).where(
-                    OrganizationMembership.organization_id == SYSTEM_ORG_ID,
-                    OrganizationMembership.email == email,
+            # Superadmin membership — UPSERT keyed on the IdP IDENTITY (provider_user_id
+            # == user.uid), NOT on the human-supplied email (WR-05). On a privilege-
+            # granting write, matching by email lets any pre-existing system-org row
+            # carrying this email (e.g. one an attacker created per CR-01) silently
+            # rebind its provider_user_id to whatever uid get_user_by_email returns —
+            # binding the superadmin row to an account the operator did not intend.
+            #
+            # Match on uid first (authoritative IdP subject). Only when NO uid row
+            # exists do we fall back to a single email-only row for the genuine
+            # first-seed-from-empty / pre-first-login case, asserting there is at most
+            # one such row before promoting it (deterministic .scalars().first() over
+            # an explicit one-or-none guard).
+            membership = (
+                session.execute(
+                    select(OrganizationMembership).where(
+                        OrganizationMembership.organization_id == SYSTEM_ORG_ID,
+                        OrganizationMembership.provider_user_id == user.uid,
+                    )
                 )
-            ).scalar_one_or_none()
+                .scalars()
+                .first()
+            )
+            if membership is None:
+                # No uid-bound row yet. Fall back to a single un-bound email row from a
+                # genuine first seed (provider_user_id NULL): bind it to this uid. We do
+                # NOT match a row that already carries a DIFFERENT provider_user_id — that
+                # would be the WR-05 hijack — so the fallback is scoped to NULL bindings.
+                email_rows = session.execute(
+                    select(OrganizationMembership).where(
+                        OrganizationMembership.organization_id == SYSTEM_ORG_ID,
+                        OrganizationMembership.email == email,
+                        OrganizationMembership.provider_user_id.is_(None),
+                    )
+                ).scalars().all()
+                if len(email_rows) > 1:
+                    raise RuntimeError(
+                        "WR-05: multiple unbound superadmin-candidate rows match "
+                        f"{email!r} under the system org; refusing to promote ambiguously."
+                    )
+                membership = email_rows[0] if email_rows else None
+
             if membership is None:
                 session.add(
                     OrganizationMembership(
@@ -153,9 +185,11 @@ def seed(email: str | None = None, password: str | None = None, session_factory=
                 )
                 summary["membership"] = "created"
             else:
-                # Repair the row in place (promote-or-fix): ensure provider_user_id +
-                # role are correct on a re-run without creating a duplicate.
+                # Repair the matched row in place (promote-or-fix): bind it to this uid
+                # and ensure role is superadmin, without creating a duplicate. The row
+                # is either the existing uid row or a single unbound first-seed row.
                 membership.provider_user_id = user.uid
+                membership.email = email
                 membership.role = "superadmin"
                 summary["membership"] = "exists"
 
