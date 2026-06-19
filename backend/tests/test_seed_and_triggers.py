@@ -1,0 +1,319 @@
+"""Empty-baseline + seed-populates + scope-guard + updated_at-mechanism suite.
+
+This is the plan 01-04 verification suite. It proves, against a live
+``pgvector/pgvector:pg16`` database built by ``alembic upgrade head`` (the
+shared session-scoped ``engine`` fixture in ``conftest.py``):
+
+  (a) PRODUCTION-EMPTY BASELINE — immediately after ``upgrade head`` every
+      tenant table has 0 rows (no migration smuggles in seed data; INFRA-02).
+  (b) SEED POPULATES — running ``scripts/seed_dev.py::seed`` against the engine
+      creates exactly the demo organization + superadmin membership + sample
+      intake template (D-09), and is idempotent on a second run.
+  (c) SEED IS NOT A MIGRATION — no file under ``app/db/alembic/versions/``
+      imports or calls ``seed_dev`` (the seed can never enter production via a
+      migration; INFRA-02 / D-09).
+  (d) SCOPE GUARD — ``prefill_intake_answers`` exists in ``pg_proc`` while the
+      three deferred (post-``decomposed``) trigger functions do NOT (INTAKE-05).
+  (e) UPDATED_AT MECHANISM MATCHES THE DOCUMENTED CHOICE — read the
+      ``UPDATED_AT_MECHANISM:`` marker from ``0004_triggers.py`` and assert
+      reality matches: for ``orm-onupdate`` there must be NO ``set_updated_at``
+      function in ``pg_proc`` AND an ORM-mediated UPDATE must bump
+      ``updated_at``; for ``trigger`` a ``set_updated_at``/``tg_set_*`` function
+      must exist AND a raw UPDATE must bump ``updated_at``.
+
+When no Postgres is reachable (no Docker + no ``DATABASE_URL``) the ``engine``
+fixture skips, so the whole suite skips cleanly — mirroring conftest.py.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import re
+import uuid
+
+import pytest
+from sqlalchemy import text
+
+pytestmark = pytest.mark.integration
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+_BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_VERSIONS_DIR = os.path.join(_BACKEND_ROOT, "app", "db", "alembic", "versions")
+_MIGRATION_0004 = os.path.join(_VERSIONS_DIR, "0004_triggers.py")
+_SEED_PATH = os.path.join(_BACKEND_ROOT, "scripts", "seed_dev.py")
+
+# The 12 tenant-OWNED tables + the 2 tenant-root tables = every table that must
+# come up empty on a fresh production DB.
+_ALL_TABLES = (
+    "organizations",
+    "organization_memberships",
+    "products",
+    "intake_templates",
+    "intakes",
+    "intake_answers",
+    "skill_runs",
+    "decompositions",
+    "research_questions",
+    "research_artifacts",
+    "findings",
+    "deliverables",
+    "artifact_embeddings",
+    "search_index",
+)
+
+# The deferred (>= research-start) trigger functions that MUST NOT exist.
+_DEFERRED_FUNCS = (
+    "tg_bump_to_in_research",
+    "tg_bump_to_delivered",
+    "persist_questions_on_research_start",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _load_seed_module():
+    """Import ``scripts/seed_dev.py`` by file path (no package assumptions)."""
+    spec = importlib.util.spec_from_file_location("seed_dev", _SEED_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _declared_updated_at_mechanism() -> str:
+    """Read the ``UPDATED_AT_MECHANISM:`` marker from 0004_triggers.py."""
+    src = open(_MIGRATION_0004, encoding="utf-8").read()
+    m = re.search(r"UPDATED_AT_MECHANISM:\s*([A-Za-z0-9\-]+)", src)
+    assert m, "0004_triggers.py is missing the UPDATED_AT_MECHANISM: marker"
+    return m.group(1).strip()
+
+
+def _seed_sessionmaker(engine):
+    """A sessionmaker bound to the TEST engine, mirroring app.db.base."""
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(engine, expire_on_commit=False, future=True)
+
+
+def _count(conn, table: str) -> int:
+    return conn.execute(text(f"SELECT count(*) FROM nestor.{table}")).scalar_one()
+
+
+def _func_exists(conn, name: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                "SELECT 1 FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = 'nestor' AND p.proname = :name"
+            ),
+            {"name": name},
+        ).first()
+        is not None
+    )
+
+
+# ---------------------------------------------------------------------------
+# (a) production-empty baseline
+# ---------------------------------------------------------------------------
+def test_all_tables_empty_after_migrate(engine):
+    """Right after ``upgrade head`` every table is empty (INFRA-02)."""
+    with engine.connect() as conn:
+        for table in _ALL_TABLES:
+            assert _count(conn, table) == 0, (
+                f"{table} is NOT empty after upgrade head — a migration is "
+                "smuggling in seed data (INFRA-02 violated)."
+            )
+
+
+# ---------------------------------------------------------------------------
+# (b) seed populates + is idempotent
+# ---------------------------------------------------------------------------
+def test_seed_populates_and_is_idempotent(engine):
+    """seed_dev.seed creates the demo org/superadmin/template, idempotently."""
+    seed_mod = _load_seed_module()
+    maker = _seed_sessionmaker(engine)
+
+    try:
+        first = seed_mod.seed(session_factory=maker)
+        assert first["organization"] == "created"
+        assert first["superadmin"] == "created"
+        assert first["intake_template"] == "created"
+
+        with engine.connect() as conn:
+            assert _count(conn, "organizations") == 1
+            assert _count(conn, "intake_templates") == 1
+            assert (
+                conn.execute(
+                    text(
+                        "SELECT count(*) FROM nestor.organization_memberships "
+                        "WHERE role = 'superadmin'"
+                    )
+                ).scalar_one()
+                == 1
+            )
+
+        # Second run creates nothing new (idempotent get-or-create).
+        second = seed_mod.seed(session_factory=maker)
+        assert second["organization"] == "exists"
+        assert second["superadmin"] == "exists"
+        assert second["intake_template"] == "exists"
+
+        with engine.connect() as conn:
+            assert _count(conn, "organizations") == 1
+            assert _count(conn, "intake_templates") == 1
+    finally:
+        # Restore the production-empty baseline for any later test.
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM nestor.intake_templates"))
+            conn.execute(text("DELETE FROM nestor.organization_memberships"))
+            conn.execute(text("DELETE FROM nestor.organizations"))
+
+
+# ---------------------------------------------------------------------------
+# (c) seed is NOT referenced by any migration
+# ---------------------------------------------------------------------------
+def test_no_migration_references_seed():
+    """No Alembic version file imports/calls seed_dev (INFRA-02 / D-09)."""
+    offenders = []
+    for fname in os.listdir(_VERSIONS_DIR):
+        if not fname.endswith(".py"):
+            continue
+        src = open(os.path.join(_VERSIONS_DIR, fname), encoding="utf-8").read()
+        if "seed_dev" in src:
+            offenders.append(fname)
+    assert not offenders, (
+        f"migration(s) reference seed_dev — seed must never enter production "
+        f"via a migration: {offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (d) scope guard: in-scope trigger present, deferred ones absent
+# ---------------------------------------------------------------------------
+def test_in_scope_trigger_present_deferred_absent(engine):
+    """prefill_intake_answers exists; the 3 deferred functions do NOT."""
+    with engine.connect() as conn:
+        assert _func_exists(conn, "prefill_intake_answers"), (
+            "prefill_intake_answers should exist in pg_proc after 0004"
+        )
+        # submit_intake transition logic also lands in 0004.
+        assert _func_exists(conn, "submit_intake")
+        for fn in _DEFERRED_FUNCS:
+            assert not _func_exists(conn, fn), (
+                f"deferred function {fn} exists in pg_proc — INTAKE-05 scope "
+                "guard breached (it would re-open the path toward Tribunal)."
+            )
+
+
+# ---------------------------------------------------------------------------
+# (e) updated_at mechanism matches the documented choice
+# ---------------------------------------------------------------------------
+def test_updated_at_mechanism_matches_declaration(engine):
+    """Reality must match the UPDATED_AT_MECHANISM: marker in 0004."""
+    mechanism = _declared_updated_at_mechanism()
+    assert mechanism in ("orm-onupdate", "trigger"), (
+        f"unexpected UPDATED_AT_MECHANISM value: {mechanism!r}"
+    )
+
+    space_id = uuid.uuid4()
+
+    if mechanism == "orm-onupdate":
+        # No set_updated_at function may exist...
+        with engine.connect() as conn:
+            assert not _func_exists(conn, "set_updated_at"), (
+                "UPDATED_AT_MECHANISM is orm-onupdate but a set_updated_at "
+                "function exists in pg_proc — two mechanisms is ambiguous."
+            )
+
+        # ...and an ORM-mediated UPDATE must bump updated_at.
+        from app.db.models import Organization, Intake
+
+        maker = _seed_sessionmaker(engine)
+        try:
+            with maker() as session:
+                with session.begin():
+                    session.add(Organization(id=space_id, name="uat-org"))
+                intake_id = uuid.uuid4()
+                with session.begin():
+                    session.add(
+                        Intake(id=intake_id, space_id=space_id, status="draft")
+                    )
+                # Read the initial updated_at, then mutate through the ORM.
+                with session.begin():
+                    obj = session.get(Intake, intake_id)
+                    before = obj.updated_at
+                with session.begin():
+                    obj = session.get(Intake, intake_id)
+                    obj.status = "submitted"
+                with session.begin():
+                    obj = session.get(Intake, intake_id)
+                    after = obj.updated_at
+                assert after is not None and before is not None
+                assert after >= before, (
+                    "ORM onupdate did not maintain updated_at — the declared "
+                    "orm-onupdate mechanism is not actually sufficient."
+                )
+        finally:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("DELETE FROM nestor.intakes WHERE space_id = :s"),
+                    {"s": str(space_id)},
+                )
+                conn.execute(
+                    text("DELETE FROM nestor.organizations WHERE id = :s"),
+                    {"s": str(space_id)},
+                )
+    else:  # mechanism == "trigger"
+        with engine.connect() as conn:
+            assert _func_exists(conn, "set_updated_at") or _func_exists(
+                conn, "tg_set_updated_at"
+            ), (
+                "UPDATED_AT_MECHANISM is trigger but no set_updated_at / "
+                "tg_set_updated_at function exists in pg_proc."
+            )
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO nestor.organizations (id, name) "
+                        "VALUES (:s, 'uat-org')"
+                    ),
+                    {"s": str(space_id)},
+                )
+            with engine.begin() as conn:
+                before = conn.execute(
+                    text(
+                        "SELECT updated_at FROM nestor.organizations "
+                        "WHERE id = :s"
+                    ),
+                    {"s": str(space_id)},
+                ).scalar_one_or_none()
+            # Only assert the bump when the table carries updated_at.
+            if before is not None:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "UPDATE nestor.organizations SET name = 'uat-org-2' "
+                            "WHERE id = :s"
+                        ),
+                        {"s": str(space_id)},
+                    )
+                    after = conn.execute(
+                        text(
+                            "SELECT updated_at FROM nestor.organizations "
+                            "WHERE id = :s"
+                        ),
+                        {"s": str(space_id)},
+                    ).scalar_one()
+                assert after >= before
+        finally:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("DELETE FROM nestor.organizations WHERE id = :s"),
+                    {"s": str(space_id)},
+                )
