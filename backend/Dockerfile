@@ -34,30 +34,27 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Dependency manifest first so the layer caches across source-only changes.
-# `uv.lock*` is a glob copied for future lockfile support, but the install below
-# resolves dependencies from `pyproject.toml` directly. `--no-install-project`
-# keeps THIS layer cacheable (project source is copied + installed afterward).
+# Dependency manifest + application source, then a single project install.
+# `uv.lock*` is a glob copied for future lockfile support; the install resolves
+# dependencies from `pyproject.toml`.
 #
-# CR-01: install dependencies into the SYSTEM interpreter (/usr/local), NOT into a
-# `uv sync` project venv (/app/.venv). The runtime stage carries third-party deps
-# via `COPY --from=build /usr/local /usr/local` only — anything installed into a
-# venv would be left behind and the runtime `uvicorn`/`app` import would fail. A
-# single unconditional `uv pip install --system` path makes this hold whether or
-# not a `uv.lock` is ever committed (no `uv sync` branch that targets a venv).
+# CR-01: install the project AND its dependencies into the SYSTEM interpreter
+# (/usr/local), NOT into a `uv sync` project venv (/app/.venv). The runtime stage
+# carries packages via `COPY --from=build /usr/local /usr/local` only — anything
+# installed into a venv would be left behind and the runtime `uvicorn`/`app`
+# import would fail. `uv pip install --system .` installs project + deps in one
+# pass, so this holds whether or not a `uv.lock` is ever committed (no `uv sync`
+# venv branch). The hatchling backend (packages = ["app"]) needs the `app` source
+# present, so it is copied before the install.
 COPY pyproject.toml uv.lock* README.md ./
-RUN uv pip install --system --no-install-project .
 
-# Application package + migration assets. alembic.ini and app/db/alembic MUST be
-# present so the migration Job (alembic upgrade head via args override) can run.
+# Application package + migration assets. alembic.ini and app/db/alembic (shipped
+# inside app/) MUST be present so the migration Job (alembic upgrade head via args
+# override) can run, and so the project install can find the `app` package.
 COPY app ./app
 COPY alembic.ini ./alembic.ini
-COPY app/db/alembic ./app/db/alembic
 
-# Install the project itself into the system interpreter so the `app` package is
-# importable from any cwd (both the Uvicorn entrypoint and the alembic Job that
-# reads app/db/alembic). --no-deps because deps were installed system-wide above.
-RUN uv pip install --system --no-deps .
+RUN uv pip install --system .
 
 # CR-01 build-time smoke check: fail the build NOW if any runtime dependency is
 # missing from /usr/local, rather than crash-looping on Cloud Run at startup.
