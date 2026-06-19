@@ -39,6 +39,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.core.firebase import init_firebase
 from app.db import base
 from app.db.base import get_engine
 
@@ -51,12 +52,19 @@ logger = logging.getLogger("nestor.health")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """App lifespan: release pooled connections on shutdown.
+    """App lifespan: init the Firebase Admin SDK on startup; release pooled
+    connections on shutdown.
 
-    Runs NO migrations and sets NO GUC — startup is a no-op; on shutdown the
-    shared engine's pool is disposed so Cloud SQL connections are released
-    cleanly when the instance is reclaimed.
+    Runs NO migrations and sets NO GUC. Startup initializes the Admin SDK once via
+    ADC (``init_firebase()`` — idempotent, no JSON key) so ``auth.verify_id_token``
+    is ready before the first request; on shutdown the shared engine's pool is
+    disposed so Cloud SQL connections are released cleanly when the instance is
+    reclaimed.
     """
+    # Phase 3: init the Admin SDK once via ADC before serving traffic (D-09). This
+    # does NOT attach any auth dependency to the bare app — /healthz and /readyz
+    # stay anonymous for the Cloud Run probes (per-route protection lands in plan 03).
+    init_firebase()
     yield
     # WR-03: only dispose if the lru_cached engine was ACTUALLY built (e.g. a
     # /readyz was served). Building a brand-new engine purely to dispose it is
