@@ -39,6 +39,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.db import base
 from app.db.base import get_engine
 
 # Server-side diagnostic logger. Cloud Run captures stderr, so logging here makes
@@ -57,7 +58,16 @@ async def lifespan(app: FastAPI):
     cleanly when the instance is reclaimed.
     """
     yield
-    get_engine().dispose()
+    # WR-03: only dispose if the lru_cached engine was ACTUALLY built (e.g. a
+    # /readyz was served). Building a brand-new engine purely to dispose it is
+    # wasteful and, in URL mode, get_engine() reads os.environ["DATABASE_URL"]
+    # which would KeyError on Cloud Run (where only INSTANCE_CONNECTION_NAME is
+    # set). Guard the dispose so a shutdown error never surfaces as an ugly crash.
+    if base.get_engine.cache_info().currsize:
+        try:
+            get_engine().dispose()
+        except Exception:  # noqa: BLE001 -- shutdown best-effort; never crash on dispose
+            logger.warning("engine dispose on shutdown failed", exc_info=True)
 
 
 app = FastAPI(lifespan=lifespan)
