@@ -1,26 +1,35 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { getIdToken, onAuthStateChanged, type User } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 
 type AuthContextValue = {
-  session: Session | null;
+  session: User | null;
   loading: boolean;
+  // Returns a fresh ID token for the current user, or null when signed out.
+  // `forceRefresh` re-fetches the token so freshly-minted custom claims (role,
+  // space_id) are picked up immediately — the login-sync handshake + the
+  // Phase-6 token-attach seam.
+  getToken: (forceRefresh?: boolean) => Promise<string | null>;
 };
 
-const AuthContext = createContext<AuthContextValue>({ session: null, loading: true });
+async function getToken(forceRefresh = false): Promise<string | null> {
+  return auth.currentUser ? getIdToken(auth.currentUser, forceRefresh) : Promise.resolve(null);
+}
+
+const AuthContext = createContext<AuthContextValue>({
+  session: null,
+  loading: true,
+  getToken,
+});
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!supabase) {
-      setLoading(false);
-      return;
-    }
     let cancelled = false;
     let settled = false;
-    const settle = (s: Session | null) => {
+    const settle = (s: User | null) => {
       if (cancelled) return;
       setSession(s);
       if (!settled) {
@@ -29,39 +38,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      settle(s);
+    // onAuthStateChanged returns its unsubscribe fn directly; use it in cleanup.
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      settle(user);
     });
-
-    (async () => {
-      try {
-        const url = new URL(window.location.href);
-        const code = url.searchParams.get("code");
-        if (code) {
-          try {
-            await supabase!.auth.exchangeCodeForSession(window.location.href);
-            // Clean ?code= from URL
-            url.searchParams.delete("code");
-            url.searchParams.delete("state");
-            window.history.replaceState({}, "", url.pathname + (url.search ? url.search : "") + url.hash);
-          } catch {
-            // fall through to getSession
-          }
-        }
-        const { data } = await supabase!.auth.getSession();
-        settle(data.session);
-      } catch {
-        settle(null);
-      }
-    })();
 
     return () => {
       cancelled = true;
-      sub.subscription.unsubscribe();
+      unsubscribe();
     };
   }, []);
 
-  return <AuthContext.Provider value={{ session, loading }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ session, loading, getToken }}>{children}</AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
