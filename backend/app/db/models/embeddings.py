@@ -38,7 +38,6 @@ class ArtifactEmbedding(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     artifact_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -55,6 +54,7 @@ class ArtifactEmbedding(Base):
     )
 
     __table_args__ = (
+        Index("ix_artifact_embeddings_space_id", "space_id"),
         # space_id-leading composite for tenant prefilter (NOT a vector index).
         Index("idx_artifact_embeddings_space_artifact", "space_id", "artifact_id"),
     )
@@ -70,7 +70,6 @@ class SearchIndex(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -89,5 +88,6 @@ class SearchIndex(Base):
     )
 
     __table_args__ = (
+        Index("ix_search_index_space_id", "space_id"),
         Index("idx_search_index_space_intake", "space_id", "intake_id"),
     )

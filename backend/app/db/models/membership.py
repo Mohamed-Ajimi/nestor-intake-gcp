@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,7 +30,6 @@ class OrganizationMembership(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     # Identity Platform subject id (Phase 3 auth). Nullable until auth lands.
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -50,5 +49,10 @@ class OrganizationMembership(Base):
     __table_args__ = (
         UniqueConstraint(
             "organization_id", "user_id", name="uq_membership_org_user"
+        ),
+        # Explicit name (NOT index=True) so it matches the 0001 migration and
+        # carries no schema prefix — keeps `alembic check` clean.
+        Index(
+            "ix_organization_memberships_organization_id", "organization_id"
         ),
     )

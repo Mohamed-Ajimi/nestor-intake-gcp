@@ -50,7 +50,6 @@ class Decomposition(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -69,6 +68,7 @@ class Decomposition(Base):
     )
 
     __table_args__ = (
+        Index("ix_decompositions_space_id", "space_id"),
         Index("idx_decompositions_space_intake", "space_id", "intake_id"),
     )
 
@@ -83,7 +83,6 @@ class ResearchQuestion(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -113,6 +112,7 @@ class ResearchQuestion(Base):
     decomposition = relationship("Decomposition", back_populates="questions")
 
     __table_args__ = (
+        Index("ix_research_questions_space_id", "space_id"),
         Index(
             "idx_research_questions_space_intake", "space_id", "intake_id"
         ),
@@ -132,7 +132,6 @@ class ResearchArtifact(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -161,6 +160,7 @@ class ResearchArtifact(Base):
     )
 
     __table_args__ = (
+        Index("ix_research_artifacts_space_id", "space_id"),
         Index(
             "idx_research_artifacts_space_intake", "space_id", "intake_id"
         ),

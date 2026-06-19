@@ -54,7 +54,6 @@ class Finding(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -87,6 +86,7 @@ class Finding(Base):
     )
 
     __table_args__ = (
+        Index("ix_findings_space_id", "space_id"),
         Index("idx_findings_space_intake", "space_id", "intake_id"),
     )
 
@@ -101,7 +101,6 @@ class Deliverable(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -122,5 +121,6 @@ class Deliverable(Base):
     )
 
     __table_args__ = (
+        Index("ix_deliverables_space_id", "space_id"),
         Index("idx_deliverables_space_intake", "space_id", "intake_id"),
     )

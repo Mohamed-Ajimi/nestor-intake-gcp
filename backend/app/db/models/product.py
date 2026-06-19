@@ -26,7 +26,6 @@ class Product(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -34,6 +33,9 @@ class Product(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    # Explicit index names (NOT index=True) so the ORM and the 0001 migration
+    # use identical, schema-prefix-free names and `alembic check` stays clean.
     __table_args__ = (
+        Index("ix_products_space_id", "space_id"),
         Index("idx_products_space_name", "space_id", "name"),
     )

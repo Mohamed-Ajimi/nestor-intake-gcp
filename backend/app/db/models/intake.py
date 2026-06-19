@@ -61,7 +61,6 @@ class Intake(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -101,6 +100,7 @@ class Intake(Base):
     )
 
     __table_args__ = (
+        Index("ix_intakes_space_id", "space_id"),
         Index("idx_intakes_space_status", "space_id", "status"),
         Index("idx_intakes_space_created", "space_id", "created_at"),
     )
@@ -116,7 +116,6 @@ class IntakeTemplate(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     # JSON schema of sections/fields (intake-types.ts IntakeSchema).
@@ -126,6 +125,7 @@ class IntakeTemplate(Base):
     )
 
     __table_args__ = (
+        Index("ix_intake_templates_space_id", "space_id"),
         Index("idx_intake_templates_space_name", "space_id", "name"),
     )
 
@@ -140,7 +140,6 @@ class IntakeAnswer(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -171,5 +170,6 @@ class IntakeAnswer(Base):
         UniqueConstraint(
             "intake_id", "field_key", name="uq_intake_answers_intake_field"
         ),
+        Index("ix_intake_answers_space_id", "space_id"),
         Index("idx_intake_answers_space_intake", "space_id", "intake_id"),
     )

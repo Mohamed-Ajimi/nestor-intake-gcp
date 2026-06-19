@@ -27,7 +27,6 @@ class SkillRun(Base):
         UUID(as_uuid=True),
         ForeignKey("nestor.organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     intake_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -57,6 +56,7 @@ class SkillRun(Base):
     )
 
     __table_args__ = (
+        Index("ix_skill_runs_space_id", "space_id"),
         Index("idx_skill_runs_space_intake", "space_id", "intake_id"),
         Index("idx_skill_runs_space_status", "space_id", "status"),
     )
