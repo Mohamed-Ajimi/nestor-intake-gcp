@@ -76,8 +76,15 @@ def _connector_creator():
 
     Reads the non-secret connection identity from the environment
     (``INSTANCE_CONNECTION_NAME`` / ``DB_USER`` / ``DB_NAME``). Auth is IAM-only
-    (no password — D-09); ip_type is left at the connector default (PUBLIC per
-    D-03).
+    (no password — D-09).
+
+    WR-05: ``ip_type`` is made EXPLICIT (and env-overridable via
+    ``CLOUD_SQL_IP_TYPE``) rather than relying on the connector's implicit PUBLIC
+    default. The instance is provisioned public-IP (``ipv4_enabled = true``, D-03),
+    so the default is ``PUBLIC`` — but encoding it here makes the
+    instance-vs-connector IP mode a single greppable contract. If the instance is
+    ever switched to private IP, set ``CLOUD_SQL_IP_TYPE=PRIVATE`` in the Cloud Run
+    env and the connector follows, instead of silently dialing the wrong endpoint.
     """
     return _get_connector().connect(
         os.environ["INSTANCE_CONNECTION_NAME"],  # "project:region:instance"
@@ -85,6 +92,7 @@ def _connector_creator():
         user=os.environ["DB_USER"],  # IAM SA login name (no .gserviceaccount.com)
         db=os.environ["DB_NAME"],
         enable_iam_auth=True,  # IAM ephemeral certs — no DB password exists
+        ip_type=os.environ.get("CLOUD_SQL_IP_TYPE", "PUBLIC"),  # WR-05: explicit, env-overridable
     )
 
 
