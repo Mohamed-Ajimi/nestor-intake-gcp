@@ -56,6 +56,17 @@ resource "google_sql_database_instance" "main" {
 resource "google_sql_database" "app" {
   name     = var.db_name
   instance = google_sql_database_instance.main.name
+
+  # WR-06: the instance-level deletion_protection does NOT cover the database
+  # object. Protect the tenant DB itself so a `terraform destroy` targeting this
+  # resource (or a config change forcing its replacement) cannot silently drop the
+  # `nestor` database while the instance survives. deletion_protection guards the
+  # provider-level destroy; prevent_destroy is the Terraform-core backstop.
+  deletion_protection = true
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # The runtime SA's IAM DB user. type=CLOUD_IAM_SERVICE_ACCOUNT grants LOGIN ONLY
