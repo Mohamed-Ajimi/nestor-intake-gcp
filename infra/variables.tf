@@ -1,0 +1,70 @@
+# Input variables for the Nestor Intake GCP footprint.
+#
+# Defaults encode the resolved Phase-2 open questions:
+#   - region          -> europe-west1 (OQ3: single EU region for the NL/FR/EN base)
+#   - tier            -> db-custom-1-3840 (A4: 3.75 GB, default max_connections=100,
+#                        comfortably above the D-04 connection-math ceiling of ~30)
+#   - db_name         -> nestor (the application database)
+#   - allow_unauthenticated -> false (OQ2: authenticated invoker by default; the
+#                        deployed /readyz is reached via `gcloud run services proxy`.
+#                        Public health-only is an explicit opt-in.)
+# image_tag has no default: the deploy is a two-step (apply -> build/push -> apply)
+# and the user passes the real tag on the second apply (see infra/README.md).
+
+variable "project" {
+  description = "Target GCP project ID."
+  type        = string
+}
+
+variable "region" {
+  description = "GCP region for Cloud SQL, Artifact Registry, and Cloud Run (OQ3)."
+  type        = string
+  default     = "europe-west1"
+}
+
+variable "tier" {
+  description = "Cloud SQL machine tier. db-custom-1-3840 -> default max_connections=100 (A4/D-04)."
+  type        = string
+  default     = "db-custom-1-3840"
+}
+
+variable "repo" {
+  description = "Artifact Registry Docker repository ID for the backend image."
+  type        = string
+  default     = "nestor"
+}
+
+variable "image_tag" {
+  description = "Backend image tag in Artifact Registry (passed on the second apply; see README)."
+  type        = string
+}
+
+variable "db_name" {
+  description = "Cloud SQL application database name."
+  type        = string
+  default     = "nestor"
+}
+
+variable "instance_name" {
+  description = "Cloud SQL instance name."
+  type        = string
+  default     = "nestor-pg"
+}
+
+variable "service_name" {
+  description = "Cloud Run service name."
+  type        = string
+  default     = "nestor-api"
+}
+
+variable "runtime_sa_id" {
+  description = "Account ID (local part) for the Cloud Run runtime service account."
+  type        = string
+  default     = "nestor-run"
+}
+
+variable "allow_unauthenticated" {
+  description = "If true, allow public (allUsers) invocation of the Cloud Run service. Default false = authenticated invoker only; verify /readyz via `gcloud run services proxy` (OQ2)."
+  type        = bool
+  default     = false
+}
