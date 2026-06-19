@@ -39,6 +39,14 @@ class Settings(BaseSettings):
 
     Runtime:
     - ``port`` -> PORT (Cloud Run injects this; default 8080)
+
+    Identity Platform (Phase 3):
+    - ``firebase_project_id`` -> FIREBASE_PROJECT_ID. **Non-secret** explicit
+      override for the Admin SDK's project. Normally ADC supplies the project via
+      ``GOOGLE_CLOUD_PROJECT`` on Cloud Run, so this field stays ``None`` there and
+      exists only to pin the project locally / in tests (Pitfall 5: the verified
+      token's ``aud`` must match the project). NO service-account key / secret field
+      is added by design (D-09) — IdP init relies on ADC, not a key in env.
     """
 
     model_config = SettingsConfigDict(
@@ -52,6 +60,10 @@ class Settings(BaseSettings):
     db_name: str | None = None
     database_url: str | None = None
     port: int = 8080
+
+    # Identity Platform: non-secret explicit project override (env FIREBASE_PROJECT_ID).
+    # None on Cloud Run (ADC supplies the project via GOOGLE_CLOUD_PROJECT). No secret here (D-09).
+    firebase_project_id: str | None = None
 
 
 def get_settings() -> Settings:
