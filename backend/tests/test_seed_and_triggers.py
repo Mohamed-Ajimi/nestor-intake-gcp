@@ -27,6 +27,7 @@ fixture skips, so the whole suite skips cleanly — mirroring conftest.py.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import os
 import re
@@ -99,8 +100,55 @@ def _seed_sessionmaker(engine):
     return sessionmaker(engine, expire_on_commit=False, future=True)
 
 
+def _superadmin_sessionmaker(engine):
+    """A sessionmaker whose sessions run as ``app_superadmin`` (CR-02/CR-03).
+
+    The 0002 migration applies ``ENABLE`` + ``FORCE ROW LEVEL SECURITY`` to
+    every tenant-owned table, so even the table owner (the role that ran the
+    migrations, which the ``engine`` fixture connects as) is policy-bound. The
+    only way to write across the space boundary — exactly what ``seed_dev``
+    and a no-GUC tenant insert do — is to satisfy the 0003
+    ``*_superadmin_all`` bypass policy, whose predicate is
+    ``current_user = 'app_superadmin'``.
+
+    ``conftest._ensure_app_superadmin`` already creates that LOGIN role in the
+    container. Rather than re-authenticate as it, we ``SET ROLE
+    app_superadmin`` at the start of every transaction on this sessionmaker's
+    sessions, which flips ``current_user`` to ``app_superadmin`` so the bypass
+    policy matches. ``SET ROLE`` is reset automatically at transaction end, so
+    this never leaks onto other sessions sharing the pool.
+    """
+    from sqlalchemy import event, text
+    from sqlalchemy.orm import sessionmaker
+
+    maker = sessionmaker(engine, expire_on_commit=False, future=True)
+
+    @event.listens_for(maker, "after_begin")
+    def _set_superadmin_role(session, transaction, connection):  # noqa: ANN001
+        connection.execute(text("SET ROLE app_superadmin"))
+
+    return maker
+
+
 def _count(conn, table: str) -> int:
     return conn.execute(text(f"SELECT count(*) FROM nestor.{table}")).scalar_one()
+
+
+@contextlib.contextmanager
+def _superadmin_connect(engine):
+    """Open a transaction whose ``current_user`` is ``app_superadmin``.
+
+    Reads/writes against FORCE-RLS tenant tables (e.g. ``intake_templates``)
+    only see/affect rows when the 0003 ``*_superadmin_all`` bypass policy
+    matches — i.e. when ``current_user = 'app_superadmin'``. The plain owner
+    connection the ``engine`` fixture hands out is policy-bound with no space
+    GUC, so a count would read 0 and a DELETE would touch nothing. ``SET
+    ROLE`` is transaction-scoped and reset on commit/rollback, so it never
+    leaks onto pooled connections (CR-02).
+    """
+    with engine.begin() as conn:
+        conn.execute(text("SET ROLE app_superadmin"))
+        yield conn
 
 
 def _func_exists(conn, name: str) -> bool:
@@ -136,7 +184,11 @@ def test_all_tables_empty_after_migrate(engine):
 def test_seed_populates_and_is_idempotent(engine):
     """seed_dev.seed creates the demo org/superadmin/template, idempotently."""
     seed_mod = _load_seed_module()
-    maker = _seed_sessionmaker(engine)
+    # CR-02: bind the seed to an app_superadmin-role session so the 0003
+    # *_superadmin_all bypass policy admits the cross-space tenant-table
+    # inserts (intake_templates is FORCE-RLS). The plain owner engine is
+    # policy-bound and would be rejected at the IntakeTemplate insert.
+    maker = _superadmin_sessionmaker(engine)
 
     try:
         first = seed_mod.seed(session_factory=maker)
@@ -144,7 +196,9 @@ def test_seed_populates_and_is_idempotent(engine):
         assert first["superadmin"] == "created"
         assert first["intake_template"] == "created"
 
-        with engine.connect() as conn:
+        # Read back as app_superadmin: intake_templates is FORCE-RLS, so an
+        # owner connection with no space GUC would count 0 (CR-02).
+        with _superadmin_connect(engine) as conn:
             assert _count(conn, "organizations") == 1
             assert _count(conn, "intake_templates") == 1
             assert (
@@ -163,12 +217,14 @@ def test_seed_populates_and_is_idempotent(engine):
         assert second["superadmin"] == "exists"
         assert second["intake_template"] == "exists"
 
-        with engine.connect() as conn:
+        with _superadmin_connect(engine) as conn:
             assert _count(conn, "organizations") == 1
             assert _count(conn, "intake_templates") == 1
     finally:
-        # Restore the production-empty baseline for any later test.
-        with engine.begin() as conn:
+        # Restore the production-empty baseline for any later test. Delete as
+        # app_superadmin so the FORCE-RLS intake_templates rows are actually
+        # removed (an owner DELETE with no GUC matches no rows).
+        with _superadmin_connect(engine) as conn:
             conn.execute(text("DELETE FROM nestor.intake_templates"))
             conn.execute(text("DELETE FROM nestor.organization_memberships"))
             conn.execute(text("DELETE FROM nestor.organizations"))
