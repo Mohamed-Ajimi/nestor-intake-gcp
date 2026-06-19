@@ -289,24 +289,42 @@ def test_updated_at_mechanism_matches_declaration(engine):
         # ...and an ORM-mediated UPDATE must bump updated_at.
         from app.db.models import Organization, Intake
 
+        # CR-03: intakes is FORCE-RLS. Every transaction that touches it must
+        # establish the space context first, or the *_space_isolation policy
+        # rejects the write/read (GUC NULL -> predicate false). We set the
+        # canonical transaction-local GUC via set_space_context inside EACH
+        # session.begin() block (SET LOCAL semantics — it does not survive a
+        # commit), matching the row's space_id so the test exercises the real
+        # production write path. This also covers the prefill_intake_answers
+        # BEFORE-INSERT trigger's secondary INSERT INTO intake_answers, which
+        # runs in the same transaction and is FORCE-RLS too.
+        from app.db.rls import set_space_context
+
         maker = _seed_sessionmaker(engine)
         try:
             with maker() as session:
                 with session.begin():
+                    # organizations is the tenant ROOT (not RLS-scoped), but we
+                    # set the context anyway for uniformity across the blocks.
+                    set_space_context(session, space_id)
                     session.add(Organization(id=space_id, name="uat-org"))
                 intake_id = uuid.uuid4()
                 with session.begin():
+                    set_space_context(session, space_id)
                     session.add(
                         Intake(id=intake_id, space_id=space_id, status="draft")
                     )
                 # Read the initial updated_at, then mutate through the ORM.
                 with session.begin():
+                    set_space_context(session, space_id)
                     obj = session.get(Intake, intake_id)
                     before = obj.updated_at
                 with session.begin():
+                    set_space_context(session, space_id)
                     obj = session.get(Intake, intake_id)
                     obj.status = "submitted"
                 with session.begin():
+                    set_space_context(session, space_id)
                     obj = session.get(Intake, intake_id)
                     after = obj.updated_at
                 assert after is not None and before is not None
@@ -315,7 +333,15 @@ def test_updated_at_mechanism_matches_declaration(engine):
                     "orm-onupdate mechanism is not actually sufficient."
                 )
         finally:
+            # Tear down under the same space context (intakes + the trigger's
+            # intake_answers row are FORCE-RLS; an owner DELETE with no GUC
+            # would match nothing). organizations is root, deleted last.
             with engine.begin() as conn:
+                set_space_context(conn, space_id)
+                conn.execute(
+                    text("DELETE FROM nestor.intake_answers WHERE space_id = :s"),
+                    {"s": str(space_id)},
+                )
                 conn.execute(
                     text("DELETE FROM nestor.intakes WHERE space_id = :s"),
                     {"s": str(space_id)},
