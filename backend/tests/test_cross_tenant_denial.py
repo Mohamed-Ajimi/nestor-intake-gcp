@@ -2,10 +2,11 @@
 
 Drives the REAL Phase 4 surface over live Postgres through a FastAPI ``TestClient``:
 ``protected_router`` (default-deny) -> ``sample_router`` (list/get/patch over intakes,
-plan 03) -> ``get_tenant_repo`` -> :class:`app.db.repository.IntakeRepository`
-(explicit ``WHERE`` + RLS) -> the handler's 404/403 mapping. This is the end-to-end
-proof that the substrate proven unit-level in ``test_tenant_repository.py`` denies
-cross-tenant access at the HTTP boundary too (QA-01 / TENANT-02 / TENANT-03 / D-04 / D-07).
+plan 03) -> the PRODUCTION ``app.db.session.get_tenant_repo`` -> the real
+:class:`app.db.repository.IntakeRepository` (explicit ``WHERE`` + RLS) -> the handler's
+404/403 mapping. This is the end-to-end proof that the substrate proven unit-level in
+``test_tenant_repository.py`` denies cross-tenant access at the HTTP boundary too
+(QA-01 / TENANT-02 / TENANT-03 / D-04 / D-07).
 
 What each case proves (04-VALIDATION.md ``-k`` selectors; D-07 / Pitfall 4):
 
@@ -25,23 +26,36 @@ What each case proves (04-VALIDATION.md ``-k`` selectors; D-07 / Pitfall 4):
 |                               | data route (the ONLY data-route 403, D-04); no session is  |
 |                               | opened for it.                                             |
 
-DESIGN — driving the real stack against the testcontainer (no live IdP, no Cloud SQL):
-The production ``get_tenant_repo`` routes through ``get_engine()`` (URL/Cloud-SQL mode)
-and ``get_superadmin_engine()`` (the Cloud SQL connector + Secret Manager password) —
-neither connects inside a testcontainer. So this suite overrides BOTH boundaries with
-test doubles that reproduce the production ROUTING verbatim against the conftest
-``engine``:
+DESIGN — driving the REAL ``get_tenant_repo`` against the testcontainer (CR-01 fix):
+The production ``get_tenant_repo`` (``app/db/session.py``) routes through
+``app.db.base.get_engine()`` (Cloud-SQL/URL mode) and ``get_superadmin_engine()`` (the
+Cloud SQL connector + Secret Manager password) — neither can dial inside a testcontainer.
 
-* ``get_current_identity`` is overridden to return a fabricated :class:`Identity`
-  (user-A / user-B / superadmin / null-space) per case — no live ``verify_id_token``.
-* ``get_tenant_repo`` is overridden by ``_tenant_repo_for(identity, engine)`` which
-  mirrors ``app.db.session.get_tenant_repo`` EXACTLY: null user space -> 403 BEFORE any
-  session (D-04); superadmin -> ``SET ROLE app_superadmin`` (no GUC) so the 0003 bypass
-  admits cross-tenant reach (Pitfall 2 — bypass is current_user-based, the testcontainer's
-  ``app_superadmin`` role is created by conftest's ``_ensure_app_superadmin``); user ->
-  the per-request GUC via ``set_space_context`` (SET LOCAL, true). It yields the REAL
-  ``IntakeRepository`` bound to a real ``Session`` — so the explicit ``WHERE``, the RLS
-  policy, and the handler's 404/403 mapping are all genuinely exercised.
+Earlier this suite overrode ``get_tenant_repo`` itself with a hand-written re-implementation,
+so the production dependency body (role->engine selection, the null-space 403 raise, the
+``maker.begin()``/``set_space_context`` wiring) was NEVER exercised — the "proven by tests"
+claim was proven against a stunt double (04-REVIEW.md CR-01 / 04-VERIFICATION.md SC-3).
+
+This version patches ONLY the engine FACTORIES that ``session.py`` imports
+(``session_mod.get_engine`` / ``session_mod.get_superadmin_engine``) so the REAL
+``get_tenant_repo`` body runs verbatim against the conftest engines:
+
+* ``get_current_identity`` is overridden (dependency_overrides) to return a fabricated
+  :class:`Identity` per case — no live ``verify_id_token``. This is legitimate: it stands
+  in for the IdP, the one boundary that genuinely cannot run locally.
+* ``session_mod.get_engine`` -> the conftest ``engine`` (the app/user path).
+* ``session_mod.get_superadmin_engine`` -> a second engine that CONNECTS AS the
+  ``app_superadmin`` role with a password (the ``superadmin_engine`` fixture) — NOT
+  ``SET ROLE`` from a superuser. Connecting-as is faithful to production
+  (``current_user = 'app_superadmin'`` -> the 0003 ``*_superadmin_all`` bypass policy) and,
+  because ``app_superadmin`` is a plain non-superuser ``LOGIN`` role, it is subject to RLS
+  and to the 0003 GRANTs — a missing GRANT or a broken bypass policy fails the test loudly
+  (closes 04-REVIEW.md WR-01 / WR-04).
+
+The null-space 403 is asserted two ways: through the full HTTP stack (``null_space_403``)
+AND by calling the real ``get_tenant_repo`` generator directly
+(``null_space_403_real_dependency_direct``) so ``session.py``'s 403 raise has explicit,
+DB-free coverage.
 
 Skip-clean (conftest discipline): ``pytestmark = pytest.mark.integration`` (skips when no
 Docker / DATABASE_URL); ``firebase_admin`` and ``app.*`` imports are guarded with
@@ -57,8 +71,6 @@ import uuid
 
 import pytest
 
-from .conftest import _sync_pg8000_url
-
 pytestmark = pytest.mark.integration
 
 # firebase-admin is pulled by app.auth.dependencies (verify_id_token). Skip (do NOT
@@ -72,15 +84,18 @@ dependencies = pytest.importorskip("app.auth.dependencies")
 identity_mod = pytest.importorskip("app.auth.identity")
 session_mod = pytest.importorskip("app.db.session")
 repository = pytest.importorskip("app.db.repository")
-rls_mod = pytest.importorskip("app.db.rls")
 
 get_current_identity = dependencies.get_current_identity
 Identity = identity_mod.Identity
 get_tenant_repo = session_mod.get_tenant_repo
 IntakeRepository = repository.IntakeRepository
-set_space_context = rls_mod.set_space_context
 
 SCHEMA = "nestor"
+
+# Password granted to the app_superadmin role for the connect-as superadmin engine. Local
+# testcontainer credential only — never a production secret (production reads the password
+# from Secret Manager via app.db.base._load_superadmin_password, Path B / D-05a).
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +128,60 @@ def _as(identity: "Identity"):
 
 
 # ---------------------------------------------------------------------------
+# Engine-factory patch: run the REAL get_tenant_repo against the testcontainer
+# ---------------------------------------------------------------------------
+
+
+def _patch_engine_factories(monkeypatch, user_engine, sa_engine=None) -> None:
+    """Patch the engine factories ``session.py`` imported, so the REAL get_tenant_repo runs.
+
+    ``app/db/session.py`` does ``from app.db.base import get_engine, get_superadmin_engine``,
+    so the names to patch live in the ``session_mod`` namespace (not ``base``). After this,
+    a request flows through the production ``get_tenant_repo`` body verbatim — only the
+    engine SOURCE is swapped for the testcontainer (the one thing that can't dial Cloud SQL).
+    ``get_sessionmaker`` is left real (it accepts any engine).
+    """
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
+    if sa_engine is not None:
+        monkeypatch.setattr(
+            session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+
+
+# ---------------------------------------------------------------------------
+# superadmin_engine fixture — a real engine that CONNECTS AS app_superadmin
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS the ``app_superadmin`` role (connect-as, not SET ROLE).
+
+    Faithful to production's two-engine routing: ``current_user = 'app_superadmin'`` makes
+    the 0003 ``*_superadmin_all`` bypass policy match, granting cross-tenant reach. Because
+    ``app_superadmin`` is a plain non-superuser ``LOGIN`` role (created by conftest's
+    ``_ensure_app_superadmin``), it is subject to RLS and to the 0003 GRANTs — so this
+    proves the bypass POLICY and the GRANTs, not superuser ambient authority (closes
+    04-REVIEW.md WR-01 / WR-04, where ``SET ROLE`` from a superuser masked both).
+    """
+    from sqlalchemy import create_engine, text
+
+    # Give the role a password so it can authenticate (conftest creates it LOGIN, no pw).
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'")
+        )
+
+    # Reuse the conftest engine's DSN (host/port/db/+pg8000 driver), swap the credentials.
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
+
+
+# ---------------------------------------------------------------------------
 # Two-space seeding helpers (shape copied from test_tenant_repository.py)
 # ---------------------------------------------------------------------------
 
@@ -139,67 +208,6 @@ def _insert_intake(conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID) -
         ),
         {"id": intake_id, "space_id": space_id},
     )
-
-
-# ---------------------------------------------------------------------------
-# The real-stack-against-testcontainer get_tenant_repo override
-# ---------------------------------------------------------------------------
-
-
-def _tenant_repo_for(identity: "Identity", test_engine):
-    """A ``get_tenant_repo`` override that reproduces production routing verbatim.
-
-    Mirrors ``app.db.session.get_tenant_repo`` EXACTLY (engine selection by role, the
-    null-space 403 BEFORE any session, one tx/request, GUC for the user path only),
-    but binds to the conftest ``test_engine`` so it runs inside the testcontainer where
-    the real ``get_engine``/``get_superadmin_engine`` (Cloud SQL connector) cannot dial.
-    It yields the REAL :class:`IntakeRepository` — the explicit ``WHERE``, RLS, and the
-    handler's 404/403 mapping are all genuinely exercised end-to-end.
-
-    Returns a FastAPI dependency generator (closure over ``identity`` + ``test_engine``).
-    """
-    from fastapi import HTTPException, status
-    from sqlalchemy.orm import Session
-
-    def _dep():
-        if identity.role == "superadmin":
-            # Superadmin: SET ROLE app_superadmin so current_user matches the 0003
-            # *_superadmin_all bypass policy (Pitfall 2 — NO GUC is set). The
-            # app_superadmin role is created by conftest's _ensure_app_superadmin.
-            from sqlalchemy import text
-
-            conn = test_engine.connect()
-            trans = conn.begin()
-            try:
-                conn.execute(text("SET ROLE app_superadmin"))
-                session = Session(bind=conn)
-                yield IntakeRepository(session, identity)
-                trans.commit()
-            except Exception:
-                trans.rollback()
-                raise
-            finally:
-                # RESET ROLE on a non-aborted connection before it returns to the pool
-                # (SET ROLE is session-scoped — a leak would corrupt later requests).
-                try:
-                    conn.execute(text("RESET ROLE"))
-                except Exception:  # noqa: BLE001 -- best-effort; connection closed next
-                    pass
-                conn.close()
-            return
-
-        # D-04 default-deny: a user with no space is rejected BEFORE any session/tx is
-        # opened — an unset GUC must never reach a query. This is the ONLY data-route 403.
-        if not identity.space_id:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "No space — not authorized")
-
-        # User path: one tx, set the tenant GUC (SET LOCAL, true), yield the real repo.
-        with test_engine.begin() as conn:
-            set_space_context(conn, identity.space_id)
-            session = Session(bind=conn)
-            yield IntakeRepository(session, identity)
-
-    return _dep
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +260,9 @@ def _cleanup_spaces(engine, space_a, space_b):
 # ===========================================================================
 
 
-def test_get_cross_tenant_returns_404_no_foreign_body(engine, set_space, two_spaces):
+def test_get_cross_tenant_returns_404_no_foreign_body(
+    engine, set_space, two_spaces, monkeypatch
+):
     """user-A GET of user-B's intake-by-id -> 404 (exact), with NO space_b fields.
 
     The repo's scoped ``WHERE`` (+ RLS) excludes space_b's row, so ``repo.get`` returns
@@ -268,10 +278,8 @@ def test_get_cross_tenant_returns_404_no_foreign_body(engine, set_space, two_spa
     try:
         _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
 
+        _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
-        app.dependency_overrides[get_tenant_repo] = _tenant_repo_for(
-            _user(space_a), engine
-        )
         client = TestClient(app)
         resp = client.get(
             f"/sample/intakes/{intake_b}",
@@ -297,7 +305,7 @@ def test_get_cross_tenant_returns_404_no_foreign_body(engine, set_space, two_spa
 # ===========================================================================
 
 
-def test_list_scoped_to_own_space(engine, set_space, two_spaces):
+def test_list_scoped_to_own_space(engine, set_space, two_spaces, monkeypatch):
     """user-A GET /sample/intakes -> only space-A rows; space-B's intake id is absent."""
     from fastapi.testclient import TestClient
 
@@ -308,10 +316,8 @@ def test_list_scoped_to_own_space(engine, set_space, two_spaces):
     try:
         _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
 
+        _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
-        app.dependency_overrides[get_tenant_repo] = _tenant_repo_for(
-            _user(space_a), engine
-        )
         client = TestClient(app)
         resp = client.get(
             "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
@@ -333,7 +339,9 @@ def test_list_scoped_to_own_space(engine, set_space, two_spaces):
 # ===========================================================================
 
 
-def test_patch_cross_tenant_returns_404_row_unchanged(engine, set_space, two_spaces):
+def test_patch_cross_tenant_returns_404_row_unchanged(
+    engine, set_space, two_spaces, monkeypatch
+):
     """user-A PATCH of a space-B intake -> EXACTLY 404, and the space-B row is unchanged.
 
     ``repo.patch`` matches the scoped ``WHERE`` against nothing -> ``rowcount == 0`` ->
@@ -350,10 +358,8 @@ def test_patch_cross_tenant_returns_404_row_unchanged(engine, set_space, two_spa
     try:
         _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
 
+        _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
-        app.dependency_overrides[get_tenant_repo] = _tenant_repo_for(
-            _user(space_a), engine
-        )
         client = TestClient(app)
         resp = client.patch(
             f"/sample/intakes/{intake_b}",
@@ -388,13 +394,17 @@ def test_patch_cross_tenant_returns_404_row_unchanged(engine, set_space, two_spa
 # ===========================================================================
 
 
-def test_superadmin_reads_all_spaces(engine, set_space, two_spaces):
+def test_superadmin_reads_all_spaces(
+    engine, set_space, two_spaces, monkeypatch, superadmin_engine
+):
     """A superadmin GET /sample/intakes -> rows from BOTH spaces are visible.
 
-    Positive cross-tenant test: the superadmin path SET ROLE app_superadmin (no GUC)
-    triggers the 0003 bypass, so both seeded intake ids appear. A mis-routed/confined
-    superadmin engine (e.g. one that set a GUC or used the app role) would fail here
-    loudly (Pitfall 2 / T-04-13).
+    Positive cross-tenant test: the REAL get_tenant_repo routes a superadmin to
+    ``get_superadmin_engine()`` (patched to the connect-as ``app_superadmin`` engine, no
+    GUC), so ``current_user = 'app_superadmin'`` triggers the 0003 bypass and both seeded
+    intake ids appear. A mis-routed/confined superadmin engine (one that set a GUC or used
+    the app role), a broken bypass policy, or a missing 0003 GRANT would all fail here
+    loudly (Pitfall 2 / T-04-13 / WR-04).
     """
     from fastapi.testclient import TestClient
 
@@ -405,10 +415,8 @@ def test_superadmin_reads_all_spaces(engine, set_space, two_spaces):
     try:
         _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
 
+        _patch_engine_factories(monkeypatch, engine, sa_engine=superadmin_engine)
         app.dependency_overrides[get_current_identity] = _as(_superadmin())
-        app.dependency_overrides[get_tenant_repo] = _tenant_repo_for(
-            _superadmin(), engine
-        )
         client = TestClient(app)
         resp = client.get(
             "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
@@ -430,12 +438,13 @@ def test_superadmin_reads_all_spaces(engine, set_space, two_spaces):
 # ===========================================================================
 
 
-def test_null_space_403_user_denied(engine, set_space, two_spaces):
+def test_null_space_403_user_denied(engine, set_space, two_spaces, monkeypatch):
     """A ``user`` Identity with ``space_id=None`` -> EXACTLY 403 on a data route (D-04).
 
-    This is the ONLY data-route 403 — the default-deny on a broken/forbidden null-space
-    user, rejected BEFORE any session/tx is opened (an unset GUC must never reach a
-    query). Distinct from the 404 cross-tenant-by-id codes (no enumeration confusion).
+    Drives the REAL get_tenant_repo: the null-space user trips the 403 raise at
+    ``session.py`` BEFORE any session/tx is opened (an unset GUC must never reach a query).
+    This is the ONLY data-route 403 — distinct from the 404 cross-tenant-by-id codes (no
+    enumeration confusion).
     """
     from fastapi.testclient import TestClient
 
@@ -446,10 +455,8 @@ def test_null_space_403_user_denied(engine, set_space, two_spaces):
     try:
         _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
 
+        _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_null_space_user())
-        app.dependency_overrides[get_tenant_repo] = _tenant_repo_for(
-            _null_space_user(), engine
-        )
         client = TestClient(app)
         resp = client.get(
             "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
@@ -463,3 +470,27 @@ def test_null_space_403_user_denied(engine, set_space, two_spaces):
     finally:
         app.dependency_overrides.clear()
         _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: null_space_403 (direct) — call the REAL dependency, assert session.py raises
+# ===========================================================================
+
+
+def test_null_space_403_real_dependency_direct():
+    """Call the production ``get_tenant_repo`` generator directly with a null-space user.
+
+    Proves ``session.py``'s default-deny 403 raise (D-04) with DB-free, explicit coverage:
+    the raise happens BEFORE any engine is touched, so no testcontainer is needed for this
+    assertion. Complements the HTTP-level ``null_space_403`` case by pinning the exact
+    source-of-truth behavior of the real dependency body.
+    """
+    from fastapi import HTTPException
+
+    gen = get_tenant_repo(identity=_null_space_user())
+    with pytest.raises(HTTPException) as excinfo:
+        next(gen)
+    assert excinfo.value.status_code == 403, (
+        f"real get_tenant_repo must raise EXACTLY 403 for a null-space user, "
+        f"got {excinfo.value.status_code}."
+    )
