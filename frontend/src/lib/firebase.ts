@@ -23,3 +23,17 @@ export const auth: Auth = getAuth(app);
 if (import.meta.env.VITE_FIREBASE_EMULATOR === "1") {
   connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
 }
+
+// Backend API base URL (WR-01). The FastAPI backend (Cloud Run) is a SEPARATE
+// origin from this frontend (Cloudflare Workers), so the login-sync handshake
+// must target an absolute backend URL — a relative `/auth/session` resolves
+// against the frontend origin and never reaches the backend. `VITE_API_BASE_URL`
+// supplies that origin (no trailing slash, e.g. "https://api.nestor.example.com").
+// When empty (local dev with a same-origin proxy/rewrite) it stays relative.
+const rawApiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+
+/** Build a backend URL for `path` (which must start with "/"). */
+export function apiUrl(path: string): string {
+  const base = (rawApiBase ?? "").replace(/\/+$/, "");
+  return `${base}${path}`;
+}

@@ -2,8 +2,12 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { toast } from "sonner";
-import { auth } from "@/lib/firebase";
+import { apiUrl, auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+
+// WR-02: a failed login-sync handshake throws this so the catch can surface an
+// authorization-specific message and NOT navigate to /admin (vs. a sign-in error).
+class SyncError extends Error {}
 
 export const Route = createFileRoute("/auth/login")({
   component: LoginPage,
@@ -32,18 +36,40 @@ function LoginPage() {
       // Claims-refresh handshake (Pitfall 2): hand the just-minted ID token to
       // the backend so it can sync/issue custom claims, then force-refresh the
       // token so the NEXT request already carries role/space_id claims.
+      //
+      // WR-01: target the backend's absolute origin (apiUrl), not a same-origin
+      // relative path that never reaches the Cloud Run backend.
+      // WR-02: getToken() returns null until auth.currentUser is populated — never
+      // send "Bearer null"; await a real token first.
       const token = await getToken();
-      await fetch("/auth/session", {
+      if (!token) throw new SyncError("Geen ID-token na inloggen. Probeer opnieuw.");
+
+      const resp = await fetch(apiUrl("/auth/session"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
+      // WR-02: a non-OK handshake (401 invalid token, 403 no membership) must NOT
+      // be ignored — surface it and DO NOT navigate to /admin, where the user would
+      // otherwise hit a wall of 403s with no actionable error.
+      if (!resp.ok) {
+        throw new SyncError("Account is niet gemachtigd voor toegang.");
+      }
+
+      // Force-refresh so the next request carries the freshly-written claims.
       await getToken(true);
 
       navigate({ to: "/admin" });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Inloggen mislukt. Probeer opnieuw.";
-      setError("Inloggen mislukt. Controleer je email en wachtwoord.");
-      toast.error(`Inloggen mislukt: ${message}`);
+      if (err instanceof SyncError) {
+        // Handshake/authorization failure: sign-in itself succeeded, so show the
+        // authorization-specific message rather than the credential hint.
+        setError(err.message);
+        toast.error(err.message);
+      } else {
+        const message = err instanceof Error ? err.message : "Inloggen mislukt. Probeer opnieuw.";
+        setError("Inloggen mislukt. Controleer je email en wachtwoord.");
+        toast.error(`Inloggen mislukt: ${message}`);
+      }
     } finally {
       setSending(false);
     }
