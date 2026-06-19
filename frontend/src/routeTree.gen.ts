@@ -12,10 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
-import { Route as ResultsTokenRouteImport } from './routes/results.$token'
-import { Route as IntakeTokenRouteImport } from './routes/intake.$token'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
-import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AdminSearchRouteImport } from './routes/admin.search'
 import { Route as AdminSalesRouteImport } from './routes/admin.sales'
 import { Route as AdminPulseRouteImport } from './routes/admin.pulse'
@@ -25,9 +22,6 @@ import { Route as AdminClientsRouteImport } from './routes/admin.clients'
 import { Route as AdminSalesIndexRouteImport } from './routes/admin.sales.index'
 import { Route as AdminPulseIndexRouteImport } from './routes/admin.pulse.index'
 import { Route as AdminIntakesIndexRouteImport } from './routes/admin.intakes.index'
-import { Route as SalesValidateTokenRouteImport } from './routes/sales.validate.$token'
-import { Route as SalesResultsTokenRouteImport } from './routes/sales.results.$token'
-import { Route as SalesIntakeTokenRouteImport } from './routes/sales.intake.$token'
 import { Route as AdminPulseSearchRouteImport } from './routes/admin.pulse.search'
 import { Route as AdminPulseClientsRouteImport } from './routes/admin.pulse.clients'
 import { Route as AdminIntakesNewRouteImport } from './routes/admin.intakes.new'
@@ -59,24 +53,9 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
-const ResultsTokenRoute = ResultsTokenRouteImport.update({
-  id: '/results/$token',
-  path: '/results/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IntakeTokenRoute = IntakeTokenRouteImport.update({
-  id: '/intake/$token',
-  path: '/intake/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/auth/login',
   path: '/auth/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthCallbackRoute = AuthCallbackRouteImport.update({
-  id: '/auth/callback',
-  path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminSearchRoute = AdminSearchRouteImport.update({
@@ -123,21 +102,6 @@ const AdminIntakesIndexRoute = AdminIntakesIndexRouteImport.update({
   id: '/intakes/',
   path: '/intakes/',
   getParentRoute: () => AdminRoute,
-} as any)
-const SalesValidateTokenRoute = SalesValidateTokenRouteImport.update({
-  id: '/sales/validate/$token',
-  path: '/sales/validate/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SalesResultsTokenRoute = SalesResultsTokenRouteImport.update({
-  id: '/sales/results/$token',
-  path: '/sales/results/$token',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SalesIntakeTokenRoute = SalesIntakeTokenRouteImport.update({
-  id: '/sales/intake/$token',
-  path: '/sales/intake/$token',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminPulseSearchRoute = AdminPulseSearchRouteImport.update({
   id: '/search',
@@ -224,10 +188,7 @@ export interface FileRoutesByFullPath {
   '/admin/pulse': typeof AdminPulseRouteWithChildren
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
-  '/auth/callback': typeof AuthCallbackRoute
   '/auth/login': typeof AuthLoginRoute
-  '/intake/$token': typeof IntakeTokenRoute
-  '/results/$token': typeof ResultsTokenRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
@@ -237,9 +198,6 @@ export interface FileRoutesByFullPath {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
-  '/sales/intake/$token': typeof SalesIntakeTokenRoute
-  '/sales/results/$token': typeof SalesResultsTokenRoute
-  '/sales/validate/$token': typeof SalesValidateTokenRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
   '/admin/sales/': typeof AdminSalesIndexRoute
@@ -257,10 +215,7 @@ export interface FileRoutesByTo {
   '/admin/login': typeof AdminLoginRoute
   '/admin/organizations': typeof AdminOrganizationsRoute
   '/admin/search': typeof AdminSearchRoute
-  '/auth/callback': typeof AuthCallbackRoute
   '/auth/login': typeof AuthLoginRoute
-  '/intake/$token': typeof IntakeTokenRoute
-  '/results/$token': typeof ResultsTokenRoute
   '/admin': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
@@ -270,9 +225,6 @@ export interface FileRoutesByTo {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
-  '/sales/intake/$token': typeof SalesIntakeTokenRoute
-  '/sales/results/$token': typeof SalesResultsTokenRoute
-  '/sales/validate/$token': typeof SalesValidateTokenRoute
   '/admin/intakes': typeof AdminIntakesIndexRoute
   '/admin/pulse': typeof AdminPulseIndexRoute
   '/admin/sales': typeof AdminSalesIndexRoute
@@ -294,10 +246,7 @@ export interface FileRoutesById {
   '/admin/pulse': typeof AdminPulseRouteWithChildren
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
-  '/auth/callback': typeof AuthCallbackRoute
   '/auth/login': typeof AuthLoginRoute
-  '/intake/$token': typeof IntakeTokenRoute
-  '/results/$token': typeof ResultsTokenRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
@@ -307,9 +256,6 @@ export interface FileRoutesById {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
-  '/sales/intake/$token': typeof SalesIntakeTokenRoute
-  '/sales/results/$token': typeof SalesResultsTokenRoute
-  '/sales/validate/$token': typeof SalesValidateTokenRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
   '/admin/sales/': typeof AdminSalesIndexRoute
@@ -332,10 +278,7 @@ export interface FileRouteTypes {
     | '/admin/pulse'
     | '/admin/sales'
     | '/admin/search'
-    | '/auth/callback'
     | '/auth/login'
-    | '/intake/$token'
-    | '/results/$token'
     | '/admin/'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
@@ -345,9 +288,6 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
-    | '/sales/intake/$token'
-    | '/sales/results/$token'
-    | '/sales/validate/$token'
     | '/admin/intakes/'
     | '/admin/pulse/'
     | '/admin/sales/'
@@ -365,10 +305,7 @@ export interface FileRouteTypes {
     | '/admin/login'
     | '/admin/organizations'
     | '/admin/search'
-    | '/auth/callback'
     | '/auth/login'
-    | '/intake/$token'
-    | '/results/$token'
     | '/admin'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
@@ -378,9 +315,6 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
-    | '/sales/intake/$token'
-    | '/sales/results/$token'
-    | '/sales/validate/$token'
     | '/admin/intakes'
     | '/admin/pulse'
     | '/admin/sales'
@@ -401,10 +335,7 @@ export interface FileRouteTypes {
     | '/admin/pulse'
     | '/admin/sales'
     | '/admin/search'
-    | '/auth/callback'
     | '/auth/login'
-    | '/intake/$token'
-    | '/results/$token'
     | '/admin/'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
@@ -414,9 +345,6 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
-    | '/sales/intake/$token'
-    | '/sales/results/$token'
-    | '/sales/validate/$token'
     | '/admin/intakes/'
     | '/admin/pulse/'
     | '/admin/sales/'
@@ -432,13 +360,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
-  AuthCallbackRoute: typeof AuthCallbackRoute
   AuthLoginRoute: typeof AuthLoginRoute
-  IntakeTokenRoute: typeof IntakeTokenRoute
-  ResultsTokenRoute: typeof ResultsTokenRoute
-  SalesIntakeTokenRoute: typeof SalesIntakeTokenRoute
-  SalesResultsTokenRoute: typeof SalesResultsTokenRoute
-  SalesValidateTokenRoute: typeof SalesValidateTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -464,32 +386,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/results/$token': {
-      id: '/results/$token'
-      path: '/results/$token'
-      fullPath: '/results/$token'
-      preLoaderRoute: typeof ResultsTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/intake/$token': {
-      id: '/intake/$token'
-      path: '/intake/$token'
-      fullPath: '/intake/$token'
-      preLoaderRoute: typeof IntakeTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/auth/login': {
       id: '/auth/login'
       path: '/auth/login'
       fullPath: '/auth/login'
       preLoaderRoute: typeof AuthLoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth/callback': {
-      id: '/auth/callback'
-      path: '/auth/callback'
-      fullPath: '/auth/callback'
-      preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/search': {
@@ -554,27 +455,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/intakes/'
       preLoaderRoute: typeof AdminIntakesIndexRouteImport
       parentRoute: typeof AdminRoute
-    }
-    '/sales/validate/$token': {
-      id: '/sales/validate/$token'
-      path: '/sales/validate/$token'
-      fullPath: '/sales/validate/$token'
-      preLoaderRoute: typeof SalesValidateTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sales/results/$token': {
-      id: '/sales/results/$token'
-      path: '/sales/results/$token'
-      fullPath: '/sales/results/$token'
-      preLoaderRoute: typeof SalesResultsTokenRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sales/intake/$token': {
-      id: '/sales/intake/$token'
-      path: '/sales/intake/$token'
-      fullPath: '/sales/intake/$token'
-      preLoaderRoute: typeof SalesIntakeTokenRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/admin/pulse/search': {
       id: '/admin/pulse/search'
@@ -784,13 +664,7 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
-  AuthCallbackRoute: AuthCallbackRoute,
   AuthLoginRoute: AuthLoginRoute,
-  IntakeTokenRoute: IntakeTokenRoute,
-  ResultsTokenRoute: ResultsTokenRoute,
-  SalesIntakeTokenRoute: SalesIntakeTokenRoute,
-  SalesResultsTokenRoute: SalesResultsTokenRoute,
-  SalesValidateTokenRoute: SalesValidateTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
