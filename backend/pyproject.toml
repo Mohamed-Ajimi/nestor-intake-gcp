@@ -18,6 +18,10 @@ dependencies = [
     # Identity Platform server SDK: verify_id_token + set_custom_user_claims (AUTH-02/03).
     # Init uses ADC (no SA key in env — D-09); firebase_project_id is an explicit override only.
     "firebase-admin>=7.4,<8",
+    # Secret Manager: get_superadmin_engine() reads the app_superadmin DB password
+    # (Path B, D-05a) once at runtime. Imported LAZILY in app/db/base.py so the
+    # testcontainers / DATABASE_URL path never loads it (Phase 4 / 04-02-PLAN).
+    "google-cloud-secret-manager>=2.20,<3",
 ]
 
 [project.optional-dependencies]
