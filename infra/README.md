@@ -33,7 +33,8 @@ gcloud services enable \
   run.googleapis.com \
   artifactregistry.googleapis.com \
   iam.googleapis.com \
-  cloudbuild.googleapis.com
+  cloudbuild.googleapis.com \
+  secretmanager.googleapis.com   # Phase 4 (D-05a): app_superadmin password secret
 
 # Terraform variables (region default is europe-west1 — OQ3).
 export TF_VAR_project="$GOOGLE_PROJECT"
@@ -219,6 +220,81 @@ firebase emulators:start            # exposes Auth on localhost:9099
 
 With the emulator running, `python -m scripts.seed_superadmin <email> <password>` and
 `POST /auth/session` work end-to-end without touching a real Identity Platform project.
+
+## Step 4c — Phase 4: app_superadmin BUILT_IN user + Secret Manager password (D-05a)
+
+Phase 4 proves cross-tenant isolation and lights up the **superadmin** read path. The
+superadmin code path (`base.py::get_superadmin_engine`) connects as the BUILT_IN Cloud
+SQL role **`app_superadmin`** — the EXACT literal the `0003` bypass policy matches with
+`current_user = 'app_superadmin'`. Unlike the runtime SA (IAM, passwordless), this role
+authenticates with a **stored password** (Path B), and that password is the **single
+deliberate exception** to the otherwise IAM-passwordless invariant (D-05a / D-09).
+
+`terraform apply` (re-run from Step 3) now also creates, all credential-free in state:
+
+- `random_password.app_superadmin` — the generated password (never a committed literal),
+- `google_sql_user.app_superadmin` — the BUILT_IN user named exactly `app_superadmin`,
+- `google_secret_manager_secret.app_superadmin_db_password` (+ `..._version`) — holds the
+  password as the secret payload (the **one** stored DB credential),
+- `google_secret_manager_secret_iam_member.runtime_superadmin_secret_accessor` — a
+  **resource-scoped** `roles/secretmanager.secretAccessor` grant for the runtime SA on
+  THAT one secret only (least privilege — T-04-17), and
+- a new Cloud Run env var **`SUPERADMIN_DB_PASSWORD_SECRET`** on `nestor-api` carrying the
+  secret **resource name** (`projects/<p>/secrets/<id>/versions/latest`) — the value
+  `base.py::_load_superadmin_password()` reads at runtime. The password value is **never**
+  put in any env or IaC literal — only the pointer to it (T-04-16).
+
+```bash
+cd infra
+# Ensure the Secret Manager API is enabled (added to the Prerequisites block above).
+gcloud services enable secretmanager.googleapis.com
+# Re-apply (idempotent) so the app_superadmin user + secret + scoped grant + env exist.
+terraform apply -var="image_tag=v1"
+```
+
+> **⚠ Pitfall 3 — the `app_superadmin` user + secret do NOT exist on the live instance
+> yet.** Like the Phase-2 IAM-DB-user / 0005-GRANT bootstrap, this is a **deferred apply**
+> (the dev box has no Terraform/gcloud — standing GCP-deploy-deferred pattern). Until the
+> apply above runs against the live instance, the superadmin path cannot connect (the role
+> and the secret are absent), so live superadmin cross-tenant reads are silently broken.
+> Run the apply, then confirm:
+>
+> ```bash
+> # The BUILT_IN user exists alongside the IAM SA user:
+> gcloud sql users list --instance="$(terraform output -raw instance_connection_name | cut -d: -f3)"
+> # The secret exists and the runtime SA can read it (resource-scoped):
+> gcloud secrets describe nestor-app-superadmin-db-password
+> gcloud secrets get-iam-policy nestor-app-superadmin-db-password   # expect the runtime SA w/ secretAccessor
+> # The service carries the pointer env (the NAME, never the password value):
+> gcloud run services describe nestor-api --region "$TF_VAR_region" \
+>   --format='value(spec.template.spec.containers[0].env)'   # SUPERADMIN_DB_PASSWORD_SECRET=projects/.../versions/latest
+> ```
+
+## Step 4d — Phase 4: wire the required cross-tenant denial CI gate (QA-01, deferred)
+
+`cloudbuild.test.yaml` (repo root) is the **QA-01 required gate**: it stands up real
+Postgres (`pgvector/pgvector:pg16`), creates the out-of-band `app_superadmin` role exactly
+the way `backend/tests/conftest.py::_ensure_app_superadmin` does, and runs
+`pytest backend/tests -m integration` — a non-zero exit **fails the build**, blocking the
+cross-tenant denial regression (D-09 / T-04-19).
+
+There is **no CI runner in the repo today** (RESEARCH Q2), so **creating the Cloud Build
+trigger and making it a required check is deferred to you**:
+
+```bash
+# Create a trigger that runs the gate on every push / PR to the integration branch.
+gcloud builds triggers create github \
+  --name=nestor-cross-tenant-denial-gate \
+  --repo-name=<repo> --repo-owner=<owner> \
+  --branch-pattern='^main$' \
+  --build-config=cloudbuild.test.yaml
+# Then mark this check REQUIRED in the branch protection rule (GitHub repo settings ->
+# Branches -> require status checks) so a red denial suite blocks merge.
+```
+
+> The gate config itself is authored and committed; only the live trigger + required-check
+> wiring is the deferred step. A merge that bypasses this gate re-opens the cross-tenant
+> hole the whole phase exists to close (T-04-19).
 
 ## Step 5 — deferred SC1 verification: deployed `/readyz` returns 200
 
