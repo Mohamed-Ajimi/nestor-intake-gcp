@@ -1,0 +1,4 @@
+# Shell scripts MUST keep LF endings so the bash shebang and `set -euo pipefail`
+# work when the repo is checked out on Windows (autocrlf would otherwise inject
+# CRLF and break scripts/ci_no_permissive_rls.sh in CI).
+*.sh text eol=lf
