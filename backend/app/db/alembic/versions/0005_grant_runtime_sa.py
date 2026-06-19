@@ -111,12 +111,14 @@ def upgrade() -> None:
         )
         return
 
-    # Quote the role identifier as a literal inside the DO block. IAM SA usernames
-    # contain '@' and '.', so they MUST be double-quoted everywhere they are used
-    # as identifiers. We build a quoted identifier and embed it; the role string
-    # itself is also passed through a guard that checks pg_roles first so a not-yet
-    # -existing role cannot abort the migration.
-    quoted = '"' + role.replace('"', '""') + '"'
+    # WR-01: do NOT hand-roll identifier quoting. The role name is declared ONCE as
+    # a SQL literal inside the DO block (the single safe place for the value), and
+    # every place it is used as an *identifier* goes through format(... %I ...),
+    # which is Postgres's canonical identifier-quoting primitive. This removes the
+    # fragile, layered '"' + role.replace('"','""') + '"' nested-EXECUTE escaping
+    # and is correct for any role name (embedded quotes/backslashes/etc.). Only a
+    # single-quote escape on the literal declaration remains -- the standard,
+    # well-understood place for literal escaping.
     role_literal = role.replace("'", "''")
 
     # Fail-safe: only run the GRANTs if the role actually exists (the IAM SA user
@@ -134,19 +136,21 @@ def upgrade() -> None:
     op.execute(
         f"""
         DO $$
+        DECLARE
+            r text := '{role_literal}';
         BEGIN
-            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_literal}') THEN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
                 -- USAGE on the schema (the runtime SA must reach nestor objects).
-                EXECUTE 'GRANT USAGE ON SCHEMA {SCHEMA} TO {quoted}';
+                EXECUTE format('GRANT USAGE ON SCHEMA {SCHEMA} TO %I', r);
                 -- DML on every tenant table so the 0002 *_space_isolation policies
                 -- can apply (RLS needs the base privilege to then narrow rows).
-                EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {SCHEMA} TO {quoted}';
+                EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {SCHEMA} TO %I', r);
                 -- Sequences backing any serial/identity columns.
-                EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {SCHEMA} TO {quoted}';
+                EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {SCHEMA} TO %I', r);
                 -- Cover FUTURE tables/sequences created by later migrations. Keyed
                 -- on the migration owner (CURRENT_USER) exactly like 0003.
-                EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {quoted}';
-                EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} GRANT USAGE, SELECT ON SEQUENCES TO {quoted}';
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', r);
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} GRANT USAGE, SELECT ON SEQUENCES TO %I', r);
                 -- NOTE: deliberately NO grant of the superadmin role and NO
                 -- new policy here. The runtime SA stays a non-superadmin,
                 -- space-scoped login subject to RLS (Pitfall 3).
@@ -155,7 +159,7 @@ def upgrade() -> None:
                 -- LOUD instead of silently skipping the load-bearing GRANT. The
                 -- env-unset testcontainer skip never reaches here (handled in
                 -- Python above), so this exception only fires under the Job.
-                RAISE EXCEPTION '0005: RUNTIME_DB_USER role % does not exist -- the IAM DB user must exist before the migration Job runs the GRANT (create the google_sql_user / IAM DB user, then re-run alembic upgrade head). Refusing to silently skip the runtime-SA GRANT.', '{role_literal}';
+                RAISE EXCEPTION '0005: RUNTIME_DB_USER role % does not exist -- the IAM DB user must exist before the migration Job runs the GRANT (create the google_sql_user / IAM DB user, then re-run alembic upgrade head). Refusing to silently skip the runtime-SA GRANT.', r;
             END IF;
         END
         $$;
@@ -171,7 +175,9 @@ def downgrade() -> None:
         )
         return
 
-    quoted = '"' + role.replace('"', '""') + '"'
+    # WR-01: same format(%I) identifier-quoting as upgrade() -- no hand-rolled
+    # double-quote escaping. The role is declared once as a literal; every
+    # identifier use goes through %I.
     role_literal = role.replace("'", "''")
 
     # Symmetric REVOKE, also guarded on role existence so a downgrade on an
@@ -179,13 +185,15 @@ def downgrade() -> None:
     op.execute(
         f"""
         DO $$
+        DECLARE
+            r text := '{role_literal}';
         BEGIN
-            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_literal}') THEN
-                EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} REVOKE USAGE, SELECT ON SEQUENCES FROM {quoted}';
-                EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM {quoted}';
-                EXECUTE 'REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {SCHEMA} FROM {quoted}';
-                EXECUTE 'REVOKE SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {SCHEMA} FROM {quoted}';
-                EXECUTE 'REVOKE USAGE ON SCHEMA {SCHEMA} FROM {quoted}';
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} REVOKE USAGE, SELECT ON SEQUENCES FROM %I', r);
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER IN SCHEMA {SCHEMA} REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM %I', r);
+                EXECUTE format('REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {SCHEMA} FROM %I', r);
+                EXECUTE format('REVOKE SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {SCHEMA} FROM %I', r);
+                EXECUTE format('REVOKE USAGE ON SCHEMA {SCHEMA} FROM %I', r);
             END IF;
         END
         $$;
