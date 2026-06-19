@@ -23,6 +23,7 @@ Authoritative references:
 
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +65,32 @@ class Settings(BaseSettings):
     # Identity Platform: non-secret explicit project override (env FIREBASE_PROJECT_ID).
     # None on Cloud Run (ADC supplies the project via GOOGLE_CLOUD_PROJECT). No secret here (D-09).
     firebase_project_id: str | None = None
+
+    # CORS allowlist for the cross-origin browser handshake (WR-03). The frontend
+    # (Cloudflare Workers origin) calls this backend (Cloud Run origin) directly with
+    # an Authorization header, so the browser preflight (OPTIONS) must be answered with
+    # an EXPLICIT origin allowlist. Env CORS_ALLOWED_ORIGINS is a comma-separated list
+    # of exact origins (e.g. "https://nestor.example.com,http://localhost:5173").
+    #
+    # Default is EMPTY -> NO CORSMiddleware is installed and NO permissive "*" is ever
+    # used (never broaden access by default). Credentials are allowed only against this
+    # pinned allowlist — never "*" + credentials together (forbidden by the browser and
+    # by this design).
+    cors_allowed_origins: list[str] = []
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v: object) -> object:
+        """Accept a comma-separated CORS_ALLOWED_ORIGINS string (env-friendly).
+
+        pydantic-settings would otherwise expect JSON for a ``list[str]`` env value;
+        this lets ``CORS_ALLOWED_ORIGINS=https://a.example,https://b.example`` work.
+        An empty/whitespace string -> empty list (no origins -> middleware not added).
+        A list is passed through unchanged (programmatic / test construction).
+        """
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
 
 def get_settings() -> Settings:

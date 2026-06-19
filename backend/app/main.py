@@ -36,10 +36,12 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.auth_routes import auth_router, protected_router
+from app.core.config import get_settings
 from app.core.firebase import init_firebase
 from app.db import base
 from app.db.base import get_engine
@@ -80,6 +82,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# CORS for the cross-origin browser handshake (Phase-3 WR-03). The frontend
+# (Cloudflare Workers origin) POSTs to /auth/session on this backend (Cloud Run
+# origin) with an Authorization bearer header; the browser preflight (OPTIONS) for
+# that header on a cross-origin request must be answered or the handshake is blocked
+# from the browser entirely. Middleware is installed ONLY when an explicit allowlist
+# is configured (CORS_ALLOWED_ORIGINS) — never a permissive "*" (and never "*" with
+# credentials). Empty allowlist (the default) => no middleware, no broadening.
+_cors_origins = get_settings().cors_allowed_origins
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 # Routers (plan 03). NO auth dependency is attached to the bare app, so /healthz and
 # /readyz below stay ANONYMOUS for the Cloud Run probes (Pitfall 1 / T-02-04).
