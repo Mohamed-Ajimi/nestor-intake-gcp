@@ -39,6 +39,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.auth_routes import auth_router, protected_router
 from app.core.firebase import init_firebase
 from app.db import base
 from app.db.base import get_engine
@@ -79,6 +80,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+# Routers (plan 03). NO auth dependency is attached to the bare app, so /healthz and
+# /readyz below stay ANONYMOUS for the Cloud Run probes (Pitfall 1 / T-02-04).
+# - auth_router: anonymous-but-self-verifying /auth/session login-sync handshake.
+# - protected_router: the default-deny base (Depends(get_current_identity)) every
+#   future feature router inherits (AUTH-01 / T-03-17). It carries no routes yet.
+app.include_router(auth_router)
+app.include_router(protected_router)
 
 
 @app.get("/healthz")
