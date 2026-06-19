@@ -32,6 +32,7 @@ Authoritative references:
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -39,6 +40,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.db.base import get_engine
+
+# Server-side diagnostic logger. Cloud Run captures stderr, so logging here makes
+# a live readiness failure (e.g. "permission denied for schema nestor" from the
+# OQ1/A5 GRANT being wrong) diagnosable WITHOUT leaking any DSN/exception text to
+# the HTTP client (T-02-01 — the client still gets a generic 503).
+logger = logging.getLogger("nestor.health")
 
 
 @asynccontextmanager
@@ -75,6 +82,11 @@ def readyz():
             conn.execute(text("SELECT 1"))
         return {"status": "ready", "db": "ok"}
     except Exception:  # noqa: BLE001 -- generic by design; never leak DSN/exception text
+        # Log the full exception SERVER-SIDE (stderr -> Cloud Run logs) so a live
+        # failure is diagnosable (WR-02). logger.exception records the traceback;
+        # the DSN/credentials are never part of the exception here (IAM auth, no
+        # password), and nothing is echoed to the client response below (T-02-01).
+        logger.exception("readyz: DB connectivity check failed")
         return JSONResponse(
             {"status": "not-ready", "db": "error"},
             status_code=503,
