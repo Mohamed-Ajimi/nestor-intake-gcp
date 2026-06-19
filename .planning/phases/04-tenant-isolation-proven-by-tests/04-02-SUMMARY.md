@@ -136,6 +136,12 @@ _TDD note: Task 3 is the test-authoring task for an existing-substrate plan; the
 - Plan 04-04 must provision the `app_superadmin` Cloud SQL user + Secret Manager secret + env var for the live superadmin path.
 - Phase 6 real endpoints subclass `TenantRepository` per entity the same way as `IntakeRepository`.
 
+## Self-Check: PASSED
+
+- All created/modified files present: `backend/app/db/base.py`, `backend/app/db/repository.py`, `backend/app/db/session.py`, `backend/tests/test_tenant_repository.py`, `backend/pyproject.toml`, `04-02-SUMMARY.md`.
+- All commits present: `e757ce3` (Task 1), `987c702` (Task 2), `2eb616c` (Task 3), `495fb31` (docs).
+- Note: Python/Docker unavailable locally (standing constraint) — AST verify + pytest deferred to CI; acceptance criteria verified by inspection. Not a Self-Check failure per the environment constraint.
+
 ---
 *Phase: 04-tenant-isolation-proven-by-tests*
 *Completed: 2026-06-19*
