@@ -39,16 +39,82 @@ class Base(DeclarativeBase):
     metadata = MetaData(schema=NESTOR_SCHEMA)
 
 
+# Bounded pool args shared by BOTH engine modes (D-04). Small pool_size +
+# max_overflow keep total connections well under the Cloud SQL tier limit even
+# as Cloud Run scales out (AI-06: never starve the instance against the cap).
+# pool_recycle pre-empts Cloud SQL idle-connection drops; pool_pre_ping guards
+# against stale pooled connections. Valid for URL-mode QueuePool too.
+_POOL_KW = dict(
+    pool_size=2,
+    max_overflow=3,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    echo=False,
+    future=True,
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _get_connector():
+    """Return the process-singleton Cloud SQL ``Connector`` (lazy refresh).
+
+    The ``Connector`` is imported **lazily inside this function** (not at module
+    top) so the testcontainers / DATABASE_URL path never imports it — Phase-1
+    suites bind explicit DSNs and must not pull in the connector (Pitfall 7).
+
+    The lazy refresh strategy defers ephemeral-cert refresh to connection time,
+    which suits Cloud Run's throttled-CPU-when-idle model (D-03 / Pattern 1).
+    ``lru_cache(maxsize=1)`` makes this one Connector per process.
+    """
+    from google.cloud.sql.connector import Connector
+
+    return Connector(refresh_strategy="lazy")
+
+
+def _connector_creator():
+    """SQLAlchemy ``creator`` that dials Cloud SQL over the connector (pg8000).
+
+    Reads the non-secret connection identity from the environment
+    (``INSTANCE_CONNECTION_NAME`` / ``DB_USER`` / ``DB_NAME``). Auth is IAM-only
+    (no password — D-09); ip_type is left at the connector default (PUBLIC per
+    D-03).
+    """
+    return _get_connector().connect(
+        os.environ["INSTANCE_CONNECTION_NAME"],  # "project:region:instance"
+        "pg8000",
+        user=os.environ["DB_USER"],  # IAM SA login name (no .gserviceaccount.com)
+        db=os.environ["DB_NAME"],
+        enable_iam_auth=True,  # IAM ephemeral certs — no DB password exists
+    )
+
+
 @functools.lru_cache(maxsize=1)
 def get_engine(database_url: str | None = None):
-    """Return the shared sync engine. Reads ``DATABASE_URL`` from env when None.
+    """Return the shared sync engine, mode-switched by environment (D-08).
 
-    The canonical driver is **pg8000** (Q1 RESOLVED), so ``DATABASE_URL`` must
-    use the ``postgresql+pg8000://`` scheme. ``pool_pre_ping=True`` guards
-    against stale pooled connections against Cloud SQL.
+    Two modes, both carrying the shared bounded pool args (``_POOL_KW``, D-04):
+
+    * **Cloud SQL mode** — when ``database_url`` is None AND
+      ``INSTANCE_CONNECTION_NAME`` is set, build a connector-backed engine via
+      ``creator=_connector_creator`` (password-free IAM auth).
+    * **URL mode** — otherwise resolve ``database_url`` (or env ``DATABASE_URL``)
+      and build a plain engine. The canonical driver is **pg8000** (Q1 RESOLVED).
+
+    Phase-1 regression guard (Pitfall 6): an **explicit** ``database_url=`` always
+    wins — the connector branch is gated on ``database_url is None and icn`` — so
+    ``conftest.py::engine`` (which passes an explicit DSN) keeps building a plain
+    testcontainer engine even if ``INSTANCE_CONNECTION_NAME`` happens to be set.
+    The signature and ``lru_cache(maxsize=1)`` are unchanged from Phase 1.
     """
+    icn = os.environ.get("INSTANCE_CONNECTION_NAME")
+    if database_url is None and icn:  # Cloud SQL mode (connector + IAM auth)
+        return create_engine(
+            "postgresql+pg8000://",
+            creator=_connector_creator,
+            **_POOL_KW,
+        )
     url = database_url if database_url is not None else os.environ["DATABASE_URL"]
-    return create_engine(url, echo=False, pool_pre_ping=True, future=True)
+    return create_engine(url, **_POOL_KW)  # testcontainers / local URL mode
 
 
 def get_sessionmaker(engine=None):
