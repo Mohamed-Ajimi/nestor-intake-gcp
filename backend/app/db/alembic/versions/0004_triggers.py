@@ -42,11 +42,18 @@ IN-SCOPE triggers created here
    on the ``(intake_id, field_key)`` unique constraint with DO NOTHING. It also
    sets ``NEW.client_name`` for the display-only column on ``intakes``.
 
-2. ``submit_intake(p_token text)`` (function, transition LOGIC for fidelity):
+2. ``submit_intake(p_intake_id uuid)`` (function, transition LOGIC for fidelity):
    ``draft -> submitted`` and ``reviewed -> validated_by_client``. Both target
    statuses are AT OR BEFORE ``decomposed`` (scope-safe). NOTE: Phase 6 replaces
-   this token-RPC with a real authenticated endpoint; the function is ported now
-   only to preserve the transition logic as a schema-faithful reference.
+   this with a real authenticated endpoint; the function is ported now only to
+   preserve the transition logic as a schema-faithful reference.
+   SECURITY (CR-01): the lookup keys on the EXACT caller-supplied intake id —
+   it does NOT select an arbitrary draft/reviewed row via ``LIMIT 1`` (which
+   would be a cross-tenant write). The original Supabase RPC keyed on
+   ``client_intake_token`` / ``client_validation_token`` and stamped
+   ``client_validated_at``; none of those columns exist in this re-platform
+   schema (space_id is the sole isolation key), so the selector is the PK and
+   the ``client_validated_at`` write is omitted.
 
 DEFERRED — NOT created (INTAKE-05 scope guard / Pitfall 5)
 ----------------------------------------------------------
@@ -136,14 +143,31 @@ def upgrade() -> None:
     )
 
     # ------------------------------------------------------------------
-    # (2) submit_intake(p_token) — transition LOGIC ported for fidelity.
+    # (2) submit_intake(p_intake_id) — transition LOGIC ported for fidelity.
     #     draft -> submitted ; reviewed -> validated_by_client. Both target
     #     statuses are <= decomposed (scope-safe). Phase 6 replaces this
-    #     token-RPC with an authenticated endpoint.
+    #     with an authenticated endpoint.
+    #
+    #     SECURITY (CR-01): the SELECT resolves the intake by an EXACT,
+    #     CALLER-SUPPLIED id — never an arbitrary "LIMIT 1" over all
+    #     draft/reviewed rows. An unkeyed LIMIT 1 would let any caller flip a
+    #     RANDOM tenant's intake (cross-tenant write / authorization defect),
+    #     violating the project's hard "no cross-tenant access" constraint.
+    #
+    #     SCHEMA RECONCILIATION (Q2 RESOLVED / D-02): the original Supabase
+    #     RPC resolved the intake by ``client_intake_token`` /
+    #     ``client_validation_token`` and stamped ``client_validated_at`` on
+    #     the validation transition. NONE of those three columns exist in this
+    #     re-platform schema (the token-based identity model was dropped;
+    #     ``space_id`` = organization id is the SOLE isolation key, and the
+    #     intakes table carries no token or ``client_validated_at`` column —
+    #     see 0001_baseline_schema.py / app/db/models/intake.py). So the
+    #     parameter is the intake ``uuid`` keyed directly on the PK, and the
+    #     ``client_validated_at`` SET clause is OMITTED (no such column).
     # ------------------------------------------------------------------
     op.execute(
         f"""
-        CREATE OR REPLACE FUNCTION {SCHEMA}.submit_intake(p_token text)
+        CREATE OR REPLACE FUNCTION {SCHEMA}.submit_intake(p_intake_id uuid)
             RETURNS jsonb
             LANGUAGE plpgsql
             SECURITY DEFINER
@@ -154,14 +178,16 @@ def upgrade() -> None:
             v_current_status {SCHEMA}.intake_status;
             v_new_status {SCHEMA}.intake_status;
         BEGIN
-            -- Allow draft (initial submit) OR reviewed (validation submit).
+            -- Resolve EXACTLY the caller-supplied intake (no arbitrary
+            -- LIMIT 1). Allow draft (initial submit) OR reviewed (validation
+            -- submit) only.
             SELECT id, status INTO v_intake_id, v_current_status
             FROM {SCHEMA}.intakes
-            WHERE status IN ('draft', 'reviewed')
-            LIMIT 1;
+            WHERE id = p_intake_id
+              AND status IN ('draft', 'reviewed');
 
             IF v_intake_id IS NULL THEN
-                RAISE EXCEPTION 'Invalid token or intake not in submittable state';
+                RAISE EXCEPTION 'Unknown intake or intake not in submittable state';
             END IF;
 
             IF v_current_status = 'draft' THEN
@@ -190,7 +216,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Reverse order: drop submit_intake, then the prefill trigger + function.
-    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.submit_intake(text)")
+    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.submit_intake(uuid)")
     op.execute(
         f"DROP TRIGGER IF EXISTS trg_prefill_intake_answers ON {SCHEMA}.intakes"
     )
