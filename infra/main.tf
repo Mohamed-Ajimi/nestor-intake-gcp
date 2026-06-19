@@ -106,6 +106,17 @@ resource "google_project_iam_member" "runtime_cloudsql_instance_user" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+# Identity Platform admin (Phase 3, Pitfall 6): EXACTLY the role the login-sync
+# claim writes + the superadmin-seed user create/lookup need -- set custom claims,
+# create/lookup IdP users. Token VERIFICATION (verify_id_token) needs NO role; only
+# claim WRITES / user creation do. Still least-privilege: no firebase.admin /
+# owner / editor -- just identitytoolkit.admin (T-03-14).
+resource "google_project_iam_member" "runtime_identitytoolkit_admin" {
+  project = var.project
+  role    = "roles/identitytoolkit.admin"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 # -------------------------------------------------- Cloud Run SERVICE (D-04/INFRA-04)
 # gen2 (the v2 resource default), runtime SA, max-instances=4 (D-04 connection
 # math). Env carries ONLY non-secret connector config -- no stored credential,
@@ -199,6 +210,60 @@ resource "google_cloud_run_v2_job" "migrate" {
     # DB_NAME, so the application database must exist before the Job is created.
     # The env references above do not create an implicit edge to the database, so
     # declare it explicitly to keep the create-ordering graph complete.
+    google_sql_database.app,
+  ]
+}
+
+# ------------------------------------------------ Cloud Run superadmin-seed JOB (D-05)
+# One-shot first-superadmin bootstrap (Open Q3 / D-05). Same image + same runtime SA
+# as the service; overrides the Uvicorn CMD with `python -m scripts.seed_superadmin`
+# (mirrors the migration Job's alt-entrypoint pattern). The runtime SA carries
+# roles/identitytoolkit.admin (above), so the claim write + IdP user create/lookup
+# succeed via ADC -- NO JSON SA key (T-03-15). The SUPERADMIN_PASSWORD is NOT set here
+# (never stored in IaC/state); it is supplied at execution time with
+# `gcloud run jobs execute ... --update-env-vars SUPERADMIN_PASSWORD=...` (see README).
+resource "google_cloud_run_v2_job" "seed_superadmin" {
+  name     = "nestor-seed-superadmin"
+  location = var.region
+
+  template {
+    template {
+      service_account = google_service_account.runtime.email
+
+      containers {
+        image = local.image
+        args  = ["python", "-m", "scripts.seed_superadmin"]
+
+        env {
+          name  = "INSTANCE_CONNECTION_NAME"
+          value = google_sql_database_instance.main.connection_name
+        }
+        env {
+          name  = "DB_USER"
+          value = local.runtime_db_user
+        }
+        env {
+          name  = "DB_NAME"
+          value = google_sql_database.app.name
+        }
+        # The first superadmin's email. The PASSWORD is intentionally absent here and
+        # supplied at execute time (T-03-15). GOOGLE_CLOUD_PROJECT is injected by Cloud
+        # Run, so the Admin SDK's ADC init resolves the Identity Platform project.
+        env {
+          name  = "SUPERADMIN_EMAIL"
+          value = var.superadmin_email
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.runtime_cloudsql_client,
+    google_project_iam_member.runtime_cloudsql_instance_user,
+    google_project_iam_member.runtime_identitytoolkit_admin,
+    google_sql_user.runtime,
+    # The seed writes the membership row -> the database (and the migrated schema) must
+    # exist first; the migration Job must have run before this is executed.
     google_sql_database.app,
   ]
 }

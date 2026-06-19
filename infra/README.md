@@ -145,6 +145,81 @@ gcloud run jobs executions list --job nestor-migrate --region "$TF_VAR_region"
 > #   SELECT has_schema_privilege('<RUNTIME_DB_USER>', 'nestor', 'USAGE');
 > ```
 
+## Step 4b — Phase 3 auth: apply the IdP IAM grant + bootstrap the first superadmin (D-05)
+
+Phase 3 adds the auth path (Identity Platform). Two things must be in place before a
+human can actually log in: the runtime SA needs **`roles/identitytoolkit.admin`** (to
+write custom claims / create-lookup IdP users — token *verification* needs no role),
+and the **first superadmin** must be seeded (there is no public self-registration —
+D-02). Both are deferred-to-live here.
+
+### 4b.1 — apply the new IAM binding + seed Job
+
+`terraform apply` (re-run from Step 3) now also creates
+`google_project_iam_member.runtime_identitytoolkit_admin` and the
+`nestor-seed-superadmin` Cloud Run Job (same image, alt entrypoint
+`python -m scripts.seed_superadmin`, no stored credential).
+
+```bash
+cd infra
+# Re-apply (idempotent) so the identitytoolkit.admin grant + seed Job exist.
+terraform apply -var="image_tag=v1" -var="superadmin_email=yanick@agenic.be"
+```
+
+> **Pitfall 6 — claim writes fail without `identitytoolkit.admin`.** If you skip this
+> grant, `verify_id_token` still works but `set_custom_user_claims` (login-sync + the
+> seed) fails with a permission error, and every authenticated user is stuck at a 403
+> "No role claim" loop. Apply the binding **before** the service serves login traffic.
+
+### 4b.2 — ⚠ same-project guard (Pitfall 5)
+
+The frontend mints tokens against the project named by **`VITE_FIREBASE_PROJECT_ID`**;
+the backend verifies + writes claims against the project ADC resolves from
+**`GOOGLE_CLOUD_PROJECT`** (injected by Cloud Run). These MUST be the **same**
+Identity-Platform-enabled project, or tokens minted by the frontend fail
+`verify_id_token` on the backend (audience mismatch).
+
+```bash
+# Backend project (what the runtime SA / ADC sees):
+gcloud run services describe nestor-api --region "$TF_VAR_region" \
+  --format='value(spec.template.spec.containers[0].env)'   # GOOGLE_CLOUD_PROJECT == $GOOGLE_PROJECT
+# Confirm Identity Platform is enabled on that SAME project:
+gcloud services list --enabled --filter='identitytoolkit.googleapis.com'
+# And confirm the frontend build's VITE_FIREBASE_PROJECT_ID == $GOOGLE_PROJECT.
+```
+
+### 4b.3 — run the superadmin seed (Cloud Run Job)
+
+Execute the one-shot Job, passing the password **at execute time** (it is never stored
+in IaC/state — T-03-15). The Job uses ADC (the runtime SA), no JSON key.
+
+```bash
+gcloud run jobs execute nestor-seed-superadmin --region "$TF_VAR_region" --wait \
+  --update-env-vars "SUPERADMIN_PASSWORD=<choose-a-strong-password>"
+# Idempotent: re-running promotes the existing IdP user / membership row (no duplicates).
+# Expect the +/= summary: idp_user, claim, system_org, membership.
+```
+
+This creates (or promotes) the IdP user, sets the **cross-tenant** claim
+`{"role":"superadmin","space_id":null}`, and writes the FK-anchored
+`organization_memberships` row against the system "Agenic" org. **Open Q3 / T-03-16:**
+the row's `organization_id` is a bookkeeping FK anchor only — the superadmin claim is
+`space_id=null` (all spaces), and Phase-4 authorization reads the *claim*, never the row.
+
+### 4b.4 — optional: local run against the Firebase Auth emulator (D-09)
+
+The dev box has no live IdP. To exercise the auth path locally, point the Admin SDK +
+the frontend at the Firebase Auth emulator:
+
+```bash
+firebase emulators:start            # exposes Auth on localhost:9099
+# Backend (seed / API): export FIREBASE_AUTH_EMULATOR_HOST=localhost:9099 before running.
+# Frontend: connectAuthEmulator(auth, "http://localhost:9099") in the auth client.
+```
+
+With the emulator running, `python -m scripts.seed_superadmin <email> <password>` and
+`POST /auth/session` work end-to-end without touching a real Identity Platform project.
+
 ## Step 5 — deferred SC1 verification: deployed `/readyz` returns 200
 
 This is **success criterion 1** — it proves live **Cloud SQL connectivity via the

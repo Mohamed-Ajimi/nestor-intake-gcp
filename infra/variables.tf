@@ -63,6 +63,12 @@ variable "runtime_sa_id" {
   default     = "nestor-run"
 }
 
+variable "superadmin_email" {
+  description = "Email of the first superadmin bootstrapped by the nestor-seed-superadmin Cloud Run Job (D-05). The password is supplied at execution time (--update-env-vars SUPERADMIN_PASSWORD=...), never stored in IaC/state (T-03-15)."
+  type        = string
+  default     = "yanick@agenic.be"
+}
+
 variable "allow_unauthenticated" {
   description = "If true, allow public (allUsers) invocation of the Cloud Run service. Default false = authenticated invoker only; verify /readyz via `gcloud run services proxy` (OQ2)."
   type        = bool
