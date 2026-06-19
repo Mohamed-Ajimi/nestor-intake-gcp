@@ -1,0 +1,51 @@
+[project]
+name = "nestor-intake-backend"
+version = "0.1.0"
+description = "Nestor Intake (GCP re-platform) — FastAPI on Cloud Run backend: schema, migrations, and the per-space RLS data layer."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "alembic==1.18.4",
+    "pgvector==0.4.2",
+    "cloud-sql-python-connector[pg8000]==1.20.2",
+    "pg8000>=1.31,<1.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "testcontainers[postgresql]",
+]
+
+# uv groups (preferred for `uv sync`). Mirrors the [project.optional-dependencies] dev set.
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "testcontainers[postgresql]",
+]
+
+[tool.pytest.ini_options]
+# asyncio_mode = "auto" so `async def test_*` functions run without an explicit
+# @pytest.mark.asyncio on every test (pytest-asyncio). The RLS isolation harness
+# uses async sessions, so auto mode keeps the suites terse.
+asyncio_mode = "auto"
+testpaths = ["tests"]
+# Registered markers so `pytest --collect-only` runs WITHOUT "unknown marker" warnings.
+# `integration` gates the live-DB / testcontainers suites (schema shape + RLS isolation).
+# NOTE: deliberately NO watch-mode flag (no -f / --looponfail / pytest-watch). Wave 0 runs
+# once per task commit; watch mode is banned by the validation contract.
+markers = [
+    "integration: tests that require a live Postgres (testcontainers pgvector/pgvector:pg16 or DATABASE_URL). Skipped cleanly when neither is available.",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Backend application package lands here in Phase 2 (app/db/...); declare it now so the
+# build backend resolves even before the package directory is populated.
+packages = ["app"]
