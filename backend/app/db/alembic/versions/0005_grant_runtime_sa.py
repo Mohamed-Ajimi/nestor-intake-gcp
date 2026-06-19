@@ -122,6 +122,15 @@ def upgrade() -> None:
     # Fail-safe: only run the GRANTs if the role actually exists (the IAM SA user
     # is created out of band by Terraform's google_sql_user / the runbook). The
     # DO block mirrors the conftest role-ensure pg_roles guard.
+    #
+    # WR-04: reaching this DO block means RUNTIME_DB_USER IS set (the env-unset
+    # path already returned early above -- that is the clean testcontainer no-op).
+    # So a set-but-absent role here means the migration Job was told to grant a
+    # role that does not exist. That must FAIL LOUD (RAISE EXCEPTION), not be a
+    # silent NOTICE-skip that leaves the runtime SA with zero privileges and a live
+    # /readyz returning 503 with no migration error to point at. The exception
+    # aborts `alembic upgrade head` with a non-zero exit, surfacing in
+    # `gcloud run jobs execute --wait` so the broken-GRANT state is detectable.
     op.execute(
         f"""
         DO $$
@@ -142,7 +151,11 @@ def upgrade() -> None:
                 -- new policy here. The runtime SA stays a non-superadmin,
                 -- space-scoped login subject to RLS (Pitfall 3).
             ELSE
-                RAISE NOTICE '0005: role % does not exist yet -- skipping runtime-SA GRANT (create the IAM DB user first, then re-run).', '{role_literal}';
+                -- WR-04: RUNTIME_DB_USER is set but the role is missing -> FAIL
+                -- LOUD instead of silently skipping the load-bearing GRANT. The
+                -- env-unset testcontainer skip never reaches here (handled in
+                -- Python above), so this exception only fires under the Job.
+                RAISE EXCEPTION '0005: RUNTIME_DB_USER role % does not exist -- the IAM DB user must exist before the migration Job runs the GRANT (create the google_sql_user / IAM DB user, then re-run alembic upgrade head). Refusing to silently skip the runtime-SA GRANT.', '{role_literal}';
             END IF;
         END
         $$;

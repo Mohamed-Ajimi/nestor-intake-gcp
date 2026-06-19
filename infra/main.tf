@@ -184,6 +184,11 @@ resource "google_cloud_run_v2_job" "migrate" {
     google_project_iam_member.runtime_cloudsql_client,
     google_project_iam_member.runtime_cloudsql_instance_user,
     google_sql_user.runtime,
+    # WR-04: the Job's execution (alembic upgrade head -> 0005 GRANT) runs against
+    # DB_NAME, so the application database must exist before the Job is created.
+    # The env references above do not create an implicit edge to the database, so
+    # declare it explicitly to keep the create-ordering graph complete.
+    google_sql_database.app,
   ]
 }
 

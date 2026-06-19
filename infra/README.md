@@ -132,6 +132,19 @@ gcloud run jobs executions list --job nestor-migrate --region "$TF_VAR_region"
 #   args=["alembic","current"] (or check the migration logs above).
 ```
 
+> **WR-04 — the 0005 GRANT now fails loud, not silent.** When the Job runs with
+> `RUNTIME_DB_USER` set but the IAM DB user does not yet exist, `0005` raises an
+> exception and the Job exits non-zero (instead of the old `RAISE NOTICE` that
+> silently skipped the GRANT and left the runtime SA with zero privileges). If the
+> Job fails on 0005 with `RUNTIME_DB_USER role ... does not exist`, confirm the IAM
+> DB user from Step 3 first, then re-run the Job. As a belt-and-suspenders check,
+> after a green Job you can assert the GRANT actually applied:
+>
+> ```bash
+> # Expect 't' (true) for the runtime SA's USAGE on schema nestor.
+> #   SELECT has_schema_privilege('<RUNTIME_DB_USER>', 'nestor', 'USAGE');
+> ```
+
 ## Step 5 — deferred SC1 verification: deployed `/readyz` returns 200
 
 This is **success criterion 1** — it proves live **Cloud SQL connectivity via the
