@@ -41,6 +41,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.auth_routes import auth_router, protected_router
+from app.api.sample_routes import sample_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
 from app.db import base
@@ -104,7 +105,13 @@ if _cors_origins:
 # /readyz below stay ANONYMOUS for the Cloud Run probes (Pitfall 1 / T-02-04).
 # - auth_router: anonymous-but-self-verifying /auth/session login-sync handshake.
 # - protected_router: the default-deny base (Depends(get_current_identity)) every
-#   future feature router inherits (AUTH-01 / T-03-17). It carries no routes yet.
+#   future feature router inherits (AUTH-01 / T-03-17).
+# - sample_router: the throwaway Phase-4 tenant-scoped list/get/patch surface (D-08),
+#   mounted UNDER protected_router so it inherits get_current_identity and is NEVER
+#   anonymous. The single app.include_router(protected_router) below carries it; do NOT
+#   add a second app.include_router(sample_router) and do NOT attach any auth dependency
+#   to the bare app (keeps /healthz and /readyz anonymous for the Cloud Run probes).
+protected_router.include_router(sample_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
 
