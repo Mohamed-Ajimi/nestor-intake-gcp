@@ -40,6 +40,11 @@ class OrganizationMembership(Base):
     role: Mapped[str] = mapped_column(
         String, nullable=False, server_default="user"
     )
+    # D-05 soft-deactivate flag; app-level allowed set {"active","deactivated"}
+    # (enforced in code, NOT a PG enum — avoids alembic enum-alter friction).
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="active"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -29,6 +29,11 @@ class Organization(Base):
     # client name surfaced by prefill_intake_answers.
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
+    # D-10 soft-deactivate flag; app-level allowed set {"active","deactivated"}
+    # (enforced in code, NOT a PG enum). No hard-delete path exists.
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="active"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
