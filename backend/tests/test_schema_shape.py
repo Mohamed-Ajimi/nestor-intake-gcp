@@ -26,11 +26,17 @@ pytestmark = pytest.mark.integration
 # The Postgres schema all application tables live in.
 SCHEMA = "nestor"
 
-# The 2 tenant-ROOT tables — NOT RLS-scoped, NO space_id (an org IS the space;
-# membership maps users to spaces). D-01 / D-03.
+# The tenant-ROOT tables — NOT RLS-scoped, NO space_id (an org IS the space;
+# membership maps users to spaces). D-01 / D-03 / D-07.
+#
+# Phase 5 adds `audit_log` (plan 02 / 0006 migration): a ROOT table (D-07) — it is
+# nullable-`space_id` (NO FK) and NOT RLS-scoped, so it belongs here, NOT in
+# TENANT_TABLES. Including it here makes `test_all_expected_tables_exist` cover it and
+# (because it is ABSENT from TENANT_TABLES) the `space_id`-FK / RLS loop correctly skips it.
 ROOT_TABLES = (
     "organizations",
     "organization_memberships",
+    "audit_log",
 )
 
 # The 12 tenant-OWNED tables — every one carries `space_id NOT NULL` -> organizations(id).
@@ -50,7 +56,7 @@ TENANT_TABLES = (
     "search_index",
 )
 
-# All 14 expected tables (INFRA-02).
+# All expected tables: 14 from Phase 1 (INFRA-02) + `audit_log` from Phase 5 (0006).
 ALL_TABLES = ROOT_TABLES + TENANT_TABLES
 
 
@@ -210,3 +216,60 @@ def test_embedding_column_no_index(engine):
             "NO index may exist on artifact_embeddings.embedding this phase "
             f"(criterion 4); found: {[(r[0], r[1]) for r in idx_rows]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 (USER-03 / AUTH-04 / D-05/D-10): status columns exist NOT NULL on the
+# two root tables; audit_log stays a ROOT (non-RLS) table.
+#
+# The 0006 migration adds `status` (String NOT NULL, server_default 'active') to
+# `organization_memberships` (deactivate/reactivate, D-05) and `organizations`
+# (soft-deactivate a space, D-10). Both MUST be NOT NULL so existing rows carry a
+# non-null status after the migration's server_default backfill.
+# ---------------------------------------------------------------------------
+
+# The root tables that gain a Phase-5 `status` column (D-05 / D-10).
+STATUS_TABLES = (
+    "organization_memberships",
+    "organizations",
+)
+
+
+def test_status_columns_exist_not_null(engine):
+    """`organization_memberships.status` and `organizations.status` exist and are NOT NULL.
+
+    Reuses the `information_schema.columns` is_nullable query shape (the same probe
+    `test_space_id_not_null_fk` uses). A nullable status would let an existing row carry a
+    NULL after the 0006 backfill — breaking the {active, deactivated} app-layer contract.
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        for tbl in STATUS_TABLES:
+            col = conn.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_schema = :schema AND table_name = :tbl "
+                    "AND column_name = 'status'"
+                ),
+                {"schema": SCHEMA, "tbl": tbl},
+            ).first()
+            assert col is not None, f"{SCHEMA}.{tbl}: missing status column (Phase 5 / 0006)"
+            assert col[0] == "NO", (
+                f"{SCHEMA}.{tbl}.status must be NOT NULL (got is_nullable={col[0]!r}) — a "
+                "nullable status breaks the active/deactivated contract (D-05/D-10)"
+            )
+
+
+def test_audit_log_is_root_not_tenant_scoped():
+    """`audit_log` is a ROOT table (D-07): it is in ROOT_TABLES and ABSENT from
+    TENANT_TABLES, so the `space_id`-FK / RLS loop (`test_space_id_not_null_fk`) skips it.
+
+    This is a pure list-membership assertion — no DB needed, so it runs on the dev box and
+    statically pins the "do NOT RLS-scope audit_log" decision (05-RESEARCH Anti-Patterns).
+    """
+    assert "audit_log" in ROOT_TABLES, "audit_log must be a root table (D-07)"
+    assert "audit_log" not in TENANT_TABLES, (
+        "audit_log must NOT be in TENANT_TABLES — it is a ROOT table with a nullable, "
+        "FK-less space_id and is NOT RLS-scoped (D-07 / 05-RESEARCH Anti-Patterns)"
+    )

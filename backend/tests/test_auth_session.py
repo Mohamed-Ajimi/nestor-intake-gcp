@@ -183,3 +183,69 @@ def test_already_synced_is_noop():
 
     assert result is SyncResult.ALREADY_SYNCED
     mock_set.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# USER-02 (Phase 5): login-sync against an INVITE-created membership row (JIT)
+#
+# The Phase-5 invite flow (plan 04) writes an organization_memberships row carrying
+# the invited user's provider_user_id (= the IdP uid set at invite) plus role="user"
+# and status="active". USER-02 is proven by driving the EXISTING
+# ``sync_claims_from_membership`` against exactly that row shape and asserting it
+# attaches the role/space_id claim — no NEW production code (Pattern 2). This case is
+# selectable with ``-k invite_created_row`` per 05-VALIDATION's requirement map.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_login_sync_invite_created_row(engine):
+    """First login of an invited user -> claims attached from the invite-created membership
+    row, matched by ``provider_user_id`` (= the invited uid). The claim payload carries the
+    row's ``role`` and ``space_id`` (USER-02 / JIT provisioning)."""
+    from sqlalchemy import select
+
+    from app.db.models import Organization, OrganizationMembership
+
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000a003"
+    invited_uid = "uid-invited-1"
+    email = "invited-user@example.com"
+
+    # Seed an INVITE-shaped membership row: provider_user_id set to the invited uid (the
+    # invite flow stamps it), role="user", and the row exists BEFORE the user's first login.
+    with factory() as s:
+        with s.begin():
+            if s.get(Organization, space_id) is None:
+                s.add(
+                    Organization(id=space_id, name="Invite Space", slug="invite-space")
+                )
+            existing = s.execute(
+                select(OrganizationMembership).where(
+                    OrganizationMembership.organization_id == space_id,
+                    OrganizationMembership.provider_user_id == invited_uid,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                s.add(
+                    OrganizationMembership(
+                        organization_id=space_id,
+                        provider_user_id=invited_uid,
+                        email=email,
+                        role="user",
+                    )
+                )
+
+    # The invited user's first verified token: uid matches the invite-stamped
+    # provider_user_id, email_verified True (they set their password via the action link).
+    decoded = {"uid": invited_uid, "email": email, "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.WROTE
+    mock_set.assert_called_once()
+    _args, kwargs = mock_set.call_args
+    claims = kwargs.get("claims") if "claims" in kwargs else mock_set.call_args[0][-1]
+    assert claims.get("role") == "user", "invite-created row must yield role='user' claim"
+    assert str(claims.get("space_id")) == space_id, (
+        "the claim's space_id must be the invited user's assigned space (USER-02)"
+    )

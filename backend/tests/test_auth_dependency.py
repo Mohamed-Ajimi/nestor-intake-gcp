@@ -115,3 +115,56 @@ def test_missing_role_claim_403():
         resp = client.get("/whoami", headers={"Authorization": "Bearer no-role-token"})
 
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# AUTH-04 (Phase 5 / D-04): deactivation re-checks — revoked / disabled -> 401
+#
+# ``check_revoked=True`` (plan 04) makes ``verify_id_token`` raise
+# ``RevokedIdTokenError`` (refresh tokens revoked on deactivate) and
+# ``UserDisabledError`` (account disabled). BOTH SUBCLASS ``InvalidIdTokenError``,
+# so ``get_current_identity`` MUST catch them BEFORE the generic
+# ``InvalidIdTokenError`` clause (05-RESEARCH Pitfall 2). These two cases mirror
+# ``test_invalid_token_401`` but pin the SPECIFIC 401 messages so a mis-ordered
+# ``except`` that silently downgrades a deactivated user to a generic
+# "Invalid token" (losing the AUTH-04 signal) FAILS the test (threat T-5-01).
+# Wave 0: these are RED until plan 04 adds ``check_revoked=True`` + the two clauses.
+# ---------------------------------------------------------------------------
+
+
+def test_revoked_token_401_session_revoked():
+    """A token whose refresh tokens were revoked (deactivation) -> 401 with the SPECIFIC
+    detail "Session revoked" — not a generic "Invalid token" (T-5-01 / Pitfall 2)."""
+    with patch.object(
+        dependencies.auth,
+        "verify_id_token",
+        side_effect=fb_auth.RevokedIdTokenError("revoked"),
+    ):
+        client = TestClient(_build_app())
+        resp = client.get("/whoami", headers={"Authorization": "Bearer revoked-token"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Session revoked", (
+        "a revoked session must return the SPECIFIC 'Session revoked' detail; a generic "
+        "401 means RevokedIdTokenError was swallowed by `except InvalidIdTokenError` "
+        "(subclass-ordering regression, Pitfall 2 / AUTH-04 signal lost)"
+    )
+
+
+def test_disabled_user_401_account_disabled():
+    """A token for a disabled account (deactivation) -> 401 with the SPECIFIC detail
+    "Account disabled" — not a generic "Invalid token" (T-5-01 / Pitfall 2)."""
+    with patch.object(
+        dependencies.auth,
+        "verify_id_token",
+        side_effect=fb_auth.UserDisabledError("disabled"),
+    ):
+        client = TestClient(_build_app())
+        resp = client.get("/whoami", headers={"Authorization": "Bearer disabled-token"})
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Account disabled", (
+        "a disabled account must return the SPECIFIC 'Account disabled' detail; a generic "
+        "401 means UserDisabledError was swallowed by `except InvalidIdTokenError` "
+        "(subclass-ordering regression, Pitfall 2 / AUTH-04 signal lost)"
+    )
