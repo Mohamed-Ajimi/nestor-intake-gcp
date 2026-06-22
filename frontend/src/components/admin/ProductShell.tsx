@@ -3,6 +3,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import agenicLogo from "@/assets/agenic-logo.png";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { ADMIN_NAV } from "@/components/admin/adminNav";
 
 type Item = { to: string; label: string; exact: boolean };
 
@@ -60,6 +61,29 @@ export function ProductShell({
                   (active
                     ? "bg-paper2 text-ink"
                     : "text-ink/60 hover:bg-ink/5 hover:text-ink")
+                }
+              >
+                <span className={active ? "mark-green" : "mark-outline"} />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Superadmin-only management section — gebruikers / spaces / templates (Phase 5). */}
+        <nav className="mt-8 flex flex-col gap-1 border-t border-ink/15 pt-4">
+          <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/40">
+            Beheer
+          </p>
+          {ADMIN_NAV.map((item) => {
+            const active = isActive(item.to, item.exact);
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={
+                  "flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors " +
+                  (active ? "bg-paper2 text-ink" : "text-ink/60 hover:bg-ink/5 hover:text-ink")
                 }
               >
                 <span className={active ? "mark-green" : "mark-outline"} />
