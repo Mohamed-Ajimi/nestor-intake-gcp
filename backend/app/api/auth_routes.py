@@ -75,12 +75,19 @@ def post_session(
     THE GOTCHA: on ``{"synced": true}`` the client MUST call ``getIdToken(true)`` to pull
     a fresh token carrying the new claim (T-03-13 / Pitfall 2 — plan 04 does this).
     """
-    # Self-verify the caller's token before deriving ANYTHING from it (T-03-12). No
-    # check_revoked (D-07), consistent with get_current_identity.
+    # Self-verify the caller's token before deriving ANYTHING from it (T-03-12), WITH
+    # check_revoked=True (AUTH-04 / D-04) — consistent with get_current_identity — so a
+    # deactivated/revoked user cannot even re-sync claims here (A2 / threat T-5-08). The
+    # 4-clause ordering is load-bearing: RevokedIdTokenError + UserDisabledError subclass
+    # InvalidIdTokenError, so they MUST precede the generic clause (Pattern 4).
     try:
-        decoded = auth.verify_id_token(cred.credentials)
+        decoded = auth.verify_id_token(cred.credentials, check_revoked=True)
     except auth.ExpiredIdTokenError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired")
+    except auth.RevokedIdTokenError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session revoked")
+    except auth.UserDisabledError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account disabled")
     except auth.InvalidIdTokenError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
 
