@@ -36,6 +36,7 @@ from fastapi import Depends, HTTPException, status
 
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
+from app.db.admin_repo import AdminRepo
 from app.db.base import get_engine, get_sessionmaker, get_superadmin_engine
 from app.db.repository import IntakeRepository
 from app.db.rls import set_space_context
@@ -71,3 +72,41 @@ def get_tenant_repo(identity: Identity = Depends(get_current_identity)):
             # SET LOCAL (tx-local, third arg true) — reverts at COMMIT (Pitfall 1).
             set_space_context(session, space_id)
         yield IntakeRepository(session, identity)
+
+
+def get_admin_session(identity: Identity = Depends(get_current_identity)):
+    """Yield an :class:`AdminRepo` for the current request — superadmin ONLY (Phase 5).
+
+    The admin API's single data-access DI seam (USER-01/03, AUTH-04, QA-04). It mirrors
+    :func:`get_tenant_repo`'s engine/tx wiring but with three deliberate differences:
+
+    * **Superadmin-only gate (T-5-13, default-deny):** a non-superadmin Identity is
+      rejected with **403 BEFORE any session/tx is opened** — the gate fires in the
+      dependency, so every admin route is superadmin-only without per-route checks and a
+      ``user`` never reaches an admin handler or a DB connection. This is the
+      EoP-mitigating wall (verified by the user-role 403 test).
+    * **Superadmin engine, NO GUC (Pitfall 2/3):** it opens the tx on
+      :func:`app.db.base.get_superadmin_engine` (``app_superadmin`` -> the 0003 bypass
+      policy) and sets NO ``app.current_space_id`` GUC — the bypass is current_user-based,
+      not GUC-based — so the admin path reaches root + cross-space tables.
+    * **Yields an** :class:`AdminRepo` **(not a TenantRepository):** the unfiltered root +
+      cross-space accessors (no ``_scope`` / ``space_id ==`` filter, no delete).
+
+    ONE transaction per request via ``with maker.begin()`` (D-02): every mutation handler
+    writes its ``audit_log`` row on THIS same session (``app.db.audit.log``), so action +
+    audit commit/rollback atomically (T-5-16 — no orphan/missing audit rows).
+
+    Pitfall 5: this is a SYNC ``def`` generator (pg8000 is blocking; FastAPI runs sync
+    dependencies in a threadpool). It MUST NOT be ``async def``.
+    """
+    # T-5-13 superadmin-only gate: reject FIRST, connect SECOND. A non-superadmin never
+    # opens a session — the 403 fires before any engine selection / maker.begin().
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Superadmin only")
+
+    # Superadmin engine (0003 bypass). NO GUC is set (Pitfall 2/3) — the bypass is
+    # current_user-based, so the admin path reaches root + cross-space tables.
+    engine = get_superadmin_engine()
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        yield AdminRepo(session, identity)
