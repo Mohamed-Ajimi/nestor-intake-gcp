@@ -74,6 +74,17 @@ class AdminRepo:
         self._s = session
         self._identity = identity
 
+    @property
+    def session(self) -> Session:
+        """The request's bound ``Session`` — the audit-write target (QA-04).
+
+        Exposed so a mutation handler can pass the SAME session to
+        :func:`app.db.audit.log`, keeping the ``audit_log`` row in the action's
+        transaction (T-5-16). This is the request session, NOT a new engine/session —
+        the no-raw-DB grep-guard stays green.
+        """
+        return self._s
+
     # -- users / memberships (root table; not RLS-scoped) -------------------
 
     def list_users(self):

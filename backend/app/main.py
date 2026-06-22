@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.admin_routes import admin_router
 from app.api.auth_routes import auth_router, protected_router
 from app.api.sample_routes import sample_router
 from app.core.config import get_settings
@@ -112,6 +113,11 @@ if _cors_origins:
 #   add a second app.include_router(sample_router) and do NOT attach any auth dependency
 #   to the bare app (keeps /healthz and /readyz anonymous for the Cloud Run probes).
 protected_router.include_router(sample_router)
+# - admin_router: the Phase-5 superadmin-only admin surface (invite / deactivate /
+#   space + template management, USER-01/03 / AUTH-04 / QA-04). Mounted UNDER
+#   protected_router exactly like sample_router, so it inherits get_current_identity;
+#   its own per-route get_admin_session dependency adds the superadmin-only 403 gate.
+protected_router.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
 
