@@ -138,3 +138,23 @@ export function updateTemplate(
     body: JSON.stringify({ schema }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Invitations — per-space pending invites
+// ---------------------------------------------------------------------------
+//
+// Thin accessor that replaces the legacy `sales.list_invitations` RPC the client-detail
+// re-point removed (org = space in the GCP model). Like `search.ts`, the seam shape is
+// fixed now though the backend listing route is finalized with the space-detail wiring;
+// callers branch on `ApiResult.success` and degrade gracefully until then.
+
+export type Invitation = {
+  id: string;
+  email: string | null;
+  space_id: string;
+  status: string;
+};
+
+export function listInvitations(spaceId: string): Promise<ApiResult<Invitation[]>> {
+  return apiFetch<Invitation[]>(`/admin/spaces/${spaceId}/invitations`, { method: "GET" });
+}

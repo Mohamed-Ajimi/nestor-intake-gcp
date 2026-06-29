@@ -1,10 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import React, { useEffect, useMemo, useState } from "react";
-import { formatDistanceToNow } from "date-fns";
-import { nl } from "date-fns/locale";
 import { Search, Users } from "lucide-react";
-import { supabase, supabasePublic } from "@/lib/supabase";
 import { Input } from "@/components/ui/input";
+import { StatusPill, STATUS_LABEL } from "@/components/intake/_status";
+import { listIntakes } from "@/lib/api/intakes";
+import { listSpaces } from "@/lib/api/admin";
 
 export const Route = createFileRoute("/admin/pulse/clients")({
   validateSearch: (s: Record<string, unknown>) => ({
@@ -15,57 +15,29 @@ export const Route = createFileRoute("/admin/pulse/clients")({
 
 type Project = {
   id: string;
-  title: string | null;
+  client_name: string | null;
   status: string | null;
-  updated_at: string;
-  created_at: string;
-  delivered_at: string | null;
 };
 
-type ClientRow = {
+// In the GCP model there is no `public.clients` — the org IS the space. A "klant" row
+// is therefore a space with at least one Pulse intake, enriched from the seam.
+type SpaceRow = {
   id: string;
   name: string;
-  primary_contact_name: string | null;
-  primary_contact_email: string | null;
-  primary_contact_phone: string | null;
-  primary_contact_role: string | null;
   projects: Project[];
   project_count: number;
   status_counts: Record<string, number>;
-  last_activity: string | null;
 };
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "concept",
-  concept: "concept",
-  submitted: "ingediend",
-  reviewed: "gereviewd",
-  validated_by_client: "gevalideerd",
-  validated: "gevalideerd",
-  decomposed: "gedecomposeerd",
-  in_research: "in onderzoek",
-  delivered: "geleverd",
-  archived: "gearchiveerd",
-};
-
-function StatusBadge({ status }: { status: string | null }) {
-  if (!status) return <span className="font-mono text-xs text-ink/40">—</span>;
-  return (
-    <span className="inline-flex items-center border border-ink px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink">
-      {(STATUS_LABEL[status] ?? status).toUpperCase()}
-    </span>
-  );
-}
 
 function statusSummary(counts: Record<string, number>) {
   return Object.entries(counts)
-    .map(([k, v]) => `${v} ${STATUS_LABEL[k] ?? k}`)
+    .map(([k, v]) => `${v} ${STATUS_LABEL[k]?.toLowerCase() ?? k}`)
     .join(", ");
 }
 
 function ClientsPage() {
   const navigate = useNavigate();
-  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [clients, setClients] = useState<SpaceRow[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,96 +46,52 @@ function ClientsPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!supabase || !supabasePublic) {
-        setError("Supabase niet geconfigureerd.");
-        setLoading(false);
-        return;
-      }
       setLoading(true);
 
-      const { data: intakes, error: iErr } = await supabase
-        .schema("nestor")
-        .from("intakes")
-        .select("id, title, status, updated_at, created_at, delivered_at, client_id")
-        .eq("product_slug", "pulse")
-        .order("updated_at", { ascending: false });
-
+      const [spacesRes, intakesRes] = await Promise.all([listSpaces(), listIntakes()]);
       if (cancelled) return;
-      if (iErr) {
-        setError(iErr.message);
+
+      if (!spacesRes.success) {
+        setError(spacesRes.error);
         setLoading(false);
         return;
       }
-      if (!intakes || intakes.length === 0) {
-        setClients([]);
-        setLoading(false);
-        return;
-      }
-
-      const clientIds = [
-        ...new Set(
-          (intakes as Array<{ client_id: string | null }>)
-            .map((i) => i.client_id)
-            .filter((x): x is string => Boolean(x)),
-        ),
-      ];
-
-      const { data: clientsData, error: cErr } = await supabasePublic
-        .schema("public")
-        .from("clients")
-        .select(
-          "id, name, primary_contact_name, primary_contact_email, primary_contact_phone, primary_contact_role",
-        )
-        .in("id", clientIds);
-
-      if (cancelled) return;
-      if (cErr) {
-        setError(cErr.message);
+      if (!intakesRes.success) {
+        setError(intakesRes.error);
         setLoading(false);
         return;
       }
 
-      const byClient: Record<string, Project[]> = {};
-      for (const i of intakes as Array<Project & { client_id: string | null }>) {
-        if (!i.client_id) continue;
-        if (!byClient[i.client_id]) byClient[i.client_id] = [];
-        byClient[i.client_id].push({
+      const bySpace: Record<string, Project[]> = {};
+      for (const i of intakesRes.data) {
+        if (!bySpace[i.space_id]) bySpace[i.space_id] = [];
+        bySpace[i.space_id].push({
           id: i.id,
-          title: i.title,
+          client_name: i.client_name,
           status: i.status,
-          updated_at: i.updated_at,
-          created_at: i.created_at,
-          delivered_at: (i as Project).delivered_at ?? null,
         });
       }
 
-      const enriched: ClientRow[] = (clientsData ?? []).map((c) => {
-        const projects = (byClient[c.id] ?? []).sort((a, b) =>
-          b.updated_at.localeCompare(a.updated_at),
-        );
-        const status_counts: Record<string, number> = {};
-        for (const p of projects) {
-          const s = p.status ?? "draft";
-          status_counts[s] = (status_counts[s] ?? 0) + 1;
-        }
-        return {
-          id: c.id,
-          name: c.name,
-          primary_contact_name: (c as ClientRow).primary_contact_name ?? null,
-          primary_contact_email: (c as ClientRow).primary_contact_email ?? null,
-          primary_contact_phone: (c as ClientRow).primary_contact_phone ?? null,
-          primary_contact_role: (c as ClientRow).primary_contact_role ?? null,
-          projects,
-          project_count: projects.length,
-          status_counts,
-          last_activity: projects[0]?.updated_at ?? null,
-        };
-      });
+      const enriched: SpaceRow[] = spacesRes.data
+        .map((s) => {
+          const projects = bySpace[s.id] ?? [];
+          const status_counts: Record<string, number> = {};
+          for (const p of projects) {
+            const st = p.status ?? "draft";
+            status_counts[st] = (status_counts[st] ?? 0) + 1;
+          }
+          return {
+            id: s.id,
+            name: s.name,
+            projects,
+            project_count: projects.length,
+            status_counts,
+          };
+        })
+        // Match legacy behaviour: only spaces with at least one Pulse-project.
+        .filter((s) => s.project_count > 0);
 
-      enriched.sort((a, b) =>
-        (b.last_activity ?? "").localeCompare(a.last_activity ?? ""),
-      );
-
+      setError(null);
       setClients(enriched);
       setLoading(false);
     })();
@@ -176,7 +104,7 @@ function ClientsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return clients;
     return clients.filter((c) =>
-      [c.name, c.primary_contact_name, c.primary_contact_email]
+      [c.name, ...c.projects.map((p) => p.client_name ?? "")]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -205,7 +133,7 @@ function ClientsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="zoek op naam, contact of email…"
+            placeholder="zoek op klant of naam…"
             className="h-9 pl-8"
           />
         </div>
@@ -244,9 +172,7 @@ function ClientsPage() {
               <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
                 <th className="w-6 px-4 py-2 text-left"></th>
                 <th className="px-4 py-2 text-left">Klant</th>
-                <th className="px-4 py-2 text-left">Contact</th>
                 <th className="px-4 py-2 text-left">Projecten</th>
-                <th className="px-4 py-2 text-left">Laatste activiteit</th>
               </tr>
             </thead>
             <tbody>
@@ -282,22 +208,6 @@ function ClientsPage() {
                           {c.name}
                         </button>
                       </td>
-                      <td className="px-4 py-3 text-sm text-ink/80">
-                        {c.primary_contact_name || c.primary_contact_email ? (
-                          <div>
-                            {c.primary_contact_name && (
-                              <div>{c.primary_contact_name}</div>
-                            )}
-                            {c.primary_contact_email && (
-                              <div className="text-xs text-ink/50">
-                                {c.primary_contact_email}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-ink/30">—</span>
-                        )}
-                      </td>
                       <td className="px-4 py-3 text-sm text-ink">
                         <div>
                           {c.project_count}{" "}
@@ -309,18 +219,10 @@ function ClientsPage() {
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-sm text-ink/70">
-                        {c.last_activity
-                          ? formatDistanceToNow(new Date(c.last_activity), {
-                              addSuffix: true,
-                              locale: nl,
-                            })
-                          : "—"}
-                      </td>
                     </tr>
                     {isOpen && (
                       <tr className="border-b border-ink/10 bg-paper2/40">
-                        <td colSpan={5} className="px-12 py-4">
+                        <td colSpan={3} className="px-12 py-4">
                           <div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-ink/60">
                             Projecten ({c.project_count})
                           </div>
@@ -338,26 +240,10 @@ function ClientsPage() {
                               >
                                 <div className="flex-1">
                                   <div className="font-medium text-ink">
-                                    {p.title || "Zonder titel"}
-                                  </div>
-                                  <div className="text-xs text-ink/50">
-                                    {formatDistanceToNow(new Date(p.updated_at), {
-                                      addSuffix: true,
-                                      locale: nl,
-                                    })}
-                                    {p.delivered_at && (
-                                      <>
-                                        {" · Geleverd: "}
-                                        {new Date(p.delivered_at).toLocaleDateString("nl-BE", {
-                                          day: "numeric",
-                                          month: "short",
-                                          year: "numeric",
-                                        })}
-                                      </>
-                                    )}
+                                    {p.client_name || "Zonder naam"}
                                   </div>
                                 </div>
-                                <StatusBadge status={p.status} />
+                                <StatusPill status={p.status} />
                                 <span className="text-ink/40">→</span>
                               </button>
                             ))}
