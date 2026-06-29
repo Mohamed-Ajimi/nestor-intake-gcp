@@ -36,11 +36,13 @@ import uuid
 from typing import Generic, TypeVar
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.auth.identity import Identity
 from app.db.base import Base
-from app.db.models.intake import Intake
+from app.db.models.intake import Intake, IntakeAnswer, IntakeTemplate
+from app.db.models.skill_run import SkillRun
 
 M = TypeVar("M", bound=Base)
 
@@ -100,6 +102,37 @@ class TenantRepository(Generic[M]):
         )
         result = self._s.execute(stmt)
         return result.rowcount
+
+    @property
+    def session(self) -> Session:
+        """The request's bound ``Session`` — the user-path audit-write target (Pitfall 2).
+
+        Mirrors :attr:`app.db.admin_repo.AdminRepo.session` verbatim. Exposed so a
+        user-path status-transition handler can pass the SAME session to
+        :func:`app.db.audit.log`, keeping the ``audit_log`` row inside the action's ONE
+        transaction (D-02). The base — not only ``AdminRepo`` — must own this so the
+        tenant (user) path can audit too. This is the request session, NOT a new
+        engine/session, so the no-raw-DB grep-guard stays green.
+        """
+        return self._s
+
+    def create(self, **values):
+        """Insert one row in this identity's space and return it (user-path create).
+
+        ``space_id`` is injected from the verified ``Identity`` (``self._space_id``) ONLY
+        — it is NEVER accepted as a method kwarg (TENANT-02 / D-03 / T-06-01). For a
+        ``user`` (``self._space_id is not None``) the tenant key is forced onto the row;
+        a superadmin create (``self._space_id is None``) is out of scope for the tenant
+        seam and goes through :class:`app.db.admin_repo.AdminRepo` against a chosen target
+        space (Pitfall 3). The row is flushed so its server-side defaults / id are
+        populated before return.
+        """
+        if self._space_id is not None:
+            values["space_id"] = self._space_id  # identity-derived; never a kwarg
+        row = self.model(**values)
+        self._s.add(row)
+        self._s.flush()
+        return row
 
 
 class IntakeRepository(TenantRepository[Intake]):
