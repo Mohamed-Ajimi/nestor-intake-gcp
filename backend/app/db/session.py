@@ -105,6 +105,42 @@ def get_intake_answer_repo(identity: Identity = Depends(get_current_identity)):
         yield IntakeAnswerRepository(session, identity)
 
 
+def get_intake_and_answer_repos(identity: Identity = Depends(get_current_identity)):
+    """Yield BOTH an :class:`IntakeRepository` and an :class:`IntakeAnswerRepository`
+    bound to the SAME session — for the answers write path's ownership-gated upsert.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_intake_answer_repo`
+    (engine-by-role, default-deny 403 on a null user space BEFORE any session, ONE tx via
+    ``maker.begin()``, GUC set for the user path only), differing ONLY in that it yields a
+    TUPLE of two repositories constructed from the one ``session``.
+
+    Why combined: ``upsert_answers`` must first verify the caller OWNS ``intake_id``
+    (``IntakeRepository.get`` -> None -> 404, D-07) BEFORE upserting (``IntakeAnswerRepository``).
+    Both must run on ONE transaction (D-02 — one tx/request); yielding both repos from the
+    SAME ``session`` here keeps the ownership read and the write atomic, with NO second
+    ``maker.begin()`` / second dependency.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield (
+            IntakeRepository(session, identity),
+            IntakeAnswerRepository(session, identity),
+        )
+
+
 def get_skill_run_repo(identity: Identity = Depends(get_current_identity)):
     """Yield a tenant-scoped :class:`SkillRunRepository` for the current request.
 
