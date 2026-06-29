@@ -42,6 +42,9 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from app.auth.dependencies import get_current_identity
+from app.auth.identity import Identity
+from app.db import audit
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
@@ -364,3 +367,108 @@ def list_skill_runs(
         latest=_skill_run_view(latest) if latest is not None else None,
         runs=[_skill_run_view(run) for run in runs],
     )
+
+
+# ---------------------------------------------------------------------------
+# Status transitions (discrete named verbs, allow-listed to <= decomposed)
+# ---------------------------------------------------------------------------
+#
+# The transition maps are the data-layer enforcement of the scope ceiling (INTAKE-05 /
+# T-06-06): the ONLY reachable targets are the in-scope ``<= decomposed`` statuses. A
+# status with no entry raises 409 — so a jump toward the out-of-scope later stages is
+# STRUCTURALLY impossible here, not merely blocked by CI. Discrete ``/submit`` / ``/review``
+# verbs (NOT a generic ``PATCH status``) keep each transition a single allow-listed step and
+# a natural audit call-site.
+_SUBMIT_TRANSITIONS: dict[str, str] = {
+    "draft": "submitted",
+    "reviewed": "validated_by_client",
+}
+_REVIEW_TRANSITIONS: dict[str, str] = {
+    "submitted": "reviewed",
+}
+
+
+def _next_submit_status(current: str) -> str:
+    """Return the submit-transition target for ``current``, or 409 if not allow-listed."""
+    try:
+        return _SUBMIT_TRANSITIONS[current]
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Cannot submit an intake in status {current!r}",
+        )
+
+
+def _next_review_status(current: str) -> str:
+    """Return the review-transition target for ``current``, or 409 if not allow-listed."""
+    try:
+        return _REVIEW_TRANSITIONS[current]
+    except KeyError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Cannot review an intake in status {current!r}",
+        )
+
+
+@intake_router.post("/{intake_id}/submit")
+def submit_intake(
+    intake_id: str,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> IntakeView:
+    """Advance an intake along the submit transition (``draft`` -> ``submitted`` or
+    ``reviewed`` -> ``validated_by_client``), auditing the change in the SAME tx.
+
+    404 if the (in-scope) intake does not exist (D-07); 409 if the current status is not in
+    the submit allow-list (the scope-ceiling wall — T-06-06). The ``audit_log`` row is
+    written on ``repo.session`` so it commits/rolls back together with the status change
+    (one-tx, QA-04 / Pitfall 2). ``metadata`` is structured ``{"from","to"}`` only — never a
+    link or token (T-06-09).
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    old_status = intake.status
+    new_status = _next_submit_status(old_status)
+    repo.patch(intake_id, status=new_status)
+    audit.log(repo.session, actor_uid=identity.uid,
+              event_type="intake.status_changed", target=str(intake_id),
+              space_id=intake.space_id,
+              metadata={"from": old_status, "to": new_status})
+
+    updated = repo.get(intake_id)
+    if updated is None:  # pragma: no cover - patched row is in-scope by construction
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    return _view(updated)
+
+
+@intake_router.post("/{intake_id}/review")
+def review_intake(
+    intake_id: str,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> IntakeView:
+    """Advance an intake along the review transition (``submitted`` -> ``reviewed``),
+    auditing the change in the SAME tx.
+
+    404 if the (in-scope) intake does not exist (D-07); 409 if the current status is not in
+    the review allow-list. The ``audit_log`` row is written on ``repo.session`` (one-tx,
+    QA-04 / Pitfall 2); ``metadata`` is structured ``{"from","to"}`` only (T-06-09).
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    old_status = intake.status
+    new_status = _next_review_status(old_status)
+    repo.patch(intake_id, status=new_status)
+    audit.log(repo.session, actor_uid=identity.uid,
+              event_type="intake.status_changed", target=str(intake_id),
+              space_id=intake.space_id,
+              metadata={"from": old_status, "to": new_status})
+
+    updated = repo.get(intake_id)
+    if updated is None:  # pragma: no cover - patched row is in-scope by construction
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    return _view(updated)
