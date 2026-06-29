@@ -109,6 +109,12 @@ None - no external service configuration required.
 - Re-run the phase verifier; the remaining open item is the deferred live `pytest -m integration` execution in CI (and the second Phase 06 blocker, tracked separately).
 - WR-02 (ownership gates on `list_answers` / `list_skill_runs`) remains an out-of-scope WARNING for a follow-up — not addressed here per the plan's scope boundary.
 
+## Self-Check: PASSED
+
+All four modified files exist on disk and all task + metadata commits are present:
+- Files: `backend/app/db/session.py`, `backend/app/api/intake_routes.py`, `backend/app/db/repository.py`, `backend/tests/test_intake_cross_tenant.py`, `06-12-SUMMARY.md`
+- Commits: `2e4b75e` (Task 1), `542ee8f` (Task 2), `d666130` (Task 3), `1279bde` (SUMMARY)
+
 ---
 *Phase: 06-intake-crud-parity-frontend-api-seam*
 *Completed: 2026-06-29*
