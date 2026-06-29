@@ -1,27 +1,29 @@
-"""Full-stack cross-tenant denial suite (QA-01) — the required HTTP-level gate.
+"""Full-stack cross-tenant denial suite (QA-01 / TENANT-04) — the required HTTP-level gate.
 
-Drives the REAL Phase 4 surface over live Postgres through a FastAPI ``TestClient``:
-``protected_router`` (default-deny) -> ``sample_router`` (list/get/patch over intakes,
-plan 03) -> the PRODUCTION ``app.db.session.get_tenant_repo`` -> the real
-:class:`app.db.repository.IntakeRepository` (explicit ``WHERE`` + RLS) -> the handler's
-404/403 mapping. This is the end-to-end proof that the substrate proven unit-level in
-``test_tenant_repository.py`` denies cross-tenant access at the HTTP boundary too
-(QA-01 / TENANT-02 / TENANT-03 / D-04 / D-07).
+Re-pointed from the throwaway disposable driver onto the REAL Phase-6 intake surface
+(plan 04, Pitfall 5 — re-point BEFORE the disposable surface is deleted, so there is never
+a coverage gap). Drives the production routers over live Postgres through a FastAPI
+``TestClient``: ``protected_router`` (default-deny) -> the real ``intake_router``
+(``/intakes`` list / get / patch, plan 03) -> the PRODUCTION
+``app.db.session.get_tenant_repo`` -> the real :class:`app.db.repository.IntakeRepository`
+(explicit ``WHERE`` + RLS) -> the handler's 404/403 mapping. This is the end-to-end proof
+that the substrate proven unit-level in ``test_tenant_repository.py`` denies cross-tenant
+access at the HTTP boundary too (QA-01 / TENANT-02 / TENANT-03 / TENANT-04 / D-04 / D-07).
 
-What each case proves (04-VALIDATION.md ``-k`` selectors; D-07 / Pitfall 4):
+What each case proves (D-07 / Pitfall 4):
 
 | Test (``-k`` selector)        | Proves                                                      |
 |-------------------------------|------------------------------------------------------------|
 | ``get_cross_tenant``          | user-A GET of user-B's intake-by-id -> EXACTLY 404 AND the |
 |                               | body carries no space_b intake fields (no 200-with-data    |
-|                               | leak; never ``in (403, 404)``) — BOLA/IDOR, T-04-10/11.    |
-| ``list_scoped``               | user-A GET /sample/intakes -> ONLY space-A rows; space-B's |
+|                               | leak; never ``in (403, 404)``) — BOLA/IDOR, T-06-10.       |
+| ``list_scoped``               | user-A GET /intakes -> ONLY space-A rows; space-B's        |
 |                               | intake id is absent — TENANT-02.                           |
 | ``patch_cross_tenant``        | user-A PATCH of a space-B intake -> EXACTLY 404 AND the    |
 |                               | space-B row is UNCHANGED on re-read as its owner — D-07.   |
-| ``superadmin_reads_all``      | a superadmin GET /sample/intakes -> rows from BOTH spaces  |
-|                               | visible (catches a mis-routed superadmin engine, Pitfall 2,|
-|                               | T-04-13) — TENANT-03.                                       |
+| ``superadmin_reads_all``      | a superadmin GET /intakes -> rows from BOTH spaces visible |
+|                               | (catches a mis-routed superadmin engine, Pitfall 2,        |
+|                               | T-04-13) — TENANT-03.                                      |
 | ``null_space_403``            | a user Identity with space_id=None -> EXACTLY 403 on a     |
 |                               | data route (the ONLY data-route 403, D-04); no session is  |
 |                               | opened for it.                                             |
@@ -31,12 +33,7 @@ The production ``get_tenant_repo`` (``app/db/session.py``) routes through
 ``app.db.base.get_engine()`` (Cloud-SQL/URL mode) and ``get_superadmin_engine()`` (the
 Cloud SQL connector + Secret Manager password) — neither can dial inside a testcontainer.
 
-Earlier this suite overrode ``get_tenant_repo`` itself with a hand-written re-implementation,
-so the production dependency body (role->engine selection, the null-space 403 raise, the
-``maker.begin()``/``set_space_context`` wiring) was NEVER exercised — the "proven by tests"
-claim was proven against a stunt double (04-REVIEW.md CR-01 / 04-VERIFICATION.md SC-3).
-
-This version patches ONLY the engine FACTORIES that ``session.py`` imports
+This suite patches ONLY the engine FACTORIES that ``session.py`` imports
 (``session_mod.get_engine`` / ``session_mod.get_superadmin_engine``) so the REAL
 ``get_tenant_repo`` body runs verbatim against the conftest engines:
 
@@ -49,8 +46,7 @@ This version patches ONLY the engine FACTORIES that ``session.py`` imports
   ``SET ROLE`` from a superuser. Connecting-as is faithful to production
   (``current_user = 'app_superadmin'`` -> the 0003 ``*_superadmin_all`` bypass policy) and,
   because ``app_superadmin`` is a plain non-superuser ``LOGIN`` role, it is subject to RLS
-  and to the 0003 GRANTs — a missing GRANT or a broken bypass policy fails the test loudly
-  (closes 04-REVIEW.md WR-01 / WR-04).
+  and to the 0003 GRANTs — a missing GRANT or a broken bypass policy fails the test loudly.
 
 The null-space 403 is asserted two ways: through the full HTTP stack (``null_space_403``)
 AND by calling the real ``get_tenant_repo`` generator directly
@@ -74,12 +70,11 @@ import pytest
 pytestmark = pytest.mark.integration
 
 # firebase-admin is pulled by app.auth.dependencies (verify_id_token). Skip (do NOT
-# error) when the Admin SDK / backend deps are not installed on this box (Wave 0).
+# error) when the Admin SDK / backend deps are not installed on this box.
 pytest.importorskip("firebase_admin")
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("fastapi")
 
-# app.* lands in plans 02/03 — importorskip so this suite collects cleanly until then.
 dependencies = pytest.importorskip("app.auth.dependencies")
 identity_mod = pytest.importorskip("app.auth.identity")
 session_mod = pytest.importorskip("app.db.session")
@@ -161,8 +156,7 @@ def superadmin_engine(engine):
     the 0003 ``*_superadmin_all`` bypass policy match, granting cross-tenant reach. Because
     ``app_superadmin`` is a plain non-superuser ``LOGIN`` role (created by conftest's
     ``_ensure_app_superadmin``), it is subject to RLS and to the 0003 GRANTs — so this
-    proves the bypass POLICY and the GRANTs, not superuser ambient authority (closes
-    04-REVIEW.md WR-01 / WR-04, where ``SET ROLE`` from a superuser masked both).
+    proves the bypass POLICY and the GRANTs, not superuser ambient authority.
     """
     from sqlalchemy import create_engine, text
 
@@ -216,18 +210,18 @@ def _insert_intake(conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID) -
 
 
 def _build_app():
-    """Build a FastAPI app carrying the REAL protected_router + sample_router.
+    """Build a FastAPI app carrying the REAL protected_router + intake_router.
 
-    Mirrors app/main.py's wiring (sample_router mounted UNDER the default-deny
+    Mirrors app/main.py's wiring (intake_router mounted UNDER the default-deny
     protected_router) without the health probes / lifespan / CORS — the surface under
     test is the routers, not the app lifecycle.
     """
     from fastapi import FastAPI
 
     from app.api.auth_routes import protected_router
-    from app.api.sample_routes import sample_router
+    from app.api.intake_routes import intake_router
 
-    protected_router.include_router(sample_router)
+    protected_router.include_router(intake_router)
     app = FastAPI()
     app.include_router(protected_router)
     return app
@@ -282,11 +276,11 @@ def test_get_cross_tenant_returns_404_no_foreign_body(
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.get(
-            f"/sample/intakes/{intake_b}",
+            f"/intakes/{intake_b}",
             headers={"Authorization": "Bearer ignored-overridden"},
         )
 
-        # EXACT 404 — never `in (403, 404)` (D-07 / Pitfall 4 / T-04-11).
+        # EXACT 404 — never `in (403, 404)` (D-07 / Pitfall 4 / T-06-10).
         assert resp.status_code == 404, (
             f"cross-tenant GET-by-id must be EXACTLY 404, got {resp.status_code} "
             f"(body={resp.text!r}). 403/200 would leak existence (BOLA/IDOR)."
@@ -306,7 +300,7 @@ def test_get_cross_tenant_returns_404_no_foreign_body(
 
 
 def test_list_scoped_to_own_space(engine, set_space, two_spaces, monkeypatch):
-    """user-A GET /sample/intakes -> only space-A rows; space-B's intake id is absent."""
+    """user-A GET /intakes -> only space-A rows; space-B's intake id is absent."""
     from fastapi.testclient import TestClient
 
     space_a, space_b = two_spaces
@@ -320,7 +314,7 @@ def test_list_scoped_to_own_space(engine, set_space, two_spaces, monkeypatch):
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.get(
-            "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
+            "/intakes", headers={"Authorization": "Bearer ignored-overridden"}
         )
 
         assert resp.status_code == 200, f"own-space list should be 200, got {resp.status_code}."
@@ -345,8 +339,10 @@ def test_patch_cross_tenant_returns_404_row_unchanged(
     """user-A PATCH of a space-B intake -> EXACTLY 404, and the space-B row is unchanged.
 
     ``repo.patch`` matches the scoped ``WHERE`` against nothing -> ``rowcount == 0`` ->
-    handler 404 (never 403, never a silent success). The foreign row is re-read as its
-    OWNER (space_b GUC) and asserted unchanged (still ``draft``).
+    handler 404 (never 403, never a silent success). The patch targets ``client_name`` (the
+    only benign mutable field on ``IntakePatch``; status moves only via the allow-listed
+    transition verbs). The foreign row is re-read as its OWNER (space_b GUC) and asserted
+    unchanged (``client_name`` still NULL — no cross-tenant write leaked through).
     """
     from fastapi.testclient import TestClient
     from sqlalchemy import text
@@ -362,8 +358,8 @@ def test_patch_cross_tenant_returns_404_row_unchanged(
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.patch(
-            f"/sample/intakes/{intake_b}",
-            json={"status": "submitted"},
+            f"/intakes/{intake_b}",
+            json={"client_name": "HACKED-by-space-A"},
             headers={"Authorization": "Bearer ignored-overridden"},
         )
 
@@ -376,13 +372,13 @@ def test_patch_cross_tenant_returns_404_row_unchanged(
         # The foreign row must be UNTOUCHED — re-read as the owner (space_b GUC).
         with engine.begin() as conn:
             set_space(conn, space_b)
-            status = conn.execute(
-                text(f"SELECT status FROM {SCHEMA}.intakes WHERE id = :id"),
+            client_name = conn.execute(
+                text(f"SELECT client_name FROM {SCHEMA}.intakes WHERE id = :id"),
                 {"id": intake_b},
             ).scalar_one()
-        assert status == "draft", (
-            f"cross-tenant PATCH leaked through: space_b row status={status!r} "
-            "(expected unchanged 'draft')."
+        assert client_name != "HACKED-by-space-A", (
+            f"cross-tenant PATCH leaked through: space_b row client_name={client_name!r} "
+            "(expected unchanged — NULL)."
         )
     finally:
         app.dependency_overrides.clear()
@@ -397,7 +393,7 @@ def test_patch_cross_tenant_returns_404_row_unchanged(
 def test_superadmin_reads_all_spaces(
     engine, set_space, two_spaces, monkeypatch, superadmin_engine
 ):
-    """A superadmin GET /sample/intakes -> rows from BOTH spaces are visible.
+    """A superadmin GET /intakes -> rows from BOTH spaces are visible.
 
     Positive cross-tenant test: the REAL get_tenant_repo routes a superadmin to
     ``get_superadmin_engine()`` (patched to the connect-as ``app_superadmin`` engine, no
@@ -419,7 +415,7 @@ def test_superadmin_reads_all_spaces(
         app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.get(
-            "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
+            "/intakes", headers={"Authorization": "Bearer ignored-overridden"}
         )
 
         assert resp.status_code == 200, f"superadmin list should be 200, got {resp.status_code}."
@@ -459,7 +455,7 @@ def test_null_space_403_user_denied(engine, set_space, two_spaces, monkeypatch):
         app.dependency_overrides[get_current_identity] = _as(_null_space_user())
         client = TestClient(app)
         resp = client.get(
-            "/sample/intakes", headers={"Authorization": "Bearer ignored-overridden"}
+            "/intakes", headers={"Authorization": "Bearer ignored-overridden"}
         )
 
         # EXACT 403 — the null-space default-deny (D-04), NOT the 404 data-by-id code.
