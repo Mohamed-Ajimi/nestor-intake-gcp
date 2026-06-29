@@ -53,6 +53,11 @@ COPY pyproject.toml uv.lock* README.md ./
 # override) can run, and so the project install can find the `app` package.
 COPY app ./app
 COPY alembic.ini ./alembic.ini
+# scripts/ ships too so the SAME image runs the one-shot bootstrap Jobs
+# (seed_superadmin / seed_dev) via a `python -m scripts.<name>` args override,
+# mirroring the migration Job. Not needed by the project install (app package),
+# only present at /app for `python -m` from WORKDIR.
+COPY scripts ./scripts
 
 RUN uv pip install --system .
 
