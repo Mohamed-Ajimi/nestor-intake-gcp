@@ -4,7 +4,7 @@ import { nl } from "date-fns/locale";
 import { Download } from "lucide-react";
 import { toast } from "sonner";
 import type { IntakeField } from "@/lib/intake-types";
-import { supabase } from "@/lib/supabase";
+import { signedDownloadUrl } from "@/lib/api/storage";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -263,18 +263,18 @@ function FileRow({ file, bucket }: { file: FileMeta | undefined; bucket?: string
  const [busy, setBusy] = useState(false);
  if (!file?.path) return <span className="text-ink/40">—</span>;
  const open = async () => {
- if (!supabase || !bucket) {
+ if (!bucket) {
  toast.error("Storage niet geconfigureerd");
  return;
  }
  setBusy(true);
  try {
- const { data, error } = await supabase.storage.from(bucket).createSignedUrl(file.path, 300);
- if (error || !data) {
+ const res = await signedDownloadUrl({ bucket, path: file.path, expiresIn: 300 });
+ if (!res.success) {
  toast.error("Download mislukt");
  return;
  }
- window.open(data.signedUrl, "_blank");
+ window.open(res.data.url, "_blank");
  } finally {
  setBusy(false);
  }
