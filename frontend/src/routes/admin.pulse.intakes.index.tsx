@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { StatusPill } from "@/components/intake/_status";
 import { listIntakes } from "@/lib/api/intakes";
 import { listSpaces } from "@/lib/api/admin";
+import { useActiveSpace } from "@/lib/active-space";
 
 export const Route = createFileRoute("/admin/pulse/intakes/")({
  component: IntakesPage,
@@ -46,6 +47,10 @@ function IntakesPage() {
  const [error, setError] = useState<string | null>(null);
  const [statusFilter, setStatusFilter] = useState<string>("all");
  const [search, setSearch] = useState("");
+ // Source of truth for whether a superadmin has narrowed to a single space. The backend
+ // now honors ?space_id for a superadmin (threaded via withActiveSpace in listIntakes), so
+ // the subtitle tracks the REAL filter state instead of falsely claiming filtering.
+ const { activeSpaceId } = useActiveSpace();
 
  useEffect(() => {
   let cancelled = false;
@@ -107,7 +112,9 @@ function IntakesPage() {
  <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">intakes</h1>
           <p className="mt-1 text-sm text-ink/60">
-            Alle Pulse intakes, gefilterd op de actieve klant.
+            {activeSpaceId
+              ? "Pulse intakes, gefilterd op de actieve klant."
+              : "Alle Pulse intakes."}
           </p>
         </div>
         <Button asChild>
