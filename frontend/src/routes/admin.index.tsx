@@ -140,7 +140,7 @@ function AdminHomePage() {
 
         <footer className="mt-16 border-t border-ink/15 pt-6 flex items-center justify-between">
           <p className="font-mono text-xs uppercase tracking-wider text-ink/60">
-            {session?.user.email}
+            {session?.email}
           </p>
           <button
             onClick={handleLogout}

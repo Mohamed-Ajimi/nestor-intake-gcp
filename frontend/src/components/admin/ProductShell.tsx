@@ -95,7 +95,7 @@ export function ProductShell({
 
         <div className="mt-auto border-t border-ink pt-4">
           <p className="truncate text-sm font-medium text-ink">
-            {session?.user.email}
+            {session?.email}
           </p>
           <button
             onClick={handleLogout}
