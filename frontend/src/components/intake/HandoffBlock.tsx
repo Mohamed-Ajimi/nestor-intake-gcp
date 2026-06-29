@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Clipboard, Download, Check, Sparkles, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { supabase } from "@/lib/supabase";
+import { derivePhase, phaseShowsResearch } from "@/lib/intake-phase";
 import { generateContextPackBlob } from "./ContextPackPDF";
 
 function slug(s: string) {
@@ -54,19 +54,10 @@ export function HandoffBlock({
     intakeStatus === "delivered";
 
   const fetchPack = async () => {
-    if (!supabase) return;
-    setLoadingPack(true);
-    const { data } = await supabase
-      .schema("nestor")
-      .from("skill_runs")
-      .select("id, output, cost_estimate_usd, completed_at, model")
-      .eq("intake_id", intakeId)
-      .eq("skill_name", "context-pack")
-      .eq("status", "succeeded")
-      .order("completed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    setPack((data as ContextPack | null) ?? null);
+    // Context-pack skill-run data is served via the API seam (other Phase-6
+    // plans). This block is gated-off dead UI this milestone — render inert.
+    void intakeId;
+    setPack(null);
     setLoadingPack(false);
   };
 
@@ -76,21 +67,9 @@ export function HandoffBlock({
   }, [intakeId]);
 
   const handleGenerate = async () => {
-    if (!supabase) return;
-    setGenerating(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("generate-context-pack", {
-        body: { intake_id: intakeId },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Synthese mislukt");
-      toast.success("Context Pack gegenereerd");
-      await fetchPack();
-    } catch (e) {
-      toast.error(`Synthese mislukt: ${(e as Error).message}`);
-    } finally {
-      setGenerating(false);
-    }
+    // Context-pack synthesis runs through the backend skill seam (Phase 6/7),
+    // not invoked from this gated-off block.
+    toast.error("Context Pack-synthese is niet beschikbaar in deze fase.");
   };
 
   const handleCopy = async () => {
@@ -177,21 +156,11 @@ export function HandoffBlock({
   };
 
   const handleMarkDelivered = async () => {
-    if (!supabase) return;
-    setBusy(true);
-    const { error } = await supabase
-      .schema("nestor")
-      .from("intakes")
-      .update({ status: "decomposed" })
-      .eq("id", intakeId);
-    setBusy(false);
+    // Status transitions are mediated by backend transition verbs (intakes.ts);
+    // not wired from this gated-off block.
+    void onStatusChange;
     setConfirming(false);
-    if (error) {
-      toast.error("Status niet bijgewerkt");
-      return;
-    }
-    onStatusChange("decomposed");
-    toast.success("Status: gedecomposeerd");
+    toast.error("Statuswijziging verloopt via de backend.");
   };
 
   const fmtDate = (d: string | null) => {
@@ -209,6 +178,22 @@ export function HandoffBlock({
 
   const fmtEur = (usd: number | null) =>
     usd == null ? "—" : `€${(usd * 0.92).toFixed(2)}`;
+
+  // Phase-gate: this handoff block is post-decomposed dead UI this milestone.
+  // The re-platform scope ceiling stops at `decomposed`, so phaseShowsResearch()
+  // is effectively false and the block never renders.
+  const phase = derivePhase(
+    {
+      status: intakeStatus,
+      validation_link_sent_at: null,
+      results_link_sent_at: null,
+      context_pack_artifact_id: null,
+      final_report_artifact_id: null,
+    },
+    null,
+    false,
+  );
+  if (!phaseShowsResearch(phase)) return null;
 
   return (
     <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-6">

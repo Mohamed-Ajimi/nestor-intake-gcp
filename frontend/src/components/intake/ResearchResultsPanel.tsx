@@ -15,7 +15,7 @@ import {
   ChevronRight,
   X,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import * as storage from "@/lib/api/storage";
 import { cn } from "@/lib/utils";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
@@ -136,30 +136,18 @@ export function ResearchResultsPanel({
   // Get signed URL — mode-aware
   const getSignedUrl = useCallback(
     async (artifactId: string, storagePath: string | null): Promise<string | null> => {
-      if (!supabase) return null;
-      if (mode === "admin") {
-        if (!storagePath) return null;
-        const { data, error } = await supabase.storage
-          .from(BUCKET)
-          .createSignedUrl(storagePath, 300);
-        if (error || !data) return null;
-        return data.signedUrl;
-      }
-      // klant
-      if (!token) return null;
-      const { data: pathInfo, error } = await supabase
-        .schema("nestor" as never)
-        .rpc("get_artifact_storage_path_by_token", {
-          p_token: token,
-          p_artifact_id: artifactId,
-        });
-      if (error || !pathInfo) return null;
-      const info = pathInfo as { storage_path?: string; storage_bucket?: string };
-      if (!info.storage_path || !info.storage_bucket) return null;
-      const { data: signed } = await supabase.storage
-        .from(info.storage_bucket)
-        .createSignedUrl(info.storage_path, 300);
-      return signed?.signedUrl ?? null;
+      // Admin downloads route through the backend storage seam. The klant
+      // token-scoped path resolution is a research-backend op (Phase 7+) and is
+      // inert this milestone.
+      void artifactId;
+      void token;
+      if (mode !== "admin" || !storagePath) return null;
+      const res = await storage.signedDownloadUrl({
+        bucket: BUCKET,
+        path: storagePath,
+        expiresIn: 300,
+      });
+      return res.success ? res.data.url : null;
     },
     [mode, token],
   );
@@ -179,18 +167,9 @@ export function ResearchResultsPanel({
   // Fetch text content of an artifact (for PDF)
   const getArtifactText = useCallback(
     async (a: RRPArtifact): Promise<string | null> => {
-      if (!supabase) return null;
-      if (mode === "admin") {
-        const { data, error } = await supabase
-          .schema("nestor" as never)
-          .from("research_artifacts")
-          .select("text_content")
-          .eq("id", a.id)
-          .single();
-        if (error || !data) return null;
-        return (data as { text_content: string | null }).text_content ?? null;
-      }
-      // klant: fetch via signed URL
+      // Artifact text bodies are served by the research backend (Phase 7+);
+      // the admin DB read is out of scope. Where a signed URL is available
+      // (admin seam), the text is fetched from it.
       const url = await getSignedUrl(a.id, a.storage_path);
       if (!url) return null;
       try {
@@ -294,29 +273,13 @@ function KlantToegangBlock({
       : null;
 
   const generate = async (regen: boolean) => {
-    if (!supabase) return;
     if (regen && !confirm("De oude link wordt ongeldig — doorgaan?")) return;
-    setBusy(true);
-    try {
-      const newToken = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
-      const updates: Record<string, unknown> = { client_results_token: newToken };
-      // Auto-bump to delivered if final report already uploaded
-      if (intake.final_report_artifact_id) {
-        updates.status = "delivered";
-      }
-      const { error } = await supabase
-        .schema("nestor" as never)
-        .from("intakes")
-        .update(updates)
-        .eq("id", intake.id);
-      if (error) throw error;
-      onTokenChange(newToken);
-      toast.success(regen ? "Nieuwe link gegenereerd" : "Klant-link aangemaakt");
-    } catch (e) {
-      toast.error(`Mislukt: ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
+    // Klant-link generation (and the auto-deliver status bump) is mediated by
+    // the backend (Phase 7+); not wired from this gated-off panel.
+    void intake.final_report_artifact_id;
+    void onTokenChange;
+    void setBusy;
+    toast.error("Klant-link genereren verloopt via de backend.");
   };
 
   const copy = async () => {
@@ -507,31 +470,11 @@ function QuestionResultBlock({
       let clientName = client.name;
 
       if (mode === "klant") {
-        if (!supabase || !token) {
-          toast.error("Configuratie ontbreekt.");
-          return;
-        }
-        const { data, error } = await supabase
-          .schema("nestor" as never)
-          .rpc("get_synthesis_text_by_token", {
-            p_token: token,
-            p_question_id: question.id,
-          });
-        const r = data as
-          | {
-              success?: boolean;
-              error?: string;
-              message?: string;
-              answer_text?: string;
-              client_name?: string;
-            }
-          | null;
-        if (error || !r || r.error || r.success === false) {
-          toast.error(r?.message || "Fout bij ophalen antwoord");
-          return;
-        }
-        text = r.answer_text ?? null;
-        if (r.client_name) clientName = r.client_name;
+        // Klant synthesis text is served by the research backend (Phase 7+);
+        // not available this milestone.
+        void token;
+        toast.error("Antwoord niet beschikbaar in deze fase.");
+        return;
       } else {
         if (!answerArtifact) return;
         text = await getArtifactText(answerArtifact);
@@ -686,46 +629,15 @@ function AISearchPanel({
       setAnswer(null);
       setFragments(null);
       setShowFragments(false);
-      try {
-        const SUPABASE_URL =
-          import.meta.env.VITE_SUPABASE_URL || "https://inmsssedwdmgtnhaydmg.supabase.co";
-        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-        const body: Record<string, unknown> = { query: text, top_k: 8 };
-        if (mode === "klant" && token) {
-          body.client_results_token = token;
-        } else {
-          body.intake_id = intakeId;
-          body.include_fragments = true;
-        }
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/ask-research`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-            apikey: SUPABASE_ANON_KEY,
-          },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Edge function error ${res.status}: ${errText}`);
-        }
-        const data = (await res.json()) as {
-          answer?: string;
-          sources_used?: number;
-          fragments?: SearchResult[];
-        };
-        setAnswer(data.answer ?? "");
-        setSourcesUsed(data.sources_used ?? 0);
-        if (mode === "admin" && Array.isArray(data.fragments)) {
-          setFragments(data.fragments);
-        }
-      } catch (e) {
-        toast.error(`Zoeken mislukt: ${(e as Error).message}`);
-        setAnswer("");
-      } finally {
-        setSearching(false);
-      }
+      // AI-zoek (ask-research / embeddings) runs on the research backend
+      // (Phase 7+) and is not available this milestone.
+      void intakeId;
+      void mode;
+      void token;
+      void setSourcesUsed;
+      toast.error("AI-zoek is nog niet beschikbaar in deze fase.");
+      setAnswer("");
+      setSearching(false);
     },
     [intakeId, mode, token],
   );
