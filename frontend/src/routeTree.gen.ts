@@ -40,6 +40,9 @@ import { Route as AdminSalesProjectsIdRouteImport } from './routes/admin.sales.p
 import { Route as AdminPulseIntakesNewRouteImport } from './routes/admin.pulse.intakes.new'
 import { Route as AdminPulseIntakesIdRouteImport } from './routes/admin.pulse.intakes.$id'
 import { Route as AdminPulseClientsIdRouteImport } from './routes/admin.pulse.clients.$id'
+import { Route as IntakeIndexRouteImport } from './routes/intake.index'
+import { Route as IntakeIdRouteImport } from './routes/intake.$id'
+import { Route as IntakeIdResultsRouteImport } from './routes/intake.$id.results'
 
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
@@ -196,6 +199,23 @@ const AdminPulseClientsIdRoute = AdminPulseClientsIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => AdminPulseClientsRoute,
 } as any)
+// Top-level authenticated user intake surface (NOT under /admin). Flat siblings under
+// the root route — there is no `intake.tsx` layout, so each registers its own full path.
+const IntakeIndexRoute = IntakeIndexRouteImport.update({
+  id: '/intake/',
+  path: '/intake/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IntakeIdRoute = IntakeIdRouteImport.update({
+  id: '/intake/$id',
+  path: '/intake/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IntakeIdResultsRoute = IntakeIdResultsRouteImport.update({
+  id: '/intake/$id/results',
+  path: '/intake/$id/results',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -229,6 +249,9 @@ export interface FileRoutesByFullPath {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
+  '/intake': typeof IntakeIndexRoute
+  '/intake/$id': typeof IntakeIdRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -259,6 +282,9 @@ export interface FileRoutesByTo {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects': typeof AdminSalesProjectsIndexRoute
+  '/intake': typeof IntakeIndexRoute
+  '/intake/$id': typeof IntakeIdRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -293,6 +319,9 @@ export interface FileRoutesById {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
+  '/intake/': typeof IntakeIndexRoute
+  '/intake/$id': typeof IntakeIdRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -328,6 +357,9 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
+    | '/intake'
+    | '/intake/$id'
+    | '/intake/$id/results'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -358,6 +390,9 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes'
     | '/admin/sales/projects'
+    | '/intake'
+    | '/intake/$id'
+    | '/intake/$id/results'
   id:
     | '__root__'
     | '/'
@@ -391,12 +426,18 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
+    | '/intake/'
+    | '/intake/$id'
+    | '/intake/$id/results'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
   AuthLoginRoute: typeof AuthLoginRoute
+  IntakeIndexRoute: typeof IntakeIndexRoute
+  IntakeIdRoute: typeof IntakeIdRoute
+  IntakeIdResultsRoute: typeof IntakeIdResultsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -618,6 +659,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminPulseClientsIdRouteImport
       parentRoute: typeof AdminPulseClientsRoute
     }
+    '/intake/': {
+      id: '/intake/'
+      path: '/intake'
+      fullPath: '/intake'
+      preLoaderRoute: typeof IntakeIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/intake/$id': {
+      id: '/intake/$id'
+      path: '/intake/$id'
+      fullPath: '/intake/$id'
+      preLoaderRoute: typeof IntakeIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/intake/$id/results': {
+      id: '/intake/$id/results'
+      path: '/intake/$id/results'
+      fullPath: '/intake/$id/results'
+      preLoaderRoute: typeof IntakeIdResultsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -728,6 +790,9 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   AuthLoginRoute: AuthLoginRoute,
+  IntakeIndexRoute: IntakeIndexRoute,
+  IntakeIdRoute: IntakeIdRoute,
+  IntakeIdResultsRoute: IntakeIdResultsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
