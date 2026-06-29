@@ -43,7 +43,6 @@ from sqlalchemy import text
 from app.api.admin_routes import admin_router
 from app.api.auth_routes import auth_router, protected_router
 from app.api.intake_routes import intake_router
-from app.api.sample_routes import sample_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
 from app.db import base
@@ -103,28 +102,26 @@ if _cors_origins:
         allow_headers=["Authorization", "Content-Type"],
     )
 
-# Routers (plan 03). NO auth dependency is attached to the bare app, so /healthz and
+# Routers (plan 03+). NO auth dependency is attached to the bare app, so /healthz and
 # /readyz below stay ANONYMOUS for the Cloud Run probes (Pitfall 1 / T-02-04).
 # - auth_router: anonymous-but-self-verifying /auth/session login-sync handshake.
 # - protected_router: the default-deny base (Depends(get_current_identity)) every
-#   future feature router inherits (AUTH-01 / T-03-17).
-# - sample_router: the throwaway Phase-4 tenant-scoped list/get/patch surface (D-08),
-#   mounted UNDER protected_router so it inherits get_current_identity and is NEVER
-#   anonymous. The single app.include_router(protected_router) below carries it; do NOT
-#   add a second app.include_router(sample_router) and do NOT attach any auth dependency
-#   to the bare app (keeps /healthz and /readyz anonymous for the Cloud Run probes).
-protected_router.include_router(sample_router)
+#   feature router inherits (AUTH-01 / T-03-17). The single
+#   app.include_router(protected_router) below carries every router mounted under it; do
+#   NOT add a second app.include_router(...) for those nested routers and do NOT attach
+#   any auth dependency to the bare app (keeps /healthz and /readyz anonymous for the
+#   Cloud Run probes).
 # - admin_router: the Phase-5 superadmin-only admin surface (invite / deactivate /
 #   space + template management, USER-01/03 / AUTH-04 / QA-04). Mounted UNDER
-#   protected_router exactly like sample_router, so it inherits get_current_identity;
-#   its own per-route get_admin_session dependency adds the superadmin-only 403 gate.
+#   protected_router so it inherits get_current_identity; its own per-route
+#   get_admin_session dependency adds the superadmin-only 403 gate.
 protected_router.include_router(admin_router)
 # - intake_router: the Phase-6 real intake feature surface (CRUD + answers batch +
 #   allow-listed status transitions + skill-run/template reads, bounded at decomposed —
-#   INTAKE-01/02/03/04). Mounted UNDER protected_router exactly like sample_router, so it
-#   inherits get_current_identity; each handler additionally Depends(get_*_repo) for its
-#   tenant-scoped data access. sample_router stays mounted until plan 04 re-points the
-#   cross-tenant denial suite onto /intakes and deletes it.
+#   INTAKE-01/02/03/04). Mounted UNDER protected_router so it inherits
+#   get_current_identity; each handler additionally Depends(get_*_repo) for its
+#   tenant-scoped data access. (The Phase-4 throwaway scaffold router was removed in plan
+#   04 once this real surface and its cross-tenant denial suite landed.)
 protected_router.include_router(intake_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
