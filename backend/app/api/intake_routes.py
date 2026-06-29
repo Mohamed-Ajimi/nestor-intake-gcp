@@ -223,14 +223,25 @@ def _template_view(template) -> TemplateView:
 
 @intake_router.get("")
 def list_intakes(
+    space_id: str | None = None,
     repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
 ) -> list[IntakeView]:
     """List intakes visible to the caller — own-space rows only for a user (TENANT-02).
 
     The repository applies the explicit ``WHERE space_id =`` for a user (and omits it for a
-    superadmin, who reads across spaces). The handler passes NO scope argument.
+    superadmin, who reads across spaces); the handler passes NO scope argument to the repo.
+
+    ``space_id`` is an optional SUPERADMIN-ONLY view-filter (TENANT-04 / T-06-22): when a
+    superadmin supplies it the already-cross-tenant result is NARROWED to that space at the
+    HANDLER layer (a list comprehension over ``repo.list()`` rows — never a repo argument, so
+    the repository's no-``space_id``-parameter invariant holds). For a user the param is INERT
+    — their rows are already token-scoped by the repo, so it can neither widen nor narrow.
     """
-    return [_view(row) for row in repo.list()]
+    rows = repo.list()
+    if identity.role == "superadmin" and space_id:
+        rows = [r for r in rows if str(r.space_id) == space_id]
+    return [_view(row) for row in rows]
 
 
 @intake_router.post("", status_code=status.HTTP_201_CREATED)

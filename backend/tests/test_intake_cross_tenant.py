@@ -582,3 +582,115 @@ def test_upsert_answers_cross_tenant_returns_404_answers_unchanged(
     finally:
         app.dependency_overrides.clear()
         _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: superadmin_space_id_narrows — superadmin ?space_id=<B> -> only space-B
+# ===========================================================================
+
+
+def test_superadmin_space_id_param_narrows_list(
+    engine, set_space, two_spaces, monkeypatch, superadmin_engine
+):
+    """A superadmin GET /intakes?space_id=<B> -> ONLY space-B's intake (space-A excluded).
+
+    Proves TENANT-04's superadmin space-switcher filter: ``withActiveSpace`` appends
+    ``?space_id=<id>`` and ``list_intakes`` now honors it for a superadmin by NARROWING the
+    already-cross-tenant ``repo.list()`` result to the selected space at the HANDLER layer
+    (T-06-22 — a UX view-filter, NEVER passed into the repo / never an authz input). The same
+    superadmin GET /intakes WITHOUT the param still returns BOTH spaces (the all-spaces default
+    is unchanged — no regression to ``test_superadmin_reads_all_spaces``).
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
+
+        _patch_engine_factories(monkeypatch, engine, sa_engine=superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        # With ?space_id=<B>: the superadmin view is NARROWED to space-B only.
+        narrowed = client.get(
+            f"/intakes?space_id={space_b}",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert narrowed.status_code == 200, (
+            f"superadmin narrowed list should be 200, got {narrowed.status_code}."
+        )
+        narrowed_ids = {row["id"] for row in narrowed.json()}
+        assert str(intake_b) in narrowed_ids, (
+            "TENANT-04: superadmin ?space_id=<B> must INCLUDE space-B's intake "
+            f"(visible ids={narrowed_ids})."
+        )
+        assert str(intake_a) not in narrowed_ids, (
+            "TENANT-04: superadmin ?space_id=<B> must EXCLUDE space-A's intake — the "
+            f"view-filter did not narrow (visible ids={narrowed_ids})."
+        )
+
+        # With NO param: the all-spaces default is unchanged — BOTH spaces visible.
+        unfiltered = client.get(
+            "/intakes", headers={"Authorization": "Bearer ignored-overridden"}
+        )
+        assert unfiltered.status_code == 200, (
+            f"superadmin unfiltered list should be 200, got {unfiltered.status_code}."
+        )
+        all_ids = {row["id"] for row in unfiltered.json()}
+        assert str(intake_a) in all_ids and str(intake_b) in all_ids, (
+            "REGRESSION: superadmin GET /intakes with NO param must still return BOTH "
+            f"spaces (visible ids={all_ids})."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: user_space_id_inert — user-A ?space_id=<B> -> still ONLY space-A
+# ===========================================================================
+
+
+def test_user_space_id_param_is_inert(engine, set_space, two_spaces, monkeypatch):
+    """user-A GET /intakes?space_id=<B> -> still ONLY space-A's intake (param inert).
+
+    Proves the param can NEVER widen a non-superadmin's access (T-06-22 / T-06-23): a user's
+    ``repo.list()`` is already ``_scope``-walled to their token-derived space, and the handler
+    applies its narrowing ONLY for ``identity.role == "superadmin"``, so a user-supplied
+    ``space_id`` is discarded server-side. A forged space-B param therefore returns space-A's
+    own intake and NEVER space-B's — the repo scope is the sole authority.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.get(
+            f"/intakes?space_id={space_b}",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        assert resp.status_code == 200, (
+            f"user list should be 200, got {resp.status_code}."
+        )
+        ids = {row["id"] for row in resp.json()}
+        assert str(intake_a) in ids, (
+            "user ?space_id=<B> must still include their OWN space-A intake (param inert)."
+        )
+        assert str(intake_b) not in ids, (
+            "TENANT-04 LEAK: user ?space_id=<B> widened access to space-B's intake — the "
+            f"param was trusted as an authz input (visible ids={ids})."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
