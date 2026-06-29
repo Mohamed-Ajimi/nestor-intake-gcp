@@ -1,9 +1,12 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { signOut } from "firebase/auth";
 import agenicLogo from "@/assets/agenic-logo.png";
-import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { ActiveSpaceProvider } from "@/lib/active-space";
 import { ADMIN_NAV } from "@/components/admin/adminNav";
+import { SpaceSwitcher } from "@/components/admin/SpaceSwitcher";
 
 type Item = { to: string; label: string; exact: boolean };
 
@@ -24,12 +27,12 @@ export function ProductShell({
     exact ? pathname === to : pathname === to || pathname.startsWith(to + "/");
 
   async function handleLogout() {
-    if (!supabase) return;
-    await supabase.auth.signOut();
+    await signOut(auth);
     navigate({ to: "/auth/login" });
   }
 
   return (
+    <ActiveSpaceProvider>
     <div className="flex min-h-screen bg-paper">
       <aside className="hidden w-64 shrink-0 flex-col border-r border-ink px-5 py-6 md:flex">
         <Link
@@ -49,7 +52,17 @@ export function ProductShell({
           </p>
         </Link>
 
-        <nav className="mt-8 flex flex-col gap-1">
+        {/* Global space switcher (D-04 / TENANT-04) — superadmin-only. Mounted on the
+            SAME isSuperadmin gate as the "Beheer" nav below so a `user` NEVER renders it
+            (absent from the DOM, not merely hidden). The selection is UX-only view-filter
+            state; the backend remains the sole tenant authority. */}
+        {isSuperadmin && (
+          <div className="mt-6">
+            <SpaceSwitcher />
+          </div>
+        )}
+
+        <nav className="mt-6 flex flex-col gap-1">
           {items.map((item) => {
             const active = isActive(item.to, item.exact);
             return (
@@ -110,5 +123,6 @@ export function ProductShell({
       </aside>
       <main className="flex-1 px-6 py-8 md:px-10 md:py-10">{children}</main>
     </div>
+    </ActiveSpaceProvider>
   );
 }
