@@ -204,6 +204,32 @@ def _insert_intake(conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID) -
     )
 
 
+def _insert_answer(
+    conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID, field_key: str, value: str
+) -> None:
+    """Insert one intake_answers row, GUC set so the 0002 WITH CHECK passes.
+
+    Mirrors :func:`_insert_intake`'s GUC-then-INSERT shape — sets ``app.current_space_id``
+    to the OWNING space before the INSERT so the RLS WITH CHECK on ``intake_answers`` admits
+    the row. Used to seed a space-B answer the cross-tenant PATCH must NOT overwrite.
+    """
+    from sqlalchemy import text
+
+    set_space(conn, space_id)
+    conn.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.intake_answers (space_id, intake_id, field_key, value) "
+            "VALUES (:space_id, :intake_id, :field_key, :value)"
+        ),
+        {
+            "space_id": space_id,
+            "intake_id": intake_id,
+            "field_key": field_key,
+            "value": value,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # App + client builder (the REAL routers under test)
 # ---------------------------------------------------------------------------
@@ -490,3 +516,69 @@ def test_null_space_403_real_dependency_direct():
         f"real get_tenant_repo must raise EXACTLY 403 for a null-space user, "
         f"got {excinfo.value.status_code}."
     )
+
+
+# ===========================================================================
+# Case: upsert_answers_cross_tenant — user-A PATCH space-B answers -> 404, unchanged
+# ===========================================================================
+
+
+def test_upsert_answers_cross_tenant_returns_404_answers_unchanged(
+    engine, set_space, two_spaces, monkeypatch
+):
+    """user-A PATCH of space-B's intake answers -> EXACTLY 404, space-B answer unchanged.
+
+    Closes the CR-01 gap on the save-as-you-go WRITE path (TENANT-04 / INTAKE-03 / D-01).
+    The real ``get_intake_and_answer_repos`` runs verbatim against the testcontainer (the
+    factories ``session.py`` imported are patched). The handler's ownership gate
+    (``intake_repo.get(intake_id) is None``) excludes space-B's intake from space-A's scope,
+    so the PATCH is EXACTLY 404 (never 403, never 200/500; D-07 existence-hiding) and
+    ``upsert_batch`` is never reached. The seeded space-B answer is re-read as its OWNER
+    (space_b GUC) and asserted STILL ``"owned-by-B"`` — the cross-tenant write did not leak
+    through (the foreign answer row is untouched).
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_a, space_b = two_spaces
+    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_two_spaces(engine, set_space, space_a, space_b, intake_a, intake_b)
+        # Seed space-B an answer that the cross-tenant PATCH must NOT overwrite.
+        with engine.begin() as conn:
+            _insert_answer(conn, set_space, space_b, intake_b, "q1", "owned-by-B")
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.patch(
+            f"/intakes/{intake_b}/answers",
+            json={"answers": [{"field_key": "q1", "value": "HACKED-by-space-A"}]},
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        # EXACT 404 — never `in (403, 404)`, never 200/500 (D-07 / T-06-10b).
+        assert resp.status_code == 404, (
+            f"cross-tenant PATCH /answers must be EXACTLY 404, got {resp.status_code} "
+            f"(body={resp.text!r}). 403/200/500 would leak existence or write through."
+        )
+
+        # The foreign answer must be UNTOUCHED — re-read as the owner (space_b GUC).
+        with engine.begin() as conn:
+            set_space(conn, space_b)
+            value = conn.execute(
+                text(
+                    f"SELECT value FROM {SCHEMA}.intake_answers "
+                    "WHERE intake_id = :id AND field_key = 'q1'"
+                ),
+                {"id": intake_b},
+            ).scalar_one()
+        assert value == "owned-by-B", (
+            f"cross-tenant answers PATCH leaked through: space_b q1 value={value!r} "
+            "(expected unchanged — 'owned-by-B')."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)

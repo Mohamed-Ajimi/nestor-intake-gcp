@@ -173,10 +173,16 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
 
         ``space_id`` is injected from ``self._space_id`` (the verified Identity) and
         ``intake_id`` from the path arg — NEVER from the item dict (D-03 / T-06-03). Each
-        item carries only ``field_key`` / ``value`` / ``value_json``; any ``space_id`` or
-        ``intake_id`` an item happened to carry is ignored. On a user path
-        ``self._space_id`` is set; this method is the user-path section save, so it relies
-        on that tenant key being present (a superadmin batch would go via the admin seam).
+        item carries only ``field_key`` / ``value`` / ``value_json``; any ``space_id`` /
+        ``intake_id`` it happened to carry is ignored. This is the user-path section save, so
+        it relies on the tenant key being present (a superadmin batch goes via the admin seam).
+
+        D-01 repo wall (independent of RLS): on the user path the ``ON CONFLICT DO UPDATE``
+        carries an explicit ``WHERE space_id = self._space_id`` (guarded by
+        ``self._space_id is not None``, mirroring ``create``) so a conflicting row owned by a
+        FOREIGN space is NEVER overwritten — even if RLS were dropped. The conflict TARGET
+        stays the ``(intake_id, field_key)`` constraint (no migration); ``space_id`` comes
+        ONLY from ``self._space_id`` (no method parameter — module invariant).
         """
         rows = [
             {
@@ -192,13 +198,22 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
             return
         stmt = pg_insert(self.model).values(rows)
         # Same conflict target the legacy prefill/save-as-you-go RPC used.
-        stmt = stmt.on_conflict_do_update(
-            constraint="uq_intake_answers_intake_field",
-            set_={
-                "value": stmt.excluded.value,
-                "value_json": stmt.excluded.value_json,
-            },
-        )
+        set_ = {
+            "value": stmt.excluded.value,
+            "value_json": stmt.excluded.value_json,
+        }
+        if self._space_id is not None:
+            # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_intake_answers_intake_field",
+                set_=set_,
+                where=(self.model.space_id == self._space_id),
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_intake_answers_intake_field",
+                set_=set_,
+            )
         self._s.execute(stmt)
 
 

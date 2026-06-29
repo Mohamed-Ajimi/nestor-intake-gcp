@@ -52,6 +52,7 @@ from app.db.repository import (
     SkillRunRepository,
 )
 from app.db.session import (
+    get_intake_and_answer_repos,
     get_intake_answer_repo,
     get_intake_template_repo,
     get_skill_run_repo,
@@ -331,19 +332,25 @@ def list_answers(
 def upsert_answers(
     intake_id: str,
     body: AnswerBatch,
-    repo: IntakeAnswerRepository = Depends(get_intake_answer_repo),
+    repos: tuple[IntakeRepository, IntakeAnswerRepository] = Depends(get_intake_and_answer_repos),
 ) -> list[AnswerView]:
     """Upsert a section's answers in one round-trip (save-as-you-go, D-03).
 
-    Each item contributes only ``field_key`` / ``value`` / ``value_json``; the repo injects
-    ``space_id`` from the verified Identity and ``intake_id`` from the path — never from the
-    item dict (T-06-03). The upsert targets the EXISTING ``(intake_id, field_key)`` unique
-    constraint, so re-saving a section UPDATES rather than duplicating (Pitfall 6). Returns
-    the intake's answers as persisted.
+    OWNERSHIP GATE (T-06-20 / D-07): BEFORE any write, ``intake_repo.get`` verifies the
+    caller owns ``intake_id`` on the SAME tx as the upsert (the combined dependency yields
+    both repos on one session — D-02). A cross-tenant/missing id -> ``None`` -> 404 (never
+    403, never 200-with-data). Each item carries only ``field_key`` / ``value`` /
+    ``value_json``; the repo injects ``space_id`` (Identity) + ``intake_id`` (path), never
+    from the item dict (T-06-03), targeting the ``(intake_id, field_key)`` constraint.
     """
+    intake_repo, answers_repo = repos
+    # Ownership pre-check (D-07): a cross-tenant/missing id is hidden as 404 BEFORE any write.
+    if intake_repo.get(intake_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
     items = [item.model_dump() for item in body.answers]
-    repo.upsert_batch(intake_id, items)
-    return [_answer_view(row) for row in repo.list_for_intake(intake_id)]
+    answers_repo.upsert_batch(intake_id, items)
+    return [_answer_view(row) for row in answers_repo.list_for_intake(intake_id)]
 
 
 # ---------------------------------------------------------------------------
