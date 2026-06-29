@@ -42,6 +42,7 @@ from sqlalchemy import text
 
 from app.api.admin_routes import admin_router
 from app.api.auth_routes import auth_router, protected_router
+from app.api.intake_routes import intake_router
 from app.api.sample_routes import sample_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
@@ -118,6 +119,13 @@ protected_router.include_router(sample_router)
 #   protected_router exactly like sample_router, so it inherits get_current_identity;
 #   its own per-route get_admin_session dependency adds the superadmin-only 403 gate.
 protected_router.include_router(admin_router)
+# - intake_router: the Phase-6 real intake feature surface (CRUD + answers batch +
+#   allow-listed status transitions + skill-run/template reads, bounded at decomposed —
+#   INTAKE-01/02/03/04). Mounted UNDER protected_router exactly like sample_router, so it
+#   inherits get_current_identity; each handler additionally Depends(get_*_repo) for its
+#   tenant-scoped data access. sample_router stays mounted until plan 04 re-points the
+#   cross-tenant denial suite onto /intakes and deletes it.
+protected_router.include_router(intake_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
 
