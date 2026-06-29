@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { listSkillRuns, type SkillRun } from "@/lib/api/skillRuns";
 
 export type ActiveSkillRun = {
   id: string;
@@ -11,21 +11,32 @@ export type ActiveSkillRun = {
   error: string | null;
 };
 
-type SkillRunRealtimeRow = ActiveSkillRun & {
-  error_message?: string | null;
-  skill_name?: string;
-  intake_id?: string;
-};
+/**
+ * Reconcile the backend `SkillRunView` (`{ id, status, applied_at, completed_at }`) into
+ * the `ActiveSkillRun` contract this component exposes to its callers. The view does not
+ * project a trigger timestamp, so we fall back to the applied/completed markers to give
+ * the elapsed-timer banner a sensible start point.
+ */
+function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
+  if (!r) return null;
+  return {
+    id: r.id,
+    status: r.status,
+    triggered_at: r.applied_at ?? r.completed_at ?? new Date().toISOString(),
+    completed_at: r.completed_at,
+    applied_at: r.applied_at,
+    error: null,
+  };
+}
 
 /**
- * Latest nestor-intake skill_run for an intake.
+ * Latest skill-run for an intake, via a POLLED `skillRuns.listSkillRuns` read.
  *
- * Replaces the previous 5s polling with a single Supabase Realtime
- * subscription on nestor.skill_runs filtered by intake_id. One persistent
- * websocket — no per-tick refetches, no state accumulation.
- *
- * The second argument is kept for API compatibility with the previous
- * polling hook but is no longer used.
+ * This replaces the previous realtime websocket subscription (Bucket C). The live SSE
+ * push lands in Phase 8 (API-04); until then a bounded 5s poll while the run is active
+ * keeps the lifecycle UI live. The external contract (`{ data: ActiveSkillRun | null }`
+ * and the second `_forcePoll` arg) is intentionally unchanged so callers — and the
+ * Phase-8 SSE swap — need no edits.
  */
 export function useActiveSkillRun(
   intakeId: string | undefined,
@@ -35,7 +46,7 @@ export function useActiveSkillRun(
   const [data, setData] = useState<ActiveSkillRun | null>(null);
 
   useEffect(() => {
-    if (!supabase || !intakeId) {
+    if (!intakeId) {
       setData(null);
       return;
     }
@@ -44,22 +55,14 @@ export function useActiveSkillRun(
     const pollStart = Date.now();
     const MAX_POLL_MS = 10 * 60 * 1000;
 
-    const fetchLatest = async () => {
-      const { data: row, error } = await supabase!
-        .schema("nestor")
-        .from("skill_runs")
-        .select("id, status, triggered_at, completed_at, applied_at, error:error_message")
-        .eq("intake_id", intakeId)
-        .eq("skill_name", "nestor-intake")
-        .order("triggered_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    const fetchLatest = async (): Promise<ActiveSkillRun | null> => {
+      const res = await listSkillRuns(intakeId);
       if (cancelled) return null;
-      if (error) {
-        console.warn("[SkillRunProgress] latest run fetch failed", error.message);
+      if (!res.success) {
+        console.warn("[SkillRunProgress] latest run fetch failed", res.error);
         return null;
       }
-      const next = (row as ActiveSkillRun | null) ?? null;
+      const next = toActiveSkillRun(res.data.latest);
       setData(next);
       return next;
     };
@@ -70,7 +73,8 @@ export function useActiveSkillRun(
         pollTimer = null;
       }
       if (cancelled) return;
-      if (status !== "running") return;
+      // Keep polling only while the run is still in flight (status verbatim from backend).
+      if (status !== "running" && status !== "queued") return;
       if (Date.now() - pollStart > MAX_POLL_MS) return;
       pollTimer = setTimeout(async () => {
         const next = await fetchLatest();
@@ -78,54 +82,12 @@ export function useActiveSkillRun(
       }, 5000);
     };
 
-    // Initial lightweight fetch, then bounded polling fallback while running.
+    // Initial fetch, then bounded polling while the run is active.
     void fetchLatest().then((next) => schedulePoll(next?.status));
-
-    // Realtime subscription (primary update channel when wired up).
-    const channel = supabase
-      .channel(`skill_runs:${intakeId}`)
-      .on(
-        "postgres_changes" as never,
-        {
-          event: "*",
-          schema: "nestor",
-          table: "skill_runs",
-          filter: `intake_id=eq.${intakeId}`,
-        },
-        (payload: {
-          new: Record<string, unknown> | null;
-          old: Record<string, unknown> | null;
-        }) => {
-          const row = (payload.new ?? payload.old) as SkillRunRealtimeRow | null;
-          if (!row) return;
-          if (row.skill_name && row.skill_name !== "nestor-intake") return;
-          setData((prev) => {
-            const merged: ActiveSkillRun = {
-              id: row.id,
-              status: row.status,
-              triggered_at: row.triggered_at,
-              completed_at: row.completed_at ?? null,
-              applied_at: (row as { applied_at?: string | null }).applied_at ?? null,
-              error: row.error ?? row.error_message ?? null,
-            };
-            if (!prev) {
-              schedulePoll(merged.status);
-              return merged;
-            }
-            if (row.id === prev.id || row.triggered_at >= prev.triggered_at) {
-              schedulePoll(merged.status);
-              return merged;
-            }
-            return prev;
-          });
-        },
-      )
-      .subscribe();
 
     return () => {
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
-      void supabase!.removeChannel(channel);
     };
   }, [intakeId]);
 
@@ -133,10 +95,12 @@ export function useActiveSkillRun(
 }
 
 /**
- * Fetches the full skill_run row (including heavy output_parsed) once,
- * only when explicitly enabled (i.e. after status='succeeded').
- *
- * No polling, no caching beyond component lifetime.
+ * The full skill-run row (heavy `output_parsed` + cost) is produced by the Phase-7
+ * apply-intake-skill backend and is NOT projected by the read-only skill-run seam
+ * (`SkillRunView` carries only `{ id, status, applied_at, completed_at }`). Until Phase 7
+ * there is nothing to fetch, so this returns `null` with its contract unchanged — the
+ * admin AI-review flow simply does not enter review mode (correct pre-Phase-7, since no
+ * real skill output exists yet).
  */
 export function useSkillRunFull(
   skillRunId: string | undefined,
@@ -146,37 +110,9 @@ export function useSkillRunFull(
     | { id: string; output_parsed: unknown; cost_estimate_usd: number | null }
     | null;
 } {
-  const [data, setData] = useState<{
-    id: string;
-    output_parsed: unknown;
-    cost_estimate_usd: number | null;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!supabase || !skillRunId || !enabled) return;
-    let cancelled = false;
-    void supabase
-      .schema("nestor")
-      .from("skill_runs")
-      .select("id, output_parsed, cost_estimate_usd")
-      .eq("id", skillRunId)
-      .single()
-      .then(({ data: row }) => {
-        if (cancelled) return;
-        setData(
-          (row as {
-            id: string;
-            output_parsed: unknown;
-            cost_estimate_usd: number | null;
-          } | null) ?? null,
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [skillRunId, enabled]);
-
-  return { data };
+  void skillRunId;
+  void enabled;
+  return { data: null };
 }
 
 export function SkillRunProgress({ triggeredAt }: { triggeredAt: string }) {
