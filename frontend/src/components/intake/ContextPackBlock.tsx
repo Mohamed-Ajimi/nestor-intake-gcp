@@ -6,7 +6,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
-import { supabase } from "@/lib/supabase";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
 type Pack = {
@@ -23,9 +22,6 @@ type Props = {
   intakeTitle: string;
   clientName: string;
 };
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 const VISIBLE_STATUSES = new Set([
   "validated_by_client",
@@ -199,48 +195,27 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   const [questionsOpen, setQuestionsOpen] = useState(true);
 
   const loadLatest = useCallback(async () => {
-    if (!supabase) return;
-    setLoadingPack(true);
-    const { data } = await supabase
-      .schema("nestor" as never)
-      .from("skill_runs")
-      .select("id, output, cost_estimate_usd, model, completed_at")
-      .eq("intake_id", intakeId)
-      .eq("skill_name", "context-pack")
-      .eq("status", "succeeded")
-      .order("completed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    setLatestPack((data as Pack) ?? null);
+    // The context-pack artifact (markdown output + cost + model) is produced by the
+    // generate-context-pack backend in Phase 7; the read-only skill-run seam does not
+    // project it (Bucket B). Until Phase 7 there is no pack to show — render the empty
+    // state. Intake id retained as the Phase-7 wiring point.
+    void intakeId;
+    setLatestPack(null);
     setLoadingPack(false);
   }, [intakeId]);
 
   useEffect(() => {
     if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return;
     loadLatest();
-    (async () => {
-      if (!supabase) return;
-      const { data } = await supabase
-        .schema("nestor" as never)
-        .from("research_questions")
-        .select("id, priority, question_type, question_text")
-        .eq("intake_id", intakeId)
-        .order("priority", { ascending: true, nullsFirst: false });
-      setQuestions((data as typeof questions) ?? []);
-    })();
+    // research_questions are written post-`decomposed` (Bucket E) and never render in
+    // this milestone, so there is no read here.
+    setQuestions([]);
   }, [intakeStatus, loadLatest, intakeId]);
 
   const loadHistory = useCallback(async () => {
-    if (!supabase) return;
-    const { data } = await supabase
-      .schema("nestor" as never)
-      .from("skill_runs")
-      .select("id, output, cost_estimate_usd, model, completed_at")
-      .eq("intake_id", intakeId)
-      .eq("skill_name", "context-pack")
-      .eq("status", "succeeded")
-      .order("completed_at", { ascending: false });
-    setHistory((data as Pack[]) ?? []);
+    // Context-pack run history depends on the Phase-7 generation backend (see loadLatest).
+    void intakeId;
+    setHistory([]);
   }, [intakeId]);
 
   const toggleHistory = () => {
@@ -250,40 +225,10 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   };
 
   async function generateContextPack() {
-    setGenerating(true);
-    setError(null);
-    try {
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/generate-context-pack`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          apikey: SUPABASE_ANON_KEY,
-        },
-        body: JSON.stringify({ intake_id: intakeId }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Onbekende fout");
-      const newPack: Pack = {
-        id: data.run_id,
-        output: data.output,
-        cost_estimate_usd: data.cost_estimate_usd ?? null,
-        completed_at: new Date().toISOString(),
-        model: data.model ?? null,
-      };
-      setLatestPack(newPack);
-      if (history !== null) setHistory([newPack, ...history]);
-      toast.success(
-        `Context Pack gegenereerd${data.cost_estimate_usd ? ` · €${data.cost_estimate_usd}` : ""}`,
-      );
-    } catch (e) {
-      const msg = (e as Error).message;
-      console.error("generate-context-pack failed", e);
-      setError(`Genereren mislukt: ${msg}`);
-    } finally {
-      setGenerating(false);
-    }
+    // The generate-context-pack backend lands in Phase 7 (Bucket B). The escape-hatch
+    // button stays in the layout but surfaces a not-yet-available notice for now.
+    void intakeId;
+    toast.message("Context Pack-generatie komt in Phase 7.");
   }
 
   if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return null;

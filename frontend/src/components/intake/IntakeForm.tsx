@@ -1,15 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IntakeField, IntakePayload, IntakeSection } from "@/lib/intake-types";
 import { FieldRenderer } from "./FieldRenderer";
 import { toast } from "sonner";
+import { saveAnswers, type AnswerInput } from "@/lib/api/answers";
+import { submitIntake } from "@/lib/api/intakes";
 import {
   ValidationDiffForField,
   sectionHasChange,
   type Proposals,
 } from "./ValidationDiff";
 
-type SaveStatus = "idle" | "saving" | "saved" | "error";
+type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
+
+/** Map a form value into the backend AnswerInput shape (string -> value, else value_json). */
+function toAnswerInput(field_key: string, value: unknown): AnswerInput {
+  if (value === null || value === undefined) return { field_key, value: null, value_json: null };
+  if (typeof value === "string") return { field_key, value, value_json: null };
+  return { field_key, value: null, value_json: value };
+}
 
 function validateField(field: IntakeField, value: any): string | null {
  const isEmpty =
@@ -82,6 +90,7 @@ export function IntakeForm({
 
  const [currentStep, setCurrentStep] = useState(0);
  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+ const [dirtyFields, setDirtyFields] = useState<Set<string>>(() => new Set());
  const [errors, setErrors] = useState<Record<string, string>>({});
  const [softWarning, setSoftWarning] = useState<IntakeField[]>([]);
  const [submitting, setSubmitting] = useState(false);
@@ -90,30 +99,11 @@ export function IntakeForm({
   const [proposals, setProposals] = useState<Proposals | null>(null);
   const isValidationPhase = payload.phase === "validation";
 
-  useEffect(() => {
-    if (!isValidationPhase || !supabase) return;
-    let cancelled = false;
-    (async () => {
-      const { data } = await supabase
-        .schema("nestor" as never)
-        .from("skill_runs")
-        .select("output_parsed")
-        .eq("intake_id", intakeId)
-        .eq("skill_name", "nestor-intake")
-        .eq("status", "succeeded")
-        .order("completed_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (cancelled) return;
-      const parsed = (data as any)?.output_parsed;
-      if (parsed && typeof parsed === "object") setProposals(parsed as Proposals);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isValidationPhase, intakeId]);
-
- const saveTimers = useRef<Record<string, any>>({});
+  // Validation-phase AI proposals (skill output_parsed) are produced by the
+  // apply-intake-skill backend, which lands in Phase 7. Until then there are no
+  // proposals to diff against, so `proposals` stays null and the ValidationDiff
+  // affordances render nothing. The skill-run seam (skillRuns.ts) carries only the
+  // phase-input projection, not the heavy output_parsed payload.
 
  const sections = useMemo(
  () =>
@@ -134,29 +124,6 @@ export function IntakeForm({
  });
  }, [sections, answers]);
 
- const saveField = useCallback(
- async (key: string, value: any, attempt = 0) => {
- if (!supabase || !editable) return;
- setSaveStatus("saving");
- const { error } = await supabase.rpc("save_intake_answer", {
- p_token: token,
- p_field_key: key,
- p_value: value,
- });
- if (error) {
- if (attempt === 0) {
- setTimeout(() => saveField(key, value, 1), 2000);
- } else {
- setSaveStatus("error");
- toast.error("Opslaan mislukt: " + error.message);
- }
- return;
- }
- setSaveStatus("saved");
- },
- [token, editable],
- );
-
  const handleChange = useCallback(
  (key: string, value: any) => {
  setAnswers((prev) => {
@@ -171,11 +138,45 @@ export function IntakeForm({
  return rest;
  });
 
- clearTimeout(saveTimers.current[key]);
- saveTimers.current[key] = setTimeout(() => saveField(key, value), 800);
+ // Section-batch save (D-03): edits only mark the section dirty — no per-field
+ // network call. The whole section's dirty batch is PATCHed on advance/leave.
+ if (!editable) return;
+ setDirtyFields((prev) => {
+ const next = new Set(prev);
+ next.add(key);
+ return next;
+ });
+ setSaveStatus("dirty");
  },
- [saveField, storageKey],
+ [storageKey, editable],
  );
+
+ // PATCH the current section's dirty answers in one batch. Returns false on failure
+ // so callers can GATE navigation (UI-SPEC Net-New 3: a failed PATCH does not advance).
+ const saveCurrentSection = useCallback(async (): Promise<boolean> => {
+ if (!editable) return true;
+ const dirtyKeys = section.fields
+ .map((f) => f.key)
+ .filter((k) => dirtyFields.has(k));
+ if (dirtyKeys.length === 0) return true;
+ setSaveStatus("saving");
+ const batch: AnswerInput[] = dirtyKeys.map((k) => toAnswerInput(k, answers[k]));
+ const res = await saveAnswers(intakeId, batch);
+ if (!res.success) {
+ setSaveStatus("error");
+ toast.error(
+ "Opslaan mislukt — je wijzigingen in deze sectie zijn niet bewaard. Probeer opnieuw.",
+ );
+ return false;
+ }
+ setDirtyFields((prev) => {
+ const next = new Set(prev);
+ dirtyKeys.forEach((k) => next.delete(k));
+ return next;
+ });
+ setSaveStatus("saved");
+ return true;
+ }, [editable, section, dirtyFields, answers, intakeId]);
 
  // clear localStorage when fully submitted
  useEffect(() => {
@@ -186,7 +187,12 @@ export function IntakeForm({
  }
  }, [submitted, storageKey]);
 
- const goToSection = (idx: number) => {
+ const goToSection = async (idx: number) => {
+ // Persist the leaving section's dirty batch BEFORE navigating; gate on success.
+ if (idx !== currentStep) {
+ const ok = await saveCurrentSection();
+ if (!ok) return;
+ }
  setCurrentStep(idx);
  setSoftWarning([]);
  if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -205,9 +211,10 @@ export function IntakeForm({
  return true;
  };
 
- const handleNext = () => {
+ const handleNext = async () => {
  if (!validateCurrent()) return;
- goToSection(currentStep + 1);
+ // goToSection saves the current section first and aborts on a failed PATCH.
+ await goToSection(currentStep + 1);
  };
 
  const handleSubmit = async () => {
@@ -241,13 +248,18 @@ export function IntakeForm({
  };
 
  const doSubmit = async () => {
- if (!supabase) return;
  setSubmitting(true);
  setConfirmDialog(false);
- const { error } = await supabase.rpc("submit_intake", { p_token: token });
+ // Persist the final (current) section before the transition, gate on success.
+ const saved = await saveCurrentSection();
+ if (!saved) {
  setSubmitting(false);
- if (error) {
- toast.error("Versturen mislukt: " + error.message);
+ return;
+ }
+ const res = await submitIntake(intakeId);
+ setSubmitting(false);
+ if (!res.success) {
+ toast.error("Versturen mislukt: " + res.error);
  return;
  }
  setSubmitted(true);
@@ -326,6 +338,7 @@ export function IntakeForm({
  {sections.map((s, idx) => {
  const active = idx === currentStep;
  const done = completedSections[idx];
+ const sectionDirty = s.fields.some((f) => dirtyFields.has(f.key));
  const changed = isValidationPhase && sectionHasChange(s, answers, proposals);
  return (
    <button
@@ -339,7 +352,7 @@ export function IntakeForm({
    : "text-ink/60 hover:bg-ink/5 hover:text-ink")
    }
    >
-   <span className={"nav-mark " + (active ? "nav-mark-green" : "nav-mark-ink")} />
+   <span className={"nav-mark " + (sectionDirty ? "" : active ? "nav-mark-green" : "nav-mark-ink")} />
    <span className="flex flex-1 flex-col gap-0.5">
      <span className="break-words">{s.title}</span>
      {changed && (
@@ -360,7 +373,8 @@ export function IntakeForm({
  <p className="text-sm text-ink/60">
  Stap {currentStep + 1} / {sections.length}
  </p>
- <p className="text-xs text-ink/40">
+ <p className="text-xs text-ink/40 font-mono">
+ {saveStatus === "dirty" && "Niet opgeslagen"}
  {saveStatus === "saving" && "Opslaan…"}
  {saveStatus === "saved" && "Alle wijzigingen opgeslagen"}
  {saveStatus === "error" && <span className="text-red-600">Opslaan mislukt</span>}
@@ -411,9 +425,9 @@ export function IntakeForm({
  field={f}
  answer={answers[f.key]}
  proposals={proposals}
- onRevert={async (key, value) => {
+ onRevert={(key, value) => {
+ // Revert marks the field dirty; it persists with the section batch on leave.
  handleChange(key, value);
- await saveField(key, value);
  }}
  />
  )}

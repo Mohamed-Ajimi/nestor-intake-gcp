@@ -6,7 +6,10 @@ import { format, formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getIntake, submitIntake, reviewIntake } from "@/lib/api/intakes";
+import { listAnswers, saveAnswers, type AnswerInput } from "@/lib/api/answers";
+import { listSkillRuns } from "@/lib/api/skillRuns";
+import { getTemplates } from "@/lib/api/templates";
 import type { IntakeField, IntakeSchema } from "@/lib/intake-types";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
 import { FieldRenderer } from "@/components/intake/FieldRenderer";
@@ -137,9 +140,6 @@ const STATUS_HINT: Record<string, string> = {
  validated_by_client: "Klaar voor decompositie.",
 };
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
 // Phase machine lives in @/lib/intake-phase. The detail-page derives a single
 // Phase from intake + latest intake-skill-run + hasResearchArtifacts.
 
@@ -241,24 +241,10 @@ function IntakeDetailPage() {
     setSkillLoading(false);
   }, [activeRunId, activeRunStatus, activeRunTriggeredAt, optimisticRunStartedAt]);
 
-  // hasArtifacts — lightweight count (head, no rows)
-  const [hasArtifacts, setHasArtifacts] = useState(false);
-  useEffect(() => {
-    if (!supabase || !intake?.id) return;
-    let cancelled = false;
-    void supabase
-      .schema("nestor")
-      .from("research_artifacts")
-      .select("id", { count: "exact", head: true })
-      .eq("intake_id", intake.id)
-      .neq("source", "context-pack-generator")
-      .then(({ count }) => {
-        if (!cancelled) setHasArtifacts((count ?? 0) > 0);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [intake?.id, intake?.status]);
+  // hasResearchArtifacts is FALSE this milestone: no research artifacts are created
+  // pre-`decomposed` (Bucket E / Phase-Ceiling). The post-decomposed research surface
+  // never renders here, so derivePhase is fed `false` (no inline DB read remains).
+  const [hasArtifacts] = useState(false);
 
   const phase = useMemo(() => {
     if (!intake) return null;
@@ -316,47 +302,63 @@ function IntakeDetailPage() {
  };
 
  const load = useCallback(async () => {
- if (!supabase) {
- setError("Supabase niet geconfigureerd.");
- setLoading(false);
- return;
- }
  setLoading(true);
- const { data: intakeData, error: iErr } = await supabase
- .schema("nestor")
- .from("intakes")
- .select(
-        `id, title, status, product_slug, template_id, client_id, client_intake_token, client_validation_token, client_results_token, final_report_artifact_id,
-         validation_link_sent_at, results_link_sent_at, context_pack_artifact_id,
-         conducted_at, conducted_by, client_validated_at, delivered_at, created_at, updated_at,
- product:products!intakes_product_slug_fkey(slug, name, tagline),
- template:intake_templates!intakes_template_id_fkey(id, name, version, schema)`,
- )
- .eq("id", id)
- .single();
- if (iErr || !intakeData) {
- setError(iErr?.message ?? "Intake niet gevonden.");
+ const intakeRes = await getIntake(id);
+ if (!intakeRes.success) {
+ setError(intakeRes.error || "Intake niet gevonden.");
  setLoading(false);
  return;
  }
- const intakeRow = intakeData as unknown as Intake;
- setIntake(intakeRow);
+ const v = intakeRes.data;
 
- const [clientRes, answersRes] = await Promise.all([
- supabase
- .schema("public" as never)
- .from("clients")
- .select("id, name, country, website")
- .eq("id", intakeRow.client_id)
- .single(),
- supabase
- .schema("nestor")
- .from("intake_answers")
- .select("field_key, value, edited_by_client, client_edited_at, updated_at")
- .eq("intake_id", id),
- ]);
- if (clientRes.data) setClient(clientRes.data as Client);
- const rows = (answersRes.data as AnswerRow[]) ?? [];
+ // The seam Intake carries status + the five phase markers; the legacy intake row
+ // also carried title/product/tokens/timestamps that the backend IntakeView does not
+ // project. Those are token-model / post-decomposed concerns retired this milestone —
+ // populate the local row from the seam and leave the rest neutral so derivePhase and
+ // the answer/section rendering stay correct.
+ const tmplRes = await getTemplates();
+ const tmpl = tmplRes.success && tmplRes.data.length > 0 ? tmplRes.data[0] : null;
+ const nowIso = new Date().toISOString();
+ const intakeRow: Intake = {
+ id: v.id,
+ title: null,
+ status: v.status,
+ product_slug: "",
+ template_id: tmpl?.id ?? "",
+ client_id: "",
+ client_intake_token: null,
+ client_validation_token: null,
+ client_results_token: null,
+ final_report_artifact_id: v.final_report_artifact_id,
+ validation_link_sent_at: v.validation_link_sent_at,
+ results_link_sent_at: v.results_link_sent_at,
+ context_pack_artifact_id: v.context_pack_artifact_id,
+ conducted_at: null,
+ conducted_by: null,
+ client_validated_at: null,
+ delivered_at: null,
+ created_at: nowIso,
+ updated_at: nowIso,
+ product: null,
+ template: tmpl
+ ? { id: tmpl.id, name: tmpl.name, version: 1, schema: tmpl.schema as unknown as IntakeSchema }
+ : null,
+ };
+ setIntake(intakeRow);
+ setClient(
+ v.client_name ? { id: "", name: v.client_name, country: null, website: null } : null,
+ );
+
+ const answersRes = await listAnswers(id);
+ const rows: AnswerRow[] = answersRes.success
+ ? answersRes.data.map((a) => ({
+ field_key: a.field_key,
+ value: a.value_json ?? a.value,
+ edited_by_client: null,
+ client_edited_at: null,
+ updated_at: "",
+ }))
+ : [];
  setAnswers(rows);
  const initialMap: Record<string, unknown> = {};
  rows.forEach((r) => (initialMap[r.field_key] = r.value));
@@ -434,32 +436,48 @@ function IntakeDetailPage() {
  };
 
  const handleStatusChange = async (newStatus: string) => {
- if (!supabase || !intake) return;
+ if (!intake) return;
+ // Status moves only via the allow-listed transition verbs (<= decomposed). Targets
+ // past the milestone ceiling are intentionally unreachable from the seam (INTAKE-05).
  setUpdatingStatus(true);
- const { error: e } = await supabase
- .schema("nestor")
- .from("intakes")
- .update({ status: newStatus })
- .eq("id", intake.id);
+ let res;
+ if (newStatus === "reviewed") {
+ res = await reviewIntake(intake.id);
+ } else if (newStatus === "submitted" || newStatus === "validated_by_client") {
+ res = await submitIntake(intake.id);
+ } else {
  setUpdatingStatus(false);
- if (e) {
- toast.error("Status niet bijgewerkt");
+ toast.error("Statuswijziging niet beschikbaar via de API (stopt bij decomposed).");
  return;
  }
- setIntake({ ...intake, status: newStatus });
+ setUpdatingStatus(false);
+ if (!res.success) {
+ toast.error("Status niet bijgewerkt: " + res.error);
+ return;
+ }
+ setIntake({ ...intake, status: res.data.status });
  toast.success("Status bijgewerkt");
  };
 
  const loadSkillRuns = useCallback(async () => {
- if (!supabase || !intake) return;
+ if (!intake) return;
  setLoadingRuns(true);
- const { data } = await supabase
- .schema("nestor")
- .from("skill_runs")
- .select("id, skill_name, status, model, cost_estimate_usd, triggered_at, completed_at, applied_at, error_message")
- .eq("intake_id", intake.id)
- .order("triggered_at", { ascending: false });
- setSkillRuns((data as SkillRun[]) ?? []);
+ const res = await listSkillRuns(intake.id);
+ const mapped: SkillRun[] = res.success
+ ? res.data.runs.map((r) => ({
+ id: r.id,
+ skill_name: "intake-skill",
+ status: r.status,
+ model: null,
+ output: null,
+ cost_estimate_usd: null,
+ triggered_at: r.applied_at ?? r.completed_at ?? "",
+ completed_at: r.completed_at,
+ applied_at: r.applied_at,
+ error_message: null,
+ }))
+ : [];
+ setSkillRuns(mapped);
  setLoadingRuns(false);
  }, [intake]);
 
@@ -474,43 +492,11 @@ function IntakeDetailPage() {
   // tenzij de gebruiker de history-accordion opent.
 
   const runSkill = async () => {
-    if (!supabase || !intake || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-    setSkillLoading(true);
-    const startedAt = new Date().toISOString();
-    setOptimisticRunStartedAt(startedAt);
-    try {
-      // Fire-and-forget: use raw fetch and never read/parse the 60-120s response body.
-      // Status/progress comes only from the lightweight skill_runs poll below.
-      void fetch(`${SUPABASE_URL}/functions/v1/apply-intake-skill`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${session?.access_token ?? SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ intake_id: intake.id }),
-      })
-        .then((response) => {
-          if (response.body) void response.body.cancel().catch(() => undefined);
-          if (!response.ok) {
-            toast.error(`Skill kon niet gestart worden: HTTP ${response.status}`);
-            setOptimisticRunStartedAt(null);
-            setSkillLoading(false);
-          }
-        })
-        .catch((e) => {
-        console.error(e);
-        toast.error(`Skill kon niet gestart worden: ${(e as Error).message}`);
-        setOptimisticRunStartedAt(null);
-        setSkillLoading(false);
-      });
-      queryClient.invalidateQueries({ queryKey: ["active-skill-run", intake.id] });
-      toast.message("Nestor analyseert je intake — dit duurt 90–120s.");
-    } catch (e) {
-      toast.error(`Skill mislukt: ${(e as Error).message}`);
-      setOptimisticRunStartedAt(null);
-      setSkillLoading(false);
-    }
+    // The apply-intake-skill AI backend lands in Phase 7. The CTA stays wired so the
+    // admin lifecycle layout is unchanged; until then it surfaces a not-yet-available
+    // notice rather than invoking an edge function (Bucket B — Phase 7 seam stub).
+    if (!intake) return;
+    toast.message("AI-analyse (Nestor-intake-skill) komt in Phase 7.");
   };
 
   // ============== Phase-driven CTA handlers ==============
@@ -557,78 +543,29 @@ function IntakeDetailPage() {
     else toast("AI-review is nog niet geladen — wacht even.");
   };
 
+  // Transactional email is Phase 10 (notification-only). The CTAs stay wired so the
+  // NextStepBanner contract is unchanged; until then they surface a notice.
   const onSendValidationMail = async () => {
-    if (!supabase || !intake) return;
-    setBusyKey("sendValidation", true);
-    const { error } = await supabase.functions.invoke("send-pulse-mail", {
-      body: { intake_id: intake.id, mail_type: "validation_request" },
-    });
-    setBusyKey("sendValidation", false);
-    if (error) {
-      toast.error(`Verzenden mislukt: ${error.message}`);
-      return;
-    }
-    toast.success("Validatie-link verstuurd");
-    await load();
+    toast.message("E-mailverzending (validatie-link) komt in Phase 10.");
   };
 
   const onSendValidationReminder = async () => {
-    if (!supabase || !intake) return;
-    setBusyKey("sendReminder", true);
-    const { error } = await supabase.functions.invoke("send-pulse-mail", {
-      body: { intake_id: intake.id, mail_type: "validation_reminder" },
-    });
-    setBusyKey("sendReminder", false);
-    if (error) toast.error(`Verzenden mislukt: ${error.message}`);
-    else toast.success("Herinnering verstuurd");
+    toast.message("Herinneringsmail komt in Phase 10.");
   };
 
   const onGenerateContextPack = async () => {
-    if (!supabase || !intake) return;
-    setBusyKey("generateContextPack", true);
-    const { error } = await supabase.functions.invoke("generate-context-pack", {
-      body: { intake_id: intake.id },
-    });
-    setBusyKey("generateContextPack", false);
-    if (error) {
-      toast.error(`Context Pack mislukt: ${error.message}`);
-      return;
-    }
-    toast.success("Context Pack gegenereerd");
-    await load();
+    // The context-pack generation backend lands in Phase 7 (Bucket B seam stub).
+    toast.message("Context Pack-generatie komt in Phase 7.");
   };
 
   const onStartAutoResearch = async () => {
-    if (!supabase || !intake) return;
-    if (
-      !confirm(
-        "Start automatische research?\n\nGebruikt SerpAPI + SearchAPI + eventueel Apify (~€0.05–0.20, 2–5 min).",
-      )
-    )
-      return;
-    setBusyKey("startResearch", true);
-    const { error } = await supabase.functions.invoke("run-research", {
-      body: { intake_id: intake.id },
-    });
-    if (!error) {
-      await supabase
-        .schema("nestor")
-        .from("intakes")
-        .update({ status: "in_research" })
-        .eq("id", intake.id);
-    }
-    setBusyKey("startResearch", false);
-    if (error) {
-      toast.error(`Research mislukt: ${error.message}`);
-      return;
-    }
-    toast.success("Research gestart — refresh over enkele minuten");
-    await load();
+    // Deep-research is out of milestone scope — the flow stops at decomposed (INTAKE-05).
+    // No invoke and no transition past decomposed is reachable from this surface.
+    toast.message("Automatische research valt buiten deze fase (stopt bij decomposed).");
   };
 
   const onStartManualResearch = async () => {
-    if (!supabase || !intake) return;
-    await handleStatusChange("in_research");
+    toast.message("Onderzoek valt buiten deze fase (stopt bij decomposed).");
   };
 
   const onDownloadContextPack = () => {
@@ -644,18 +581,7 @@ function IntakeDetailPage() {
   };
 
   const onSendResultsMail = async () => {
-    if (!supabase || !intake) return;
-    setBusyKey("sendResults", true);
-    const { error } = await supabase.functions.invoke("send-pulse-mail", {
-      body: { intake_id: intake.id, mail_type: "results_ready" },
-    });
-    setBusyKey("sendResults", false);
-    if (error) {
-      toast.error(`Verzenden mislukt: ${error.message}`);
-      return;
-    }
-    toast.success("Resultaten-link verstuurd");
-    await load();
+    toast.message("E-mailverzending (resultaten-link) komt in Phase 10.");
   };
 
   const onArchive = async () => {
@@ -689,19 +615,9 @@ function IntakeDetailPage() {
   };
 
   const handleSemanticSearch = async () => {
-    if (!supabase || !intake || !searchQuery.trim()) return;
-    setSearching(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("semantic-search", {
-        body: { intake_id: intake.id, query: searchQuery.trim(), limit: 10 },
-      });
-      if (error) throw error;
-      setSearchResults(data?.results ?? []);
-    } catch (e) {
-      toast.error(`Zoeken mislukt: ${(e as Error).message}`);
-    } finally {
-      setSearching(false);
-    }
+    // Semantic-search backend lands in Phase 7; the panel only renders post-research
+    // (hasArtifacts is false this milestone), so this surfaces a notice for now.
+    toast.message("Semantisch zoeken komt in Phase 7.");
   };
 
 
@@ -714,43 +630,30 @@ function IntakeDetailPage() {
  };
 
  const handleSave = async () => {
- if (!supabase || !intake) return;
+ if (!intake) return;
  if (!hasChanges) {
  toast("Geen wijzigingen");
  setEditMode(false);
  return;
  }
  setSaving(true);
- try {
- for (const key of changedKeys) {
+ // Batch every changed field into one section-style PATCH (D-03). Emptied fields
+ // are sent as null/null so the backend upsert clears them on (intake_id, field_key).
+ const batch: AnswerInput[] = Array.from(changedKeys).map((key) => {
  const val = draft[key];
- if (isEmptyVal(val)) {
- const { error: delErr } = await supabase
- .schema("nestor")
- .from("intake_answers")
- .delete()
- .eq("intake_id", intake.id)
- .eq("field_key", key);
- if (delErr) throw delErr;
- } else {
- const { error: upErr } = await supabase
- .schema("nestor")
- .from("intake_answers")
- .upsert(
- { intake_id: intake.id, field_key: key, value: val },
- { onConflict: "intake_id,field_key" },
- );
- if (upErr) throw upErr;
- }
+ if (isEmptyVal(val)) return { field_key: key, value: null, value_json: null };
+ if (typeof val === "string") return { field_key: key, value: val, value_json: null };
+ return { field_key: key, value: null, value_json: val };
+ });
+ const res = await saveAnswers(intake.id, batch);
+ setSaving(false);
+ if (!res.success) {
+ toast.error(`Opslaan mislukt: ${res.error}`);
+ return;
  }
  toast.success("Wijzigingen opgeslagen");
  setEditMode(false);
  await load();
- } catch (e) {
- toast.error(`Opslaan mislukt: ${(e as Error).message}`);
- } finally {
- setSaving(false);
- }
  };
 
  if (loading) {
@@ -1338,20 +1241,12 @@ function DeliveredAtEditor({
   }, [value]);
   const dirty = (value ? value.slice(0, 10) : "") !== date;
   const save = async () => {
-    if (!supabase || !date) return;
-    setSaving(true);
+    if (!date) return;
+    // delivered_at sits past the decomposed ceiling (delivered phase). There is no seam
+    // write for it this milestone; reflect the change locally and surface a notice.
     const iso = new Date(date + "T12:00:00Z").toISOString();
-    const { error } = await supabase
-      .schema("nestor")
-      .from("intakes")
-      .update({ delivered_at: iso })
-      .eq("id", intakeId);
-    setSaving(false);
-    if (error) {
-      toast.error(`Opslaan faalde: ${error.message}`);
-      return;
-    }
-    toast.success("Leverdatum bijgewerkt");
+    void intakeId;
+    toast.message("Leverdatum bewaren komt in een latere fase.");
     onSaved(iso);
   };
   return (
@@ -1405,26 +1300,12 @@ function ResultsLinkRow({
  };
 
  const regenerate = async () => {
- if (!supabase) return;
- if (!confirm("De oude link wordt ongeldig — doorgaan?")) return;
- setBusy(true);
- try {
- const newToken = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
- const updates: Record<string, unknown> = { client_results_token: newToken };
- if (hasFinalReport) updates.status = "delivered";
- const { error } = await supabase
- .schema("nestor" as never)
- .from("intakes")
- .update(updates)
- .eq("id", intakeId);
- if (error) throw error;
- onTokenChange(newToken);
- toast.success("Nieuwe link gegenereerd");
- } catch (e) {
- toast.error(`Mislukt: ${(e as Error).message}`);
- } finally {
- setBusy(false);
- }
+ // Token regeneration belongs to the retired token model (Phase 3 D-08) and the
+ // post-decomposed results surface — no seam path exists in this milestone.
+ void intakeId;
+ void hasFinalReport;
+ void onTokenChange;
+ toast.message("Linkbeheer komt in een latere fase.");
  };
 
  return (

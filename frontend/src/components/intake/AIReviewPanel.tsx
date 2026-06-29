@@ -3,8 +3,16 @@ import { Sparkles, Check, X, Pencil, Loader2, AlertTriangle, Info, Copy, Chevron
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { supabase } from "@/lib/supabase";
+import { saveAnswers, type AnswerInput } from "@/lib/api/answers";
+import { reviewIntake } from "@/lib/api/intakes";
 import { cn } from "@/lib/utils";
+
+/** Map an answer value into the backend AnswerInput shape (string -> value, else value_json). */
+function toAnswerInput(field_key: string, value: unknown): AnswerInput {
+  if (value === null || value === undefined) return { field_key, value: null, value_json: null };
+  if (typeof value === "string") return { field_key, value, value_json: null };
+  return { field_key, value: null, value_json: value };
+}
 
 const markdownComponents = {
  p: ({ children }: { children?: ReactNode }) => (
@@ -74,40 +82,13 @@ async function persistApprovedField(
   field_key: string,
   value: unknown,
 ): Promise<void> {
-  if (!supabase || !intakeId) return;
+  // The skill-run `applied_at` marker is now owned by the backend review transition
+  // (audit-in-one-tx), so the field save is the only client-side write here.
+  void runId;
+  if (!intakeId) return;
   if (value === "" || value == null) return;
-  const { error } = await supabase
-    .schema("nestor")
-    .from("intake_answers")
-    .upsert(
-      { intake_id: intakeId, field_key, value },
-      { onConflict: "intake_id,field_key" },
-    );
-  if (error) throw error;
-  if (runId) {
-    let appliedBy: string | null = null;
-    try {
-      const { data } = await supabase.auth.getUser();
-      appliedBy = data.user?.id ?? null;
-    } catch {}
-    const patch: Record<string, unknown> = {
-      applied_at: new Date().toISOString(),
-    };
-    if (appliedBy) patch.applied_by = appliedBy;
-    const { error: e1 } = await supabase
-      .schema("nestor")
-      .from("skill_runs")
-      .update(patch)
-      .eq("id", runId);
-    if (e1 && appliedBy) {
-      // Retry without applied_by in case the column doesn't exist
-      await supabase
-        .schema("nestor")
-        .from("skill_runs")
-        .update({ applied_at: patch.applied_at })
-        .eq("id", runId);
-    }
-  }
+  const res = await saveAnswers(intakeId, [toAnswerInput(field_key, value)]);
+  if (!res.success) throw new Error(res.error);
 }
 
 
@@ -302,7 +283,7 @@ export async function submitReview({
  parsed: ParsedSkillOutput;
  state: AIReviewState;
 }): Promise<string> {
- if (!supabase) throw new Error("Supabase niet geconfigureerd");
+ void runId;
  const { decisions, extraQuestions } = state;
  const upserts: Array<{ field_key: string; value: unknown }> = [];
 
@@ -351,45 +332,23 @@ export async function submitReview({
 
 
 
- for (const row of upserts) {
- if (row.value === "" || row.value == null) continue;
- const { error } = await supabase
- .schema("nestor")
- .from("intake_answers")
- .upsert(
- { intake_id: intakeId, field_key: row.field_key, value: row.value },
- { onConflict: "intake_id,field_key" },
- );
- if (error) throw error;
+ // Persist every decided field in one section-style batch (D-03) over the seam.
+ const batch: AnswerInput[] = upserts
+ .filter((row) => row.value !== "" && row.value != null)
+ .map((row) => toAnswerInput(row.field_key, row.value));
+ if (batch.length > 0) {
+ const res = await saveAnswers(intakeId, batch);
+ if (!res.success) throw new Error(res.error);
  }
 
- const validationToken = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
- const { error: updErr } = await supabase
- .schema("nestor")
- .from("intakes")
- .update({
- client_validation_token: validationToken,
- status: "reviewed",
- updated_at: new Date().toISOString(),
- })
- .eq("id", intakeId);
- if (updErr) throw updErr;
+ // submitted -> reviewed transition (replaces the legacy intakes status update + the
+ // client_validation_token mint + the skill_run applied_changes write). The backend
+ // owns the transition + audit in one tx; the authenticated user surface reaches the
+ // intake by id (/intake/{id}), so no validation token is minted here.
+ const res2 = await reviewIntake(intakeId);
+ if (!res2.success) throw new Error(res2.error);
 
- if (runId) {
- await supabase
- .schema("nestor")
- .from("skill_runs")
- .update({
- applied_at: new Date().toISOString(),
- applied_changes: {
- decisions,
- extra_questions_included: extraQuestions.filter((q) => q.include).length,
- },
- })
- .eq("id", runId);
- }
-
- return validationToken;
+ return intakeId;
 }
 
 // ============== Banner (top of page) ==============
