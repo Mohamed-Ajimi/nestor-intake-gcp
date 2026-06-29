@@ -143,3 +143,106 @@ class IntakeRepository(TenantRepository[Intake]):
     """
 
     model = Intake
+
+
+class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
+    """Tenant-scoped repository over ``nestor.intake_answers``.
+
+    Thin subclass — list/get/patch/create come from :class:`TenantRepository` and are
+    space-walled by ``_scope`` for free. Adds a per-intake read and the section-batch
+    upsert the save-as-you-go flow needs.
+    """
+
+    model = IntakeAnswer
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's answers within scope (own space only for a user)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model).where(self.model.intake_id == intake_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    def upsert_batch(self, intake_id, items):
+        """Upsert a section's answers on the EXISTING ``(intake_id, field_key)`` unique
+        constraint (``uq_intake_answers_intake_field``) — INSERT ... ON CONFLICT DO UPDATE.
+
+        ``space_id`` is injected from ``self._space_id`` (the verified Identity) and
+        ``intake_id`` from the path arg — NEVER from the item dict (D-03 / T-06-03). Each
+        item carries only ``field_key`` / ``value`` / ``value_json``; any ``space_id`` or
+        ``intake_id`` an item happened to carry is ignored. On a user path
+        ``self._space_id`` is set; this method is the user-path section save, so it relies
+        on that tenant key being present (a superadmin batch would go via the admin seam).
+        """
+        rows = [
+            {
+                "space_id": self._space_id,
+                "intake_id": intake_id,
+                "field_key": item["field_key"],
+                "value": item.get("value"),
+                "value_json": item.get("value_json"),
+            }
+            for item in items
+        ]
+        if not rows:
+            return
+        stmt = pg_insert(self.model).values(rows)
+        # Same conflict target the legacy prefill/save-as-you-go RPC used.
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_intake_answers_intake_field",
+            set_={
+                "value": stmt.excluded.value,
+                "value_json": stmt.excluded.value_json,
+            },
+        )
+        self._s.execute(stmt)
+
+
+class SkillRunRepository(TenantRepository[SkillRun]):
+    """Tenant-scoped repository over ``nestor.skill_runs``.
+
+    Thin subclass — list/get/patch/create come from :class:`TenantRepository`. Adds the
+    per-intake list and the "latest run" read the phase machine / progress poll need.
+    """
+
+    model = SkillRun
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's skill runs within scope (newest first)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(self.model.intake_id == intake_id)
+                    .order_by(self.model.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    def latest_for_intake(self, intake_id):
+        """Return the most recent skill run for this intake within scope, or ``None``."""
+        return self._s.execute(
+            self._scope(
+                select(self.model)
+                .where(self.model.intake_id == intake_id)
+                .order_by(self.model.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+class IntakeTemplateRepository(TenantRepository[IntakeTemplate]):
+    """Tenant-scoped repository over ``nestor.intake_templates``.
+
+    Thin subclass — all behaviour lives in :class:`TenantRepository`. The user path reads
+    only templates in its own space; superadmin cross-space template ops go via
+    :class:`app.db.admin_repo.AdminRepo` (Pitfall 3).
+    """
+
+    model = IntakeTemplate
