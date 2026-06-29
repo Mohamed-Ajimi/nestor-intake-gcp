@@ -38,7 +38,12 @@ from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
 from app.db.admin_repo import AdminRepo
 from app.db.base import get_engine, get_sessionmaker, get_superadmin_engine
-from app.db.repository import IntakeRepository
+from app.db.repository import (
+    IntakeAnswerRepository,
+    IntakeRepository,
+    IntakeTemplateRepository,
+    SkillRunRepository,
+)
 from app.db.rls import set_space_context
 
 
@@ -72,6 +77,80 @@ def get_tenant_repo(identity: Identity = Depends(get_current_identity)):
             # SET LOCAL (tx-local, third arg true) — reverts at COMMIT (Pitfall 1).
             set_space_context(session, space_id)
         yield IntakeRepository(session, identity)
+
+
+def get_intake_answer_repo(identity: Identity = Depends(get_current_identity)):
+    """Yield a tenant-scoped :class:`IntakeAnswerRepository` for the current request.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_tenant_repo`
+    (engine-by-role, default-deny 403 on a null user space BEFORE any session, ONE tx via
+    ``maker.begin()``, GUC set for the user path only), differing ONLY in the repository
+    class yielded.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield IntakeAnswerRepository(session, identity)
+
+
+def get_skill_run_repo(identity: Identity = Depends(get_current_identity)):
+    """Yield a tenant-scoped :class:`SkillRunRepository` for the current request.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_tenant_repo`,
+    differing ONLY in the repository class yielded.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield SkillRunRepository(session, identity)
+
+
+def get_intake_template_repo(identity: Identity = Depends(get_current_identity)):
+    """Yield a tenant-scoped :class:`IntakeTemplateRepository` for the current request.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_tenant_repo`,
+    differing ONLY in the repository class yielded.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield IntakeTemplateRepository(session, identity)
 
 
 def get_admin_session(identity: Identity = Depends(get_current_identity)):
