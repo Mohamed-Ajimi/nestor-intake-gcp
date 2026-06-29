@@ -26,7 +26,7 @@ Locked decisions realized here:
   absent.
 
 Sync ``def`` handlers (not ``async def``): pg8000 is blocking and FastAPI runs sync
-handlers in a threadpool (mirrors ``sample_routes.py`` / ``auth_routes.py``).
+handlers in a threadpool (mirrors ``intake_routes.py`` / ``auth_routes.py``).
 """
 
 from __future__ import annotations

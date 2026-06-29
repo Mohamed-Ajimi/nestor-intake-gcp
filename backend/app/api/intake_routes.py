@@ -1,6 +1,6 @@
 """The real intake feature router — the RPC-equivalent backend (INTAKE-01/02/03/04).
 
-This GENERALIZES the throwaway ``sample_routes.py`` seam-prover into the full
+This GENERALIZES the earlier throwaway seam-prover scaffold into the full
 authenticated intake surface, bounded by the scope ceiling at ``decomposed``: list /
 create / get / patch intakes, read + section-batch-save answers (D-03), discrete named
 status transitions (``/submit`` / ``/review`` — Task 2), and read-only skill-run +
@@ -32,7 +32,7 @@ Locked decisions / invariants realized here:
 
 Sync ``def`` handlers (not ``async def``): pg8000 is a blocking driver and FastAPI runs
 sync handlers in a threadpool; an ``async def`` calling the sync engine would stall the
-event loop (mirrors ``sample_routes.py`` / ``main.py``).
+event loop (mirrors ``admin_routes.py`` / ``main.py``).
 """
 
 from __future__ import annotations

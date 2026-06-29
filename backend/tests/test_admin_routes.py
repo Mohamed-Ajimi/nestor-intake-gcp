@@ -36,9 +36,9 @@ run locally, so ``get_current_identity`` is overridden (legitimate stand-in) and
 ``admin_users.*`` SDK calls are faked.
 
 Authoritative references:
-- backend/tests/test_cross_tenant_denial.py (the drive-the-REAL-route + fabricated-Identity
+- backend/tests/test_intake_cross_tenant.py (the drive-the-REAL-route + fabricated-Identity
     + ``superadmin_engine`` + ``_patch_engine_factories`` + ``_build_app`` template)
-- backend/app/api/sample_routes.py (router-under-protected_router, pydantic view/patch, 404 map)
+- backend/app/api/intake_routes.py (router-under-protected_router, pydantic view/patch, 404 map)
 - .planning/phases/05-user-space-management/05-RESEARCH.md § Patterns 1/3/5 / § Code Examples
 - .planning/phases/05-user-space-management/05-PATTERNS.md § test_admin_routes.py / § admin_routes.py
 """
