@@ -1,6 +1,10 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { getIdToken, onAuthStateChanged, type User } from "firebase/auth";
+import { getIdToken, getIdTokenResult, onIdTokenChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+
+// The verified `role` custom claim, minted server-side by Identity Platform and
+// read here for UX gating ONLY — the backend remains the sole authority.
+type Role = "superadmin" | "user" | null;
 
 type AuthContextValue = {
   session: User | null;
@@ -10,6 +14,11 @@ type AuthContextValue = {
   // space_id) are picked up immediately — the login-sync handshake + the
   // Phase-6 token-attach seam.
   getToken: (forceRefresh?: boolean) => Promise<string | null>;
+  // The `role` custom claim from the verified ID token (null when signed out or
+  // before the claim resolves). UX gating only; never trusted for authorization.
+  role: Role;
+  // Convenience derived flag: true iff `role === "superadmin"`.
+  isSuperadmin: boolean;
 };
 
 async function getToken(forceRefresh = false): Promise<string | null> {
@@ -20,11 +29,14 @@ const AuthContext = createContext<AuthContextValue>({
   session: null,
   loading: true,
   getToken,
+  role: null,
+  isSuperadmin: false,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [role, setRole] = useState<Role>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,9 +50,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    // onAuthStateChanged returns its unsubscribe fn directly; use it in cleanup.
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    // onIdTokenChanged is a superset of onAuthStateChanged (D-LI2-01): it fires on
+    // sign-in/out AND on token refresh, so the `role` claim minted server-side after
+    // sign-in (picked up via the login `getToken(true)` force-refresh) is observed
+    // here. Identical signature/unsubscribe contract — session/loading behavior is
+    // preserved. Returns its unsubscribe fn directly; use it in cleanup.
+    const unsubscribe = onIdTokenChanged(auth, (user) => {
+      // Settle session/loading on the first tick exactly as before — do NOT block
+      // on the async claim read.
       settle(user);
+
+      if (!user) {
+        if (!cancelled) setRole(null);
+        return;
+      }
+
+      // Read the verified custom claim asynchronously; populate role once resolved.
+      // Respect `cancelled` — the user may have signed out mid-await.
+      void getIdTokenResult(user)
+        .then((res) => {
+          if (cancelled) return;
+          const claimRole = res.claims.role;
+          setRole(claimRole === "superadmin" || claimRole === "user" ? claimRole : null);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.error("[auth-context] failed to read role claim", err);
+          setRole(null);
+        });
     });
 
     return () => {
@@ -50,7 +87,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ session, loading, getToken }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider
+      value={{ session, loading, getToken, role, isSuperadmin: role === "superadmin" }}
+    >
+      {children}
+    </AuthContext.Provider>
   );
 }
 

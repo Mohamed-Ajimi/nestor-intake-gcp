@@ -1,5 +1,5 @@
 import { apiUrl, auth } from "@/lib/firebase";
-import { getIdToken } from "firebase/auth";
+import { getIdToken, signOut } from "firebase/auth";
 
 // frontend/src/lib/api/client.ts — the FIRST lib/api module and the generalizable
 // token-attach transport seam that Phase 6 extends (NOT a throwaway). It reuses the
@@ -68,6 +68,27 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<Api
           : undefined);
       const message =
         typeof detail === "string" && detail.length > 0 ? detail : `HTTP ${resp.status}`;
+
+      // Disabled/revoked-session eject UX: the backend is still the authority (it
+      // returned 401); we simply clear the dead client session and bounce to login
+      // so the user isn't stranded behind a wall of 401s. The `{success,error}`
+      // contract is preserved — the error is still returned to the caller below.
+      if (resp.status === 401 && (message === "Account disabled" || message === "Session revoked")) {
+        // Never let a signOut failure throw out of apiFetch.
+        await signOut(auth).catch(() => {
+          /* ignore — we redirect regardless */
+        });
+        // Guard against redirect loops and SSR: only navigate in the browser and
+        // when we are not already on the login page. A full navigation is correct
+        // here — it clears in-memory state and cannot re-enter this module.
+        if (
+          typeof window !== "undefined" &&
+          !window.location.pathname.startsWith("/auth/login")
+        ) {
+          window.location.assign("/auth/login");
+        }
+      }
+
       return { success: false, error: message };
     }
 
