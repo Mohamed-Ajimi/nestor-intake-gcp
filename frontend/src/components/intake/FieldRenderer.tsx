@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { IntakeField } from "@/lib/intake-types";
-import { supabase } from "@/lib/supabase";
+import * as storage from "@/lib/api/storage";
 import { toast } from "sonner";
 
 type Props = {
@@ -385,7 +385,6 @@ function FileControl({
  const useSlots = multi && (field.max_files ?? 0) > 0 && (field.max_files ?? 0) <= 5;
 
  const uploadOne = async (f: File): Promise<any | null> => {
- if (!supabase) return null;
  if (acceptOnlyPdf && !f.name.toLowerCase().endsWith(".pdf")) {
  toast.error(
  "Alleen PDF bestanden toegestaan. Sla je PowerPoint/Word/Excel eerst op als PDF.",
@@ -397,16 +396,23 @@ function FileControl({
  return null;
  }
  const path = `${prefix}/${crypto.randomUUID()}-${f.name}`;
- const { error } = await supabase.storage.from(bucket).upload(path, f);
- if (error) {
- toast.error(`Upload mislukt: ${error.message}`);
+ const res = await storage.uploadFile({
+ intakeId,
+ bucket,
+ path,
+ file: f,
+ filename: f.name,
+ contentType: f.type || undefined,
+ });
+ if (!res.success) {
+ toast.error(`Upload mislukt: ${res.error}`);
  return null;
  }
  return {
- path,
+ path: res.data.path ?? path,
  filename: f.name,
  size: f.size,
- uploaded_at: new Date().toISOString(),
+ uploaded_at: res.data.uploaded_at ?? new Date().toISOString(),
  };
  };
 
@@ -417,8 +423,8 @@ function FileControl({
  const uploaded = await uploadOne(selected[0]);
  if (!uploaded) return;
  const next = [...files];
- if (replace && next[slotIndex]?.path && supabase) {
- supabase.storage.from(bucket).remove([next[slotIndex].path]).catch(() => {});
+ if (replace && next[slotIndex]?.path) {
+ void storage.removeFile({ bucket, paths: [next[slotIndex].path] });
  }
  next[slotIndex] = uploaded;
  onChange(next.filter(Boolean));
@@ -428,7 +434,7 @@ function FileControl({
  };
 
  const handleMulti = async (selected: FileList | null) => {
- if (!selected || !supabase) return;
+ if (!selected) return;
  const list = Array.from(selected);
  if (multi && field.max_files && files.length + list.length > field.max_files) {
  toast.error(`Maximum ${field.max_files} bestanden.`);
@@ -450,8 +456,8 @@ function FileControl({
 
  const removeFile = async (idx: number) => {
  const f = files[idx];
- if (f?.path && supabase) {
- supabase.storage.from(bucket).remove([f.path]).catch(() => {});
+ if (f?.path) {
+ void storage.removeFile({ bucket, paths: [f.path] });
  }
  if (multi) {
  onChange(files.filter((_, i) => i !== idx));
@@ -575,17 +581,19 @@ function FileControl({
 function DownloadControl({ field }: { field: IntakeField }) {
  const [loading, setLoading] = useState(false);
  const handleClick = async () => {
- if (!supabase || !field.storage_bucket || !field.storage_path) return;
+ if (!field.storage_bucket || !field.storage_path) return;
  setLoading(true);
  try {
- const { data, error } = await supabase.storage
- .from(field.storage_bucket)
- .createSignedUrl(field.storage_path, 300);
- if (error || !data) {
+ const res = await storage.signedDownloadUrl({
+ bucket: field.storage_bucket,
+ path: field.storage_path,
+ expiresIn: 300,
+ });
+ if (!res.success) {
  toast.error("Download mislukt");
  return;
  }
- window.open(data.signedUrl, "_blank");
+ window.open(res.data.url, "_blank");
  } finally {
  setLoading(false);
  }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, Upload, Download } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import * as storage from "@/lib/api/storage";
+import { derivePhase, phaseShowsFinalReport } from "@/lib/intake-phase";
 
 const BUCKET = "nestor-uploads";
 
@@ -51,87 +52,39 @@ export function FinalReportBlock({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!supabase || !finalReportArtifactId) {
-        setArtifact(null);
-        return;
-      }
-      const { data } = await supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .select("id, filename, byte_size, mime_type, storage_path")
-        .eq("id", finalReportArtifactId)
-        .single();
-      if (!cancelled) setArtifact((data as Artifact) ?? null);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    // The final-report artifact record is served by the research backend
+    // (Phase 7+). Not fetched this milestone — the block is gated off.
+    void finalReportArtifactId;
+    setArtifact(null);
   }, [finalReportArtifactId]);
 
   const maybeAutoDeliver = async () => {
-    if (!supabase) return;
-    if (intakeStatus === "in_research" && hasResultsToken) {
-      await supabase
-        .schema("nestor" as never)
-        .from("intakes")
-        .update({ status: "delivered" })
-        .eq("id", intakeId);
-    }
+    // Status transitions are mediated by the backend transition verbs
+    // (intakes.ts); the auto-deliver bump is out of scope here.
+    void intakeStatus;
+    void hasResultsToken;
   };
 
   const onPick = async (file: File) => {
-    if (!supabase) return;
     setBusy(true);
     try {
       const safeName = sanitizeFilenameForStorage(file.name);
       const path = `intakes/${intakeId}/final-report/${crypto.randomUUID()}-${safeName}`;
-      const up = await supabase.storage.from(BUCKET).upload(path, file);
-      if (up.error) throw up.error;
-
-      let textContent: string | null = null;
-      if (
-        file.type === "text/plain" ||
-        file.type === "text/markdown" ||
-        /\.(txt|md)$/i.test(file.name)
-      ) {
-        try {
-          textContent = await file.text();
-        } catch {}
-      }
-
-      const { data: art, error: insErr } = await supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .insert({
-          intake_id: intakeId,
-          research_question_id: null,
-          source: "manual",
-          artifact_type: "deliverable",
-          filename: file.name,
-          storage_path: path,
-          byte_size: file.size,
-          mime_type: file.type || null,
-          text_content: textContent,
-          embed_status: "pending",
-        })
-        .select("id, filename, byte_size, mime_type, storage_path")
-        .single();
-      if (insErr) throw insErr;
-
-      const { error: rpcErr } = await supabase
-        .schema("nestor" as never)
-        .rpc("set_final_report", {
-          p_intake_id: intakeId,
-          p_artifact_id: (art as Artifact).id,
-        });
-      if (rpcErr) throw rpcErr;
-
-      setArtifact(art as Artifact);
-      toast.success("Rapport geüpload en gekoppeld");
+      const res = await storage.uploadFile({
+        intakeId,
+        bucket: BUCKET,
+        path,
+        file,
+        filename: file.name,
+        contentType: file.type || undefined,
+      });
+      if (!res.success) throw new Error(res.error);
+      // Linking the uploaded report to the intake (set_final_report) and the
+      // research-artifact record are research-backend operations (Phase 7+),
+      // not wired this milestone.
+      toast.success("Rapport geüpload");
       await maybeAutoDeliver();
-      await onChange((art as Artifact).id);
+      await onChange(null);
     } catch (e) {
       toast.error(`Upload mislukt: ${(e as Error).message}`);
     } finally {
@@ -141,17 +94,11 @@ export function FinalReportBlock({
   };
 
   const onRemove = async () => {
-    if (!supabase) return;
     if (!confirm("Verwijder het volledig rapport voor deze klant?")) return;
     setBusy(true);
     try {
-      const { error } = await supabase
-        .schema("nestor" as never)
-        .rpc("set_final_report", {
-          p_intake_id: intakeId,
-          p_artifact_id: null,
-        });
-      if (error) throw error;
+      // Unlinking the final report (set_final_report) is a research-backend
+      // operation (Phase 7+); here we only clear local UI state.
       setArtifact(null);
       toast.success("Rapport ontkoppeld");
       await onChange(null);
@@ -163,16 +110,18 @@ export function FinalReportBlock({
   };
 
   const onDownload = async () => {
-    if (!supabase || !artifact?.storage_path) return;
-    const { data, error } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrl(artifact.storage_path, 300);
-    if (error || !data) {
+    if (!artifact?.storage_path) return;
+    const signed = await storage.signedDownloadUrl({
+      bucket: BUCKET,
+      path: artifact.storage_path,
+      expiresIn: 300,
+    });
+    if (!signed.success) {
       toast.error("Kon link niet maken");
       return;
     }
     try {
-      const response = await fetch(data.signedUrl);
+      const response = await fetch(signed.data.url);
       if (!response.ok) throw new Error("Download faalde");
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
@@ -194,6 +143,22 @@ export function FinalReportBlock({
     const file = e.dataTransfer?.files?.[0];
     if (file) onPick(file);
   };
+
+  // Phase-gate: the final report belongs to the post-decomposed flow. The
+  // re-platform scope ceiling stops at `decomposed`, so phaseShowsFinalReport()
+  // is effectively false this milestone and the block never renders.
+  const phase = derivePhase(
+    {
+      status: intakeStatus,
+      validation_link_sent_at: null,
+      results_link_sent_at: null,
+      context_pack_artifact_id: null,
+      final_report_artifact_id: finalReportArtifactId,
+    },
+    null,
+    false,
+  );
+  if (!phaseShowsFinalReport(phase)) return null;
 
   // Red when missing (active blocker) — yellow when uploaded (done).
   // The block is only rendered for in_research/decomposed/delivered, so a

@@ -3,7 +3,8 @@ import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { toast } from "sonner";
 import { Loader2, Upload, FileText, Download, X, StickyNote } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import * as storage from "@/lib/api/storage";
+import { derivePhase, phaseShowsResearch } from "@/lib/intake-phase";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
 const BUCKET = "nestor-uploads";
@@ -64,11 +65,21 @@ export function ResearchArtifactsBlock({
   intakeStatus: string | null;
   onStartResearch?: () => Promise<void> | void;
 }) {
-  const isResearchPhase = !!intakeStatus && RESEARCH_STATUSES.includes(intakeStatus);
-
-  // The "Volgende stap" banner bovenaan is de single source of truth voor
-  // de status-transitie. Geen duplicaat callout meer hier.
-  if (!isResearchPhase) return null;
+  // Phase-gate: this block is post-decomposed UI (research phase only). The
+  // re-platform flow stops at `decomposed`, so phaseShowsResearch() is
+  // effectively false this milestone and the block never renders (scope ceiling).
+  const phase = derivePhase(
+    {
+      status: intakeStatus,
+      validation_link_sent_at: null,
+      results_link_sent_at: null,
+      context_pack_artifact_id: null,
+      final_report_artifact_id: null,
+    },
+    null,
+    false,
+  );
+  if (!phaseShowsResearch(phase)) return null;
   // onStartResearch prop is no longer used by this block (banner handles it).
   void onStartResearch;
 
@@ -90,23 +101,12 @@ function ResearchArtifactsInner({
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
-    if (!supabase) return;
-    const [qRes, aRes] = await Promise.all([
-      supabase
-        .schema("nestor" as never)
-        .from("research_questions")
-        .select("id, question_text, question_type, priority, rationale, status, client_answer_artifact_id")
-        .eq("intake_id", intakeId)
-        .order("priority", { ascending: true, nullsFirst: false }),
-      supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .select("id, research_question_id, source, artifact_type, filename, storage_path, byte_size, mime_type, created_at, embed_status, notes")
-        .eq("intake_id", intakeId)
-        .order("created_at", { ascending: false }),
-    ]);
-    setQuestions((qRes.data as ResearchQuestion[]) ?? []);
-    setArtifacts((aRes.data as Artifact[]) ?? []);
+    // Post-decomposed research data is out of scope this milestone (research
+    // backend lands Phase 7+). The block is gated off, so render inert with
+    // no data rather than fetching.
+    void intakeId;
+    setQuestions([]);
+    setArtifacts([]);
     setLoading(false);
   }, [intakeId]);
 
@@ -352,43 +352,26 @@ function PendingUploadForm({
   const [busy, setBusy] = useState(false);
 
   const upload = async () => {
-    if (!supabase) return;
     setBusy(true);
+    // Artifact metadata (source/type) is persisted by the research backend
+    // (Phase 7+), which is out of scope here. Files route through the storage
+    // seam only; the DB-indexing insert is intentionally not wired this milestone.
     const finalSource = source === "other" && otherSource.trim() ? otherSource.trim() : source;
+    void finalSource;
+    void type;
     try {
       for (const file of files) {
         const path = `intakes/${intakeId}/research/${questionId ?? "general"}/${crypto.randomUUID()}-${file.name}`;
-        const up = await supabase.storage.from(BUCKET).upload(path, file);
-        if (up.error) throw up.error;
-
-        let textContent: string | null = null;
-        if (
-          file.type === "text/plain" ||
-          file.type === "text/markdown" ||
-          /\.(txt|md)$/i.test(file.name)
-        ) {
-          try {
-            textContent = await file.text();
-          } catch {}
-        }
-
-        const { error } = await supabase
-          .schema("nestor" as never)
-          .from("research_artifacts")
-          .insert({
-            intake_id: intakeId,
-            research_question_id: questionId,
-            source: finalSource,
-            artifact_type: type,
-            filename: file.name,
-            storage_path: path,
-            byte_size: file.size,
-            mime_type: file.type || null,
-            text_content: textContent,
-            embed_status: "pending",
-          });
-        if (error) throw error;
-        toast.success(`${file.name} geüpload — wordt binnenkort geïndexeerd.`);
+        const res = await storage.uploadFile({
+          intakeId,
+          bucket: BUCKET,
+          path,
+          file,
+          filename: file.name,
+          contentType: file.type || undefined,
+        });
+        if (!res.success) throw new Error(res.error);
+        toast.success(`${file.name} geüpload.`);
       }
       await onDone();
     } catch (e) {
@@ -482,7 +465,6 @@ function NoteModal({
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
-    if (!supabase) return;
     if (!text.trim()) {
       toast.error("Schrijf een notitie");
       return;
@@ -493,26 +475,17 @@ function NoteModal({
       const filename = (title.trim() ? title.trim().replace(/[^\w-]+/g, "_") : `note-${ts}`) + ".txt";
       const path = `intakes/${intakeId}/research/${questionId ?? "general"}/${crypto.randomUUID()}-${filename}`;
       const blob = new Blob([text], { type: "text/plain" });
-      const up = await supabase.storage.from(BUCKET).upload(path, blob, { contentType: "text/plain" });
-      if (up.error) throw up.error;
-
-      const { error } = await supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .insert({
-          intake_id: intakeId,
-          research_question_id: questionId,
-          source: "manual",
-          artifact_type: "note",
-          filename,
-          storage_path: path,
-          byte_size: text.length,
-          mime_type: "text/plain",
-          text_content: text,
-          embed_status: "pending",
-          notes: title.trim() || null,
-        });
-      if (error) throw error;
+      // Note content routes through the storage seam; the research-artifact
+      // DB record + embedding belong to the research backend (Phase 7+).
+      const res = await storage.uploadFile({
+        intakeId,
+        bucket: BUCKET,
+        path,
+        file: blob,
+        filename,
+        contentType: "text/plain",
+      });
+      if (!res.success) throw new Error(res.error);
       toast.success("Notitie opgeslagen");
       await onDone();
     } catch (e) {
@@ -573,31 +546,29 @@ function ArtifactRow({ artifact, isClientChoice, onDeleted }: { artifact: Artifa
   const [busy, setBusy] = useState(false);
 
   const open = async () => {
-    if (!supabase || !artifact.storage_path) return;
-    const { data, error } = await supabase.storage
-      .from(BUCKET)
-      .createSignedUrl(artifact.storage_path, 300);
-    if (error || !data) {
+    if (!artifact.storage_path) return;
+    const res = await storage.signedDownloadUrl({
+      bucket: BUCKET,
+      path: artifact.storage_path,
+      expiresIn: 300,
+    });
+    if (!res.success) {
       toast.error("Kon link niet maken");
       return;
     }
-    window.open(data.signedUrl, "_blank");
+    window.open(res.data.url, "_blank");
   };
 
   const remove = async () => {
-    if (!supabase) return;
     if (!confirm(`Verwijder ${artifact.filename}?`)) return;
     setBusy(true);
     try {
+      // The research-artifact DB record is owned by the research backend
+      // (Phase 7+); here we only remove the stored object via the seam.
       if (artifact.storage_path) {
-        await supabase.storage.from(BUCKET).remove([artifact.storage_path]);
+        const res = await storage.removeFile({ bucket: BUCKET, paths: [artifact.storage_path] });
+        if (!res.success) throw new Error(res.error);
       }
-      const { error } = await supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .delete()
-        .eq("id", artifact.id);
-      if (error) throw error;
       toast.success("Verwijderd");
       await onDeleted();
     } catch (e) {
@@ -762,22 +733,11 @@ function PerSourceRow({
 
   const ensureText = useCallback(async (): Promise<string | null> => {
     if (text !== null) return text;
-    if (!supabase) return null;
-    setLoadingText(true);
-    try {
-      const { data, error } = await supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .select("text_content")
-        .eq("id", artifact.id)
-        .single();
-      if (error || !data) return null;
-      const t = (data as { text_content: string | null }).text_content ?? "";
-      setText(t);
-      return t;
-    } finally {
-      setLoadingText(false);
-    }
+    // Artifact text content is served by the research backend (Phase 7+);
+    // not available this milestone, so previews/downloads have no body.
+    void artifact.id;
+    void setLoadingText;
+    return null;
   }, [artifact.id, text]);
 
   const resultsMatch = (text || "").match(/Results?:\s*(\d+)/i);

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import {
   ResearchResultsPanel,
   type RRPArtifact,
@@ -23,26 +22,12 @@ export function AdminResearchResultsPanel({
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!supabase) return;
-    setLoading(true);
-    const [qRes, aRes] = await Promise.all([
-      supabase
-        .schema("nestor" as never)
-        .from("research_questions")
-        .select("id, question_text, question_type, priority, rationale, status")
-        .eq("intake_id", intake.id)
-        .order("priority", { ascending: true, nullsFirst: false }),
-      supabase
-        .schema("nestor" as never)
-        .from("research_artifacts")
-        .select(
-          "id, research_question_id, source, artifact_type, filename, storage_path, byte_size, mime_type, created_at",
-        )
-        .eq("intake_id", intake.id)
-        .order("created_at", { ascending: false }),
-    ]);
-    setQuestions((qRes.data as RRPQuestion[]) ?? []);
-    setArtifacts((aRes.data as RRPArtifact[]) ?? []);
+    // Research questions/artifacts are served by the research backend (Phase 7+),
+    // out of scope this milestone. Render the (inert) panel with no data; the
+    // admin detail screen only mounts this in the post-decomposed phase.
+    void intake.id;
+    setQuestions([]);
+    setArtifacts([]);
     setLoading(false);
   }, [intake.id]);
 
