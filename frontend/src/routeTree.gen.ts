@@ -11,7 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as IntakeIndexRouteImport } from './routes/intake.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as IntakeIdRouteImport } from './routes/intake.$id'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminTemplatesRouteImport } from './routes/admin.templates'
@@ -25,6 +27,7 @@ import { Route as AdminClientsRouteImport } from './routes/admin.clients'
 import { Route as AdminSalesIndexRouteImport } from './routes/admin.sales.index'
 import { Route as AdminPulseIndexRouteImport } from './routes/admin.pulse.index'
 import { Route as AdminIntakesIndexRouteImport } from './routes/admin.intakes.index'
+import { Route as IntakeIdResultsRouteImport } from './routes/intake.$id.results'
 import { Route as AdminPulseSearchRouteImport } from './routes/admin.pulse.search'
 import { Route as AdminPulseClientsRouteImport } from './routes/admin.pulse.clients'
 import { Route as AdminIntakesNewRouteImport } from './routes/admin.intakes.new'
@@ -40,9 +43,6 @@ import { Route as AdminSalesProjectsIdRouteImport } from './routes/admin.sales.p
 import { Route as AdminPulseIntakesNewRouteImport } from './routes/admin.pulse.intakes.new'
 import { Route as AdminPulseIntakesIdRouteImport } from './routes/admin.pulse.intakes.$id'
 import { Route as AdminPulseClientsIdRouteImport } from './routes/admin.pulse.clients.$id'
-import { Route as IntakeIndexRouteImport } from './routes/intake.index'
-import { Route as IntakeIdRouteImport } from './routes/intake.$id'
-import { Route as IntakeIdResultsRouteImport } from './routes/intake.$id.results'
 
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
@@ -54,10 +54,20 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntakeIndexRoute = IntakeIndexRouteImport.update({
+  id: '/intake/',
+  path: '/intake/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRoute,
+} as any)
+const IntakeIdRoute = IntakeIdRouteImport.update({
+  id: '/intake/$id',
+  path: '/intake/$id',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/auth/login',
@@ -123,6 +133,11 @@ const AdminIntakesIndexRoute = AdminIntakesIndexRouteImport.update({
   id: '/intakes/',
   path: '/intakes/',
   getParentRoute: () => AdminRoute,
+} as any)
+const IntakeIdResultsRoute = IntakeIdResultsRouteImport.update({
+  id: '/results',
+  path: '/results',
+  getParentRoute: () => IntakeIdRoute,
 } as any)
 const AdminPulseSearchRoute = AdminPulseSearchRouteImport.update({
   id: '/search',
@@ -199,23 +214,6 @@ const AdminPulseClientsIdRoute = AdminPulseClientsIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => AdminPulseClientsRoute,
 } as any)
-// Top-level authenticated user intake surface (NOT under /admin). Flat siblings under
-// the root route — there is no `intake.tsx` layout, so each registers its own full path.
-const IntakeIndexRoute = IntakeIndexRouteImport.update({
-  id: '/intake/',
-  path: '/intake/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IntakeIdRoute = IntakeIdRouteImport.update({
-  id: '/intake/$id',
-  path: '/intake/$id',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IntakeIdResultsRoute = IntakeIdResultsRouteImport.update({
-  id: '/intake/$id/results',
-  path: '/intake/$id/results',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -230,7 +228,9 @@ export interface FileRoutesByFullPath {
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
+  '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin/': typeof AdminIndexRoute
+  '/intake/': typeof IntakeIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
   '/admin/edge/coming-soon': typeof AdminEdgeComingSoonRoute
@@ -239,6 +239,7 @@ export interface FileRoutesByFullPath {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
   '/admin/sales/': typeof AdminSalesIndexRoute
@@ -249,9 +250,6 @@ export interface FileRoutesByFullPath {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
-  '/intake': typeof IntakeIndexRoute
-  '/intake/$id': typeof IntakeIdRoute
-  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -263,7 +261,9 @@ export interface FileRoutesByTo {
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
+  '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin': typeof AdminIndexRoute
+  '/intake': typeof IntakeIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
   '/admin/edge/coming-soon': typeof AdminEdgeComingSoonRoute
@@ -272,6 +272,7 @@ export interface FileRoutesByTo {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes': typeof AdminIntakesIndexRoute
   '/admin/pulse': typeof AdminPulseIndexRoute
   '/admin/sales': typeof AdminSalesIndexRoute
@@ -282,9 +283,6 @@ export interface FileRoutesByTo {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects': typeof AdminSalesProjectsIndexRoute
-  '/intake': typeof IntakeIndexRoute
-  '/intake/$id': typeof IntakeIdRoute
-  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -300,7 +298,9 @@ export interface FileRoutesById {
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
+  '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin/': typeof AdminIndexRoute
+  '/intake/': typeof IntakeIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
   '/admin/echo/coming-soon': typeof AdminEchoComingSoonRoute
   '/admin/edge/coming-soon': typeof AdminEdgeComingSoonRoute
@@ -309,6 +309,7 @@ export interface FileRoutesById {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
   '/admin/sales/': typeof AdminSalesIndexRoute
@@ -319,9 +320,6 @@ export interface FileRoutesById {
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
-  '/intake/': typeof IntakeIndexRoute
-  '/intake/$id': typeof IntakeIdRoute
-  '/intake/$id/results': typeof IntakeIdResultsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -338,7 +336,9 @@ export interface FileRouteTypes {
     | '/admin/templates'
     | '/admin/users'
     | '/auth/login'
+    | '/intake/$id'
     | '/admin/'
+    | '/intake/'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
     | '/admin/edge/coming-soon'
@@ -347,6 +347,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/results'
     | '/admin/intakes/'
     | '/admin/pulse/'
     | '/admin/sales/'
@@ -357,9 +358,6 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
-    | '/intake'
-    | '/intake/$id'
-    | '/intake/$id/results'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -371,7 +369,9 @@ export interface FileRouteTypes {
     | '/admin/templates'
     | '/admin/users'
     | '/auth/login'
+    | '/intake/$id'
     | '/admin'
+    | '/intake'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
     | '/admin/edge/coming-soon'
@@ -380,6 +380,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/results'
     | '/admin/intakes'
     | '/admin/pulse'
     | '/admin/sales'
@@ -390,9 +391,6 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes'
     | '/admin/sales/projects'
-    | '/intake'
-    | '/intake/$id'
-    | '/intake/$id/results'
   id:
     | '__root__'
     | '/'
@@ -407,7 +405,9 @@ export interface FileRouteTypes {
     | '/admin/templates'
     | '/admin/users'
     | '/auth/login'
+    | '/intake/$id'
     | '/admin/'
+    | '/intake/'
     | '/admin/clients/$id'
     | '/admin/echo/coming-soon'
     | '/admin/edge/coming-soon'
@@ -416,6 +416,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/results'
     | '/admin/intakes/'
     | '/admin/pulse/'
     | '/admin/sales/'
@@ -426,18 +427,14 @@ export interface FileRouteTypes {
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
-    | '/intake/'
-    | '/intake/$id'
-    | '/intake/$id/results'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
   AuthLoginRoute: typeof AuthLoginRoute
+  IntakeIdRoute: typeof IntakeIdRouteWithChildren
   IntakeIndexRoute: typeof IntakeIndexRoute
-  IntakeIdRoute: typeof IntakeIdRoute
-  IntakeIdResultsRoute: typeof IntakeIdResultsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -456,12 +453,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/intake/': {
+      id: '/intake/'
+      path: '/intake'
+      fullPath: '/intake/'
+      preLoaderRoute: typeof IntakeIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/intake/$id': {
+      id: '/intake/$id'
+      path: '/intake/$id'
+      fullPath: '/intake/$id'
+      preLoaderRoute: typeof IntakeIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/auth/login': {
       id: '/auth/login'
@@ -553,6 +564,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/intakes/'
       preLoaderRoute: typeof AdminIntakesIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/intake/$id/results': {
+      id: '/intake/$id/results'
+      path: '/results'
+      fullPath: '/intake/$id/results'
+      preLoaderRoute: typeof IntakeIdResultsRouteImport
+      parentRoute: typeof IntakeIdRoute
     }
     '/admin/pulse/search': {
       id: '/admin/pulse/search'
@@ -658,27 +676,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/pulse/clients/$id'
       preLoaderRoute: typeof AdminPulseClientsIdRouteImport
       parentRoute: typeof AdminPulseClientsRoute
-    }
-    '/intake/': {
-      id: '/intake/'
-      path: '/intake'
-      fullPath: '/intake'
-      preLoaderRoute: typeof IntakeIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/intake/$id': {
-      id: '/intake/$id'
-      path: '/intake/$id'
-      fullPath: '/intake/$id'
-      preLoaderRoute: typeof IntakeIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/intake/$id/results': {
-      id: '/intake/$id/results'
-      path: '/intake/$id/results'
-      fullPath: '/intake/$id/results'
-      preLoaderRoute: typeof IntakeIdResultsRouteImport
-      parentRoute: typeof rootRouteImport
     }
   }
 }
@@ -786,13 +783,24 @@ const AdminRouteChildren: AdminRouteChildren = {
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
+interface IntakeIdRouteChildren {
+  IntakeIdResultsRoute: typeof IntakeIdResultsRoute
+}
+
+const IntakeIdRouteChildren: IntakeIdRouteChildren = {
+  IntakeIdResultsRoute: IntakeIdResultsRoute,
+}
+
+const IntakeIdRouteWithChildren = IntakeIdRoute._addFileChildren(
+  IntakeIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   AuthLoginRoute: AuthLoginRoute,
+  IntakeIdRoute: IntakeIdRouteWithChildren,
   IntakeIndexRoute: IntakeIndexRoute,
-  IntakeIdRoute: IntakeIdRoute,
-  IntakeIdResultsRoute: IntakeIdResultsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
