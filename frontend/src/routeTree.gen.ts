@@ -13,6 +13,9 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
+import { Route as AdminUsersRouteImport } from './routes/admin.users'
+import { Route as AdminTemplatesRouteImport } from './routes/admin.templates'
+import { Route as AdminSpacesRouteImport } from './routes/admin.spaces'
 import { Route as AdminSearchRouteImport } from './routes/admin.search'
 import { Route as AdminSalesRouteImport } from './routes/admin.sales'
 import { Route as AdminPulseRouteImport } from './routes/admin.pulse'
@@ -57,6 +60,21 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/auth/login',
   path: '/auth/login',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminTemplatesRoute = AdminTemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSpacesRoute = AdminSpacesRouteImport.update({
+  id: '/spaces',
+  path: '/spaces',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminSearchRoute = AdminSearchRouteImport.update({
   id: '/search',
@@ -188,6 +206,9 @@ export interface FileRoutesByFullPath {
   '/admin/pulse': typeof AdminPulseRouteWithChildren
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/templates': typeof AdminTemplatesRoute
+  '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
@@ -215,6 +236,9 @@ export interface FileRoutesByTo {
   '/admin/login': typeof AdminLoginRoute
   '/admin/organizations': typeof AdminOrganizationsRoute
   '/admin/search': typeof AdminSearchRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/templates': typeof AdminTemplatesRoute
+  '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
   '/admin': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
@@ -246,6 +270,9 @@ export interface FileRoutesById {
   '/admin/pulse': typeof AdminPulseRouteWithChildren
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
+  '/admin/spaces': typeof AdminSpacesRoute
+  '/admin/templates': typeof AdminTemplatesRoute
+  '/admin/users': typeof AdminUsersRoute
   '/auth/login': typeof AuthLoginRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/clients/$id': typeof AdminClientsIdRoute
@@ -278,6 +305,9 @@ export interface FileRouteTypes {
     | '/admin/pulse'
     | '/admin/sales'
     | '/admin/search'
+    | '/admin/spaces'
+    | '/admin/templates'
+    | '/admin/users'
     | '/auth/login'
     | '/admin/'
     | '/admin/clients/$id'
@@ -305,6 +335,9 @@ export interface FileRouteTypes {
     | '/admin/login'
     | '/admin/organizations'
     | '/admin/search'
+    | '/admin/spaces'
+    | '/admin/templates'
+    | '/admin/users'
     | '/auth/login'
     | '/admin'
     | '/admin/clients/$id'
@@ -335,6 +368,9 @@ export interface FileRouteTypes {
     | '/admin/pulse'
     | '/admin/sales'
     | '/admin/search'
+    | '/admin/spaces'
+    | '/admin/templates'
+    | '/admin/users'
     | '/auth/login'
     | '/admin/'
     | '/admin/clients/$id'
@@ -392,6 +428,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/auth/login'
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/users': {
+      id: '/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/templates': {
+      id: '/admin/templates'
+      path: '/templates'
+      fullPath: '/admin/templates'
+      preLoaderRoute: typeof AdminTemplatesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/spaces': {
+      id: '/admin/spaces'
+      path: '/spaces'
+      fullPath: '/admin/spaces'
+      preLoaderRoute: typeof AdminSpacesRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/admin/search': {
       id: '/admin/search'
@@ -634,6 +691,9 @@ interface AdminRouteChildren {
   AdminPulseRoute: typeof AdminPulseRouteWithChildren
   AdminSalesRoute: typeof AdminSalesRouteWithChildren
   AdminSearchRoute: typeof AdminSearchRoute
+  AdminSpacesRoute: typeof AdminSpacesRoute
+  AdminTemplatesRoute: typeof AdminTemplatesRoute
+  AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminEchoComingSoonRoute: typeof AdminEchoComingSoonRoute
   AdminEdgeComingSoonRoute: typeof AdminEdgeComingSoonRoute
@@ -650,6 +710,9 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminPulseRoute: AdminPulseRouteWithChildren,
   AdminSalesRoute: AdminSalesRouteWithChildren,
   AdminSearchRoute: AdminSearchRoute,
+  AdminSpacesRoute: AdminSpacesRoute,
+  AdminTemplatesRoute: AdminTemplatesRoute,
+  AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminEchoComingSoonRoute: AdminEchoComingSoonRoute,
   AdminEdgeComingSoonRoute: AdminEdgeComingSoonRoute,
@@ -669,3 +732,12 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+  }
+}
