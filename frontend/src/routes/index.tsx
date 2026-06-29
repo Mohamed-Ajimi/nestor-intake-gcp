@@ -1,6 +1,4 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { supabase, type Product } from "@/lib/supabase";
 
 export const Route = createFileRoute("/")({
   beforeLoad: () => {
@@ -8,6 +6,27 @@ export const Route = createFileRoute("/")({
   },
   component: Index,
 });
+
+// The root marketing cards are static product metadata — there is no tenant data here,
+// so they live as a local constant instead of an inline Supabase read. (`beforeLoad`
+// redirects to /admin, so this component is effectively never rendered, but it stays a
+// valid, seam-free fallback.)
+type Product = {
+ id: string;
+ name: string;
+ tagline: string | null;
+ description: string | null;
+};
+
+const PRODUCTS: Product[] = [
+ {
+   id: "pulse",
+   name: "pulse",
+   tagline: "verified intelligence that compounds",
+   description:
+     "Structured intake, AI-assisted research questions, and a validated context pack — the flow that runs before deep research.",
+ },
+];
 
 function ProductCard({
  product,
@@ -55,34 +74,8 @@ function ProductCard({
 }
 
 function Index() {
- const [products, setProducts] = useState<Product[] | null>(null);
- const [error, setError] = useState<string | null>(null);
-
- useEffect(() => {
- if (!supabase) {
- setError(
- "Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY."
- );
- return;
- }
- const client = supabase;
- async function fetchProducts() {
- const { data, error } = await client
- .schema("nestor")
- .from("products")
- .select("*");
-
- console.log("SUPABASE_TEST:", { data, error });
-
- if (error) setError(error.message);
- else setProducts((data ?? []) as Product[]);
- }
-
- fetchProducts();
- }, []);
-
  const order = ["pulse", "echo", "edge", "flux", "sales"];
- const sorted = (products ?? []).slice().sort((a, b) => {
+ const sorted = PRODUCTS.slice().sort((a, b) => {
  const ai = order.indexOf((a.name || "").toLowerCase());
  const bi = order.indexOf((b.name || "").toLowerCase());
  return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -103,17 +96,6 @@ function Index() {
           </h1>
         </header>
 
- {error && (
- <div className="border border-ink/10 bg-paper2 p-6 text-sm text-ink/60">
- {error}
- </div>
- )}
-
- {!error && products === null && (
- <div className="text-sm text-ink/40">Loading…</div>
- )}
-
- {products && (
  <div className="space-y-6">
  {pulse && <ProductCard product={pulse} hero />}
  {rest.length > 0 && (
@@ -124,7 +106,6 @@ function Index() {
  </div>
  )}
  </div>
- )}
  </div>
  </main>
  );
