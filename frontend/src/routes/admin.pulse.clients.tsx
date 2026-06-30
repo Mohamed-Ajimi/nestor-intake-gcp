@@ -7,9 +7,12 @@ import { listIntakes } from "@/lib/api/intakes";
 import { listSpaces } from "@/lib/api/admin";
 
 export const Route = createFileRoute("/admin/pulse/clients")({
-  validateSearch: (s: Record<string, unknown>) => ({
-    client: typeof s.client === "string" ? s.client : undefined,
-  }),
+  // Optional search key: return `{ client?: string }` (key omitted when absent) rather
+  // than `{ client: string | undefined }` (a REQUIRED key with a possibly-undefined value),
+  // so Links/navigates to this route — and its `$id` child, which inherits this search —
+  // need not pass `search`. The param is not read anywhere; this is type hygiene only.
+  validateSearch: (s: Record<string, unknown>): { client?: string } =>
+    typeof s.client === "string" ? { client: s.client } : {},
   component: ClientsPage,
 });
 

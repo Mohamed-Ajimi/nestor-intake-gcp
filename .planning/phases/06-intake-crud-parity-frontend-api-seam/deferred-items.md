@@ -5,7 +5,9 @@ per the executor scope boundary). Tracked here for a follow-up.
 
 ## From 06-13 (intakes index space_id filter)
 
-- **Pre-existing repo-wide tsc errors — stale `routeTree.gen.ts` / missing required `search` param.**
+- **RESOLVED 2026-06-30.** Regenerating `routeTree.gen.ts` was a no-op (it was NOT stale — byte-identical). Real cause: `/admin/pulse/clients` and `/admin/pulse/intakes/new` declared `validateSearch` returning a REQUIRED key (`{ client: string | undefined }` / `{ client_id: string | undefined }`), and `/admin/pulse/clients/$id` inherited it — so Links/navigates were forced to pass `search`. The params are never read (no `useSearch` consumers). Fixed by returning an OPTIONAL-key shape (`{ client?: string }` / `{ client_id?: string }`). `tsc --noEmit` now reports 0 errors. Behavior-preserving (type hygiene only).
+
+- ~~**Pre-existing repo-wide tsc errors — stale `routeTree.gen.ts` / missing required `search` param.**~~
   `frontend` `tsc --noEmit` reports 7 errors across the admin route tree, all of the form
   *"Property 'search' is missing ... MakeRequiredSearchParams"* on `<Link>` / `navigate({ to })`
   calls. Affected files: `admin.clients.$id.tsx`, `admin.pulse.clients.$id.tsx`,

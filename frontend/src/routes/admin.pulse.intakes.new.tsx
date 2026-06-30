@@ -8,9 +8,10 @@ import { Label } from "@/components/ui/label";
 import { createIntake, type Intake } from "@/lib/api/intakes";
 
 export const Route = createFileRoute("/admin/pulse/intakes/new")({
- validateSearch: (s: Record<string, unknown>) => ({
-  client_id: typeof s.client_id === "string" ? s.client_id : undefined,
- }),
+ // Optional search key (`{ client_id?: string }`, not a required possibly-undefined key)
+ // so links/navigates to this route need not pass `search`. Type hygiene only.
+ validateSearch: (s: Record<string, unknown>): { client_id?: string } =>
+  typeof s.client_id === "string" ? { client_id: s.client_id } : {},
  component: NewIntakePage,
 });
 
