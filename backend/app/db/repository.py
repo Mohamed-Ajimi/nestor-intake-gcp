@@ -45,6 +45,10 @@ from app.auth.identity import Identity
 from app.db.base import Base
 from app.db.models.intake import Intake, IntakeAnswer, IntakeTemplate
 from app.db.models.skill_run import SkillRun
+from app.db.models.sources import IntakeSource
+from app.db.models.transcripts import Transcript
+from app.db.models.insights import ExtractedInsight
+from app.db.models.embeddings import ArtifactEmbedding
 
 M = TypeVar("M", bound=Base)
 
@@ -245,6 +249,65 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
             )
         self._s.execute(stmt)
 
+    def upsert_extracted(self, intake_id, items):
+        """LLM-extracted answer upsert — the structure-answers handler's write path (A6).
+
+        Per 07-RESEARCH A6 (D-05 LLM-answer collision): machine-extracted answers
+        land in the SAME ``intake_answers`` rows as human input and MUST respect the
+        existing ``uq_intake_answers_intake_field`` unique constraint — we do NOT relax
+        or re-target it. This mirrors :meth:`upsert_batch` but stamps
+        ``extracted_by='llm'`` and carries the extraction provenance
+        (``confidence`` / ``source_chunk_id``) so 07-07's structure-answers handler
+        reuses this verbatim instead of re-opening the constraint.
+
+        ``space_id`` is injected from ``self._space_id`` (the verified Identity) and
+        ``intake_id`` from the path arg — NEVER from the item dict (D-03). Each item
+        carries only ``field_key`` / ``value`` / ``value_json`` / ``confidence`` /
+        ``source_chunk_id``; any tenant key it happened to carry is ignored.
+
+        D-01 repo wall (independent of RLS): on the user path the ``ON CONFLICT DO
+        UPDATE`` carries an explicit ``WHERE space_id = self._space_id`` so a
+        conflicting row owned by a FOREIGN space is NEVER overwritten — even if RLS
+        were dropped. The conflict TARGET stays the ``(intake_id, field_key)``
+        constraint (no migration). space_id is NEVER a method parameter.
+        """
+        rows = [
+            {
+                "space_id": self._space_id,
+                "intake_id": intake_id,
+                "field_key": item["field_key"],
+                "value": item.get("value"),
+                "value_json": item.get("value_json"),
+                "confidence": item.get("confidence"),
+                "source_chunk_id": item.get("source_chunk_id"),
+                "extracted_by": "llm",
+            }
+            for item in items
+        ]
+        if not rows:
+            return
+        stmt = pg_insert(self.model).values(rows)
+        set_ = {
+            "value": stmt.excluded.value,
+            "value_json": stmt.excluded.value_json,
+            "confidence": stmt.excluded.confidence,
+            "source_chunk_id": stmt.excluded.source_chunk_id,
+            "extracted_by": stmt.excluded.extracted_by,
+        }
+        if self._space_id is not None:
+            # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_intake_answers_intake_field",
+                set_=set_,
+                where=(self.model.space_id == self._space_id),
+            )
+        else:
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_intake_answers_intake_field",
+                set_=set_,
+            )
+        self._s.execute(stmt)
+
 
 class SkillRunRepository(TenantRepository[SkillRun]):
     """Tenant-scoped repository over ``nestor.skill_runs``.
@@ -290,3 +353,101 @@ class IntakeTemplateRepository(TenantRepository[IntakeTemplate]):
     """
 
     model = IntakeTemplate
+
+
+class IntakeSourceRepository(TenantRepository[IntakeSource]):
+    """Tenant-scoped repository over ``nestor.intake_sources`` (Phase 7 AI ports).
+
+    Thin subclass — list/get/patch/create come from :class:`TenantRepository` and are
+    space-walled by ``_scope`` for free. ``space_id`` is injected from the verified
+    Identity on ``create``; it is NEVER a method parameter (TENANT-02). Adds a per-intake
+    read the transcribe/extract handlers use to enumerate an intake's uploads.
+    """
+
+    model = IntakeSource
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's source uploads within scope (own space only for a user)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model).where(self.model.intake_id == intake_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+class TranscriptRepository(TenantRepository[Transcript]):
+    """Tenant-scoped repository over ``nestor.transcripts`` (Phase 7 AI ports).
+
+    Thin subclass — the inherited ``_scope`` wall applies the explicit space filter for a
+    user and is omitted for a superadmin (0003 bypass). ``space_id`` is identity-derived
+    only. Adds per-intake / per-source reads the insight-extraction handler consumes.
+    """
+
+    model = Transcript
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's transcript chunks within scope (own space only for a user)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(self.model.intake_id == intake_id)
+                    .order_by(self.model.chunk_index)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    def list_for_source(self, source_id):
+        """Return one source's transcript chunks within scope (ordered by chunk_index)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(self.model.source_id == source_id)
+                    .order_by(self.model.chunk_index)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+class ExtractedInsightRepository(TenantRepository[ExtractedInsight]):
+    """Tenant-scoped repository over ``nestor.extracted_insights`` (Phase 7 AI ports).
+
+    Thin subclass — list/get/patch/create come from :class:`TenantRepository`, all
+    space-walled by ``_scope``. ``space_id`` is taken only from the verified Identity.
+    Adds the per-intake read the context-pack / review surfaces consume.
+    """
+
+    model = ExtractedInsight
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's extracted insights within scope (own space only for a user)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model).where(self.model.intake_id == intake_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+class ArtifactEmbeddingRepository(TenantRepository[ArtifactEmbedding]):
+    """Tenant-scoped repository over ``nestor.artifact_embeddings`` (Phase 7 search seam).
+
+    Thin subclass — the inherited ``_scope`` wall pre-filters every read/write by the
+    identity's space, so the vector store never has a cross-tenant leak path (threat
+    T-01-06). ``space_id`` is identity-derived only — never a method parameter (TENANT-02).
+    The embed/search handlers add vector ops on top of this scoped base in later plans.
+    """
+
+    model = ArtifactEmbedding

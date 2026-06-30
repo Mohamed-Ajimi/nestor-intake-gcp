@@ -20,6 +20,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     DateTime,
+    Float,
     ForeignKey,
     Index,
     String,
@@ -161,6 +162,20 @@ class IntakeAnswer(Base):
     artifact_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), nullable=True
     )
+    # ---- AI-provenance columns (07-RESEARCH Pitfall 3 / A6). All NULLABLE so the
+    #      save-as-you-go upsert (repository.upsert_batch) is byte-for-byte
+    #      unaffected — only the LLM-extracted path (upsert_extracted) populates
+    #      them. respondent_id ties an answer to a specific respondent;
+    #      confidence/source_chunk_id record extraction provenance; extracted_by
+    #      stamps 'llm' on machine-written answers (NULL = human/save-as-you-go).
+    respondent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_chunk_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    extracted_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
