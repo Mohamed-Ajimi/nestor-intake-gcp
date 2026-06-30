@@ -26,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -133,8 +134,14 @@ class IntakeTemplate(Base):
 class IntakeAnswer(Base):
     __tablename__ = "intake_answers"
 
+    # server_default gen_random_uuid() (migration 0007): the prefill_intake_answers trigger
+    # inserts rows via raw SQL that does NOT carry the ORM uuid4 default, so id needs a
+    # DB-level default or the trigger insert hits 23502 (null id, NOT NULL violation).
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     space_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
