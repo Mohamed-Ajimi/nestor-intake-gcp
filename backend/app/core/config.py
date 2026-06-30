@@ -66,6 +66,27 @@ class Settings(BaseSettings):
     # None on Cloud Run (ADC supplies the project via GOOGLE_CLOUD_PROJECT). No secret here (D-09).
     firebase_project_id: str | None = None
 
+    # AI model ids (Phase 7, D-06). These are MODEL IDENTIFIERS — non-secret — so
+    # they belong in typed config and are env-overridable (MODEL_APPLY_INTAKE etc.)
+    # to swap a renamed/upgraded model without a redeploy. The handlers resolve the
+    # id from here and persist it on ``skill_runs.llm_model`` for parity/observability.
+    #
+    # CRITICAL (D-07): the provider API keys are NOT added to Settings — they are
+    # secrets and are read from os.environ at CALL TIME inside app/ai/clients.py only
+    # (never typed config, never logged). Defaults below are the exact legacy literals:
+    #   apply-intake-skill + generate-context-pack -> claude-sonnet-4-5
+    #     (apply-intake-skill.ts:8, generate-context-pack.ts:8)
+    #   structure-answers + extract-insights       -> claude-sonnet-4-6
+    #     (structure-answers.ts:18, extract-insights.ts:20)
+    #   embeddings   -> text-embedding-3-small (D-02, 1536 dims)
+    #   transcription-> whisper-1
+    model_apply_intake: str = "claude-sonnet-4-5"
+    model_context_pack: str = "claude-sonnet-4-5"
+    model_structure_answers: str = "claude-sonnet-4-6"
+    model_extract_insights: str = "claude-sonnet-4-6"
+    model_embeddings: str = "text-embedding-3-small"
+    model_transcription: str = "whisper-1"
+
     # CORS allowlist for the cross-origin browser handshake (WR-03). The frontend
     # (Cloudflare Workers origin) calls this backend (Cloud Run origin) directly with
     # an Authorization header, so the browser preflight (OPTIONS) must be answered with
