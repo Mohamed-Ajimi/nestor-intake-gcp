@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +43,17 @@ class SkillRun(Base):
     llm_model: Mapped[str | None] = mapped_column(String, nullable=True)
     output_parsed: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- Legacy parity + cost-observability columns (07-RESEARCH Pitfall 2 /
+    #      Open Q1). All NULLABLE — the existing run lifecycle is unaffected; AI
+    #      handlers stamp these post-call (tokens/cost from the LLM response,
+    #      prompts + raw output for auditability, skill_version for replay).
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_estimate_usd: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_system: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_user: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_version: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
