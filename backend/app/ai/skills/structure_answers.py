@@ -23,7 +23,7 @@ Grep-guard: constructs NO database engine/session — the injected ``session`` (
 ``run_with_session_release``) plus the repository wall (D-01) do every tenant-scoped write;
 the Claude client is obtained through ``app.ai.clients`` at CALL TIME (the test monkeypatch
 seam on ``app.ai.clients.anthropic_client``). This module contains NO constraint DDL — it
-respects ``uq_intake_answers_intake_field``, it never drops or re-targets it.
+respects the ``(intake_id, field_key)`` unique constraint, it never drops or re-targets it.
 
 Source: docs/supabase-functions/structure-answers.ts (claude-sonnet-4-6, max_tokens 8192,
 transcript read :88-101, intake_answers write :131-148; Pitfall 3 / Open Q3 routes the
@@ -119,7 +119,7 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
     Claude (``claude-sonnet-4-6``, ``max_tokens=8192``, verbatim system prompt) holding NO
     DB connection. WRITE: parse the JSON array and UPSERT each answer per ``field_key`` via
     :meth:`IntakeAnswerRepository.upsert_extracted` (``extracted_by='llm'``, respecting
-    ``uq_intake_answers_intake_field``) — ``succeeded`` on a parseable array, ``failed`` +
+    the ``(intake_id, field_key)`` unique constraint) — ``succeeded`` on a parseable array, ``failed`` +
     ``error_message`` on a parse error (D-09).
     """
     model = get_settings().model_structure_answers
