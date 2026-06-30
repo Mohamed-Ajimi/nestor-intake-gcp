@@ -362,3 +362,51 @@ def test_transition_audited(engine, monkeypatch):
     finally:
         app.dependency_overrides.clear()
         _cleanup_space(engine, space_id)
+
+
+# ===========================================================================
+# (x) canonical template — GET /intakes/templates serves the ONE in-repo form (D-CANON)
+# ===========================================================================
+
+
+def test_templates_returns_canonical_form():
+    """GET /intakes/templates returns the single canonical Pulse template (D-CANON).
+
+    The form is shared product config served from ``app.intake_canonical`` — NOT per-space
+    ``intake_templates`` rows — so the endpoint touches NO database (no engine patch, no
+    seeded space) and returns the same 14-section template to any authenticated caller.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.intake_canonical import (
+        CANONICAL_TEMPLATE_ID,
+        CANONICAL_TEMPLATE_NAME,
+        CANONICAL_TEMPLATE_SCHEMA,
+    )
+
+    app = _build_app()
+    try:
+        # Auth override only — the handler is pure (no repo / no space scope).
+        app.dependency_overrides[get_current_identity] = _as(_user(uuid.uuid4()))
+        client = TestClient(app)
+
+        resp = client.get(
+            "/intakes/templates",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code == 200, (
+            f"templates should be 200, got {resp.status_code} ({resp.text!r})"
+        )
+        body = resp.json()
+        assert isinstance(body, list) and len(body) == 1, (
+            "exactly ONE canonical template must be served (no per-space rows)"
+        )
+        tpl = body[0]
+        assert tpl["id"] == str(CANONICAL_TEMPLATE_ID), "the canonical template id is served"
+        assert tpl["name"] == CANONICAL_TEMPLATE_NAME
+        sections = tpl["schema"]["sections"]
+        assert len(sections) == len(CANONICAL_TEMPLATE_SCHEMA["sections"]) == 14, (
+            "the full recovered Pulse form (14 sections) must be served verbatim"
+        )
+    finally:
+        app.dependency_overrides.clear()

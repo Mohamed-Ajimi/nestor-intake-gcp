@@ -44,17 +44,20 @@ from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
+from app.intake_canonical import (
+    CANONICAL_TEMPLATE_ID,
+    CANONICAL_TEMPLATE_NAME,
+    CANONICAL_TEMPLATE_SCHEMA,
+)
 from app.db import audit
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
-    IntakeTemplateRepository,
     SkillRunRepository,
 )
 from app.db.session import (
     get_intake_and_answer_repos,
     get_intake_answer_repo,
-    get_intake_template_repo,
     get_skill_run_repo,
     get_tenant_repo,
 )
@@ -207,15 +210,6 @@ def _skill_run_view(run) -> SkillRunView:
     )
 
 
-def _template_view(template) -> TemplateView:
-    """Project an ``IntakeTemplate`` ORM row onto the template response."""
-    return TemplateView(
-        id=str(template.id),
-        name=template.name,
-        schema=template.schema,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Collection handlers
 # ---------------------------------------------------------------------------
@@ -264,15 +258,25 @@ def create_intake(
 
 
 @intake_router.get("/templates")
-def list_templates(
-    repo: IntakeTemplateRepository = Depends(get_intake_template_repo),
-) -> list[TemplateView]:
-    """List the intake templates in the caller's space (own-space only for a user).
+def list_templates() -> list[TemplateView]:
+    """Return the single CANONICAL intake template (D-CANON).
+
+    The Pulse intake form is shared product config, identical for every space, so it is
+    served from the in-repo canonical asset (``app.intake_canonical``) rather than per-space
+    ``intake_templates`` rows — no per-space copies, no operator-edited JSON. EVERY
+    authenticated caller (user or superadmin, any space) receives the same template; there
+    is no longer a per-space template read here, so the handler needs no repo/scope.
 
     Declared BEFORE ``/{intake_id}`` so the literal ``templates`` segment is not captured
     as a path parameter.
     """
-    return [_template_view(row) for row in repo.list()]
+    return [
+        TemplateView(
+            id=str(CANONICAL_TEMPLATE_ID),
+            name=CANONICAL_TEMPLATE_NAME,
+            schema=CANONICAL_TEMPLATE_SCHEMA,
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

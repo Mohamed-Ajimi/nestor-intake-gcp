@@ -1,0 +1,479 @@
+{
+  "title": "Nestor Pulse — Intake",
+  "submit": {
+    "label": "Intake versturen",
+    "confirmation_title": "Bedankt — intake ontvangen",
+    "confirmation_message": "We bekijken jullie input binnen 1-2 werkdagen en nemen contact op via {{contact_email}} voor een eerste validatie. Vergeet niet de getekende overeenkomst te mailen naar nestor@agenic.be als je hem nog niet hebt geüpload."
+  },
+  "version": 1,
+  "sections": [
+    {
+      "id": "nda",
+      "title": "Voor we starten — Service-overeenkomst",
+      "fields": [
+        {
+          "key": "nda_download",
+          "help": "Print, vul in en teken — of teken digitaal in je eigen tool.",
+          "type": "download",
+          "label": "Stap 1 — Download de overeenkomst",
+          "storage_path": "templates/NDA/Agenic-Nestor-Overeenkomst.pdf",
+          "storage_bucket": "nestor-uploads",
+          "display_filename": "Agenic × Nestor — Overeenkomst.pdf"
+        },
+        {
+          "key": "nda_signed_upload",
+          "help": "PDF of een duidelijke scan/foto. Max 25 MB.",
+          "type": "file",
+          "label": "Stap 2 — Upload de getekende overeenkomst",
+          "accept": [
+            ".pdf",
+            ".jpg",
+            ".jpeg",
+            ".png"
+          ],
+          "required": false,
+          "max_size_mb": 25,
+          "soft_required": true,
+          "storage_bucket": "nestor-uploads",
+          "storage_path_prefix": "intakes/{intake_id}/nda/",
+          "soft_required_message": "Je hebt nog geen getekende overeenkomst geüpload. Je kan toch verder met de intake — vergeet hem dan zeker te mailen naar nestor@agenic.be."
+        }
+      ],
+      "soft_gate": true,
+      "description": "Voor jullie research starten, vragen we de Nestor service-overeenkomst (incl. wederzijdse vertrouwelijkheidsclausule) te ondertekenen. Download, teken, upload. Of mail het ondertekend naar nestor@agenic.be — dan kun je deze stap overslaan."
+    },
+    {
+      "id": "client_info",
+      "title": "Wie zijn jullie?",
+      "fields": [
+        {
+          "key": "client_name",
+          "type": "text",
+          "label": "Klantnaam (organisatie)",
+          "required": true,
+          "placeholder": "bv. Acme NV"
+        },
+        {
+          "key": "project_name",
+          "type": "text",
+          "label": "Projectnaam",
+          "required": true,
+          "placeholder": "bv. EU-expansie 2026"
+        },
+        {
+          "key": "contact_name",
+          "type": "text",
+          "label": "Naam primaire contactpersoon",
+          "required": true
+        },
+        {
+          "key": "contact_email",
+          "type": "email",
+          "label": "E-mail",
+          "required": true
+        },
+        {
+          "key": "contact_phone",
+          "type": "tel",
+          "label": "Telefoon",
+          "required": false
+        },
+        {
+          "key": "company_intro",
+          "help": "Wat jullie doen, voor wie, en waar jullie vandaag staan in jullie markt.",
+          "rows": 5,
+          "type": "longtext",
+          "label": "Vertel in één paragraaf wie jullie zijn",
+          "required": true,
+          "min_length": 100
+        }
+      ],
+      "description": "Basisgegevens. Helpt ons om jullie context goed te kaderen."
+    },
+    {
+      "id": "research_goal",
+      "title": "Wat moet er beslist of begrepen worden?",
+      "fields": [
+        {
+          "key": "decision_or_goal",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Beslissing of doel (1-2 zinnen)",
+          "examples": {
+            "bad": [
+              "We willen onze internationale strategie optimaliseren."
+            ],
+            "good": [
+              "We moeten beslissen of we volgend jaar in Duitsland lanceren of eerst Nederland verdiepen. Beslissing valt eind juni."
+            ]
+          },
+          "required": true
+        }
+      ],
+      "description": "Zonder beslissing wordt research een leesoefening. Met beslissing wordt het een instrument."
+    },
+    {
+      "id": "research_questions",
+      "title": "Onderzoeksvragen",
+      "fields": [
+        {
+          "key": "questions",
+          "item": {
+            "type": "object",
+            "fields": [
+              {
+                "key": "text",
+                "rows": 2,
+                "type": "longtext",
+                "label": "Onderzoeksvraag",
+                "required": true
+              },
+              {
+                "key": "kind",
+                "type": "select",
+                "label": "Type",
+                "options": [
+                  {
+                    "label": "Beslissing",
+                    "value": "decision"
+                  },
+                  {
+                    "label": "Verkenning",
+                    "value": "exploration"
+                  }
+                ],
+                "required": false
+              }
+            ]
+          },
+          "type": "list",
+          "label": "Vragen (1 tot 5)",
+          "required": true,
+          "max_items": 5,
+          "min_items": 1
+        }
+      ],
+      "description": "De concrete vragen die jullie beantwoord willen zien. Liever 2 scherpe dan 5 vage."
+    },
+    {
+      "id": "extra_questions_nestor",
+      "phase": "validation",
+      "title": "Extra vragen — voorstel Nestor",
+      "fields": [
+        {
+          "key": "extra_questions_proposed",
+          "item": {
+            "type": "object",
+            "fields": [
+              {
+                "key": "text",
+                "rows": 2,
+                "type": "longtext",
+                "label": "Vraag"
+              },
+              {
+                "key": "rationale",
+                "rows": 2,
+                "type": "longtext",
+                "label": "Waarom relevant"
+              },
+              {
+                "key": "approved",
+                "type": "boolean",
+                "label": "Opnemen in research?"
+              }
+            ]
+          },
+          "type": "proposal_list",
+          "label": "Voorstellen van Nestor",
+          "required": false
+        }
+      ],
+      "description": "Vragen die wij voorstellen om mee te onderzoeken — naast jullie eigen vragen. Vink aan wat jullie relevant vinden, laat staan of weg wat niet."
+    },
+    {
+      "id": "audience",
+      "title": "Doelgroep / klanten",
+      "fields": [
+        {
+          "key": "audience_description",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Doelgroepbeschrijving",
+          "required": true
+        }
+      ],
+      "description": "Wie zijn jullie klanten? Welke segmenten, hoe groot, wie tekent de bestelbon?"
+    },
+    {
+      "id": "competitors",
+      "title": "Concurrenten / markt",
+      "fields": [
+        {
+          "key": "competitors_list",
+          "item": {
+            "type": "text",
+            "placeholder": "Naam concurrent"
+          },
+          "type": "list",
+          "label": "Concurrenten",
+          "required": false,
+          "max_items": 10,
+          "min_items": 0
+        }
+      ],
+      "optional": true,
+      "description": "De 3 tot 7 spelers waar jullie het meest mee vergeleken worden. Plus eventuele nieuwkomers. Wij vullen zelf ook aan."
+    },
+    {
+      "id": "stakeholders",
+      "title": "Stakeholders",
+      "fields": [
+        {
+          "key": "stakeholders_list",
+          "item": {
+            "type": "object",
+            "fields": [
+              {
+                "key": "name",
+                "type": "text",
+                "label": "Naam",
+                "required": true
+              },
+              {
+                "key": "role",
+                "type": "text",
+                "label": "Rol",
+                "required": true
+              },
+              {
+                "key": "expectation",
+                "rows": 2,
+                "type": "longtext",
+                "label": "Wat verwacht hij/zij van deze research?",
+                "required": false
+              }
+            ]
+          },
+          "type": "list",
+          "label": "Stakeholders",
+          "required": true,
+          "max_items": 10,
+          "min_items": 1
+        }
+      ],
+      "description": "Wie leest het rapport? Wie beslist? Wie moet overtuigd worden?"
+    },
+    {
+      "id": "sensitivities",
+      "title": "Politieke of interne gevoeligheden",
+      "fields": [
+        {
+          "key": "sensitivities_text",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Politieke / interne gevoeligheden",
+          "required": false
+        }
+      ],
+      "optional": true,
+      "description": "Optioneel maar sterk aanbevolen. Is er een richting die intern al gefavoriseerd wordt? Een aanname die niemand durft te challengen? Vertrouwelijk."
+    },
+    {
+      "id": "scope_constraints",
+      "title": "Scope & constraints",
+      "fields": [
+        {
+          "key": "deadline",
+          "type": "date",
+          "label": "Deadline gewenste oplevering",
+          "required": true
+        },
+        {
+          "key": "geo_scope",
+          "type": "text",
+          "label": "Geografische scope",
+          "required": false,
+          "placeholder": "bv. België, BeNeLux, EU, globaal"
+        },
+        {
+          "key": "time_horizon",
+          "type": "text",
+          "label": "Tijdshorizon",
+          "required": false,
+          "placeholder": "bv. vandaag, 12m, 24m"
+        },
+        {
+          "key": "out_of_scope",
+          "rows": 3,
+          "type": "longtext",
+          "label": "Wat hoeft niet (out of scope)?",
+          "required": false
+        }
+      ],
+      "description": "Deadline is verplicht — scope-velden helpen ons mikken."
+    },
+    {
+      "id": "output_format",
+      "title": "Gewenste outputvorm & omvang",
+      "fields": [
+        {
+          "key": "output_size",
+          "help": "Dikker ≠ beter. Een scherp rapport van 10 pagina's dwingt ons tot keuzes; een rapport van 40 pagina's schuift die keuzes naar jullie door.",
+          "type": "radio",
+          "label": "Gewenste omvang van het rapport",
+          "options": [
+            {
+              "label": "Compact — ca. 2-5 pagina's",
+              "value": "compact",
+              "description": "Alleen de beslissing, de opties, de trade-offs. Bronnen in appendix. Aanbevolen voor één heldere beslisvraag."
+            },
+            {
+              "label": "Standaard — ca. 5-10 pagina's",
+              "value": "standard",
+              "description": "Beslissing + onderbouwing per optie + context. Aanbevolen voor 2-3 samenhangende onderzoeksvragen."
+            },
+            {
+              "label": "Uitgebreid — ca. 10-20 pagina's",
+              "value": "extended",
+              "description": "Volledige deep-dive per onderzoeksvraag. Alleen kiezen als meerdere stakeholders onafhankelijk willen kunnen lezen."
+            },
+            {
+              "label": "Anders",
+              "value": "other",
+              "allow_text": true,
+              "text_placeholder": "bv. max. 15 slides voor ExCo"
+            }
+          ],
+          "required": true
+        },
+        {
+          "key": "output_form",
+          "type": "radio",
+          "label": "Vorm van de oplevering",
+          "options": [
+            {
+              "label": "Notion-pagina (standaard, best leesbaar, traceerbaar)",
+              "value": "notion"
+            },
+            {
+              "label": "PDF-rapport",
+              "value": "pdf"
+            },
+            {
+              "label": "Anders",
+              "value": "other",
+              "allow_text": true
+            }
+          ],
+          "required": true
+        }
+      ],
+      "description": "Standaard leveren we een beslisstructuur + 60-min sessie. Twee keuzes die we van jullie nodig hebben."
+    },
+    {
+      "id": "success_metrics",
+      "title": "Hoe meten jullie succes?",
+      "fields": [
+        {
+          "key": "success_definition",
+          "rows": 3,
+          "type": "longtext",
+          "label": "Hoe ziet succes eruit?",
+          "required": false
+        }
+      ],
+      "optional": true,
+      "description": "Aan welk resultaat zien jullie achteraf dat deze research zijn werk heeft gedaan?"
+    },
+    {
+      "id": "materials",
+      "title": "Bestaand materiaal",
+      "fields": [
+        {
+          "key": "materials_files",
+          "help": "Tot 5 PDF-bestanden, max 50 MB per stuk. Word/PowerPoint/Excel? Sla eerst op als PDF.",
+          "type": "files",
+          "label": "Upload bestaand materiaal",
+          "accept": [
+            ".pdf"
+          ],
+          "required": false,
+          "max_files": 5,
+          "max_size_mb": 50,
+          "storage_bucket": "nestor-uploads",
+          "storage_path_prefix": "intakes/{intake_id}/materials/"
+        },
+        {
+          "key": "materials_note",
+          "rows": 3,
+          "type": "longtext",
+          "label": "Toelichting bij de bestanden",
+          "required": false,
+          "placeholder": "bv. 'STRATEGIE-2026 is concept, nog niet final' — alles wat helpt om de docs goed te lezen"
+        }
+      ],
+      "optional": true,
+      "description": "Strategie-docs, klantinterviews, marktrapporten, persona's, pitch-decks, eerdere onderzoeken. Hoe meer relevant materiaal, hoe scherper onze research. Geef bestanden duidelijke namen (bv. 'STRATEGIE-2026.pdf'). Alleen PDF — converteer Word/PowerPoint/Excel zelf naar PDF voor je uploadt."
+    },
+    {
+      "id": "strategic_perspective",
+      "title": "Strategische analyse (intern)",
+      "fields": [
+        {
+          "key": "bias_radar",
+          "help": "Voorkeursrichting in de intake + opposition-vraag",
+          "rows": 5,
+          "type": "longtext",
+          "label": "Bias-radar",
+          "required": false
+        },
+        {
+          "key": "blind_spots_upstream",
+          "help": "Oorzaken/inputs die de uitkomst bepalen maar niet bevraagd worden",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Blinde vlekken — Upstream",
+          "required": false
+        },
+        {
+          "key": "blind_spots_downstream",
+          "help": "Tweede-orde-effecten, onbedoelde consequenties",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Blinde vlekken — Downstream",
+          "required": false
+        },
+        {
+          "key": "blind_spots_perspectief",
+          "help": "Stakeholders wiens blik niet in de vraag zit",
+          "rows": 4,
+          "type": "longtext",
+          "label": "Blinde vlekken — Perspectief",
+          "required": false
+        }
+      ],
+      "admin_only": true,
+      "description": "Bias-radar en blinde vlekken — door Nestor geïdentificeerd. Alleen zichtbaar voor admin, niet voor de klant en niet in de handoff-PDF. Gebruik om interne context te bewaren of aan te scherpen."
+    }
+  ],
+  "subtitle": "Welkom. Vul dit op jullie tempo. Richttijd 30 minuten. Hoe scherper jullie input, hoe scherper onze research.",
+  "product_slug": "pulse",
+  "save_as_you_go": true,
+  "schema_version": "1.0",
+  "estimated_minutes": 30,
+  "field_types_reference": {
+    "tel": "Phone input",
+    "date": "Date picker",
+    "file": "Single file upload, value stored as { path, filename, size, uploaded_at }",
+    "list": "Repeating items, item.type defines what each entry looks like (text, object, etc.)",
+    "text": "Single line input",
+    "email": "Email input with built-in validation",
+    "files": "Multi file upload, value stored as array of file objects",
+    "radio": "Radio button group with options. Some options can have allow_text:true to add a freeform input next to them",
+    "select": "Dropdown with options",
+    "_comment": "Reference voor Lovable: types die in dit schema voorkomen",
+    "download": "Download link to a Storage path. Not an input — display only.",
+    "longtext": "Multi-line textarea (rows from field config)"
+  }
+}
