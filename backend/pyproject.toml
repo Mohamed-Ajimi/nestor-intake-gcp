@@ -22,6 +22,13 @@ dependencies = [
     # (Path B, D-05a) once at runtime. Imported LAZILY in app/db/base.py so the
     # testcontainers / DATABASE_URL path never loads it (Phase 4 / 04-02-PLAN).
     "google-cloud-secret-manager>=2.20,<3",
+    # Phase 7 AI ports: official external-API SDKs for the four Claude skills,
+    # OpenAI embeddings (text-embedding-3-small @ 1536) and Whisper transcription.
+    # API KEYS are NOT declared here and NOT in core/config.Settings (D-07) — they
+    # are read from os.environ at CALL TIME inside app/ai/clients.py factories only.
+    # Versions verified on PyPI 2026-06-30 (07-RESEARCH § Standard Stack :83-84).
+    "anthropic==0.113.0",
+    "openai==2.44.0",
 ]
 
 [project.optional-dependencies]
