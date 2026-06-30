@@ -41,11 +41,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.admin_routes import admin_router
+from app.api.ai_routes import ai_router
 from app.api.auth_routes import auth_router, protected_router
 from app.api.intake_routes import intake_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
 from app.db import base
+from app.db.ai_session import sweep_orphaned_skill_runs
 from app.db.base import get_engine
 
 # Server-side diagnostic logger. Cloud Run captures stderr, so logging here makes
@@ -70,6 +72,19 @@ async def lifespan(app: FastAPI):
     # does NOT attach any auth dependency to the bare app — /healthz and /readyz
     # stay anonymous for the Cloud Run probes (per-route protection lands in plan 03).
     init_firebase()
+    # Phase 7 (D-01a / 07-RESEARCH Pitfall 6): self-heal orphaned skill runs. A
+    # Cloud Run instance can die mid-task (deploy/scale-in/crash), leaving a
+    # ``skill_runs`` row stuck at ``running`` forever — the frontend would then poll a
+    # never-terminal run. One cheap superadmin-engine UPDATE on startup flips stale
+    # ``running`` rows to ``failed`` before serving traffic. GUARDED so a sweep failure
+    # (e.g. the DB is briefly unreachable at boot) never crashes startup — liveness must
+    # not depend on it (mirrors the dispose guard below / T-02-04).
+    try:
+        swept = sweep_orphaned_skill_runs()
+        if swept:
+            logger.info("startup sweep marked %d orphaned skill_runs failed", swept)
+    except Exception:  # noqa: BLE001 -- best-effort self-heal; never block startup
+        logger.warning("startup sweep_orphaned_skill_runs failed", exc_info=True)
     yield
     # WR-03: only dispose if the lru_cached engine was ACTUALLY built (e.g. a
     # /readyz was served). Building a brand-new engine purely to dispose it is
@@ -123,6 +138,13 @@ protected_router.include_router(admin_router)
 #   tenant-scoped data access. (The Phase-4 throwaway scaffold router was removed in plan
 #   04 once this real surface and its cross-tenant denial suite landed.)
 protected_router.include_router(intake_router)
+# - ai_router: the Phase-7 AI feature surface (apply / context-pack / structure-answers /
+#   extract-insights / embeddings / transcribe / semantic search — AI-01..05). Mounted
+#   UNDER protected_router so it inherits get_current_identity; each handler depends on
+#   Identity ONLY (never get_tenant_repo — the long Claude/OpenAI call must not hold the
+#   request tx) and dispatches the work via BackgroundTasks (D-05). No second
+#   app.include_router for it — it rides the single protected_router include below.
+protected_router.include_router(ai_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
 
