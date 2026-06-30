@@ -4,7 +4,18 @@ import { auth } from "@/lib/firebase";
 
 // The verified `role` custom claim, minted server-side by Identity Platform and
 // read here for UX gating ONLY — the backend remains the sole authority.
-type Role = "superadmin" | "user" | null;
+export type Role = "superadmin" | "user" | null;
+
+/**
+ * Post-login landing path for a role (UX routing only — the backend stays the
+ * authority on every route). Superadmins land in the admin area; everyone else
+ * (regular `user`, plus the not-yet-resolved / no-claim case) lands on the
+ * authenticated user intake list. Routing a non-superadmin to `/admin` would hit
+ * the superadmin guard's "geen toegang" wall, so users MUST go to `/intake`.
+ */
+export function landingPathForRole(role: Role): "/admin" | "/intake" {
+  return role === "superadmin" ? "/admin" : "/intake";
+}
 
 type AuthContextValue = {
   session: User | null;

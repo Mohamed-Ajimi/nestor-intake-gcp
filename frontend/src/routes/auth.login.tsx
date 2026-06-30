@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { getIdTokenResult, signInWithEmailAndPassword } from "firebase/auth";
 import { toast } from "sonner";
 import { apiUrl, auth } from "@/lib/firebase";
-import { useAuth } from "@/lib/auth-context";
+import { landingPathForRole, useAuth, type Role } from "@/lib/auth-context";
 
 // WR-02: a failed login-sync handshake throws this so the catch can surface an
 // authorization-specific message and NOT navigate to /admin (vs. a sign-in error).
@@ -15,15 +15,17 @@ export const Route = createFileRoute("/auth/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { session, loading, getToken } = useAuth();
+  const { session, loading, role, getToken } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Already signed in (revisiting the login URL): bounce to the role's landing page.
+  // Wait for `role` to resolve so a superadmin isn't briefly routed to /intake.
   useEffect(() => {
-    if (!loading && session) navigate({ to: "/admin" });
-  }, [loading, session, navigate]);
+    if (!loading && session && role) navigate({ to: landingPathForRole(role) });
+  }, [loading, session, role, navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,7 +60,15 @@ function LoginPage() {
       // Force-refresh so the next request carries the freshly-written claims.
       await getToken(true);
 
-      navigate({ to: "/admin" });
+      // Route by the freshly-minted role claim, read straight from the refreshed
+      // token so routing is deterministic and does not race the auth-context effect:
+      // superadmin → /admin, everyone else → /intake (avoids the admin "geen toegang"
+      // wall a non-superadmin would otherwise hit).
+      const result = auth.currentUser ? await getIdTokenResult(auth.currentUser) : null;
+      const claim = result?.claims.role;
+      const claimRole: Role =
+        claim === "superadmin" ? "superadmin" : claim === "user" ? "user" : null;
+      navigate({ to: landingPathForRole(claimRole) });
     } catch (err) {
       if (err instanceof SyncError) {
         // Handshake/authorization failure: sign-in itself succeeded, so show the

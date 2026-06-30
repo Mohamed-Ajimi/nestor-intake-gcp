@@ -79,20 +79,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useEffect } from "react";
 import { useRouter } from "@tanstack/react-router";
-import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { AuthProvider, useAuth, landingPathForRole } from "@/lib/auth-context";
 
 const queryClient = new QueryClient();
 
 function AuthRedirector() {
  const router = useRouter();
- const { session, loading } = useAuth();
+ const { session, loading, role } = useAuth();
  useEffect(() => {
  if (loading || !session) return;
  const path = window.location.pathname;
  if (path === "/admin/login" || path === "/auth/login") {
- router.navigate({ to: "/admin" });
+ // Wait for the role claim to resolve so a superadmin is never briefly sent to
+ // /intake. Route by role: superadmin → /admin, user → /intake (avoids the
+ // admin "geen toegang" wall for non-superadmins).
+ if (!role) return;
+ router.navigate({ to: landingPathForRole(role) });
  }
- }, [loading, session, router]);
+ }, [loading, session, role, router]);
  return null;
 }
 
