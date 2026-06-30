@@ -39,6 +39,8 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.db.rls import set_space_context
+
 from app.auth.identity import Identity
 from app.db.base import Base
 from app.db.models.intake import Intake, IntakeAnswer, IntakeTemplate
@@ -148,6 +150,13 @@ class TenantRepository(Generic[M]):
             raise RuntimeError(
                 "create_in_space is superadmin-only — the user path must use create()"
             )
+        # The BEFORE-INSERT prefill trigger (SECURITY DEFINER) writes a client_name row into
+        # intake_answers, whose RLS WITH CHECK is ``space_id = app.current_space_id``. The
+        # superadmin path sets NO GUC, and the ``app_superadmin`` bypass policy does NOT apply
+        # inside the definer trigger (current_user becomes the function owner there), so that
+        # child insert would fail with 42501. Set the GUC to the TARGET space (tx-local) first
+        # so the trigger's write passes its space-isolation check; it reverts at COMMIT.
+        set_space_context(self._s, space_id)
         values["space_id"] = space_id
         row = self.model(**values)
         self._s.add(row)
