@@ -410,3 +410,26 @@ def test_templates_returns_canonical_form():
         )
     finally:
         app.dependency_overrides.clear()
+
+
+# ===========================================================================
+# (y) superadmin create — create_in_space is the ONLY cross-space write path
+# ===========================================================================
+
+
+def test_create_in_space_is_superadmin_only():
+    """``create_in_space`` rejects a USER-scoped repo (TENANT-02).
+
+    A superadmin has no own space and creates into a CHOSEN target space via
+    ``create_in_space``; a user must NEVER target a space, so the method refuses a
+    user-scoped repo (``self._space_id is not None``). DB-free — the guard fires before any
+    session use, so a ``None`` session is sufficient.
+    """
+    import pytest
+
+    from app.db.repository import IntakeRepository
+
+    # _user(...) sets a concrete space_id => user path => the guard must reject.
+    user_repo = IntakeRepository(None, _user(uuid.uuid4()))
+    with pytest.raises(RuntimeError, match="superadmin-only"):
+        user_repo.create_in_space(uuid.uuid4(), client_name="X")

@@ -241,19 +241,38 @@ def list_intakes(
 @intake_router.post("", status_code=status.HTTP_201_CREATED)
 def create_intake(
     body: IntakeCreate,
+    space_id: str | None = None,
     repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
 ) -> IntakeView:
-    """Create an intake in the caller's space -> ``draft`` (fires ``trg_prefill_intake_answers``).
+    """Create an intake -> ``draft`` (fires ``trg_prefill_intake_answers``).
 
-    ``space_id`` is injected by the repo from the verified Identity — never read from the
-    body (TENANT-02). The DB ``server_default`` sets the initial ``draft`` status.
+    A USER creates in their OWN space — the repo injects ``space_id`` from the verified
+    Identity (TENANT-02), and the optional ``space_id`` query param is INERT for them (it can
+    neither widen nor retarget). A SUPERADMIN has no own space, so they create into a CHOSEN
+    target space — the active-client switcher, threaded as ``?space_id=`` — via the superadmin
+    write path (``create_in_space``). ``space_id`` is NEVER read from the create BODY; the
+    query param is honored ONLY for a superadmin (mirrors the 06-13 list filter). A superadmin
+    with no client selected gets 422 — pick a client first. The DB ``server_default`` sets the
+    initial ``draft`` status.
     """
     values = body.model_dump(exclude_unset=True)
     # Coerce an optional template reference to UUID for the pg8000 bind; ``space_id`` is
-    # NEVER in ``values`` (not a field on IntakeCreate) — the repo injects it from identity.
+    # NEVER in ``values`` (not honored from the body) — see the role branch below.
     if values.get("template_id"):
         values["template_id"] = uuid.UUID(values["template_id"])
-    intake = repo.create(**values)
+
+    if identity.role == "superadmin":
+        if not space_id:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Select a client (space) before creating an intake.",
+            )
+        intake = repo.create_in_space(uuid.UUID(space_id), **values)
+    else:
+        # User path: the repo forces the caller's own space onto the row (TENANT-02);
+        # any ``space_id`` query param is ignored.
+        intake = repo.create(**values)
     return _view(intake)
 
 

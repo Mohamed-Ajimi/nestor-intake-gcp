@@ -134,6 +134,26 @@ class TenantRepository(Generic[M]):
         self._s.flush()
         return row
 
+    def create_in_space(self, space_id, **values):
+        """Superadmin-only create into an EXPLICIT target space (D-05 / Pitfall 3).
+
+        The tenant :meth:`create` deliberately refuses a ``space_id`` kwarg (TENANT-02): a
+        user may never target a foreign space. A SUPERADMIN, however, has no own space and
+        acts cross-tenant against a CHOSEN space (the active-client switcher). This is the
+        audited superadmin write path: valid ONLY on a superadmin-scoped repo
+        (``self._space_id is None``, bound to the ``app_superadmin`` engine whose 0003 bypass
+        policy permits the cross-space insert), it sets the target ``space_id`` explicitly.
+        """
+        if self._space_id is not None:
+            raise RuntimeError(
+                "create_in_space is superadmin-only — the user path must use create()"
+            )
+        values["space_id"] = space_id
+        row = self.model(**values)
+        self._s.add(row)
+        self._s.flush()
+        return row
+
 
 class IntakeRepository(TenantRepository[Intake]):
     """Sample/concrete repository over ``nestor.intakes`` (the Phase 4 seam driver).

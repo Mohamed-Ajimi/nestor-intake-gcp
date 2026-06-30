@@ -43,7 +43,10 @@ export function getIntake(id: string): Promise<ApiResult<Intake>> {
 export function createIntake(input: {
   client_name?: string;
 }): Promise<ApiResult<Intake>> {
-  return apiFetch<Intake>("/intakes", {
+  // Thread the active space (superadmin view-filter): a superadmin has no own space, so the
+  // backend creates the intake into the SELECTED client (?space_id, honored superadmin-only).
+  // For a regular user the param is inert — the backend forces their own token-derived space.
+  return apiFetch<Intake>(withActiveSpace("/intakes"), {
     method: "POST",
     body: JSON.stringify({ client_name: input.client_name ?? null }),
   });
