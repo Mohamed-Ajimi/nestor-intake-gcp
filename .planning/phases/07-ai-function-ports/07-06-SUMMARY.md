@@ -109,3 +109,9 @@ RED→GREEN transition is authored-by-construction against the pinned Wave-1 con
 via the plan's grep acceptance gates (all green above). `pytest tests/test_ai_embeddings.py`,
 `test_ai_search_cross_tenant.py`, and `test_ai_search_explain.py` run GREEN in CI (faked OpenAI +
 testcontainer Postgres for the integration pair).
+
+## Self-Check: PASSED
+- Files exist: `backend/app/ai/skills/embeddings.py`, `backend/app/ai/search.py`,
+  `.planning/phases/07-ai-function-ports/07-06-SUMMARY.md`.
+- Commits exist: `c8c4f0c` (run_embeddings), `fbe821c` (semantic_search), `ace9fe2` (summary).
+- Scope: only the two owned files changed (no STATE.md/ROADMAP.md, no sibling-agent files).
