@@ -35,11 +35,12 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.auth.identity import Identity
 from app.db.base import get_engine, get_sessionmaker, get_superadmin_engine
+from app.db.models.embeddings import ArtifactEmbedding
 from app.db.models.skill_run import SkillRun
 from app.db.repository import IntakeRepository, SkillRunRepository
 from app.db.rls import set_space_context
@@ -190,3 +191,46 @@ def sweep_orphaned_skill_runs(max_age_minutes: int = 30) -> int:
             .values(status="failed", error_message="orphaned by restart")
         )
         return result.rowcount
+
+
+def search_artifacts(
+    session: Session,
+    query_vec: Any,
+    limit: int = 25,
+    max_distance: float | None = None,
+):
+    """Space-confined EXACT cosine (``<=>``) scan over ``artifact_embeddings`` (AI-04 / D-03).
+
+    Takes a READY ``query_vec`` (the query-text embedding lives in ``app/ai/search.py``,
+    07-06) and the caller's tenant-scoped ``session`` (opened via :func:`tenant_session`).
+    Builds ``ORDER BY embedding <=> :query_vec LIMIT :limit`` over the pgvector cosine
+    operator (:meth:`ArtifactEmbedding.embedding.cosine_distance`).
+
+    Tenant confinement is NOT a manual ``WHERE space_id`` here: on the user engine the 0002
+    RLS policy + the GUC set by :func:`tenant_session` prefilter the scan to the caller's
+    space (the predicate ``test_ai_search_explain`` looks for, and the zero-foreign-rows
+    guarantee ``test_ai_search_cross_tenant`` proves). The space-leading btree index
+    (``ix_artifact_embeddings_space_id``) supplies the prefilter — there is deliberately NO
+    approximate-nearest-neighbour vector index this phase (D-03): exact ``<=>`` over the
+    small per-tenant set is correct and cheap on an empty/near-empty table.
+
+    ``max_distance`` (default ``None``) optionally drops rows past a distance threshold —
+    the legacy 0.7-cosine-similarity cutoff maps to distance ``0.3`` (``distance = 1 −
+    similarity``); param/config-driven so the default keeps every nearest row. Returns plain
+    SQLAlchemy ``Row`` tuples (``id, artifact_id, chunk_text, distance``) — no live ORM rows
+    to detach across sessions.
+    """
+    distance = ArtifactEmbedding.embedding.cosine_distance(query_vec)
+    stmt = (
+        select(
+            ArtifactEmbedding.id,
+            ArtifactEmbedding.artifact_id,
+            ArtifactEmbedding.chunk_text,
+            distance.label("distance"),
+        )
+        .order_by(distance)
+        .limit(limit)
+    )
+    if max_distance is not None:
+        stmt = stmt.where(distance <= max_distance)
+    return session.execute(stmt).all()
