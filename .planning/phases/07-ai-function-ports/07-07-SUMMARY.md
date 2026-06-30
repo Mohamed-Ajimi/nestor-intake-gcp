@@ -93,4 +93,6 @@ All three finalize their `skill_runs` row to exactly `succeeded` / `failed` (D-0
 
 - **superadmin structure-answers scoping:** `IntakeAnswerRepository.upsert_extracted` carries `space_id` from `self._space_id` (the Identity); on the superadmin path (`space_id is None`) it would write a NULL `space_id`. This mirrors the existing `upsert_batch` limitation and is out of scope here (the contract test and the user flow are user-scoped). extract-insights and transcribe avoid this by branching to `create_in_space` for the superadmin path. Not modified because `repository.py` is owned outside this plan.
 
-## Self-Check: PENDING (see below)
+## Self-Check: PASSED
+
+All three modified files exist; all four commits (29a8af9, 5e3a956, 59fd241, b7ac2c3) are present in the worktree history.
