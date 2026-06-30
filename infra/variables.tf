@@ -80,3 +80,38 @@ variable "allow_unauthenticated" {
   type        = bool
   default     = false
 }
+
+# ---------------------------------------------------- AI provider keys (D-07 / Phase 7)
+# The LLM (Anthropic) + embedding/Whisper (OpenAI) credentials. Each is a Secret
+# Manager secret whose RESOURCE is declared in IaC, but whose VALUE (the version
+# payload) is seeded out-of-band per the deploy runbook by default — the key never
+# lands in committed IaC/state (T-7-05). The Cloud Run service env injects them
+# natively via value_source.secret_key_ref (NOT a runtime access_secret_version
+# call) — they have no import-cycle reason to runtime-fetch (unlike the superadmin
+# password). The keys are read at call time by the AI seam and are NEVER logged.
+
+variable "anthropic_api_key_secret_id" {
+  description = "Secret Manager secret ID holding ANTHROPIC_API_KEY (Anthropic LLM credential, D-07). The secret RESOURCE + the runtime SA's scoped secretAccessor grant are declared in IaC; the VALUE (version payload) is added out-of-band per infra/DEPLOY-RUNBOOK.md (default: no Terraform-managed version), so the key never lands in committed state (T-7-05)."
+  type        = string
+  default     = "nestor-anthropic-api-key"
+}
+
+variable "openai_api_key_secret_id" {
+  description = "Secret Manager secret ID holding OPENAI_API_KEY (OpenAI embedding + Whisper credential, D-07). Same handling as anthropic_api_key_secret_id: resource + secretAccessor in IaC, value seeded out-of-band per the runbook (T-7-05)."
+  type        = string
+  default     = "nestor-openai-api-key"
+}
+
+variable "anthropic_api_key" {
+  description = "Optional ANTHROPIC_API_KEY VALUE to seed the secret version at apply time. Default \"\" => Terraform creates NO version (add it manually via `gcloud secrets versions add` per DEPLOY-RUNBOOK.md — the drift-honest default). When non-empty the value is written to a secret version and is then in Terraform state, so prefer the manual path in shared environments (T-7-05)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "openai_api_key" {
+  description = "Optional OPENAI_API_KEY VALUE to seed the secret version at apply time. Same semantics as anthropic_api_key: default \"\" => no Terraform-managed version (seed manually per the runbook). Non-empty => stored in state, so prefer the manual path (T-7-05)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

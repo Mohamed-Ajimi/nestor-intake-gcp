@@ -141,6 +141,66 @@ resource "google_secret_manager_secret_iam_member" "runtime_superadmin_secret_ac
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+# ------------------------------------------- Secret Manager: AI provider keys (D-07 / Phase 7)
+# ANTHROPIC_API_KEY (LLM) + OPENAI_API_KEY (embeddings + Whisper). Mirrors the
+# app_superadmin password block (:122-142): a secret resource + a resource-scoped
+# secretAccessor grant to the runtime SA. The KEY VALUE is NOT committed here — by
+# default the secret VERSION is seeded out-of-band per infra/DEPLOY-RUNBOOK.md
+# (the var defaults to "" => the *_version resource has count 0). Unlike the
+# superadmin password (read at runtime by base.py), these keys are injected
+# NATIVELY into the Cloud Run container env via value_source.secret_key_ref below
+# — no runtime access_secret_version call (RESEARCH "Don't Hand-Roll": API keys
+# have no import-cycle reason to runtime-fetch). secretAccessor is required because
+# native secret_key_ref injection still resolves the version with the runtime SA's
+# identity at deploy/boot time. The keys are read at call time by the AI seam and
+# are NEVER logged / echoed (T-7-05).
+resource "google_secret_manager_secret" "anthropic_api_key" {
+  secret_id = var.anthropic_api_key_secret_id
+
+  replication {
+    auto {}
+  }
+}
+
+# Optional seed of the ANTHROPIC_API_KEY value. Default var => "" => count 0, i.e.
+# NO Terraform-managed version: the real key is added manually with
+# `gcloud secrets versions add` per the runbook (the drift-honest default — the
+# key never enters committed state, T-7-05). secret_key_ref below uses
+# version = "latest" so it binds whichever version exists, manual or seeded.
+resource "google_secret_manager_secret_version" "anthropic_api_key" {
+  count       = var.anthropic_api_key == "" ? 0 : 1
+  secret      = google_secret_manager_secret.anthropic_api_key.id
+  secret_data = var.anthropic_api_key
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_anthropic_secret_accessor" {
+  secret_id = google_secret_manager_secret.anthropic_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret" "openai_api_key" {
+  secret_id = var.openai_api_key_secret_id
+
+  replication {
+    auto {}
+  }
+}
+
+# Optional seed of the OPENAI_API_KEY value — same drift-honest semantics as the
+# anthropic_api_key version above (default "" => count 0 => seed manually per runbook).
+resource "google_secret_manager_secret_version" "openai_api_key" {
+  count       = var.openai_api_key == "" ? 0 : 1
+  secret      = google_secret_manager_secret.openai_api_key.id
+  secret_data = var.openai_api_key
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_openai_secret_accessor" {
+  secret_id = google_secret_manager_secret.openai_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 # --------------------------------------------------------- Artifact Registry (D-01)
 resource "google_artifact_registry_repository" "backend" {
   location      = var.region
@@ -191,8 +251,15 @@ resource "google_cloud_run_v2_service" "api" {
   template {
     service_account = google_service_account.runtime.email
 
+    # D-01a: scale to ZERO when idle (min_instance_count = 0 — warm-pool knob OFF,
+    # no idle cost) while max stays capped so worst-case pooled connections stay
+    # under the Cloud SQL tier (D-04 math: 4 * (pool 2 + overflow 3) = 20 << 100).
+    # CPU-always-allocated (resources.cpu_idle = false below) lets a request's
+    # background work — the 90–120s LLM/Whisper calls (AI-06) — finish after the
+    # response without CPU throttling, even though there is no warm pool.
     scaling {
-      max_instance_count = 4 # D-04: 4 * (pool 2 + overflow 3) = 20 conns << 100
+      min_instance_count = 0 # scale to zero; warm-pool OFF (D-01a)
+      max_instance_count = 4 # D-04 connection-math ceiling (T-7-15)
     }
 
     containers {
@@ -201,6 +268,18 @@ resource "google_cloud_run_v2_service" "api" {
       # Cloud Run injects PORT (default 8080); the Dockerfile binds $PORT.
       ports {
         container_port = 8080
+      }
+
+      # D-01a: CPU ALWAYS-ALLOCATED. In the Cloud Run v2 API this is the
+      # `resources.cpu_idle = false` field — the native equivalent of the gen1
+      # `run.googleapis.com/cpu-throttling = "false"` annotation. CPU is NOT
+      # throttled between requests, so background tasks spawned by a handler (the
+      # long LLM/embedding/Whisper calls) reliably run to completion even with
+      # min-instances=0 (no warm pool). Paired with AI-06 (no DB connection held
+      # across those calls) this is the "reliable background work, scale to zero"
+      # configuration the phase requires.
+      resources {
+        cpu_idle = false
       }
 
       # Non-secret connector config only (D-09). The mode-switched engine factory
@@ -228,6 +307,32 @@ resource "google_cloud_run_v2_service" "api" {
       }
       # Deliberately NO DSN env and NO stored DB credential VALUE here (D-09/V10);
       # SUPERADMIN_DB_PASSWORD_SECRET above carries only the secret name, not the password.
+
+      # D-07: AI provider keys injected NATIVELY from Secret Manager via
+      # value_source.secret_key_ref (NOT a runtime access_secret_version call).
+      # Cloud Run resolves `version = "latest"` with the runtime SA's identity at
+      # deploy/boot — hence the resource-scoped secretAccessor grants above. The
+      # KEY VALUE never appears in this config or in Terraform state; only the
+      # secret reference does. The AI seam reads ANTHROPIC_API_KEY / OPENAI_API_KEY
+      # from the process env at call time and must NEVER log them (T-7-05).
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.anthropic_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "OPENAI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.openai_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
     }
   }
 
@@ -239,6 +344,12 @@ resource "google_cloud_run_v2_service" "api" {
     # base.py tries to read the (not-yet-readable) secret.
     google_secret_manager_secret_version.app_superadmin_db_password,
     google_secret_manager_secret_iam_member.runtime_superadmin_secret_accessor,
+    # D-07: the AI-key secrets + the runtime SA's scoped read grants must exist
+    # before the service boots, or native secret_key_ref injection fails to
+    # resolve `latest` at deploy time. (The secret VERSIONS are seeded out-of-band
+    # per the runbook by default, so they are intentionally NOT in this edge.)
+    google_secret_manager_secret_iam_member.runtime_anthropic_secret_accessor,
+    google_secret_manager_secret_iam_member.runtime_openai_secret_accessor,
   ]
 }
 
