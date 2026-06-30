@@ -267,3 +267,303 @@ def two_spaces():
     are invisible to a session scoped to space_a.
     """
     return uuid.uuid4(), uuid.uuid4()
+
+
+# ===========================================================================
+# Phase 7 — AI external-call fakes (fake_anthropic / fake_openai)
+# ===========================================================================
+#
+# These fixtures hand back STUB SDK clients so the AI contract suites can fake
+# every Anthropic / OpenAI / Whisper call (no network, no keys, deterministic).
+# Tests monkeypatch the client factory in ``app.ai.clients`` (e.g.
+# ``app.ai.clients.anthropic_client`` / ``openai_client``) to return one of
+# these stubs, then assert (1) the REQUEST shape recorded on ``.calls`` (model
+# id, max_tokens, dimensions, response_format, language) and (2) the DB writes
+# the handler made from the canned response.
+#
+# Design discipline (07-01 PLAN must_have): these fixtures import NOTHING from
+# the not-yet-existing ``app.ai`` / ``app.db.ai_session`` modules, so conftest
+# stays importable while the implementation (07-04..07-07) is still pending —
+# only the test MODULES hard-import the impl (and stay RED until it lands).
+# The stub classes use stdlib only and are defined at module scope so the
+# fixtures can be parametrised per test.
+
+
+class _FakeUsage:
+    """Mirrors ``anthropic`` ``message.usage`` (typed token counts)."""
+
+    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _FakeContentBlock:
+    """Mirrors one ``message.content[i]`` text block (``.text`` / ``.type``)."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.type = "text"
+
+
+class _FakeMessage:
+    """Mirrors the object ``Anthropic().messages.create(...)`` returns.
+
+    Exposes ``.content[0].text`` (the raw model output the port parses) and
+    ``.usage.input_tokens`` / ``.usage.output_tokens`` (cost/observability).
+    """
+
+    def __init__(self, text: str, input_tokens: int, output_tokens: int) -> None:
+        self.content = [_FakeContentBlock(text)]
+        self.usage = _FakeUsage(input_tokens, output_tokens)
+        self.stop_reason = "end_turn"
+        self.model = None  # set by _FakeMessages.create from the request kwargs
+
+
+class _FakeMessages:
+    """``client.messages`` namespace — records each ``create`` call's kwargs."""
+
+    def __init__(self, parent: "_FakeAnthropicClient") -> None:
+        self._parent = parent
+
+    def create(self, **kwargs: Any) -> _FakeMessage:
+        # Record the REQUEST shape for assertions (model, max_tokens, system, messages).
+        self._parent.calls.append(kwargs)
+        msg = _FakeMessage(
+            self._parent.response_text,
+            self._parent.input_tokens,
+            self._parent.output_tokens,
+        )
+        msg.model = kwargs.get("model")
+        return msg
+
+
+class _FakeAnthropicClient:
+    """A stand-in for ``anthropic.Anthropic`` with a controllable response.
+
+    ``.calls`` is the list of kwargs each ``messages.create`` was called with —
+    the contract suites assert ``calls[0]["model"] == "claude-sonnet-4-5"`` and
+    ``calls[0]["max_tokens"] == 8192`` etc.
+    """
+
+    def __init__(self, response_text: str, input_tokens: int, output_tokens: int) -> None:
+        self.response_text = response_text
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.calls: list[dict[str, Any]] = []
+        self.messages = _FakeMessages(self)
+
+
+@pytest.fixture
+def fake_anthropic():
+    """Factory -> a stub ``anthropic.Anthropic`` client (no network).
+
+    Usage::
+
+        client = fake_anthropic('{"x": 1}', output_tokens=42)
+        monkeypatch.setattr("app.ai.clients.anthropic_client", lambda: client)
+        ...
+        assert client.calls[0]["model"] == "claude-sonnet-4-5"
+        assert client.calls[0]["max_tokens"] == 8192
+
+    ``response_text`` is whatever the model "returns" — pass valid JSON to drive
+    the success (``succeeded``) path, or a non-JSON string to drive the parse
+    failure (``failed`` + ``error_message``) path. The returned object exposes
+    ``.content[0].text`` and ``.usage.input_tokens`` / ``.usage.output_tokens``.
+    """
+
+    def _make(
+        response_text: str = "{}",
+        *,
+        input_tokens: int = 120,
+        output_tokens: int = 340,
+    ) -> _FakeAnthropicClient:
+        return _FakeAnthropicClient(response_text, input_tokens, output_tokens)
+
+    return _make
+
+
+class _FakeEmbeddingItem:
+    """One ``response.data[i]`` row — exposes ``.embedding`` (list[float])."""
+
+    def __init__(self, embedding: list[float]) -> None:
+        self.embedding = embedding
+
+
+class _FakeEmbeddingResponse:
+    """Mirrors ``client.embeddings.create(...)`` -> ``.data[0].embedding``."""
+
+    def __init__(self, embedding: list[float]) -> None:
+        self.data = [_FakeEmbeddingItem(list(embedding))]
+
+
+class _FakeEmbeddings:
+    """``client.embeddings`` namespace — records each ``create`` call's kwargs."""
+
+    def __init__(self, parent: "_FakeOpenAIClient") -> None:
+        self._parent = parent
+
+    def create(self, **kwargs: Any) -> _FakeEmbeddingResponse:
+        # Record model + dimensions for the AI-04 request-shape assertion.
+        self._parent.embedding_calls.append(kwargs)
+        return _FakeEmbeddingResponse(self._parent.embedding)
+
+
+class _FakeSegment:
+    """One Whisper ``verbose_json`` segment (``.start`` / ``.end`` / ``.text``)."""
+
+    def __init__(self, start: float, end: float, text: str) -> None:
+        self.start = start
+        self.end = end
+        self.text = text
+
+
+class _FakeTranscription:
+    """Mirrors ``audio.transcriptions.create(...)`` (verbose_json) result.
+
+    Exposes ``.text`` (full transcript), ``.language`` and ``.segments`` (the
+    chunk boundaries the port maps into ``transcripts`` rows).
+    """
+
+    def __init__(self, text: str, language: str, segments: list) -> None:
+        self.text = text
+        self.language = language
+        self.segments = [_FakeSegment(s, e, t) for (s, e, t) in segments]
+
+
+class _FakeTranscriptions:
+    """``client.audio.transcriptions`` namespace — records ``create`` kwargs."""
+
+    def __init__(self, parent: "_FakeOpenAIClient") -> None:
+        self._parent = parent
+
+    def create(self, **kwargs: Any) -> _FakeTranscription:
+        # Record model / response_format / language for AI-05 request-shape asserts.
+        self._parent.transcription_calls.append(kwargs)
+        return _FakeTranscription(
+            self._parent.transcript_text,
+            self._parent.transcript_language,
+            self._parent.transcript_segments,
+        )
+
+
+class _FakeAudio:
+    """``client.audio`` namespace -> ``.transcriptions.create``."""
+
+    def __init__(self, parent: "_FakeOpenAIClient") -> None:
+        self.transcriptions = _FakeTranscriptions(parent)
+
+
+class _FakeOpenAIClient:
+    """A stand-in for ``openai.OpenAI`` covering embeddings + Whisper.
+
+    ``.embedding_calls`` / ``.transcription_calls`` capture request kwargs for
+    the contract assertions (``dimensions == 1536``, ``model``,
+    ``response_format == "verbose_json"``, ``language``).
+    """
+
+    def __init__(
+        self,
+        embedding: list[float],
+        transcript_text: str,
+        transcript_language: str,
+        transcript_segments: list,
+    ) -> None:
+        self.embedding = list(embedding)
+        self.transcript_text = transcript_text
+        self.transcript_language = transcript_language
+        self.transcript_segments = transcript_segments
+        self.embedding_calls: list[dict[str, Any]] = []
+        self.transcription_calls: list[dict[str, Any]] = []
+        self.embeddings = _FakeEmbeddings(self)
+        self.audio = _FakeAudio(self)
+
+
+@pytest.fixture
+def fake_openai():
+    """Factory -> a stub ``openai.OpenAI`` client (embeddings + Whisper, no network).
+
+    Usage::
+
+        client = fake_openai()                         # default 1536-float vector
+        monkeypatch.setattr("app.ai.clients.openai_client", lambda: client)
+        ...
+        assert client.embedding_calls[0]["dimensions"] == 1536
+        assert client.transcription_calls[0]["response_format"] == "verbose_json"
+
+    Defaults give a deterministic 1536-float embedding (matching
+    ``text-embedding-3-small`` at ``dimensions=1536``) and a one-segment Dutch
+    transcript so the chunking + space-scoped ``transcripts`` writes are testable
+    without any real audio (AI-05; audio download is Phase 9 / D-08).
+    """
+
+    def _make(
+        *,
+        embedding: list[float] | None = None,
+        transcript_text: str = "Dit is een test transcript.",
+        transcript_language: str = "nl",
+        transcript_segments: list | None = None,
+    ) -> _FakeOpenAIClient:
+        if embedding is None:
+            # Deterministic, non-zero, length-1536 vector (text-embedding-3-small dims).
+            embedding = [round(0.001 * ((i % 97) + 1), 6) for i in range(1536)]
+        if transcript_segments is None:
+            transcript_segments = [(0.0, 2.5, transcript_text)]
+        return _FakeOpenAIClient(
+            embedding, transcript_text, transcript_language, transcript_segments
+        )
+
+    return _make
+
+
+# ===========================================================================
+# Phase 7 — seed_artifact_embeddings: two-space vector seeding for AI-04 search
+# ===========================================================================
+
+
+@pytest.fixture
+def seed_artifact_embeddings():
+    """Return a helper that inserts ``artifact_embeddings`` rows for one space.
+
+    Signature: ``_seed(conn_or_session, space_id, vectors)`` where ``vectors`` is
+    a list of either ``embedding`` lists or ``(chunk_text, embedding)`` tuples.
+    Each row carries ``space_id`` so the cross-tenant search suite can seed
+    space-A and space-B and prove a space-A search returns ZERO space-B rows
+    (AI-04 / T-7-01). Returns the inserted row ids.
+
+    The caller MUST have set ``app.current_space_id`` (via the ``set_space``
+    fixture) to ``space_id`` inside the SAME transaction first, so the 0002 RLS
+    ``WITH CHECK`` on ``artifact_embeddings`` admits the INSERT — mirrors the
+    GUC-then-INSERT shape of ``test_intake_cross_tenant._insert_intake``.
+
+    The embedding is bound as a pgvector text literal (``[f1,f2,...]``) cast to
+    ``vector`` — pg8000 has no native vector type, so the cast is explicit. Uses
+    raw SQL (no ORM model import) to keep conftest free of app-model imports.
+    """
+    from sqlalchemy import text
+
+    def _seed(conn_or_session: Any, space_id: Any, vectors: Any) -> list[str]:
+        ids: list[str] = []
+        for index, item in enumerate(vectors):
+            if isinstance(item, tuple):
+                chunk_text, vec = item
+            else:
+                chunk_text, vec = f"chunk-{index}", item
+            vec_literal = "[" + ",".join(str(float(x)) for x in vec) + "]"
+            row = conn_or_session.execute(
+                text(
+                    "INSERT INTO nestor.artifact_embeddings "
+                    "(id, space_id, chunk_text, embedding) "
+                    "VALUES (gen_random_uuid(), :space_id, :chunk_text, "
+                    "CAST(:embedding AS vector)) RETURNING id"
+                ),
+                {
+                    "space_id": str(space_id),
+                    "chunk_text": chunk_text,
+                    "embedding": vec_literal,
+                },
+            ).first()
+            if row is not None:
+                ids.append(str(row[0]))
+        return ids
+
+    return _seed
