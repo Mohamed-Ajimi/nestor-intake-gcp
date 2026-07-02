@@ -104,16 +104,24 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
 
     def read_fn(session: Any) -> dict[str, Any]:
         intake = IntakeRepository(session, identity).get(intake_id)
+        if intake is None:
+            # Deleted-intake race after dispatch (WR-04): don't run the model on
+            # empty/near-empty input and mark it succeeded — carry the missing
+            # sentinel through call_fn/write_fn to a failed finalize instead.
+            return {"missing": True}
         answer_rows = IntakeAnswerRepository(session, identity).list_for_intake(intake_id)
         answers = [
             {"field_key": row.field_key, "value": row.value, "value_json": row.value_json}
             for row in answer_rows
         ]
-        client_name = intake.client_name if intake is not None else None
+        client_name = intake.client_name
         user_message = _APPLY_USER_PREFIX + _format_intake_markdown(client_name, answers)
         return {"client_name": client_name, "answers": answers, "user_message": user_message}
 
     def call_fn(dto: dict[str, Any]) -> dict[str, Any]:
+        if dto.get("missing"):
+            # No Claude call for a vanished intake — surface the failure to write_fn.
+            return {"error": "Intake not found"}
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
         message = clients.anthropic_client().messages.create(
             model=model,
@@ -128,6 +136,16 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
         }
 
     def write_fn(session: Any, dto: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        if result.get("error"):
+            # Missing-intake sentinel (WR-04): finalize failed, never a silent success.
+            SkillRunRepository(session, identity).patch(
+                run_id,
+                status="failed",
+                error_message=result["error"],
+                completed_at=_now(),
+            )
+            return {"status": "failed", "error_message": result["error"]}
+
         raw = result["raw"]
         input_tokens = result["input_tokens"]
         output_tokens = result["output_tokens"]
