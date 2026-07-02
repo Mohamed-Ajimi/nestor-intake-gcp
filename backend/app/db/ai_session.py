@@ -31,6 +31,7 @@ integration tests can ``monkeypatch.setattr(ai_session, "get_engine", ...)`` / s
 
 from __future__ import annotations
 
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
@@ -41,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.auth.identity import Identity
 from app.db.base import get_engine, get_sessionmaker, get_superadmin_engine
 from app.db.models.embeddings import ArtifactEmbedding
+from app.db.models.research import ResearchArtifact
 from app.db.models.skill_run import SkillRun
 from app.db.repository import IntakeRepository, SkillRunRepository
 from app.db.rls import set_space_context
@@ -215,6 +217,8 @@ def sweep_orphaned_skill_runs(max_age_minutes: int = 30) -> int:
 def search_artifacts(
     session: Session,
     query_vec: Any,
+    *,
+    intake_id: Any | None = None,
     limit: int = 25,
     max_distance: float | None = None,
 ):
@@ -224,6 +228,13 @@ def search_artifacts(
     07-06) and the caller's tenant-scoped ``session`` (opened via :func:`tenant_session`).
     Builds ``ORDER BY embedding <=> :query_vec LIMIT :limit`` over the pgvector cosine
     operator (:meth:`ArtifactEmbedding.embedding.cosine_distance`).
+
+    ``intake_id`` (optional) narrows the scan to ONE intake's artifacts — legacy
+    ``match_intake_content`` parity. ``artifact_embeddings`` carries no ``intake_id``
+    column, so the predicate goes through the owning ``research_artifacts`` row
+    (``artifact_id IN (SELECT id FROM research_artifacts WHERE intake_id = ...)``),
+    itself RLS/space-confined on the same session. This is an INTAKE filter within the
+    caller's space — tenant confinement stays with RLS + the GUC (below), unchanged.
 
     Tenant confinement is NOT a manual ``WHERE space_id`` here: on the user engine the 0002
     RLS policy + the GUC set by :func:`tenant_session` prefilter the scan to the caller's
@@ -250,6 +261,16 @@ def search_artifacts(
         .order_by(distance)
         .limit(limit)
     )
+    if intake_id is not None:
+        # Per-intake narrowing (legacy match_intake_content parity, WR-02): the
+        # embeddings row links to its intake via the owning research_artifacts row.
+        stmt = stmt.where(
+            ArtifactEmbedding.artifact_id.in_(
+                select(ResearchArtifact.id).where(
+                    ResearchArtifact.intake_id == uuid.UUID(str(intake_id))
+                )
+            )
+        )
     if max_distance is not None:
         stmt = stmt.where(distance <= max_distance)
     return session.execute(stmt).all()

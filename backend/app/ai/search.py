@@ -53,6 +53,11 @@ def semantic_search(
     :func:`app.db.ai_session.search_artifacts` to return the nearest space-scoped chunks. No
     cross-tenant rows can be returned (RLS + the space_id prefilter — T-7-01).
 
+    ``intake_id`` is threaded into the scan (WR-02 — legacy ``match_intake_content``
+    parity): results are confined to the named intake's artifacts WITHIN the caller's
+    space, so the ``/intakes/{intake_id}/search`` path parameter is honoured rather than
+    returning every intake in the space.
+
     ``max_distance`` is the legacy 0.7-cosine-similarity cutoff expressed as a cosine
     *distance* (``0.3``); ``None`` (the default) keeps every nearest row — param/config-driven
     so callers may tighten it without code changes.
@@ -67,9 +72,16 @@ def semantic_search(
     )
     query_vec = resp.data[0].embedding
 
-    # READ — one tenant-scoped session; search_artifacts applies the space-confined <=> scan.
+    # READ — one tenant-scoped session; search_artifacts applies the space-confined <=> scan
+    # narrowed to THIS intake's artifacts (WR-02 — the path param is honoured).
     with tenant_session(identity) as session:
-        rows = search_artifacts(session, query_vec, limit=limit, max_distance=max_distance)
+        rows = search_artifacts(
+            session,
+            query_vec,
+            intake_id=intake_id,
+            limit=limit,
+            max_distance=max_distance,
+        )
         # Map the plain Row tuples to JSON-friendly dicts for the inline endpoint response.
         return [
             {
