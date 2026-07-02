@@ -167,6 +167,13 @@ def run_extract_insights(identity: Identity, intake_id: Any, run_id: Any) -> dic
         insight_repo = ExtractedInsightRepository(session, identity)
         is_super = identity.role == "superadmin"
         space_uuid = uuid.UUID(dto["space_id"]) if dto["space_id"] else None
+        if is_super and space_uuid is None:
+            # Deleted-intake race after dispatch: a superadmin has no own space, so with
+            # the intake gone there is no target space — finalize the run failed (D-09)
+            # instead of falling through to a NULL-space create() crash (WR-01).
+            msg = "Intake not found — no target space for the superadmin write"
+            run_repo.patch(run_id, status="failed", error_message=msg, **common)
+            return {"status": "failed", "error_message": msg}
         inserted = 0
         for entry in parsed if isinstance(parsed, list) else []:
             if not isinstance(entry, dict):
@@ -184,7 +191,7 @@ def run_extract_insights(identity: Identity, intake_id: Any, run_id: Any) -> dic
             )
             # space_id is injected by the repo from the verified Identity (user) or set to
             # the intake's own space (superadmin) — NEVER read from the LLM array (T-7-03).
-            if is_super and space_uuid is not None:
+            if is_super:
                 insight_repo.create_in_space(space_uuid, **values)
             else:
                 insight_repo.create(**values)

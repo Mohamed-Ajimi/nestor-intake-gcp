@@ -129,12 +129,18 @@ class TenantRepository(Generic[M]):
         — it is NEVER accepted as a method kwarg (TENANT-02 / D-03 / T-06-01). For a
         ``user`` (``self._space_id is not None``) the tenant key is forced onto the row;
         a superadmin create (``self._space_id is None``) is out of scope for the tenant
-        seam and goes through :class:`app.db.admin_repo.AdminRepo` against a chosen target
-        space (Pitfall 3). The row is flushed so its server-side defaults / id are
-        populated before return.
+        seam and goes through :meth:`create_in_space` against a chosen target space (or
+        :class:`app.db.admin_repo.AdminRepo` — Pitfall 3). A superadmin reaching this
+        method would emit a row with NO ``space_id`` (a ``NOT NULL`` violation), so it
+        fails fast and loud instead (WR-01 — the mirror of ``create_in_space``'s guard).
+        The row is flushed so its server-side defaults / id are populated before return.
         """
-        if self._space_id is not None:
-            values["space_id"] = self._space_id  # identity-derived; never a kwarg
+        if self._space_id is None:
+            raise RuntimeError(
+                "create() requires a user-scoped identity (space_id); a superadmin "
+                "must use create_in_space() against an explicit target space"
+            )
+        values["space_id"] = self._space_id  # identity-derived; never a kwarg
         row = self.model(**values)
         self._s.add(row)
         self._s.flush()

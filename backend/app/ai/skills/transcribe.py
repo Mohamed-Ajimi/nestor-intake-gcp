@@ -187,6 +187,15 @@ def run_transcribe(
         repo = TranscriptRepository(session, identity)
         is_super = identity.role == "superadmin"
         space_uuid = uuid.UUID(dto["space_id"]) if dto.get("space_id") else None
+        if is_super and space_uuid is None:
+            # Deleted-source race after dispatch: a superadmin has no own space, so with
+            # the source gone there is no target space — finalize the run failed (D-09)
+            # instead of falling through to a NULL-space create() crash (WR-01).
+            msg = "Source not found — no target space for the superadmin write"
+            run_repo.patch(
+                run_id, status="failed", error_message=msg, completed_at=_now()
+            )
+            return {"status": "failed", "error_message": msg}
         for index, chunk in enumerate(chunks):
             values = dict(
                 intake_id=intake_uuid,
@@ -200,7 +209,7 @@ def run_transcribe(
             )
             # space_id injected from the verified Identity (user) / the source's own space
             # (superadmin) — never a method/LLM-provided value (T-7-03).
-            if is_super and space_uuid is not None:
+            if is_super:
                 repo.create_in_space(space_uuid, **values)
             else:
                 repo.create(**values)
