@@ -99,6 +99,8 @@ def run_with_session_release(
     read_fn: Callable[[Session], Any],
     call_fn: Callable[[Any], Any],
     write_fn: Callable[[Session, Any, Any], Any],
+    *,
+    on_error: Callable[[Session, Any, Exception], Any] | None = None,
 ) -> Any:
     """READ → release → CALL → reopen-WRITE — the AI-06 connection-release contract.
 
@@ -114,17 +116,34 @@ def run_with_session_release(
     Phase 3 (WRITE): a FRESH :func:`tenant_session` re-issues the GUC structurally (the
     marquee 2nd-session ``set_space_context`` — T-7-02) and returns ``write_fn(session,
     dto, result)``.
+
+    ``on_error`` (D-09 terminal-status guard): FastAPI ``BackgroundTasks`` swallows an
+    exception that escapes the task, which would leave the ``skill_runs`` row stuck at
+    ``running`` until the next startup sweep. When ``on_error`` is provided, ANY exception
+    raised by read/call/write is routed to ``on_error(session, dto, exc)`` inside a fresh
+    :func:`tenant_session` so the caller can finalize the run row to EXACTLY ``failed``
+    (with ``error_message``) — the contract the frontend polls. ``dto`` is ``None`` when
+    the READ phase itself raised. Without ``on_error`` the exception re-raises unchanged.
     """
-    # Phase 1 — READ: load plain DTOs, then release the connection on block exit.
-    with tenant_session(identity) as session:
-        dto = read_fn(session)
+    dto: Any = None
+    try:
+        # Phase 1 — READ: load plain DTOs, then release the connection on block exit.
+        with tenant_session(identity) as session:
+            dto = read_fn(session)
 
-    # Phase 2 — CALL: no DB connection held across the external call (AI-06 / T-7-06).
-    result = call_fn(dto)
+        # Phase 2 — CALL: no DB connection held across the external call (AI-06 / T-7-06).
+        result = call_fn(dto)
 
-    # Phase 3 — WRITE: a fresh tx; tenant_session re-issues the GUC (T-7-02).
-    with tenant_session(identity) as session:
-        return write_fn(session, dto, result)
+        # Phase 3 — WRITE: a fresh tx; tenant_session re-issues the GUC (T-7-02).
+        with tenant_session(identity) as session:
+            return write_fn(session, dto, result)
+    except Exception as exc:  # noqa: BLE001 — finalize the run as failed (D-09)
+        if on_error is None:
+            raise
+        # A fresh tx (the failed write tx rolled back on block exit); tenant_session
+        # re-issues the GUC so the failed-finalize patch is space-scoped like any write.
+        with tenant_session(identity) as session:
+            return on_error(session, dto, exc)
 
 
 def create_running_skill_run(

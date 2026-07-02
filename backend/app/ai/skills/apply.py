@@ -155,4 +155,12 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
         repo.patch(run_id, status="succeeded", output_parsed=parsed, **common)
         return {"status": "succeeded"}
 
-    return run_with_session_release(identity, read_fn, call_fn, write_fn)
+    def on_error(session: Any, dto: Any, exc: Exception) -> dict[str, Any]:
+        # D-09 terminal-status guard: any call/write failure (API timeout, 429, empty
+        # content array, write crash) finalizes the row failed — never stuck running.
+        SkillRunRepository(session, identity).patch(
+            run_id, status="failed", error_message=str(exc), completed_at=_now()
+        )
+        return {"status": "failed", "error_message": str(exc)}
+
+    return run_with_session_release(identity, read_fn, call_fn, write_fn, on_error=on_error)

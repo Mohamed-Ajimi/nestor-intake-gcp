@@ -210,4 +210,13 @@ def run_transcribe(
         )
         return {"status": "succeeded", "chunks": len(chunks)}
 
-    return run_with_session_release(identity, read_fn, call_fn, write_fn)
+    def on_error(session: Any, dto: Any, exc: Exception) -> dict[str, Any]:
+        # D-09 terminal-status guard: call_fn already catches its own fetch/Whisper
+        # failures, so this covers the WRITE phase (and any read crash) — a write
+        # exception finalizes the row failed instead of leaving it stuck running.
+        SkillRunRepository(session, identity).patch(
+            run_id, status="failed", error_message=str(exc), completed_at=_now()
+        )
+        return {"status": "failed", "error_message": str(exc)}
+
+    return run_with_session_release(identity, read_fn, call_fn, write_fn, on_error=on_error)
