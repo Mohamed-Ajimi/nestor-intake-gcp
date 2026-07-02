@@ -130,7 +130,11 @@ def run_transcribe(
 
     def read_fn(session: Any) -> dict[str, Any]:
         source = IntakeSourceRepository(session, identity).get(source_id)
-        if source is None:
+        if source is None or source.intake_id != intake_uuid:
+            # Missing, OR the source belongs to a DIFFERENT intake than the path names
+            # (WR-03): writing rows stamped with the path intake_id but sourced from
+            # another intake would mislabel the transcript — treat both as missing
+            # (the sentinel flows through call_fn/write_fn to a failed finalize).
             return {"missing": True}
         return {
             "missing": False,
