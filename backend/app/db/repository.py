@@ -210,13 +210,19 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
         ``intake_id`` it happened to carry is ignored. This is the user-path section save, so
         it relies on the tenant key being present (a superadmin batch goes via the admin seam).
 
-        D-01 repo wall (independent of RLS): on the user path the ``ON CONFLICT DO UPDATE``
-        carries an explicit ``WHERE space_id = self._space_id`` (guarded by
-        ``self._space_id is not None``, mirroring ``create``) so a conflicting row owned by a
+        D-01 repo wall (independent of RLS): the ``ON CONFLICT DO UPDATE`` carries an
+        explicit ``WHERE space_id = self._space_id`` so a conflicting row owned by a
         FOREIGN space is NEVER overwritten — even if RLS were dropped. The conflict TARGET
         stays the ``(intake_id, field_key)`` constraint (no migration); ``space_id`` comes
-        ONLY from ``self._space_id`` (no method parameter — module invariant).
+        ONLY from ``self._space_id`` (no method parameter — module invariant). A superadmin
+        repo (``self._space_id is None``) must NOT reach this method — a NULL ``space_id``
+        row would violate the ``NOT NULL`` constraint — so it fails fast and loud instead.
         """
+        if self._space_id is None:
+            raise RuntimeError(
+                "upsert_batch requires a user-scoped identity (space_id); a superadmin "
+                "write must target an explicit space"
+            )
         rows = [
             {
                 "space_id": self._space_id,
@@ -235,18 +241,12 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
             "value": stmt.excluded.value,
             "value_json": stmt.excluded.value_json,
         }
-        if self._space_id is not None:
-            # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_intake_answers_intake_field",
-                set_=set_,
-                where=(self.model.space_id == self._space_id),
-            )
-        else:
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_intake_answers_intake_field",
-                set_=set_,
-            )
+        # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_intake_answers_intake_field",
+            set_=set_,
+            where=(self.model.space_id == self._space_id),
+        )
         self._s.execute(stmt)
 
     def upsert_extracted(self, intake_id, items):
@@ -265,12 +265,20 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
         carries only ``field_key`` / ``value`` / ``value_json`` / ``confidence`` /
         ``source_chunk_id``; any tenant key it happened to carry is ignored.
 
-        D-01 repo wall (independent of RLS): on the user path the ``ON CONFLICT DO
-        UPDATE`` carries an explicit ``WHERE space_id = self._space_id`` so a
-        conflicting row owned by a FOREIGN space is NEVER overwritten — even if RLS
-        were dropped. The conflict TARGET stays the ``(intake_id, field_key)``
-        constraint (no migration). space_id is NEVER a method parameter.
+        D-01 repo wall (independent of RLS): the ``ON CONFLICT DO UPDATE`` carries an
+        explicit ``WHERE space_id = self._space_id`` so a conflicting row owned by a
+        FOREIGN space is NEVER overwritten — even if RLS were dropped. The conflict
+        TARGET stays the ``(intake_id, field_key)`` constraint (no migration). space_id
+        is NEVER a method parameter. A superadmin repo (``self._space_id is None``)
+        must use :meth:`upsert_extracted_in_space` against the intake's OWN space —
+        reaching this method with no space would emit a NULL ``space_id`` row (a
+        ``NOT NULL`` violation), so it fails fast and loud instead.
         """
+        if self._space_id is None:
+            raise RuntimeError(
+                "upsert_extracted requires a user-scoped identity (space_id); a "
+                "superadmin write must use upsert_extracted_in_space()"
+            )
         rows = [
             {
                 "space_id": self._space_id,
@@ -294,18 +302,65 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
             "source_chunk_id": stmt.excluded.source_chunk_id,
             "extracted_by": stmt.excluded.extracted_by,
         }
+        # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_intake_answers_intake_field",
+            set_=set_,
+            where=(self.model.space_id == self._space_id),
+        )
+        self._s.execute(stmt)
+
+    def upsert_extracted_in_space(self, space_id, intake_id, items):
+        """Superadmin-only LLM-extracted upsert into an EXPLICIT target space (D-05).
+
+        Mirrors :meth:`create_in_space`: the tenant :meth:`upsert_extracted` derives its
+        space ONLY from the verified Identity, so a SUPERADMIN (no own space) needs this
+        audited cross-tenant path against the intake's OWN space. Valid ONLY on a
+        superadmin-scoped repo (``self._space_id is None``, bound to the
+        ``app_superadmin`` engine whose 0003 bypass policy permits the cross-space
+        write). Sets the tx-local GUC to the TARGET space (as :meth:`create_in_space`
+        does for the SECURITY DEFINER trigger path) and stamps ``space_id`` on every
+        row. The conflict TARGET stays the ``(intake_id, field_key)`` constraint and the
+        ``ON CONFLICT DO UPDATE`` carries an explicit ``WHERE space_id = <target>`` so
+        only rows in the chosen space are ever overwritten (D-01 wall, unchanged).
+        """
         if self._space_id is not None:
-            # D-01: overwrite only a conflicting row owned by THIS space (independent wall).
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_intake_answers_intake_field",
-                set_=set_,
-                where=(self.model.space_id == self._space_id),
+            raise RuntimeError(
+                "upsert_extracted_in_space is superadmin-only — the user path must "
+                "use upsert_extracted()"
             )
-        else:
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_intake_answers_intake_field",
-                set_=set_,
-            )
+        rows = [
+            {
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "field_key": item["field_key"],
+                "value": item.get("value"),
+                "value_json": item.get("value_json"),
+                "confidence": item.get("confidence"),
+                "source_chunk_id": item.get("source_chunk_id"),
+                "extracted_by": "llm",
+            }
+            for item in items
+        ]
+        if not rows:
+            return
+        # Mirror create_in_space: set the tx-local GUC to the TARGET space so any
+        # definer-trigger write passes its space-isolation check (reverts at COMMIT).
+        set_space_context(self._s, space_id)
+        stmt = pg_insert(self.model).values(rows)
+        set_ = {
+            "value": stmt.excluded.value,
+            "value_json": stmt.excluded.value_json,
+            "confidence": stmt.excluded.confidence,
+            "source_chunk_id": stmt.excluded.source_chunk_id,
+            "extracted_by": stmt.excluded.extracted_by,
+        }
+        # D-01: overwrite only a conflicting row owned by the TARGET space.
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_intake_answers_intake_field",
+            set_=set_,
+            where=(self.model.space_id == space_id),
+        )
         self._s.execute(stmt)
 
 

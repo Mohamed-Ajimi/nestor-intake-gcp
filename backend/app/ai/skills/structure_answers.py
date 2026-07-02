@@ -126,6 +126,9 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
 
     def read_fn(session: Any) -> dict[str, Any]:
         intake = IntakeRepository(session, identity).get(intake_id)
+        # Capture the intake's OWN space for the superadmin write path (a superadmin
+        # identity has no space_id of its own — CR-01): None when the intake vanished.
+        space_id = str(intake.space_id) if intake is not None else None
         template_keys: list[str] = []
         if intake is not None and intake.template_id is not None:
             tpl = IntakeTemplateRepository(session, identity).get(intake.template_id)
@@ -150,7 +153,11 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
                 transcript_text,
             ]
         )
-        return {"user_message": user_message, "valid_keys": template_keys}
+        return {
+            "user_message": user_message,
+            "valid_keys": template_keys,
+            "space_id": space_id,
+        }
 
     def call_fn(dto: dict[str, Any]) -> dict[str, Any]:
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
@@ -213,7 +220,21 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
 
         # Route the write through the upsert (extracted_by='llm') — respects the existing
         # (intake_id, field_key) unique constraint; never a plain INSERT (no 23505).
-        IntakeAnswerRepository(session, identity).upsert_extracted(intake_id, items)
+        answer_repo = IntakeAnswerRepository(session, identity)
+        if identity.role == "superadmin":
+            # A superadmin has no own space: write into the intake's OWN space (CR-01).
+            # A missing space (deleted-intake race after dispatch) finalizes the run
+            # failed rather than crashing on a NULL space_id write (D-09).
+            if not dto["space_id"]:
+                msg = "Intake not found — no target space for the superadmin write"
+                repo.patch(run_id, status="failed", error_message=msg, **common)
+                return {"status": "failed", "error_message": msg}
+            answer_repo.upsert_extracted_in_space(
+                uuid.UUID(dto["space_id"]), intake_id, items
+            )
+        else:
+            # User path: space_id injected from the verified Identity (TENANT-02).
+            answer_repo.upsert_extracted(intake_id, items)
         repo.patch(run_id, status="succeeded", **common)
         return {"status": "succeeded", "inserted": len(items)}
 
