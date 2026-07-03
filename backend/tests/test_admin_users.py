@@ -163,25 +163,31 @@ def test_generate_set_password_link_uses_password_reset_link():
 
 def test_reinvite_reconciles_existing_account_via_get_user_by_email():
     """Re-inviting an email whose IdP account already exists raises
-    ``EmailAlreadyExistsError`` from ``create_user``; the wrapper reconciles to the existing
-    uid via ``auth.get_user_by_email`` rather than 500ing (Pitfall 5)."""
-    existing = MagicMock(uid="existing-uid")
+    ``EmailAlreadyExistsError`` from ``create_invited_user`` (the wrapper does NOT
+    swallow it — the endpoint catches it, per the documented contract); the
+    reconcile seam is ``resolve_existing_uid`` via ``auth.get_user_by_email``
+    (Pitfall 5)."""
     with patch.object(
         admin_users.auth,
         "create_user",
         side_effect=admin_users.auth.EmailAlreadyExistsError(
             "exists", cause=None, http_response=None
         ),
-    ), patch.object(
+    ), patch.object(admin_users.auth, "set_custom_user_claims") as set_claims:
+        with pytest.raises(admin_users.auth.EmailAlreadyExistsError):
+            admin_users.create_invited_user(
+                "dup@x.com", role="user", space_id="SPACE-UUID"
+            )
+    # No claims write may happen for an account that was not created here.
+    set_claims.assert_not_called()
+
+    existing = MagicMock(uid="existing-uid")
+    with patch.object(
         admin_users.auth, "get_user_by_email", return_value=existing
-    ) as get_by_email, patch.object(
-        admin_users.auth, "set_custom_user_claims"
-    ):
-        uid = admin_users.create_invited_user(
-            "dup@x.com", role="user", space_id="SPACE-UUID"
-        )
+    ) as get_by_email:
+        uid = admin_users.resolve_existing_uid("dup@x.com")
 
     get_by_email.assert_called_once_with("dup@x.com")
     assert uid == "existing-uid", (
-        "re-invite must reconcile to the existing account's uid, not raise"
+        "re-invite must reconcile to the existing account's uid via the seam"
     )
