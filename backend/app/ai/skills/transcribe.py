@@ -121,7 +121,8 @@ def run_transcribe(
     :func:`download_audio_bytes` seam (faked in Phase 7) and call Whisper (``whisper-1``,
     ``response_format='verbose_json'``, the source language) holding NO DB connection. WRITE:
     chunk the verbose_json segments into ~500-word ``transcripts`` rows via
-    :class:`TranscriptRepository` (``space_id`` injected from Identity) and finalize the
+    :class:`TranscriptRepository` (``space_id`` injected from Identity), REPLACING the
+    source's prior chunk set in the same tx (idempotent re-run — WR-02), and finalize the
     ``skill_runs`` row ``succeeded`` — no ``intakes.status`` change (Pitfall 1).
     """
     model = get_settings().model_transcription
@@ -200,6 +201,12 @@ def run_transcribe(
                 run_id, status="failed", error_message=msg, completed_at=_now()
             )
             return {"status": "failed", "error_message": msg}
+        # Idempotent re-run (WR-02): a second dispatch for the same source (double-click,
+        # retry after a success, concurrent 202s) must not interleave a duplicate chunk
+        # set — replace this source's prior chunks in the SAME tx, so the last run stays
+        # authoritative and a crash mid-replace rolls back to the prior consistent set.
+        for row in repo.list_for_source(source_id):
+            session.delete(row)
         for index, chunk in enumerate(chunks):
             values = dict(
                 intake_id=intake_uuid,
