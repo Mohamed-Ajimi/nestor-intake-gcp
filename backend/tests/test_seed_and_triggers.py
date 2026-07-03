@@ -177,7 +177,7 @@ def _func_exists(conn, name: str) -> bool:
 # ---------------------------------------------------------------------------
 # (a) production-empty baseline
 # ---------------------------------------------------------------------------
-def test_all_tables_empty_after_migrate(engine):
+def test_all_tables_empty_after_migrate(engine, pg_container):
     """Right after ``upgrade head`` every table is empty (INFRA-02).
 
     Runs against a FRESH scratch database: the shared session-scoped DB
@@ -186,8 +186,9 @@ def test_all_tables_empty_after_migrate(engine):
     owner role has CREATEDB (conftest bootstrap) precisely for this check.
     """
     from sqlalchemy import create_engine
+    from sqlalchemy.engine import make_url
 
-    from .conftest import _run_migrations
+    from .conftest import _run_migrations, _sync_pg8000_url
 
     scratch = "nestor_infra02_check"
 
@@ -224,6 +225,21 @@ def test_all_tables_empty_after_migrate(engine):
         f'DROP DATABASE IF EXISTS "{scratch}"',
         f'CREATE DATABASE "{scratch}"',
     )
+
+    # Pre-create the extensions AS THE CONTAINER SUPERUSER (mirrors the conftest
+    # bootstrap): pgvector is not a trusted extension, so 0001's CREATE
+    # EXTENSION would fail 42501 for the non-superuser owner in the fresh DB.
+    su_eng = create_engine(
+        make_url(_sync_pg8000_url(pg_container)).set(database=scratch),
+        echo=False,
+        future=True,
+    )
+    try:
+        with su_eng.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    finally:
+        su_eng.dispose()
 
     scratch_eng = create_engine(
         engine.url.set(database=scratch), echo=False, future=True
