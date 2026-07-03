@@ -192,22 +192,33 @@ def test_all_tables_empty_after_migrate(engine):
     scratch = "nestor_infra02_check"
 
     def _autocommit_sql(*statements: str) -> None:
-        """Run CREATE/DROP DATABASE on the raw pg8000 connection in autocommit.
+        """Run CREATE/DROP DATABASE on a FRESH pg8000 connection in autocommit.
 
-        These statements refuse to run inside a transaction block (25001), and
-        the driver-level ``autocommit`` flag is the only mode pg8000 guarantees
-        never wraps an execute in an implicit BEGIN.
+        These statements refuse to run inside a transaction block (25001).
+        A pooled connection won't do: pg8000 BEGINs implicitly on any execute
+        (including the pool's pre-ping probe), and setting ``autocommit`` while
+        a transaction is open does not end it. A brand-new driver connection
+        with ``autocommit`` set before its first statement is the only shape
+        pg8000 guarantees transaction-free.
         """
-        raw = engine.raw_connection()
+        import pg8000.dbapi
+
+        u = engine.url
+        con = pg8000.dbapi.connect(
+            user=u.username,
+            password=u.password,
+            host=u.host,
+            port=u.port or 5432,
+            database=u.database,
+        )
         try:
-            raw.driver_connection.autocommit = True
-            cur = raw.cursor()
+            con.autocommit = True
+            cur = con.cursor()
             for stmt in statements:
                 cur.execute(stmt)
             cur.close()
         finally:
-            raw.driver_connection.autocommit = False
-            raw.close()
+            con.close()
 
     _autocommit_sql(
         f'DROP DATABASE IF EXISTS "{scratch}"',
