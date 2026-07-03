@@ -75,7 +75,11 @@ def test_readyz_db_ok(engine, monkeypatch):
     the testcontainer, not the Cloud SQL connector. Skips cleanly without Docker
     (the ``engine`` fixture handles the skip).
     """
-    bound = base.get_engine(database_url=str(engine.url))
+    # render_as_string(hide_password=False): str(engine.url) masks the password
+    # as literal "***", which the bound engine would then use as the real password.
+    bound = base.get_engine(
+        database_url=engine.url.render_as_string(hide_password=False)
+    )
     monkeypatch.setattr(main_module, "get_engine", lambda: bound, raising=True)
 
     client = TestClient(app)
