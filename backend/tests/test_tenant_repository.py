@@ -36,7 +36,7 @@ import uuid
 
 import pytest
 
-from .conftest import _sync_pg8000_url
+from .conftest import _owner_url
 
 pytestmark = pytest.mark.integration
 
@@ -303,7 +303,8 @@ def test_pool_no_leak_across_reused_connection(engine, pg_container):
     from app.db.base import _register_guc_reset
     from app.db.rls import set_space_context
 
-    url = _sync_pg8000_url(pg_container)
+    # Owner (non-superuser) DSN: the superuser DSN would bypass RLS entirely.
+    url = _owner_url(pg_container)
     # Pin a single shared physical connection so a leak would be observable.
     pooled = create_engine(
         url, echo=False, future=True, pool_size=1, max_overflow=0, pool_pre_ping=True

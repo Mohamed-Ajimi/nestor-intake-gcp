@@ -54,6 +54,16 @@ PGVECTOR_IMAGE = "pgvector/pgvector:pg16"
 # plan 01-03's 0002 migration: NULLIF(current_setting('app.current_space_id', true), '')::uuid
 SPACE_GUC_KEY = "app.current_space_id"
 
+# The NON-superuser role that owns the schema in tests. The container's
+# POSTGRES_USER is a Postgres SUPERUSER, and superusers bypass RLS
+# unconditionally (FORCE ROW LEVEL SECURITY binds table OWNERS, not
+# superusers) — so every RLS-observing suite would silently test nothing if it
+# ran on the superuser DSN. Cloud SQL's migration/app roles are NOT superusers,
+# so a non-superuser owner is also the higher-fidelity shape. The superuser DSN
+# is used only for one-time bootstrap (extensions, roles, database ownership).
+OWNER_ROLE = "nestor_owner"
+OWNER_PASSWORD = "nestor-owner-test-pw"
+
 
 # ---------------------------------------------------------------------------
 # Skip-clean guard: no Docker AND no DATABASE_URL -> skip, never error
@@ -211,20 +221,96 @@ def _ensure_app_superadmin(engine: Any) -> None:
 # Session-scoped engine fixture (sync pg8000) — builds schema via Alembic
 # ---------------------------------------------------------------------------
 
+def _owner_url(pg_container) -> str:
+    """The engine DSN with the NON-superuser ``nestor_owner`` credentials.
+
+    Derives host/port/db from the same source as `_sync_pg8000_url` and swaps in
+    the bootstrap-created owner role. Exposed for suites that build their own
+    engines (e.g. the pooled-connection Pitfall-1 regression test) — they MUST
+    NOT use the superuser DSN or RLS is silently bypassed.
+    """
+    from sqlalchemy.engine import make_url
+
+    url = make_url(_sync_pg8000_url(pg_container))
+    return url.set(
+        username=OWNER_ROLE, password=OWNER_PASSWORD
+    ).render_as_string(hide_password=False)
+
+
+def _bootstrap_non_superuser_owner(admin_engine: Any) -> None:
+    """One-time superuser bootstrap: extensions + the non-superuser owner role.
+
+    - Pre-creates pgcrypto/vector so 0001's ``CREATE EXTENSION IF NOT EXISTS``
+      no-ops regardless of who runs the migrations.
+    - Creates ``nestor_owner`` (LOGIN, CREATEDB, CREATEROLE, NOSUPERUSER) and
+      makes it the database owner so it can create the ``nestor`` schema and
+      the ``alembic_version`` table in ``public``.
+    - ``createrole_self_grant = 'set, inherit'`` so roles the owner creates in
+      tests (e.g. the WR-02 app role) can be assumed via ``SET ROLE``.
+    Idempotent — safe on a reused DSN.
+    """
+    from sqlalchemy import text
+
+    with admin_engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(
+            text(
+                "DO $$ BEGIN "
+                f"  CREATE ROLE {OWNER_ROLE} LOGIN PASSWORD '{OWNER_PASSWORD}' "
+                "   CREATEDB CREATEROLE NOSUPERUSER; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; "
+                "END $$;"
+            )
+        )
+        conn.execute(
+            text(
+                f"ALTER ROLE {OWNER_ROLE} SET createrole_self_grant = 'set, inherit'"
+            )
+        )
+        dbname = conn.execute(text("SELECT current_database()")).scalar_one()
+        conn.execute(text(f'ALTER DATABASE "{dbname}" OWNER TO {OWNER_ROLE}'))
+
+
 @pytest.fixture(scope="session")
 def engine(pg_container):
     """Yield a sync SQLAlchemy engine bound to the pgvector container / DSN.
 
-    Side effects (session-scoped, run once):
-      1. create the `app_superadmin` bypass role,
-      2. run `alembic upgrade head` to build the schema (RED until plan 01-02).
+    The yielded engine authenticates as the NON-superuser ``nestor_owner`` (see
+    OWNER_ROLE above) — the superuser DSN would bypass RLS and void every
+    isolation assertion in the suite.
+
+    Side effects (session-scoped, run once, as the container superuser):
+      1. bootstrap extensions + the ``nestor_owner`` role (database owner),
+      2. create the `app_superadmin` bypass role and grant it to the owner
+         (so tests can ``SET LOCAL ROLE app_superadmin``),
+      3. run `alembic upgrade head` AS THE OWNER to build the schema — the
+         owner then owns every table, and FORCE RLS binds it (T-01-02).
     """
     sa = pytest.importorskip("sqlalchemy")
+    from sqlalchemy import text
 
-    url = _sync_pg8000_url(pg_container)
-    eng = sa.create_engine(url, echo=False, future=True, pool_pre_ping=True)
+    admin_eng = sa.create_engine(
+        _sync_pg8000_url(pg_container), echo=False, future=True, pool_pre_ping=True
+    )
     try:
-        _ensure_app_superadmin(eng)
+        _bootstrap_non_superuser_owner(admin_eng)
+        _ensure_app_superadmin(admin_eng)
+        with admin_eng.begin() as conn:
+            # Membership (PG16 default WITH SET) lets the owner assume the role;
+            # ADMIN OPTION lets the CREATEROLE owner ALTER it (e.g. the
+            # superadmin_engine fixture sets a LOGIN password on it — PG16
+            # requires CREATEROLE + ADMIN OPTION on the target role for that).
+            conn.execute(
+                text(f"GRANT app_superadmin TO {OWNER_ROLE} WITH ADMIN OPTION")
+            )
+    finally:
+        admin_eng.dispose()
+
+    eng = sa.create_engine(
+        _owner_url(pg_container), echo=False, future=True, pool_pre_ping=True
+    )
+    try:
         _run_migrations(eng)
         yield eng
     finally:

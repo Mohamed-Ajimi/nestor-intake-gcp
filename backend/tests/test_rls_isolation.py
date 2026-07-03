@@ -56,7 +56,7 @@ import uuid
 
 import pytest
 
-from .conftest import _sync_pg8000_url
+from .conftest import _owner_url
 
 pytestmark = pytest.mark.integration
 
@@ -270,7 +270,8 @@ def test_concurrent_different_spaces_stay_isolated(engine, pg_container):
     """
     from sqlalchemy import create_engine, text
 
-    url = _sync_pg8000_url(pg_container)
+    # Owner (non-superuser) DSN: the superuser DSN would bypass RLS entirely.
+    url = _owner_url(pg_container)
 
     # Force a single shared physical connection.
     pooled = create_engine(
@@ -367,36 +368,27 @@ APP_ROLE = "app_user_rls_test"
 
 @contextlib.contextmanager
 def _as_role(engine, role: str):
-    """Yield a connection in an open transaction with ``SET ROLE <role>`` applied,
-    guaranteeing ``RESET ROLE`` runs before the connection returns to the pool.
+    """Yield a connection in an open transaction with ``SET LOCAL ROLE <role>``.
 
-    ``SET ROLE`` is SESSION-scoped (not transaction-local), so a leaked role on a
-    pooled connection would corrupt later tests. This helper:
-      - opens an explicit transaction and applies SET ROLE,
-      - on clean exit: commits, then RESET ROLE on a fresh statement,
-      - on exception (e.g. a row-security violation that aborts the tx): rolls
-        back FIRST (clearing the aborted state) so the subsequent RESET ROLE
-        succeeds and does NOT mask the original error, then re-raises.
-
-    Using a manual begin()/commit() (rather than ``engine.begin()``) is what lets
-    us run RESET ROLE on a non-aborted connection in both paths.
+    ``SET LOCAL ROLE`` is TRANSACTION-local: the role reverts automatically on
+    commit AND on rollback, so nothing ever leaks onto the pooled connection.
+    (The previous SET ROLE + manual RESET ROLE shape leaked: the RESET ran in a
+    fresh implicit transaction that the pool then ROLLED BACK on release —
+    SET/RESET ROLE are transactional — leaving the physical connection stuck as
+    <role> and corrupting every later test that drew it from the pool.)
     """
     from sqlalchemy import text
 
     conn = engine.connect()
     trans = conn.begin()
     try:
-        conn.execute(text(f"SET ROLE {role}"))
+        conn.execute(text(f"SET LOCAL ROLE {role}"))
         yield conn
         trans.commit()
     except Exception:
-        trans.rollback()  # clear any aborted-tx state before RESET ROLE
+        trans.rollback()
         raise
     finally:
-        try:
-            conn.execute(text("RESET ROLE"))
-        except Exception:  # noqa: BLE001 -- best-effort; connection is disposed next
-            pass
         conn.close()
 
 

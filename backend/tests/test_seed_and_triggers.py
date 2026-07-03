@@ -112,11 +112,12 @@ def _superadmin_sessionmaker(engine):
     ``current_user = 'app_superadmin'``.
 
     ``conftest._ensure_app_superadmin`` already creates that LOGIN role in the
-    container. Rather than re-authenticate as it, we ``SET ROLE
+    container. Rather than re-authenticate as it, we ``SET LOCAL ROLE
     app_superadmin`` at the start of every transaction on this sessionmaker's
     sessions, which flips ``current_user`` to ``app_superadmin`` so the bypass
-    policy matches. ``SET ROLE`` is reset automatically at transaction end, so
-    this never leaks onto other sessions sharing the pool.
+    policy matches. ``SET LOCAL ROLE`` (unlike plain ``SET ROLE``, which is
+    session-scoped and DOES leak onto pooled connections) reverts automatically
+    at transaction end.
     """
     from sqlalchemy import event, text
     from sqlalchemy.orm import sessionmaker
@@ -125,13 +126,21 @@ def _superadmin_sessionmaker(engine):
 
     @event.listens_for(maker, "after_begin")
     def _set_superadmin_role(session, transaction, connection):  # noqa: ANN001
-        connection.execute(text("SET ROLE app_superadmin"))
+        connection.execute(text("SET LOCAL ROLE app_superadmin"))
 
     return maker
 
 
 def _count(conn, table: str) -> int:
     return conn.execute(text(f"SELECT count(*) FROM nestor.{table}")).scalar_one()
+
+
+def _count_in_space(conn, table: str, col: str, space_id: str) -> int:
+    """Count rows in ``table`` where ``col`` equals the given space id."""
+    return conn.execute(
+        text(f"SELECT count(*) FROM nestor.{table} WHERE {col} = :sid"),
+        {"sid": space_id},
+    ).scalar_one()
 
 
 @contextlib.contextmanager
@@ -147,7 +156,7 @@ def _superadmin_connect(engine):
     leaks onto pooled connections (CR-02).
     """
     with engine.begin() as conn:
-        conn.execute(text("SET ROLE app_superadmin"))
+        conn.execute(text("SET LOCAL ROLE app_superadmin"))
         yield conn
 
 
@@ -169,13 +178,40 @@ def _func_exists(conn, name: str) -> bool:
 # (a) production-empty baseline
 # ---------------------------------------------------------------------------
 def test_all_tables_empty_after_migrate(engine):
-    """Right after ``upgrade head`` every table is empty (INFRA-02)."""
-    with engine.connect() as conn:
-        for table in _ALL_TABLES:
-            assert _count(conn, table) == 0, (
-                f"{table} is NOT empty after upgrade head — a migration is "
-                "smuggling in seed data (INFRA-02 violated)."
-            )
+    """Right after ``upgrade head`` every table is empty (INFRA-02).
+
+    Runs against a FRESH scratch database: the shared session-scoped DB
+    accumulates rows from suites that ran earlier in the same session, so a
+    global count there says nothing about what the MIGRATIONS created. The
+    owner role has CREATEDB (conftest bootstrap) precisely for this check.
+    """
+    from sqlalchemy import create_engine, text
+
+    from .conftest import _run_migrations
+
+    scratch = "nestor_infra02_check"
+
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
+        conn.execute(text(f'CREATE DATABASE "{scratch}"'))
+
+    scratch_eng = create_engine(
+        engine.url.set(database=scratch), echo=False, future=True
+    )
+    try:
+        _run_migrations(scratch_eng)
+        with scratch_eng.connect() as conn:
+            for table in _ALL_TABLES:
+                assert _count(conn, table) == 0, (
+                    f"{table} is NOT empty after upgrade head — a migration is "
+                    "smuggling in seed data (INFRA-02 violated)."
+                )
+    finally:
+        scratch_eng.dispose()
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            conn.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
 
 
 # ---------------------------------------------------------------------------
@@ -197,16 +233,20 @@ def test_seed_populates_and_is_idempotent(engine):
         assert first["intake_template"] == "created"
 
         # Read back as app_superadmin: intake_templates is FORCE-RLS, so an
-        # owner connection with no space GUC would count 0 (CR-02).
+        # owner connection with no space GUC would count 0 (CR-02). Counts are
+        # scoped to the seed's fixed DEV_SPACE_ID — the shared session DB may
+        # hold residue from suites that ran earlier.
+        sid = str(seed_mod.DEV_SPACE_ID)
         with _superadmin_connect(engine) as conn:
-            assert _count(conn, "organizations") == 1
-            assert _count(conn, "intake_templates") == 1
+            assert _count_in_space(conn, "organizations", "id", sid) == 1
+            assert _count_in_space(conn, "intake_templates", "space_id", sid) == 1
             assert (
                 conn.execute(
                     text(
                         "SELECT count(*) FROM nestor.organization_memberships "
-                        "WHERE role = 'superadmin'"
-                    )
+                        "WHERE role = 'superadmin' AND organization_id = :sid"
+                    ),
+                    {"sid": sid},
                 ).scalar_one()
                 == 1
             )
@@ -218,16 +258,30 @@ def test_seed_populates_and_is_idempotent(engine):
         assert second["intake_template"] == "exists"
 
         with _superadmin_connect(engine) as conn:
-            assert _count(conn, "organizations") == 1
-            assert _count(conn, "intake_templates") == 1
+            assert _count_in_space(conn, "organizations", "id", sid) == 1
+            assert _count_in_space(conn, "intake_templates", "space_id", sid) == 1
     finally:
-        # Restore the production-empty baseline for any later test. Delete as
-        # app_superadmin so the FORCE-RLS intake_templates rows are actually
-        # removed (an owner DELETE with no GUC matches no rows).
+        # Remove ONLY the seeded space (scoped — other suites' rows are not
+        # ours to delete). Delete as app_superadmin so the FORCE-RLS
+        # intake_templates rows are actually removed (an owner DELETE with no
+        # GUC matches no rows).
+        sid = str(_load_seed_module().DEV_SPACE_ID)
         with _superadmin_connect(engine) as conn:
-            conn.execute(text("DELETE FROM nestor.intake_templates"))
-            conn.execute(text("DELETE FROM nestor.organization_memberships"))
-            conn.execute(text("DELETE FROM nestor.organizations"))
+            conn.execute(
+                text("DELETE FROM nestor.intake_templates WHERE space_id = :sid"),
+                {"sid": sid},
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM nestor.organization_memberships "
+                    "WHERE organization_id = :sid"
+                ),
+                {"sid": sid},
+            )
+            conn.execute(
+                text("DELETE FROM nestor.organizations WHERE id = :sid"),
+                {"sid": sid},
+            )
 
 
 # ---------------------------------------------------------------------------
