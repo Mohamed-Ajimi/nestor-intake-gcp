@@ -169,7 +169,11 @@ def _run_migrations(engine: Any) -> None:
         return
 
     cfg = Config(alembic_ini)
-    cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # render_as_string(hide_password=False): str(engine.url) masks the password
+    # as literal "***", which Alembic would then use as the real password.
+    cfg.set_main_option(
+        "sqlalchemy.url", engine.url.render_as_string(hide_password=False)
+    )
     command.upgrade(cfg, "head")
 
 
