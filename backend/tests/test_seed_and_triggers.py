@@ -185,15 +185,34 @@ def test_all_tables_empty_after_migrate(engine):
     global count there says nothing about what the MIGRATIONS created. The
     owner role has CREATEDB (conftest bootstrap) precisely for this check.
     """
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import create_engine
 
     from .conftest import _run_migrations
 
     scratch = "nestor_infra02_check"
 
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        conn.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
-        conn.execute(text(f'CREATE DATABASE "{scratch}"'))
+    def _autocommit_sql(*statements: str) -> None:
+        """Run CREATE/DROP DATABASE on the raw pg8000 connection in autocommit.
+
+        These statements refuse to run inside a transaction block (25001), and
+        the driver-level ``autocommit`` flag is the only mode pg8000 guarantees
+        never wraps an execute in an implicit BEGIN.
+        """
+        raw = engine.raw_connection()
+        try:
+            raw.driver_connection.autocommit = True
+            cur = raw.cursor()
+            for stmt in statements:
+                cur.execute(stmt)
+            cur.close()
+        finally:
+            raw.driver_connection.autocommit = False
+            raw.close()
+
+    _autocommit_sql(
+        f'DROP DATABASE IF EXISTS "{scratch}"',
+        f'CREATE DATABASE "{scratch}"',
+    )
 
     scratch_eng = create_engine(
         engine.url.set(database=scratch), echo=False, future=True
@@ -208,10 +227,7 @@ def test_all_tables_empty_after_migrate(engine):
                 )
     finally:
         scratch_eng.dispose()
-        with engine.connect().execution_options(
-            isolation_level="AUTOCOMMIT"
-        ) as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
+        _autocommit_sql(f'DROP DATABASE IF EXISTS "{scratch}"')
 
 
 # ---------------------------------------------------------------------------

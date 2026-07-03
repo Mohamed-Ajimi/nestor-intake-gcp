@@ -499,7 +499,13 @@ def test_template_clone_and_edit_schema(engine, monkeypatch, superadmin_engine):
                 f"template schema edit should be 200, got {edit.status_code} ({edit.text!r})"
             )
             # The clone is scoped to the target space (TENANT — clone lands in the right org).
-            with engine.connect() as conn:
+            # intake_templates is FORCE-RLS and the owner engine is policy-bound: the
+            # verification read needs the space GUC set in the same transaction.
+            with engine.begin() as conn:
+                conn.execute(
+                    text("SELECT set_config('app.current_space_id', :sid, true)"),
+                    {"sid": str(space_id)},
+                )
                 owner = conn.execute(
                     text(
                         f"SELECT space_id FROM {SCHEMA}.intake_templates WHERE id = :id"

@@ -235,7 +235,13 @@ def test_answers_batch_upsert(engine, monkeypatch):
         )
 
         # Exactly ONE row for (intake_id, field_key) and the value was UPDATED, not appended.
-        with engine.connect() as conn:
+        # The owner engine is policy-bound under FORCE RLS — the verification read
+        # needs the space GUC set in the same transaction to see the rows at all.
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_space_id', :sid, true)"),
+                {"sid": str(space_id)},
+            )
             rows = conn.execute(
                 text(
                     f"SELECT value FROM {SCHEMA}.intake_answers "

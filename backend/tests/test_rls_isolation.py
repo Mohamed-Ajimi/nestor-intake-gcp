@@ -493,13 +493,19 @@ def test_superadmin_bypass_writes_across_spaces(engine, set_space, two_spaces):
     This is the positive write side of the cross-tenant operator path; it would
     be RED if 0003 only added a USING (read) clause and forgot WITH CHECK.
 
+    Uses ``products`` (a trigger-free tenant table): an ``intakes`` INSERT fires
+    the 0008 answer-seeding trigger, whose SECURITY DEFINER child insert into
+    ``intake_answers`` is GUC-bound by contract (the app's superadmin write path
+    always sets the GUC to the target space — ``create_in_space``), so the pure
+    no-GUC bypass can only be proven on a table without insert triggers.
+
     We then read the rows back as the OWNER (per space, with the GUC) to confirm
     the inserts actually landed in the intended spaces.
     """
     from sqlalchemy import text
 
     space_a, space_b = two_spaces
-    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+    product_a, product_b = uuid.uuid4(), uuid.uuid4()
 
     try:
         with engine.begin() as conn:
@@ -510,41 +516,41 @@ def test_superadmin_bypass_writes_across_spaces(engine, set_space, two_spaces):
         with _as_role(engine, "app_superadmin") as conn:
             conn.execute(
                 text(
-                    f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
-                    "VALUES (:id, :sid, 'draft')"
+                    f"INSERT INTO {SCHEMA}.products (id, space_id, name) "
+                    "VALUES (:id, :sid, 'bypass-write-a')"
                 ),
-                {"id": intake_a, "sid": space_a},
+                {"id": product_a, "sid": space_a},
             )
             conn.execute(
                 text(
-                    f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
-                    "VALUES (:id, :sid, 'draft')"
+                    f"INSERT INTO {SCHEMA}.products (id, space_id, name) "
+                    "VALUES (:id, :sid, 'bypass-write-b')"
                 ),
-                {"id": intake_b, "sid": space_b},
+                {"id": product_b, "sid": space_b},
             )
 
         # Confirm each row landed in its intended space (read back as owner with
         # the matching GUC — the isolation policy scopes the owner per space).
         with engine.begin() as conn:
             set_space(conn, space_a)
-            ids_a = {r[0] for r in conn.execute(text(f"SELECT id FROM {SCHEMA}.intakes"))}
-            assert intake_a in ids_a, (
+            ids_a = {r[0] for r in conn.execute(text(f"SELECT id FROM {SCHEMA}.products"))}
+            assert product_a in ids_a, (
                 "0003 BYPASS BROKEN: app_superadmin's INSERT into space_a was "
                 "rejected or landed elsewhere (WITH CHECK current_user="
                 "'app_superadmin' must admit the write)."
             )
-            assert intake_b not in ids_a, (
+            assert product_b not in ids_a, (
                 "space_a session saw space_b's superadmin-inserted row — "
                 "isolation regression."
             )
         with engine.begin() as conn:
             set_space(conn, space_b)
-            ids_b = {r[0] for r in conn.execute(text(f"SELECT id FROM {SCHEMA}.intakes"))}
-            assert intake_b in ids_b, (
+            ids_b = {r[0] for r in conn.execute(text(f"SELECT id FROM {SCHEMA}.products"))}
+            assert product_b in ids_b, (
                 "0003 BYPASS BROKEN: app_superadmin's INSERT into space_b was "
                 "rejected or landed elsewhere."
             )
-            assert intake_a not in ids_b, (
+            assert product_a not in ids_b, (
                 "space_b session saw space_a's superadmin-inserted row — "
                 "isolation regression."
             )
