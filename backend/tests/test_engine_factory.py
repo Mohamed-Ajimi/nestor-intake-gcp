@@ -74,8 +74,12 @@ def test_factory_connector_mode(monkeypatch):
     # Patch the lazy import target inside _get_connector (imported there, not at module top).
     with patch("google.cloud.sql.connector.Connector", return_value=fake_connector) as ctor:
         engine = base.get_engine()
-        # Force a connection so the creator (and thus connector.connect) actually fires.
-        engine.connect()
+        # The connector branch builds a creator-backed engine on a host-less DSN.
+        assert engine.url.host is None
+        # Invoke the creator directly: a full engine.connect() would run real
+        # dialect initialization (SELECT version() etc.) against the MagicMock
+        # DBAPI connection and blow up — the creator IS the seam under test.
+        base._connector_creator()
 
     # The process-singleton Connector was constructed with the lazy refresh strategy.
     ctor.assert_called_once()
