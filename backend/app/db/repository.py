@@ -106,7 +106,13 @@ class TenantRepository(Generic[M]):
         stmt = self._scope(update(self.model).where(self.model.id == row_id)).values(
             **values
         )
-        result = self._s.execute(stmt)
+        # synchronize_session="fetch": the default "evaluate" strategy compares the
+        # str path-param row_id against the UUID attribute in Python (always False),
+        # so an already-loaded instance is NOT synced and a follow-up get() returns
+        # stale attributes (e.g. /submit responding with the pre-transition status).
+        result = self._s.execute(
+            stmt, execution_options={"synchronize_session": "fetch"}
+        )
         return result.rowcount
 
     @property
