@@ -101,15 +101,20 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
 
     def read_fn(session: Any) -> dict[str, Any]:
         intake = IntakeRepository(session, identity).get(intake_id)
+        if intake is None:
+            # Deleted-intake race after dispatch: don't burn the paid Claude call on a
+            # near-empty prompt and then crash on a NULL space — carry the missing
+            # sentinel through call_fn/write_fn to a failed finalize (mirrors apply.py).
+            return {"missing": True}
         answer_rows = IntakeAnswerRepository(session, identity).list_for_intake(intake_id)
         answers = [
             {"field_key": row.field_key, "value": row.value, "value_json": row.value_json}
             for row in answer_rows
         ]
-        client_name = intake.client_name if intake is not None else None
+        client_name = intake.client_name
         # The artifact's space comes from the intake's OWN space (the superadmin path has
         # no identity.space_id, so the row must carry the intake's space explicitly).
-        space_id = str(intake.space_id) if intake is not None else None
+        space_id = str(intake.space_id)
         user_message = _CONTEXT_PACK_USER_PREFIX + _format_intake_markdown(client_name, answers)
         return {
             "client_name": client_name,
@@ -119,6 +124,9 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
         }
 
     def call_fn(dto: dict[str, Any]) -> dict[str, Any]:
+        if dto.get("missing"):
+            # No Claude call for a vanished intake — surface the failure to write_fn.
+            return {"error": "Intake not found"}
         message = clients.anthropic_client().messages.create(
             model=model,
             max_tokens=_CONTEXT_PACK_MAX_TOKENS,
@@ -132,6 +140,17 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
         }
 
     def write_fn(session: Any, dto: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        if result.get("error"):
+            # Missing-intake sentinel: finalize failed with a clear diagnostic (D-09) —
+            # never a cryptic TypeError from a NULL-space artifact insert.
+            SkillRunRepository(session, identity).patch(
+                run_id,
+                status="failed",
+                error_message=result["error"],
+                completed_at=_now(),
+            )
+            return {"status": "failed", "error_message": result["error"]}
+
         raw = result["raw"]
         cost = estimate_cost_usd(result["input_tokens"], result["output_tokens"])
 

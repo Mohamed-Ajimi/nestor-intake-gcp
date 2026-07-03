@@ -126,11 +126,16 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
 
     def read_fn(session: Any) -> dict[str, Any]:
         intake = IntakeRepository(session, identity).get(intake_id)
+        if intake is None:
+            # Deleted-intake race after dispatch: don't burn the paid Claude call on a
+            # near-empty prompt — carry the missing sentinel through call_fn/write_fn
+            # to a failed finalize (mirrors apply.py).
+            return {"missing": True}
         # Capture the intake's OWN space for the superadmin write path (a superadmin
-        # identity has no space_id of its own — CR-01): None when the intake vanished.
-        space_id = str(intake.space_id) if intake is not None else None
+        # identity has no space_id of its own — CR-01).
+        space_id = str(intake.space_id)
         template_keys: list[str] = []
-        if intake is not None and intake.template_id is not None:
+        if intake.template_id is not None:
             tpl = IntakeTemplateRepository(session, identity).get(intake.template_id)
             if tpl is not None:
                 template_keys = _flatten_template_keys(tpl.schema)
@@ -160,6 +165,9 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         }
 
     def call_fn(dto: dict[str, Any]) -> dict[str, Any]:
+        if dto.get("missing"):
+            # No Claude call for a vanished intake — surface the failure to write_fn.
+            return {"error": "Intake not found"}
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
         message = clients.anthropic_client().messages.create(
             model=model,
@@ -174,6 +182,17 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         }
 
     def write_fn(session: Any, dto: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        if result.get("error"):
+            # Missing-intake sentinel: finalize failed with a clear diagnostic (D-09) —
+            # never an FK-violation dump in the operator-facing error_message.
+            SkillRunRepository(session, identity).patch(
+                run_id,
+                status="failed",
+                error_message=result["error"],
+                completed_at=_now(),
+            )
+            return {"status": "failed", "error_message": result["error"]}
+
         raw = result["raw"]
         cost = estimate_cost_usd(result["input_tokens"], result["output_tokens"])
         repo = SkillRunRepository(session, identity)
@@ -223,8 +242,9 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         answer_repo = IntakeAnswerRepository(session, identity)
         if identity.role == "superadmin":
             # A superadmin has no own space: write into the intake's OWN space (CR-01).
-            # A missing space (deleted-intake race after dispatch) finalizes the run
-            # failed rather than crashing on a NULL space_id write (D-09).
+            # Belt: the read-phase missing sentinel already short-circuits a vanished
+            # intake before the Claude call; this guards a NULL-space DTO ever reaching
+            # the write (finalize failed, never a NULL space_id write — D-09).
             if not dto["space_id"]:
                 msg = "Intake not found — no target space for the superadmin write"
                 repo.patch(run_id, status="failed", error_message=msg, **common)
