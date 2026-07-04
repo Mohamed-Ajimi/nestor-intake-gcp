@@ -146,7 +146,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Embeddings generation and semantic search run on Cloud Run with results filtered by `space_id` (an `EXPLAIN` shows index use with a tenant prefilter; a user's search never returns another space's artifacts)
   4. Audio transcription (Whisper) runs on Cloud Run
   5. AI/LLM calls release the DB session before the call and reopen to persist — no connection held across a 90–120s call
-**Plans**: TBD
+**Plans**: 8 plans (4 waves)
+  - [ ] 07-01-PLAN.md — Wave 0 RED test scaffold: 10 AI test modules + conftest fakes (faked external calls) (Wave 1)
+  - [ ] 07-02-PLAN.md — 0009 migration + 3 new models (intake_sources/transcripts/extracted_insights) + parity columns + repository subclasses (Wave 1)
+  - [ ] 07-03-PLAN.md — AI client seam: anthropic/openai SDKs + verbatim prompts + extract_json/cost ports + D-06 model-id config (Wave 1)
+  - [ ] 07-08-PLAN.md — Secret Manager API keys + Cloud Run CPU-always/min-instances=0 + deploy runbook + scope-guard regression (Wave 1)
+  - [ ] 07-04-PLAN.md — D-05 session-release helper (tenant_session/run_with_session_release) + search_artifacts + orphan sweep (Wave 2)
+  - [ ] 07-05-PLAN.md — ai_routes surface (7 endpoints) + apply-intake-skill (AI-01) + generate-context-pack (AI-02) + mount + sweep (Wave 3)
+  - [ ] 07-06-PLAN.md — Embeddings generation + semantic search, space-prefiltered (AI-04) (Wave 4)
+  - [ ] 07-07-PLAN.md — structure-answers + extract-insights (AI-03) + transcribe-audio (AI-05, faked audio) (Wave 4)
 
 ### Phase 8: SSE Skill-Run Progress
 **Goal**: Skill-run progress streams to the admin UI via a stateless, DB-backed Server-Sent Events endpoint, replacing the Supabase Realtime subscription.
@@ -156,7 +164,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. The admin UI receives live skill-run progress over a `text/event-stream` SSE endpoint and stops streaming on terminal status
   2. The SSE handler reads `skill_runs` state from Cloud SQL each tick (no in-memory state) so any instance can serve a reconnecting client
   3. The SSE stream is tenant-scoped — a user cannot stream another space's skill run
-**Plans**: TBD
+**Plans**: 3 plans (1 wave)
+  - [ ] 08-01-PLAN.md — Backend SSE stream + full-run read (D-08): stream_session helpers, async StreamingResponse endpoint, RED suites (Wave 1)
+  - [ ] 08-02-PLAN.md — Frontend SSE reader + SSE-first useActiveSkillRun (poll fallback) + un-stubbed useSkillRunFull + terminal refresh (Wave 1)
+  - [ ] 08-03-PLAN.md — Cloud Run 900s request timeout (main.tf) + deploy-runbook live-apply note (Wave 1)
 **UI hint**: yes
 
 ### Phase 9: GCS Storage
@@ -212,8 +223,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Tenant Isolation (Proven by Tests) | 0/4 | Not started | - |
 | 5. User & Space Management | 5/5 | Complete (live UAT) | 2026-06-29 |
 | 6. Intake CRUD Parity & Frontend API Seam | 11/13 | Gaps found (2 blockers) — gap plans 06-12/06-13 | 2026-06-29 |
-| 7. AI Function Ports | 0/TBD | Not started | - |
-| 8. SSE Skill-Run Progress | 0/TBD | Not started | - |
+| 7. AI Function Ports | 0/8 | Planned (8 plans, 4 waves) | - |
+| 8. SSE Skill-Run Progress | 0/3 | Planned (3 plans, 1 wave) | - |
 | 9. GCS Storage | 0/TBD | Not started | - |
 | 10. Notifications | 0/TBD | Not started | - |
 | 11. Internationalization (NL/FR/EN) | 0/TBD | Not started | - |
