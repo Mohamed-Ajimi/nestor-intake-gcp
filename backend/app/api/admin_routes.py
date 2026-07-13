@@ -40,6 +40,11 @@ from app.auth.identity import Identity
 from app.db import audit
 from app.db.admin_repo import AdminRepo
 from app.db.session import get_admin_session
+from app.mail import render as mail_render
+from app.mail import resend as mail_resend
+
+# Dutch subject for the set-password invite mail (the ONLY link-carrying mail, D-09).
+_INVITE_SUBJECT = "Welkom bij Nestor Pulse — stel je wachtwoord in"
 
 # The admin feature router. NO auth dependency of its own — mounted UNDER
 # protected_router in app/main.py, and each handler additionally Depends(get_admin_session)
@@ -262,6 +267,60 @@ def reactivate_user(
 
     membership = repo.get_membership(membership_id)
     return _user_view(membership)
+
+
+class MailResult(BaseModel):
+    """Invite-mail response — a bare success flag, NEVER the action link (D-03 / T-5-14).
+
+    The invite-mail endpoint SENDS the link (it does not hand it back to the browser),
+    so unlike ``InviteResult`` it carries no ``action_link`` — the link only ever lives in
+    the mail body and is never logged/audited.
+    """
+
+    success: bool
+
+
+@admin_router.post("/users/{membership_id}/invite-mail")
+def send_invite_mail(
+    membership_id: str,
+    repo: AdminRepo = Depends(get_admin_session),
+    identity: Identity = Depends(get_current_identity),
+) -> MailResult:
+    """Send a fresh-link set-password invite mail to a member (USER-01 / D-10 / QA-04).
+
+    Mirrors ``invite_user``'s compose-external-then-audit shape. ``repo.get_membership``
+    404-gates an unknown membership; a membership with NO email → 409 (do NOT send to
+    ``None``). A FRESH action link is regenerated per send (D-10 — ``generate_set_password_link``,
+    whose continue URL is the branded ``/auth/action`` handler from Task 2). The invite
+    body (the only link-carrying mail, D-09) is rendered and sent via the faked Resend
+    seam; a ``mail.sent`` audit row is written on the SAME session with structured
+    metadata ONLY (NEVER the action link — Phase-5 audit contract, T-5-16). One handler
+    serves both the InviteUserDialog resend and the member-list resend (D-10).
+    """
+    membership = repo.get_membership(membership_id)
+    if membership is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    if not membership.email:
+        # Never send to None — a membership without an email cannot be invited by mail.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Member has no email address to invite"
+        )
+
+    # Fresh action link per send (D-10). Its continue URL is /auth/action (Task 2).
+    action_link = admin_users.generate_set_password_link(membership.email)
+    html = mail_render.render_invite(cta_url=action_link)
+    mail_resend.send(to=[membership.email], subject=_INVITE_SUBJECT, html=html)
+
+    # QA-04 / T-5-16: audit on the SAME session — structured metadata ONLY, NEVER the link.
+    audit.log(
+        repo.session,
+        actor_uid=identity.uid,
+        event_type="mail.sent",
+        target=membership.provider_user_id or str(membership.id),
+        space_id=membership.organization_id,
+        metadata={"type": "invite"},
+    )
+    return MailResult(success=True)
 
 
 # ===========================================================================
