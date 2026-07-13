@@ -1,0 +1,20 @@
+{#
+  Validation-request / reminder mail — ported from buildValidationHtml
+  (send-pulse-mail.ts:132-149), incl. the isReminder greeting/intro branch.
+  NOTIF-01: cta_url is {app_base_url}/intake/{intake_id} — an intake-id app route,
+  NEVER a bearer validation token.
+#}{% extends "_base.html.j2" %}
+{% block content %}
+{% if is_reminder %}
+<h1>Korte herinnering</h1>
+<p>Eerder stuurden we de gevalideerde onderzoeksvragen door — heb je even tijd om ze door te lezen en goed te keuren?</p>
+{% else %}
+<h1>Hi {{ first_name or "team" }}</h1>
+<p>We hebben jullie intake doorgenomen en de onderzoeksvragen verfijnd. Plus we stelden enkele extra strategische vragen voor die jullie context scherper kunnen maken. Even bekijken en bevestigen?</p>
+{% endif %}
+<p>Het duurt ongeveer 10 minuten. Je ziet per vraag onze aangescherpte versie, plus eventuele extra vragen die we voorstellen. Per vraag kies je: <strong>goedkeuren</strong>, <strong>aanpassen</strong> of <strong>afkeuren</strong>.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open validatie-pagina →</a></p>
+<p style="margin-top: 24px;">Geen haast, maar zonder validatie kunnen we de research niet starten. Bij vragen of onduidelijkheden — gewoon reply op deze mail.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">Deze pagina is uniek voor jullie project ({{ project_title }}). Log in om te valideren.</div>
+{% endblock %}

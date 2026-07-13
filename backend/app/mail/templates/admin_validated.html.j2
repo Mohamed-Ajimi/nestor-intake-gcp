@@ -1,0 +1,13 @@
+{#
+  Admin "klant heeft gevalideerd" notification — ported from
+  buildAdminValidatedHtml (send-pulse-mail.ts:172-183).
+  NOTIF-01: cta_url is {app_base_url}/admin/pulse/intakes/{intake_id} — no token.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Admin{% endblock %}
+{% block content %}
+<h1>Klant heeft gevalideerd</h1>
+<p><strong>{{ client_name }}</strong> heeft de intake gevalideerd voor project &ldquo;{{ project_title }}&rdquo;.</p>
+<p>Status: <code>validated_by_client</code></p>
+<p>Volgende stap: Context Pack genereren en research starten.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open intake in admin →</a></p>
+{% endblock %}

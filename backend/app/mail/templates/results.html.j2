@@ -1,0 +1,20 @@
+{#
+  Results-ready mail — ported from buildResultsHtml (send-pulse-mail.ts:151-170).
+  NOTIF-01: cta_url is {app_base_url}/intake/{intake_id}/results — an intake-id app
+  route, NEVER a bearer results token.
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>De onderzoeksresultaten staan klaar</h1>
+<p>Hi {{ first_name or "team" }},</p>
+<p>Het onderzoek voor <strong>{{ project_title }}</strong> is afgerond. Het volledige rapport én de onderliggende research-artifacts staan klaar in jullie portaal.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open resultaten →</a></p>
+<p style="margin-top: 24px;">In het portaal vinden jullie:</p>
+<ul>
+  <li>Het strategische rapport (download als PDF of DOCX)</li>
+  <li>De onderliggende bronnen per onderzoeksvraag</li>
+  <li>Een semantische zoekfunctie om alle research te doorzoeken</li>
+</ul>
+<p>Bij vragen of als je een werksessie wil om de resultaten samen door te lopen — gewoon reply op deze mail.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">Log in op jullie portaal om de resultaten te bekijken.</div>
+{% endblock %}

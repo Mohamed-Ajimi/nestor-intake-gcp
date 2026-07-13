@@ -73,6 +73,22 @@ class Settings(BaseSettings):
     # Read at call time inside app/storage/gcs.py, never at module import.
     storage_bucket: str | None = None
 
+    # Notifications (Phase 10, NOTIF-01/02). Both NON-secret by design — the only
+    # mail secret is RESEND_API_KEY, which is read from os.environ at CALL TIME
+    # inside app/mail/resend.send() (never here, never logged — D-07 discipline,
+    # mirroring app/ai/clients.py).
+    #
+    # nestor_admin_email (env NESTOR_ADMIN_EMAIL, D-08): the single ops address the
+    # `admin_validated` mail targets ("klant heeft gevalideerd"). Legacy analog:
+    # send-pulse-mail.ts NESTOR_ADMIN_EMAIL.
+    nestor_admin_email: str | None = None
+
+    # app_base_url (env APP_BASE_URL): the origin for every mail CTA and the logo
+    # <img> in the mail templates. Legacy analog: send-pulse-mail.ts NESTOR_BASE_URL.
+    # Callers compose CTAs as {app_base_url}/intake/{intake_id} etc. (NOTIF-01: an
+    # intake-id app route, NEVER a bearer token).
+    app_base_url: str | None = None
+
     # AI model ids (Phase 7, D-06). These are MODEL IDENTIFIERS — non-secret — so
     # they belong in typed config and are env-overridable (MODEL_APPLY_INTAKE etc.)
     # to swap a renamed/upgraded model without a redeploy. The handlers resolve the
