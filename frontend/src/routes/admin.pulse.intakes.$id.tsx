@@ -9,6 +9,7 @@ import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, Chevr
 import { getIntake, submitIntake, reviewIntake } from "@/lib/api/intakes";
 import { listAnswers, saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { listSkillRuns } from "@/lib/api/skillRuns";
+import * as storage from "@/lib/api/storage";
 import { getTemplates } from "@/lib/api/templates";
 import type { IntakeField, IntakeSchema } from "@/lib/intake-types";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
@@ -196,6 +197,11 @@ function IntakeDetailPage() {
  const [draft, setDraft] = useState<Record<string, unknown>>({});
  const [initial, setInitial] = useState<Record<string, unknown>>({});
  const [saving, setSaving] = useState(false);
+ // WR-04: object paths whose backend delete is deferred until the edit draft is saved.
+ // A replaced/removed file in edit mode queues its old path here instead of deleting it
+ // immediately, so a Cancel leaves the persisted answer's object intact. Flushed after a
+ // successful save; cleared on cancel. A ref (not state) — it never drives rendering.
+ const pendingRemovals = useRef<string[]>([]);
  const [updatingStatus, setUpdatingStatus] = useState(false);
 
  const [skillLoading, setSkillLoading] = useState(false);
@@ -642,6 +648,9 @@ function IntakeDetailPage() {
  if (hasChanges) {
  if (!confirm("Niet-opgeslagen wijzigingen worden verwijderd. Doorgaan?")) return;
  }
+ // WR-04: drop queued deletes — the stored objects the draft would have removed must
+ // survive a cancel (the persisted answers still reference them).
+ pendingRemovals.current = [];
  setDraft(initial);
  setEditMode(false);
  };
@@ -663,11 +672,23 @@ function IntakeDetailPage() {
  return { field_key: key, value: null, value_json: val };
  });
  const res = await saveAnswers(intake.id, batch);
- setSaving(false);
  if (!res.success) {
+ setSaving(false);
  toast.error(`Opslaan mislukt: ${res.error}`);
  return;
  }
+ // WR-04: the draft is now persisted — it is finally safe to delete the objects that
+ // replaced/removed files pointed at. Fire AFTER the save succeeds; a failed delete is
+ // surfaced but does not undo the save (the answer no longer references the object).
+ const toRemove = pendingRemovals.current;
+ pendingRemovals.current = [];
+ if (toRemove.length > 0) {
+ const del = await storage.removeFile({ intakeId: intake.id, paths: toRemove });
+ if (!del.success) {
+ toast.error(`Oude bestanden opruimen mislukt: ${del.error}`);
+ }
+ }
+ setSaving(false);
  toast.success("Wijzigingen opgeslagen");
  setEditMode(false);
  await load();
@@ -1192,6 +1213,9 @@ function IntakeDetailPage() {
  value={draft[field.key]}
  onChange={(v) => setDraft((d) => ({ ...d, [field.key]: v }))}
  intakeId={intake.id}
+ onDeferRemove={(paths) => {
+ pendingRemovals.current.push(...paths);
+ }}
  />
  </div>
  );

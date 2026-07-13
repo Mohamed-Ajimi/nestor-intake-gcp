@@ -10,13 +10,20 @@ type Props = {
  intakeId: string;
  error?: string;
  disabled?: boolean;
+ // WR-04: when the field lives inside an unsaved edit draft (admin edit mode), the
+ // destructive server-side delete of a replaced/removed object must be DEFERRED until
+ // the draft is committed — otherwise a cancel leaves the persisted answer pointing at a
+ // deleted object. The parent supplies this to queue paths-to-remove; it flushes them
+ // after a successful save and drops them on cancel. When omitted (client save-as-you-go
+ // form, where every change persists immediately), the delete fires inline instead.
+ onDeferRemove?: (paths: string[]) => void;
 };
 
 const inputCls =
  "w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60";
 
 export function FieldRenderer(props: Props) {
- const { field, value, onChange, error, disabled } = props;
+ const { field, value, onChange, error, disabled, onDeferRemove } = props;
 
  return (
  <div className="space-y-2">
@@ -133,9 +140,9 @@ function FieldControl({ field, value, onChange, intakeId, disabled }: Props) {
  case "list":
  return <ListControl field={field} value={value} onChange={onChange} intakeId={intakeId} disabled={disabled} />;
  case "file":
- return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={false} disabled={disabled} />;
+ return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={false} disabled={disabled} onDeferRemove={onDeferRemove} />;
  case "files":
- return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={true} disabled={disabled} />;
+ return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={true} disabled={disabled} onDeferRemove={onDeferRemove} />;
  case "download":
  return <DownloadControl field={field} intakeId={intakeId} />;
  case "proposal_list":
@@ -362,6 +369,7 @@ function FileControl({
  intakeId,
  multi,
  disabled,
+ onDeferRemove,
 }: {
  field: IntakeField;
  value: any;
@@ -369,15 +377,24 @@ function FileControl({
  intakeId: string;
  multi: boolean;
  disabled?: boolean;
+ onDeferRemove?: (paths: string[]) => void;
 }) {
  const [uploading, setUploading] = useState<number | null>(null);
  // The server authors the stored key (D-05); the browser only tags a category.
  // Audio-accept fields land under "audio" (they seed intake_sources), all other
  // client attachments under "attachments".
+ // WR-03: classify audio via an EXPLICIT extension set mirroring the backend allowlist
+ // (backend/app/storage/keys.py ALLOWED_EXT) — the old ".mp" prefix wrongly matched
+ // .mp4 (video) and ".aac" was never in the server allowlist, so the picker implied a
+ // file the server then rejected with 415. Keep the server authoritative.
+ const AUDIO_EXTS = new Set([".m4a", ".mp3", ".wav", ".webm", ".ogg"]);
  const isAudioField =
  Array.isArray(field.accept) &&
  field.accept.length > 0 &&
- field.accept.every((a) => a.toLowerCase().startsWith("audio/") || a.toLowerCase().startsWith(".mp") || a.toLowerCase().startsWith(".wav") || a.toLowerCase().startsWith(".m4a") || a.toLowerCase().startsWith(".aac") || a.toLowerCase().startsWith(".ogg"));
+ field.accept.every((a) => {
+ const t = a.toLowerCase();
+ return t.startsWith("audio/") || AUDIO_EXTS.has(t);
+ });
  const category = isAudioField ? "audio" : "attachments";
 
  const files: any[] = multi ? (Array.isArray(value) ? value : []) : value ? [value] : [];
@@ -386,6 +403,21 @@ function FileControl({
  field.accept.length === 1 &&
  field.accept[0].toLowerCase() === ".pdf";
  const useSlots = multi && (field.max_files ?? 0) > 0 && (field.max_files ?? 0) <= 5;
+
+ // WR-04: destructive server-side deletes are DEFERRED to the parent's save when
+ // onDeferRemove is provided (edit-mode draft) — a cancel then leaves the stored object
+ // intact. Without it (client save-as-you-go), fire immediately but AWAIT and surface a
+ // toast on failure instead of the old fire-and-forget `void`.
+ const removeStoredObject = async (path: string) => {
+ if (onDeferRemove) {
+ onDeferRemove([path]);
+ return;
+ }
+ const res = await storage.removeFile({ intakeId, paths: [path] });
+ if (!res.success) {
+ toast.error(`Bestand verwijderen mislukt: ${res.error}`);
+ }
+ };
 
  const uploadOne = async (f: File): Promise<any | null> => {
  if (acceptOnlyPdf && !f.name.toLowerCase().endsWith(".pdf")) {
@@ -425,7 +457,7 @@ function FileControl({
  if (!uploaded) return;
  const next = [...files];
  if (replace && next[slotIndex]?.path) {
- void storage.removeFile({ intakeId, paths: [next[slotIndex].path] });
+ await removeStoredObject(next[slotIndex].path);
  }
  next[slotIndex] = uploaded;
  onChange(next.filter(Boolean));
@@ -458,7 +490,7 @@ function FileControl({
  const removeFile = async (idx: number) => {
  const f = files[idx];
  if (f?.path) {
- void storage.removeFile({ intakeId, paths: [f.path] });
+ await removeStoredObject(f.path);
  }
  if (multi) {
  onChange(files.filter((_, i) => i !== idx));
