@@ -22,7 +22,7 @@
   </head>
   <body>
     <div class="card">
-      <img src="{{ app_base_url }}/agenic-logo.png" alt="Agenic" class="logo" />
+      {% if app_base_url %}<img src="{{ app_base_url }}/agenic-logo.png" alt="Agenic" class="logo" />{% endif %}
       <div class="tag">{% block tag %}Nestor Pulse{% endblock %}</div>
       {% block content %}{% endblock %}
     </div>

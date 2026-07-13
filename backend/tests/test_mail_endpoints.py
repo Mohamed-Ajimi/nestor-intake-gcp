@@ -292,6 +292,8 @@ def test_timestamp_on_success_only(
             member_ok = _insert_member(conn, space_a, "ok@x.com")
             member_fail = _insert_member(conn, space_a, "fail@x.com")
 
+        # WR-01: APP_BASE_URL must be set or _run_intake_send refuses (success=False).
+        monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
@@ -339,6 +341,122 @@ def test_timestamp_on_success_only(
 
 
 # ===========================================================================
+# unset_app_base_url_refuses_send — no APP_BASE_URL -> refuse, no stamp (WR-01)
+# ===========================================================================
+
+
+def test_unset_app_base_url_refuses_send(
+    engine, set_space, two_spaces, monkeypatch, fake_resend
+):
+    """With APP_BASE_URL unset, a client-facing send is REFUSED (200 + success=False) — WR-01.
+
+    A relative `/intake/{id}` CTA is a dead link in every mail client and the logo renders
+    `None/agenic-logo.png`. The guard refuses BEFORE the send (like _send_admin_validated
+    refuses on an unset NESTOR_ADMIN_EMAIL): no mail reaches the seam, no sent-at is stamped,
+    and no mail.sent audit row is written.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, _b = two_spaces
+    intake_a = uuid.uuid4()
+
+    app = _build_intake_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "No Base URL Space")
+        with engine.begin() as conn:
+            _insert_intake(conn, set_space, space_a, intake_a)
+            member = _insert_member(conn, space_a, "b@x.com")
+
+        # Explicitly ensure APP_BASE_URL is UNSET for this case.
+        monkeypatch.delenv("APP_BASE_URL", raising=False)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.post(
+            f"/intakes/{intake_a}/mail/validation",
+            json={"recipients": [str(member)]},
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        assert resp.status_code == 200, "an unset-base-url refusal returns a 200 JSON body"
+        assert resp.json()["success"] is False, (
+            "WR-01: with APP_BASE_URL unset the send must be refused (success=False)"
+        )
+        assert fake_resend["calls"] == [], (
+            "WR-01: no mail may reach the seam when APP_BASE_URL is unset"
+        )
+        val_ts, res_ts = _read_intake_timestamps(engine, set_space, space_a, intake_a)
+        assert val_ts is None and res_ts is None, (
+            "WR-01: a refused send must NOT stamp any sent-at column"
+        )
+        assert _count_mail_sent_audit(engine, space_a) == 0, (
+            "WR-01: a refused send must NOT write a mail.sent audit row"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a)
+
+
+# ===========================================================================
+# members_read_excludes_null_email — email-less active member filtered (WR-02)
+# ===========================================================================
+
+
+def test_members_read_excludes_null_email(
+    engine, set_space, two_spaces, monkeypatch, fake_resend
+):
+    """GET /intakes/{id}/members EXCLUDES an ACTIVE member whose email is NULL (WR-02).
+
+    An email-less active membership can never be a recipient (the send resolver would 422 the
+    whole batch), and the RecipientPicker preselects every returned row — so an unfilterable
+    NULL-email row would make the one-click default send fail with an opaque 422 and render a
+    blank checkbox. Filtering it out of the read keeps the picker clean and sendable.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_a, _b = two_spaces
+    intake_a = uuid.uuid4()
+
+    app = _build_intake_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "Null Email Space")
+        with engine.begin() as conn:
+            _insert_intake(conn, set_space, space_a, intake_a)
+            has_email = _insert_member(conn, space_a, "has@x.com", status="active")
+            # An ACTIVE membership with a NULL email (email column is nullable).
+            no_email = uuid.uuid4()
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.organization_memberships "
+                    "(id, organization_id, provider_user_id, email, role, status) "
+                    "VALUES (:id, :org, :uid, NULL, 'user', 'active')"
+                ),
+                {"id": no_email, "org": space_a, "uid": f"pu-{no_email}"},
+            )
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.get(
+            f"/intakes/{intake_a}/members",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        assert resp.status_code == 200, f"members read should be 200, got {resp.status_code}"
+        ids = {r["id"] for r in resp.json()}
+        assert str(has_email) in ids, "an active member WITH an email must appear"
+        assert str(no_email) not in ids, (
+            "WR-02: an active member with a NULL email must be EXCLUDED from the read"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a)
+
+
+# ===========================================================================
 # reminder_writes_no_timestamp — reminder send stamps nothing (legacy parity)
 # ===========================================================================
 
@@ -360,6 +478,7 @@ def test_reminder_writes_no_timestamp(
             _insert_intake(conn, set_space, space_a, intake_a)
             member = _insert_member(conn, space_a, "rem@x.com")
 
+        monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")  # WR-01
         _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
@@ -401,6 +520,7 @@ def test_results_stamps_results_sent_at(
             _insert_intake(conn, set_space, space_a, intake_a)
             member = _insert_member(conn, space_a, "res@x.com")
 
+        monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")  # WR-01
         _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
@@ -631,6 +751,88 @@ def test_invite_mail_no_email_returns_409(
             f"a member with no email must be 409, got {resp.status_code} ({resp.text!r})"
         )
         assert fake_resend["calls"] == [], "no mail may be sent when the member has no email"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+# ===========================================================================
+# invite_mail_send_failure — transport failure -> 200 + success:false, no audit (WR-04)
+# ===========================================================================
+
+
+def test_invite_mail_send_failure_returns_success_false(
+    engine, monkeypatch, superadmin_engine, fake_resend
+):
+    """A raised invite-mail send returns 200 + success=False and writes NO audit row (WR-04).
+
+    Mirrors _run_intake_send's contract: a Resend transport failure (or missing
+    RESEND_API_KEY) is caught and surfaced as HTTP 200 + {success: false} — NOT a raw 500 —
+    and the mail.sent audit row is written only on success (audit-on-success-only).
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    membership_id = uuid.uuid4()
+    action_link = "https://idp/action?oobCode=FAILCODE"
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Invite Fail Space")
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.organization_memberships "
+                    "(id, organization_id, provider_user_id, email, role, status) "
+                    "VALUES (:id, :org, 'fail-uid', 'fail-invitee@x.com', 'user', 'active')"
+                ),
+                {"id": membership_id, "org": space_id},
+            )
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        # Force the invite send to raise (simulates Resend non-2xx / missing key).
+        import app.mail.resend as resend_mod
+
+        def _raise(*, to, subject, html):  # noqa: ANN001
+            raise RuntimeError("resend 500 during invite")
+
+        monkeypatch.setattr(resend_mod, "send", _raise)
+
+        app = _build_admin_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        with patch.object(
+            admin_users, "generate_set_password_link", MagicMock(return_value=action_link)
+        ):
+            client = TestClient(app)
+            resp = client.post(
+                f"/admin/users/{membership_id}/invite-mail",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+
+        assert resp.status_code == 200, (
+            f"WR-04: a failed invite send returns a 200 JSON body, got {resp.status_code} "
+            f"({resp.text!r})"
+        )
+        assert resp.json()["success"] is False, (
+            "WR-04: a raised invite send must report success=False (not a raw 500)"
+        )
+
+        # No mail.sent audit row may be written on a failed send (audit-on-success-only).
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_space_id', :sid, true)"),
+                {"sid": str(space_id)},
+            )
+            count = conn.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.audit_log "
+                    "WHERE event_type = 'mail.sent'"
+                )
+            ).scalar_one()
+        assert count == 0, (
+            "WR-04: a failed invite send must NOT write a mail.sent audit row"
+        )
     finally:
         app.dependency_overrides.clear()
         _cleanup_spaces(engine, space_id)

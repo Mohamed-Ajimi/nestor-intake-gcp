@@ -63,6 +63,7 @@ from app.db.models.membership import OrganizationMembership
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
+    ResearchArtifactRepository,
     SkillRunRepository,
 )
 from app.mail import render as mail_render
@@ -644,13 +645,25 @@ def list_members(
     for the read as for the sends — BEFORE any membership query. Then the ACTIVE members
     of the intake's OWN space are returned (deactivated members excluded). This reuses
     the same active-member query the send endpoints resolve against.
+
+    Email-less members are filtered out (``email IS NOT NULL``): an active membership with
+    no email can never be a recipient — ``_resolve_active_member_emails`` builds ``resolved``
+    only from rows ``if row.email`` and would 422-reject the whole send if such a row were
+    preselected by the picker. Excluding it here keeps the picker's preselect-all default
+    sendable and never renders a blank, label-less checkbox row (WR-02).
     """
     intake = repo.get(intake_id)
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     rows = (
-        repo.session.execute(_active_members_stmt(intake.space_id)).scalars().all()
+        repo.session.execute(
+            _active_members_stmt(intake.space_id).where(
+                OrganizationMembership.email.is_not(None)
+            )
+        )
+        .scalars()
+        .all()
     )
     return [
         MemberView(id=str(row.id), email=row.email, name=None) for row in rows
@@ -740,7 +753,17 @@ def _run_intake_send(
     emails = _resolve_active_member_emails(repo.session, intake.space_id, body.recipients)
 
     settings = get_settings()
-    base = (settings.app_base_url or "").rstrip("/")
+    # WR-01 / D-16: every client-facing CTA is `{app_base_url}/intake/...`. With
+    # APP_BASE_URL unset the link degrades to a relative `/intake/{id}` (dead in every mail
+    # client) and the logo renders `None/agenic-logo.png`. Refuse the send (like
+    # `_send_admin_validated` refuses when NESTOR_ADMIN_EMAIL is unset) so we NEVER stamp a
+    # sent-at for a broken mail — mirrors the transport-failure `{"success": False}` shape.
+    if not settings.app_base_url:
+        _log.warning(
+            "APP_BASE_URL unset — refusing mail send for intake %s", intake.id
+        )
+        return {"success": False}
+    base = settings.app_base_url.rstrip("/")
     client = intake.client_name or "team"
 
     if is_results:

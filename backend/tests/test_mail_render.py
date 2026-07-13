@@ -115,6 +115,34 @@ def test_autoescape_guards_project_title():
     assert "&lt;script&gt;" in html
 
 
+def test_logo_omitted_when_app_base_url_unset():
+    """With app_base_url falsy the logo <img> is omitted — never `src="None/..."` (WR-01)."""
+    cta = f"{_BASE}/intake/{_INTAKE_ID}"
+    html = render.render_validation(
+        first_name="Sam",
+        project_title="Project Phoenix",
+        cta_url=cta,
+        is_reminder=False,
+        app_base_url=None,
+    )
+    # The literal broken logo URL must NOT appear; the img is skipped entirely.
+    assert "None/agenic-logo.png" not in html
+    assert "agenic-logo.png" not in html
+
+
+def test_logo_rendered_when_app_base_url_set():
+    """With app_base_url set the logo <img> renders against the origin (WR-01 regression guard)."""
+    cta = f"{_BASE}/intake/{_INTAKE_ID}"
+    html = render.render_validation(
+        first_name="Sam",
+        project_title="Project Phoenix",
+        cta_url=cta,
+        is_reminder=False,
+        app_base_url=_BASE,
+    )
+    assert f"{_BASE}/agenic-logo.png" in html
+
+
 def test_fake_resend_captures_and_returns_fake_id(fake_resend):
     """fake_resend records {to, subject, html} and returns a deterministic id."""
     import app.mail.resend as resend_mod
