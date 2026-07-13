@@ -15,6 +15,7 @@ import { Route as IntakeIndexRouteImport } from './routes/intake.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as IntakeIdRouteImport } from './routes/intake.$id'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
+import { Route as AuthActionRouteImport } from './routes/auth.action'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminTemplatesRouteImport } from './routes/admin.templates'
 import { Route as AdminSpacesRouteImport } from './routes/admin.spaces'
@@ -72,6 +73,11 @@ const IntakeIdRoute = IntakeIdRouteImport.update({
 const AuthLoginRoute = AuthLoginRouteImport.update({
   id: '/auth/login',
   path: '/auth/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthActionRoute = AuthActionRouteImport.update({
+  id: '/auth/action',
+  path: '/auth/action',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
@@ -227,6 +233,7 @@ export interface FileRoutesByFullPath {
   '/admin/spaces': typeof AdminSpacesRoute
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
   '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin/': typeof AdminIndexRoute
@@ -260,6 +267,7 @@ export interface FileRoutesByTo {
   '/admin/spaces': typeof AdminSpacesRoute
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
   '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin': typeof AdminIndexRoute
@@ -297,6 +305,7 @@ export interface FileRoutesById {
   '/admin/spaces': typeof AdminSpacesRoute
   '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
   '/intake/$id': typeof IntakeIdRouteWithChildren
   '/admin/': typeof AdminIndexRoute
@@ -335,6 +344,7 @@ export interface FileRouteTypes {
     | '/admin/spaces'
     | '/admin/templates'
     | '/admin/users'
+    | '/auth/action'
     | '/auth/login'
     | '/intake/$id'
     | '/admin/'
@@ -368,6 +378,7 @@ export interface FileRouteTypes {
     | '/admin/spaces'
     | '/admin/templates'
     | '/admin/users'
+    | '/auth/action'
     | '/auth/login'
     | '/intake/$id'
     | '/admin'
@@ -404,6 +415,7 @@ export interface FileRouteTypes {
     | '/admin/spaces'
     | '/admin/templates'
     | '/admin/users'
+    | '/auth/action'
     | '/auth/login'
     | '/intake/$id'
     | '/admin/'
@@ -432,6 +444,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
+  AuthActionRoute: typeof AuthActionRoute
   AuthLoginRoute: typeof AuthLoginRoute
   IntakeIdRoute: typeof IntakeIdRouteWithChildren
   IntakeIndexRoute: typeof IntakeIndexRoute
@@ -479,6 +492,13 @@ declare module '@tanstack/react-router' {
       path: '/auth/login'
       fullPath: '/auth/login'
       preLoaderRoute: typeof AuthLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/action': {
+      id: '/auth/action'
+      path: '/auth/action'
+      fullPath: '/auth/action'
+      preLoaderRoute: typeof AuthActionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/users': {
@@ -798,6 +818,7 @@ const IntakeIdRouteWithChildren = IntakeIdRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
+  AuthActionRoute: AuthActionRoute,
   AuthLoginRoute: AuthLoginRoute,
   IntakeIdRoute: IntakeIdRouteWithChildren,
   IntakeIndexRoute: IntakeIndexRoute,
