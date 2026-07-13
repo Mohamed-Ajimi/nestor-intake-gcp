@@ -63,7 +63,7 @@ export function FieldRenderer(props: Props) {
  );
 }
 
-function FieldControl({ field, value, onChange, intakeId, disabled }: Props) {
+function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove }: Props) {
  switch (field.type) {
  case "text":
  return (
