@@ -259,6 +259,67 @@ def test_answers_batch_upsert(engine, monkeypatch):
         _cleanup_space(engine, space_id)
 
 
+def test_answers_value_json_accepts_any_json_value(engine, monkeypatch):
+    """value_json accepts arrays/booleans/numbers, not only objects (live-UAT regression).
+
+    The frontend routes EVERY non-string form value into ``value_json`` (arrays from
+    list/files fields, booleans, numbers) and the column is JSONB. A ``dict``-only
+    Pydantic annotation 422'd real section saves ('Opslaan mislukt', 2026-07-13 UAT).
+    The GET projection must round-trip the same shapes (AnswerView mirrors AnswerItem).
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Answers JSON Shapes Space")
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+        client = TestClient(app)
+
+        intake_id = client.post(
+            "/intakes",
+            json={"client_name": "JSON Shapes Co"},
+            headers={"Authorization": "Bearer ignored-overridden"},
+        ).json()["id"]
+
+        payload = {
+            "answers": [
+                {"field_key": "list_field", "value_json": ["alpha", "beta"]},
+                {"field_key": "files_field", "value_json": [{"path": "k", "name": "f.pdf"}]},
+                {"field_key": "flag_field", "value_json": True},
+                {"field_key": "num_field", "value_json": 42},
+                {"field_key": "obj_field", "value_json": {"nested": "ok"}},
+            ]
+        }
+        saved = client.patch(
+            f"/intakes/{intake_id}/answers",
+            json=payload,
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert saved.status_code == 200, (
+            f"non-dict value_json shapes must be accepted (JSONB column), "
+            f"got {saved.status_code} ({saved.text!r})"
+        )
+
+        read = client.get(
+            f"/intakes/{intake_id}/answers",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert read.status_code == 200, f"answers read should be 200, got {read.status_code}"
+        by_key = {a["field_key"]: a.get("value_json") for a in read.json()}
+        assert by_key.get("list_field") == ["alpha", "beta"]
+        assert by_key.get("files_field") == [{"path": "k", "name": "f.pdf"}]
+        assert by_key.get("flag_field") is True
+        assert by_key.get("num_field") == 42
+        assert by_key.get("obj_field") == {"nested": "ok"}
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
 # ===========================================================================
 # (c) transitions — the allow-listed path succeeds; a forbidden jump -> 409
 # ===========================================================================

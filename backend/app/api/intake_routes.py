@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -120,7 +121,9 @@ class AnswerView(BaseModel):
 
     field_key: str
     value: str | None = None
-    value_json: dict | None = None
+    # Any JSON value, not just objects — the frontend routes every non-string form value
+    # here (arrays from list/files fields, booleans, numbers) and the column is JSONB.
+    value_json: Any = None
 
 
 class AnswerItem(BaseModel):
@@ -130,7 +133,9 @@ class AnswerItem(BaseModel):
 
     field_key: str
     value: str | None = None
-    value_json: dict | None = None
+    # Mirrors AnswerView: any JSON value (arrays/booleans/numbers), matching the JSONB
+    # column and the frontend's string->value / everything-else->value_json split.
+    value_json: Any = None
 
 
 class AnswerBatch(BaseModel):
