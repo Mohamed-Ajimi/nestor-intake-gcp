@@ -561,6 +561,15 @@ function IntakeDetailPage() {
         toast.error(`Versturen mislukt: ${res.error}`);
         return;
       }
+      // D-16: the backend returns HTTP 200 with `{ success: false }` when the Resend
+      // transport fails (no sent-at stamped, no audit row). `res.success` is only the
+      // transport-level flag (true on any 2xx), so we MUST inspect the body-level
+      // `res.data.success` — otherwise a failed send toasts success and the operator
+      // never learns the client didn't get the mail.
+      if (!res.data.success) {
+        toast.error("Versturen mislukt — de mail is niet verstuurd. Probeer opnieuw.");
+        return; // keep the picker open so the operator can retry
+      }
       toast.success("E-mail verstuurd.");
       setMailPickerType(null);
       // Refresh the intake so the sent-at markers (validation/results) re-drive the phase.
