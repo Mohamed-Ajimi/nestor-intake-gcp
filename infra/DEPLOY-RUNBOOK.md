@@ -385,6 +385,97 @@ Step-9.4 image rebuild did not include `google-cloud-storage` / `python-multipar
 
 ---
 
+## Phase 10 — Notifications: Resend secret + mail env vars + jinja2 image rebuild
+
+Phase 10 adds the transactional-email (Resend) send path. The mail module (Plan 01) and
+the endpoints (Plan 03) are **inert live** until the `RESEND_API_KEY` secret and the two
+non-secret mail env vars exist on Cloud Run **and** the image is rebuilt to include
+`jinja2`. `RESEND_API_KEY` is the ONLY new secret this phase adds (`agenic.be` sender
+domain already verified, D-13).
+
+> **⚠️ IaC-DRIFT (same reality as the Phase 5/7/8/9 notes above).** The `infra/main.tf`
+> `google_secret_manager_secret.resend_api_key` trio (secret + version + resource-scoped
+> secretAccessor), the `RESEND_API_KEY` `secret_key_ref` env, and the plain
+> `NESTOR_ADMIN_EMAIL` / `APP_BASE_URL` envs are the INTENDED end-state only — they are
+> INERT until applied out-of-band via the steps below. Reconcile via `terraform import`
+> (or keep manual) **before the Phase 12 cutover**.
+
+### Step 10.1 — Create the Resend secret (resource) + add the key VALUE (out-of-band)
+
+```bash
+# Create the secret container (empty — no version yet). Mirrors the Phase-7 Step-1 idiom.
+gcloud secrets create nestor-resend-api-key \
+  --replication-policy=automatic --project="$GOOGLE_PROJECT" 2>/dev/null || true
+
+# Resource-scoped secretAccessor to the runtime SA (least privilege — NOT project-wide).
+export RUNTIME_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+gcloud secrets add-iam-policy-binding nestor-resend-api-key \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/secretmanager.secretAccessor" --project="$GOOGLE_PROJECT"
+
+# Add the key VALUE as a secret version. Reads from stdin; paste the key, then Ctrl-D.
+# The value is added OUT-OF-BAND and is NEVER committed / echoed / logged (T-10-04).
+gcloud secrets versions add nestor-resend-api-key --data-file=- --project="$GOOGLE_PROJECT"
+```
+
+### Step 10.2 — Set the two non-secret mail env vars on the live service
+
+```bash
+# NESTOR_ADMIN_EMAIL = the ops address that receives the admin_validated notification (D-08).
+# APP_BASE_URL       = the deployed frontend origin used to build mail CTA links + logo URL (D-15).
+# Plain non-secret envs (the live equivalent of the main.tf env { name = "NESTOR_ADMIN_EMAIL" … }
+# / "APP_BASE_URL" blocks — inert until this command runs).
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --update-env-vars="NESTOR_ADMIN_EMAIL=<ops address>,APP_BASE_URL=<deployed frontend origin>"
+```
+
+### Step 10.3 — Map the RESEND_API_KEY secret to the service env (if not applied by Terraform)
+
+```bash
+# Native Secret Manager injection — gcloud stores the secret REFERENCE, never the value.
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --update-secrets="RESEND_API_KEY=nestor-resend-api-key:latest"
+```
+
+### Step 10.4 — REBUILD the backend image with `jinja2` (Cloud Build) — the recurring deploy-gap
+
+The running container does **not** contain `jinja2` until rebuilt (**RESEARCH Pitfall 2** —
+the same image-only-redeploy gap as Phase 7/8/9). CI can be green while a live mail send
+500s with `ModuleNotFoundError: jinja2` in UAT if this step is skipped. Reuse the
+Step-3/8.1/9.4 Cloud Build idiom (never a local `docker build` — downloads are blocked on
+the dev box), then repoint the service:
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build (pulls the new jinja2 dep into the image), then repoint.
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"
+```
+
+### Step 10.5 — Live mail UAT: trigger each mail type against the deployed rev
+
+Trigger each of the five mail types on the deployed service and inspect the inbox for
+visual parity + a working (authenticated, tokenless) CTA:
+
+1. **invite** — send an invite; confirm the "Kies je wachtwoord" CTA points to the
+   authenticated app route (no token, NOTIF-01).
+2. **validation** — send the validation-link mail; confirm `validation_link_sent_at`
+   updates **only on successful send** (D-16).
+3. **results** — send the results-link mail; confirm `results_link_sent_at` updates only
+   on success.
+4. **reminder** — send a reminder; confirm the body + CTA render.
+5. **admin_validated** — confirm the ops address (`NESTOR_ADMIN_EMAIL`) receives the
+   admin notification.
+
+Failure triage: a mail endpoint **500** with `ModuleNotFoundError: jinja2` → the Step-10.4
+image rebuild did not ship `jinja2` (**Pitfall 2**). A **broken logo / dead CTA** →
+`APP_BASE_URL` is unset or wrong (Step 10.2). An **auth error reaching Resend** →
+`RESEND_API_KEY` secret version missing or not mapped (Steps 10.1 / 10.3).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -401,4 +492,9 @@ Step-9.4 image rebuild did not include `google-cloud-storage` / `python-multipar
 - [ ] Step 9.3 — `roles/iam.serviceAccountTokenCreator` self-binding on the runtime SA for keyless signBlob (criterion 1, T-09-13; separate grant per Pitfall 2)
 - [ ] Step 9.4 — image rebuilt via Cloud Build with `google-cloud-storage` + `python-multipart` AND the Phase-8 stream route, service repointed + `STORAGE_BUCKET` env set (Pitfall 7; live is still v12)
 - [ ] Step 9.5 — combined 7+8+9 UAT: attachment + audio upload → transcribe → SSE-streamed apply-intake-skill → signed-URL download (attachment disposition, ≤15-min TTL); no SA JSON key anywhere (D-13)
-- [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover (now extended with the Phase-9 storage resources)
+- [ ] Step 10.1 — `nestor-resend-api-key` secret created + resource-scoped secretAccessor to the runtime SA + key VALUE added out-of-band (never committed/echoed, T-10-04)
+- [ ] Step 10.2 — `NESTOR_ADMIN_EMAIL` + `APP_BASE_URL` plain non-secret envs set live via `--update-env-vars` (D-08/D-15; the `main.tf` edits alone are inert per drift)
+- [ ] Step 10.3 — `RESEND_API_KEY=nestor-resend-api-key:latest` mapped to the service env (native secret injection; reference only, never the value)
+- [ ] Step 10.4 — backend image rebuilt via Cloud Build with `jinja2`, service repointed (Pitfall 2 — green CI but a 500 `ModuleNotFoundError: jinja2` in UAT if skipped)
+- [ ] Step 10.5 — live mail UAT: trigger invite, validation, results, reminder, admin_validated against the deployed rev and inspect the inbox (visual parity + tokenless CTA)
+- [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover (now extended with the Phase-9 storage + Phase-10 Resend resources)
