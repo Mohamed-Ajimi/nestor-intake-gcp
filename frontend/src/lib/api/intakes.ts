@@ -76,3 +76,55 @@ export function submitIntake(id: string): Promise<ApiResult<Intake>> {
 export function reviewIntake(id: string): Promise<ApiResult<Intake>> {
   return apiFetch<Intake>(`/intakes/${id}/review`, { method: "POST" });
 }
+
+// ---------------------------------------------------------------------------
+// Notification mail — members read + discrete send verbs (Plan 10-03/04)
+// ---------------------------------------------------------------------------
+//
+// SECURITY (D-06 / T-10-11): the send endpoints take ONLY server-issued membership
+// ids — never a free-text address. `listSpaceMembers` is the RecipientPicker's list
+// source; the backend re-validates every id against the intake's OWN active memberships
+// (a non-active-member id is a 422, never a silent drop).
+
+/**
+ * Active member of an intake's space. Mirrors the backend `MemberView`
+ * (intake_routes.py `GET /intakes/{id}/members`). `name` is currently always
+ * `null` (no name column on `organization_memberships`) — the picker labels on
+ * `name ?? email`.
+ */
+export type SpaceMember = {
+  id: string; // membership id — the send-endpoint recipient identifier
+  email: string;
+  name?: string | null;
+};
+
+/** The three client-facing send verbs (mirrors the backend route suffixes). */
+export type IntakeMailType = "validation" | "reminder" | "results";
+
+/** Bare success flag returned by the send endpoints (no link/token in the body). */
+export type MailResult = { success: boolean };
+
+/**
+ * List the ACTIVE members of the intake's space — the RecipientPicker's source.
+ * Hits `GET /intakes/{id}/members` (Plan 10-03 Task 1); a cross-space/unknown intake
+ * id is a 404 (existence-hidden), surfaced as `{ success: false }`.
+ */
+export function listSpaceMembers(intakeId: string): Promise<ApiResult<SpaceMember[]>> {
+  return apiFetch<SpaceMember[]>(`/intakes/${intakeId}/members`, { method: "GET" });
+}
+
+/**
+ * Send a client-facing mail (validation / reminder / results) to the selected
+ * active members. `recipients` are membership ids (D-06 — never addresses); the
+ * backend resolves the emails server-side and stamps the sent-at only on a 2xx send.
+ */
+export function sendIntakeMail(
+  intakeId: string,
+  type: IntakeMailType,
+  recipients: string[],
+): Promise<ApiResult<MailResult>> {
+  return apiFetch<MailResult>(`/intakes/${intakeId}/mail/${type}`, {
+    method: "POST",
+    body: JSON.stringify({ recipients }),
+  });
+}
