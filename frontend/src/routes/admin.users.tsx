@@ -125,6 +125,12 @@ function UsersPage() {
       toast.error(res.error);
       return;
     }
+    // WR-04 / D-16: HTTP 200 + `{ success: false }` on a Resend failure — check the
+    // body-level flag, not just the transport-level `res.success`.
+    if (!res.data.success) {
+      toast.error("Versturen mislukt — de uitnodigingsmail is niet verstuurd. Probeer opnieuw.");
+      return;
+    }
     toast.success("Uitnodigingsmail verstuurd");
   }
 

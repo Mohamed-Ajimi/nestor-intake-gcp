@@ -31,6 +31,8 @@ handlers in a threadpool (mirrors ``intake_routes.py`` / ``auth_routes.py``).
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
@@ -42,6 +44,8 @@ from app.db.admin_repo import AdminRepo
 from app.db.session import get_admin_session
 from app.mail import render as mail_render
 from app.mail import resend as mail_resend
+
+_log = logging.getLogger(__name__)
 
 # Dutch subject for the set-password invite mail (the ONLY link-carrying mail, D-09).
 _INVITE_SUBJECT = "Welkom bij Nestor Pulse — stel je wachtwoord in"
@@ -306,10 +310,19 @@ def send_invite_mail(
             status.HTTP_409_CONFLICT, "Member has no email address to invite"
         )
 
-    # Fresh action link per send (D-10). Its continue URL is /auth/action (Task 2).
-    action_link = admin_users.generate_set_password_link(membership.email)
-    html = mail_render.render_invite(cta_url=action_link)
-    mail_resend.send(to=[membership.email], subject=_INVITE_SUBJECT, html=html)
+    # WR-04 / D-16: mirror `_run_intake_send`'s failure discipline so the two send surfaces
+    # share ONE contract (HTTP 200 + `{success: false}` on transport failure, not a raw 500).
+    # Any transport failure — a Resend non-2xx (`raise_for_status`), a network error, a
+    # missing RESEND_API_KEY (`KeyError`), or an IdP failure generating the fresh link —
+    # returns `MailResult(success=False)` with NO audit row (audit-on-success-only).
+    try:
+        # Fresh action link per send (D-10). Its continue URL is /auth/action (Task 2).
+        action_link = admin_users.generate_set_password_link(membership.email)
+        html = mail_render.render_invite(cta_url=action_link)
+        mail_resend.send(to=[membership.email], subject=_INVITE_SUBJECT, html=html)
+    except Exception:  # noqa: BLE001 -- any transport/link failure is a non-send.
+        _log.warning("invite mail send failed for membership %s", membership_id)
+        return MailResult(success=False)
 
     # QA-04 / T-5-16: audit on the SAME session — structured metadata ONLY, NEVER the link.
     audit.log(

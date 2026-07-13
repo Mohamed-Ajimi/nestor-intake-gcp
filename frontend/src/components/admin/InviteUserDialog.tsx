@@ -134,6 +134,13 @@ export function InviteUserDialog({
       toast.error(res.error);
       return;
     }
+    // WR-04 / D-16: the backend returns HTTP 200 + `{ success: false }` on a Resend
+    // transport failure (or missing RESEND_API_KEY). `res.success` is only the transport
+    // flag — inspect the body-level flag so a failed send doesn't toast success.
+    if (!res.data.success) {
+      toast.error("Versturen mislukt — de uitnodigingsmail is niet verstuurd. Probeer opnieuw.");
+      return;
+    }
     setMailSent(true);
     toast.success("Uitnodigingsmail verstuurd");
   }
