@@ -753,3 +753,49 @@ def fake_gcs(monkeypatch):
         monkeypatch.setattr(storage_pkg, name, fake, raising=False)
 
     return calls
+
+
+# ===========================================================================
+# Phase 10 — fake_resend: the app.mail.resend.send seam faked (no network)
+# ===========================================================================
+#
+# Clones the fake_gcs / fake_anthropic discipline for the mail-egress seam: the
+# notification suites monkeypatch ``app.mail.resend.send`` with a capture-only
+# fake, so no test ever reaches the real Resend API or reads RESEND_API_KEY. The
+# fixture imports ``app.mail.resend`` LAZILY (importorskip inside the fixture
+# body), so conftest itself stays importable on a box without jinja2/httpx
+# installed. Plan 03's send-endpoint tests reuse this fixture.
+
+
+@pytest.fixture
+def fake_resend(monkeypatch):
+    """Monkeypatch ``app.mail.resend.send``; return the capture dict.
+
+    Usage::
+
+        def test_x(fake_resend, ...):
+            ...  # drive an endpoint that sends a mail
+            assert fake_resend["calls"][0]["subject"].startswith("Even valideren")
+
+    Captures (append-per-call to ``calls``): ``{to, subject, html}``. The fake
+    returns a deterministic ``"fake-resend-id"`` and performs NO network I/O.
+    Both the ``app.mail.resend`` module attribute AND any ``app.mail``
+    package-level re-export are patched (raising=False), so a consumer that bound
+    either name is intercepted.
+    """
+    resend_mod = pytest.importorskip("app.mail.resend")
+    mail_pkg = pytest.importorskip("app.mail")
+
+    calls: dict[str, list[dict[str, Any]]] = {"calls": []}
+
+    def _fake_send(*, to: list[str], subject: str, html: str) -> str:
+        calls["calls"].append({"to": to, "subject": subject, "html": html})
+        return "fake-resend-id"
+
+    monkeypatch.setattr(resend_mod, "send", _fake_send)
+    # Package-level re-export (if app.mail ever re-exports send) binds the
+    # ORIGINAL function object — patch it too (raising=False: tolerate a slim
+    # __init__ that does not re-export send).
+    monkeypatch.setattr(mail_pkg, "send", _fake_send, raising=False)
+
+    return calls
