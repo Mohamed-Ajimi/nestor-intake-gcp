@@ -63,6 +63,7 @@ from app.db.repository import (
 from app.db.session import (
     get_intake_and_answer_repos,
     get_intake_answer_repo,
+    get_research_artifact_repo,
     get_skill_run_repo,
     get_tenant_repo,
 )
@@ -190,6 +191,21 @@ class TemplateView(BaseModel):
     schema: dict | None = None
 
 
+class ContextPackView(BaseModel):
+    """Read-shaped view of ONE context-pack artifact — the briefing markdown the admin reads.
+
+    Projects ONLY in-scope, non-identifying fields (T-7-09-02): the id, the briefing
+    ``text_content``, its ``created_at``, and the free-text ``notes``. Deliberately carries
+    NO ``space_id``, no ``storage_bucket`` / ``storage_path``, and no cross-tenant identifier
+    (mirrors the ``SkillRunFullView`` projection discipline).
+    """
+
+    id: str
+    text_content: str | None = None
+    created_at: str | None = None
+    notes: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Projection helpers (no leakage — only in-scope fields)
 # ---------------------------------------------------------------------------
@@ -242,6 +258,16 @@ def _skill_run_view(run) -> SkillRunView:
         status=run.status,
         applied_at=(run.applied_at.isoformat() if run.applied_at else None),
         completed_at=(run.completed_at.isoformat() if run.completed_at else None),
+    )
+
+
+def _context_pack_view(artifact) -> ContextPackView:
+    """Project a ``ResearchArtifact`` (context-pack) ORM row — in-scope fields only."""
+    return ContextPackView(
+        id=str(artifact.id),
+        text_content=artifact.text_content,
+        created_at=(artifact.created_at.isoformat() if artifact.created_at else None),
+        notes=artifact.notes,
     )
 
 
@@ -452,6 +478,40 @@ def list_skill_runs(
         latest=_skill_run_view(latest) if latest is not None else None,
         runs=[_skill_run_view(run) for run in runs],
     )
+
+
+# ---------------------------------------------------------------------------
+# Context pack (read-only projection of the generated briefing — 07-09)
+# ---------------------------------------------------------------------------
+
+
+@intake_router.get("/{intake_id}/context-pack")
+def get_context_pack(
+    intake_id: str,
+    repo: ResearchArtifactRepository = Depends(get_research_artifact_repo),
+) -> dict:
+    """Return the generated context pack (latest + history) for an in-scope intake (07-09).
+
+    The generate-context-pack WRITE path lands a ``research_artifacts`` row
+    (``source="context-pack-generator"``, ``text_content`` = briefing markdown) but nothing
+    projected it — ``ContextPackBlock.loadLatest`` / ``loadHistory`` were stubbed. This is
+    that read surface.
+
+    EXISTENCE-HIDDEN (D-07 / T-7-09-01): the scoped repo applies the per-user space ``WHERE``
+    (omitted for superadmin via the 0003 bypass). A cross-tenant or missing intake matches
+    ZERO in-scope artifacts, so it reads ``{"latest": None, "history": []}`` — identical to an
+    in-scope intake that simply has no pack yet. Absence of a pack is NOT absence of the
+    intake, so this is a scoped-empty 200, never a 404 and never a distinguishable 403; a
+    stranger cannot tell "no pack" from "not your intake" (no BOLA/IDOR enumeration).
+    """
+    latest = repo.latest_context_pack_for_intake(intake_id)
+    if latest is None:
+        return {"latest": None, "history": []}
+    history = repo.list_context_packs_for_intake(intake_id)
+    return {
+        "latest": _context_pack_view(latest),
+        "history": [_context_pack_view(a) for a in history],
+    }
 
 
 # ---------------------------------------------------------------------------
