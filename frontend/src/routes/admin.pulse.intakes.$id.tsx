@@ -35,6 +35,7 @@ import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
+import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
 import {
   derivePhase,
   phaseShowsAIReview,
@@ -429,11 +430,9 @@ function IntakeDetailPage() {
  }, [sections]);
 
  const copyLink = async () => {
- if (!intake?.client_intake_token) {
- toast.error("Geen intake-token beschikbaar");
- return;
- }
- const url = `${window.location.origin}/intake/${intake.client_intake_token}`;
+ if (!intake) return;
+ // Authenticated client route since Phase 6 — /intake/{id}, no legacy bearer token.
+ const url = `${window.location.origin}/intake/${intake.id}`;
  try {
  await navigator.clipboard.writeText(url);
  toast.success("Link gekopieerd");
@@ -538,22 +537,17 @@ function IntakeDetailPage() {
     }
   };
 
+  // Since Phase 6 the client area is authenticated at /intake/{id} (no bearer tokens).
+  // Validation renders on the SAME /intake/{id} page when status is `reviewed`; results
+  // is /intake/{id}/results. All three copy handlers build from intake.id.
   const onCopyIntakeLink = () =>
-    copyLinkGeneric(
-      intake?.client_intake_token ? `${origin()}/intake/${intake.client_intake_token}` : null,
-      "Geen intake-token",
-    );
+    copyLinkGeneric(intake ? `${origin()}/intake/${intake.id}` : null, "Intake nog niet geladen");
   const onCopyValidationLink = () =>
-    copyLinkGeneric(
-      intake?.client_validation_token
-        ? `${origin()}/intake/${intake.client_validation_token}`
-        : null,
-      "Geen validatie-token",
-    );
+    copyLinkGeneric(intake ? `${origin()}/intake/${intake.id}` : null, "Intake nog niet geladen");
   const onCopyResultsLink = () =>
     copyLinkGeneric(
-      intake?.client_results_token ? `${origin()}/results/${intake.client_results_token}` : null,
-      "Geen resultaten-token",
+      intake ? `${origin()}/intake/${intake.id}/results` : null,
+      "Intake nog niet geladen",
     );
 
   const onOpenAIReview = () => {
@@ -783,9 +777,7 @@ function IntakeDetailPage() {
  const headerTitle = projectNameStr
  ? `${client?.name ?? "Onbekende klant"} — ${projectNameStr}`
  : intake.title || intake.product?.name || "";
- const intakeUrl = intake.client_intake_token
- ? `${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.client_intake_token}`
- : null;
+ const intakeUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`;
  const statusHint = intake.status ? STATUS_HINT[intake.status] : undefined;
  const currentPhase = phase ?? "awaiting_client_submission";
  const showAIReview = phaseShowsAIReview(currentPhase);
@@ -1078,13 +1070,9 @@ function IntakeDetailPage() {
  </Meta>
  <Meta label="Validatie-link">
  <LinkRow
- url={
- intake.client_validation_token
- ? `${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.client_validation_token}`
- : null
- }
- subtitle="Werkt nadat je 'Verstuur voor klant-validatie' klikte"
- placeholder="Komt na 'Verstuur voor klant-validatie'"
+ url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
+ subtitle="Zelfde pagina in validatie-modus (status = Beoordeeld)"
+ placeholder="—"
  />
  </Meta>
  <Meta label="Validatie">
@@ -1096,7 +1084,6 @@ function IntakeDetailPage() {
  <span className="text-ink/60">Nog niet gevalideerd</span>
  )}
  </Meta>
- {intake.client_results_token && (
  <Meta
  label={
  <span className="inline-flex items-center gap-1">
@@ -1112,12 +1099,9 @@ function IntakeDetailPage() {
  >
  <ResultsLinkRow
  intakeId={intake.id}
- token={intake.client_results_token}
  hasFinalReport={!!intake.final_report_artifact_id}
- onTokenChange={(t) => setIntake({ ...intake, client_results_token: t })}
  />
  </Meta>
- )}
  </dl>
  </section>
 
@@ -1167,6 +1151,9 @@ function IntakeDetailPage() {
  )}
  </section>
   )}
+
+  {/* AISkillsPanel self-gates on status (submitted → decomposed); mount unconditionally. */}
+  <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
 
   {showContextPack && (
     <div data-context-pack-block>
@@ -1366,18 +1353,15 @@ function DeliveredAtEditor({
 
 function ResultsLinkRow({
  intakeId,
- token,
  hasFinalReport,
- onTokenChange,
 }: {
  intakeId: string;
- token: string;
  hasFinalReport: boolean;
- onTokenChange: (t: string) => void;
 }) {
- const [busy, setBusy] = useState(false);
+ // Authenticated results route since Phase 6 — /intake/{id}/results (no bearer token).
+ void hasFinalReport;
  const url =
- typeof window !== "undefined" ? `${window.location.origin}/results/${token}` : "";
+ typeof window !== "undefined" ? `${window.location.origin}/intake/${intakeId}/results` : "";
 
  const copy = async () => {
  try {
@@ -1386,15 +1370,6 @@ function ResultsLinkRow({
  } catch {
  toast.error("Kopiëren mislukt");
  }
- };
-
- const regenerate = async () => {
- // Token regeneration belongs to the retired token model (Phase 3 D-08) and the
- // post-decomposed results surface — no seam path exists in this milestone.
- void intakeId;
- void hasFinalReport;
- void onTokenChange;
- toast.message("Linkbeheer komt in een latere fase.");
  };
 
  return (
@@ -1413,14 +1388,6 @@ function ResultsLinkRow({
  >
  <Copy className="h-3.5 w-3.5" />
  Kopieer
- </button>
- <button
- type="button"
- onClick={regenerate}
- disabled={busy}
- className="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-50"
- >
- ↻ Genereer nieuwe link
  </button>
  </div>
  <p className="text-xs text-ink/40">Werkt zodra status = Geleverd</p>

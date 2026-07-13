@@ -615,6 +615,14 @@ function DownloadControl({ field, intakeId }: { field: IntakeField; intakeId: st
  const [loading, setLoading] = useState(false);
  const handleClick = async () => {
  if (!field.storage_path) return;
+ // Shared template assets (e.g. "templates/NDA/…") are NOT intake-scoped — the
+ // space-scoped signed-URL seam rightly 404s them (D-05/D-08). Serve them from the
+ // vite static root instead (frontend/public/templates → /templates). A missing file
+ // surfaces the browser's own 404; do NOT toast a false storage error for these.
+ if (field.storage_path.startsWith("templates/")) {
+ window.open("/" + field.storage_path, "_blank");
+ return;
+ }
  setLoading(true);
  try {
  const res = await storage.signedDownloadUrl({
