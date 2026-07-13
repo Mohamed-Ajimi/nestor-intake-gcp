@@ -507,6 +507,8 @@ async def stream_skill_runs(
             if anyio.current_time() - started > MAX_STREAM_SECONDS:  # 10-min cap (D-07)
                 return
             await anyio.sleep(TICK_SECONDS)  # thread released here
+            if await request.is_disconnected():  # re-check post-sleep — skip the wasted read
+                return
             view = await run_in_threadpool(read_latest_run_dict, identity, intake_id)
             if view != last_sent:  # emit-on-change (D-06)
                 yield _sse_data(view)
