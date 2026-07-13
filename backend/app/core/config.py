@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # None on Cloud Run (ADC supplies the project via GOOGLE_CLOUD_PROJECT). No secret here (D-09).
     firebase_project_id: str | None = None
 
+    # GCS object storage (Phase 9, INFRA-03): the bucket NAME (env STORAGE_BUCKET).
+    # NON-secret by design — keyless V4 signing goes through the IAM signBlob API
+    # with the attached service account's ADC, so Phase 9 adds ZERO Secret Manager
+    # resources (contrast the AI API keys, deliberately NOT in Settings per D-07).
+    # Read at call time inside app/storage/gcs.py, never at module import.
+    storage_bucket: str | None = None
+
     # AI model ids (Phase 7, D-06). These are MODEL IDENTIFIERS — non-secret — so
     # they belong in typed config and are env-overridable (MODEL_APPLY_INTAKE etc.)
     # to swap a renamed/upgraded model without a redeploy. The handlers resolve the
