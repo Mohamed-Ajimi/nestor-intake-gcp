@@ -725,8 +725,10 @@ def fake_gcs(monkeypatch):
                 "ttl_seconds": ttl_seconds,
                 "filename": filename,
                 "content_type": content_type,
-                # What the REAL seam always emits (T-09-04): forced download.
-                "disposition": f'attachment; filename="{filename}"',
+                # WR-07: the fake does NOT fabricate a `disposition` — the forced-download
+                # (attachment) invariant is emitted INSIDE the real seam and is pinned by a
+                # dedicated unit test (test_storage_signed_url.py::test_seam_forces_
+                # attachment_disposition), not by anything this fake makes up.
             }
         )
         return f"https://signed.example/{key}"

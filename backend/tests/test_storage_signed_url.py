@@ -156,9 +156,10 @@ def test_ttl_clamped_and_disposition(engine, set_space, fake_gcs, monkeypatch):
             f"the signer must receive the exact requested key: {recorded['key']!r}."
         )
         assert recorded["filename"], "a download filename must be passed to the signer."
-        assert recorded["disposition"].startswith("attachment"), (
-            "T-09-04: the signed URL must force download (attachment), never inline."
-        )
+        # WR-07: the forced-download (attachment) invariant is NOT asserted here — the
+        # fake no longer fabricates a `disposition`, so a route-level test cannot claim to
+        # verify what the seam emits. That invariant is pinned against the REAL seam in
+        # test_seam_forces_attachment_disposition below.
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
@@ -184,3 +185,75 @@ def test_seam_clamps_ttl_to_900():
     assert gcs_mod._clamp_ttl(300) == 300, "an in-range request passes through."
     assert gcs_mod._clamp_ttl(0) == 1, "zero clamps up to the 1s floor."
     assert gcs_mod._clamp_ttl(-5) == 1, "a negative request clamps up to the 1s floor."
+
+
+# ===========================================================================
+# Case: the REAL seam forces attachment disposition (WR-07 — no fabricated fake value)
+# ===========================================================================
+
+
+def test_seam_forces_attachment_disposition(monkeypatch):
+    """``gcs.signed_download_url`` passes ``response_disposition='attachment; ...'`` (T-09-04).
+
+    WR-07: patch ONLY the auth + storage.Client SDK boundary (not the seam function) and
+    capture the kwargs the seam hands to ``Blob.generate_signed_url``. This pins the
+    forced-download invariant against the REAL seam — if someone flips the disposition to
+    ``inline`` the assertion fails, unlike the old fixture-fabricated check. It also proves
+    the WR-01 filename sanitization reaches the header (a hostile tail cannot inject).
+    """
+    gcs_mod = pytest.importorskip("app.storage.gcs")
+    # get_settings() reads the environment fresh per call (not cached), so the seam picks
+    # up this bucket name at call time via _bucket().
+    monkeypatch.setenv("STORAGE_BUCKET", "unit-test-bucket")
+
+    recorded: dict = {}
+
+    class _FakeBlob:
+        def generate_signed_url(self, **kwargs):
+            recorded.update(kwargs)
+            return "https://signed.example/unit"
+
+    class _FakeBucket:
+        def blob(self, key):
+            recorded["key"] = key
+            return _FakeBlob()
+
+    class _FakeStorageClient:
+        def bucket(self, name):
+            recorded["bucket"] = name
+            return _FakeBucket()
+
+    class _FakeCreds:
+        service_account_email = "sa@example.iam.gserviceaccount.com"
+        token = "fake-access-token"
+
+        def refresh(self, _request):
+            recorded["refreshed"] = True
+
+    monkeypatch.setattr(gcs_mod.storage, "Client", lambda *a, **k: _FakeStorageClient())
+    monkeypatch.setattr(gcs_mod.google.auth, "default", lambda *a, **k: (_FakeCreds(), "proj"))
+    monkeypatch.setattr(
+        gcs_mod.google.auth.transport.requests, "Request", lambda *a, **k: object()
+    )
+
+    url = gcs_mod.signed_download_url(
+        "space/intake/audio/uuid-clean.m4a",
+        ttl_seconds=300,
+        # A hostile tail: quotes + semicolon would break out of the header if unsanitized.
+        filename='evil".m4a; x=y',
+        content_type=None,
+    )
+
+    assert url == "https://signed.example/unit"
+    disposition = recorded.get("response_disposition", "")
+    assert disposition.startswith("attachment; filename="), (
+        f"T-09-04: the real seam must force download (attachment), got {disposition!r}."
+    )
+    # WR-01: the sanitizer strips the quote/semicolon so no header injection survives.
+    assert '"' not in disposition[len("attachment; filename=") :].strip('"'), (
+        f"the disposition filename must be sanitized (no raw quotes), got {disposition!r}."
+    )
+    assert ";" not in disposition.split("filename=", 1)[1], (
+        f"a hostile ';' tail must not survive into the header, got {disposition!r}."
+    )
+    assert recorded.get("method") == "GET", "signed URL must be a GET (download only)."
