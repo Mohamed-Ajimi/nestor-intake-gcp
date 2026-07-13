@@ -4,6 +4,7 @@ import { FieldRenderer } from "./FieldRenderer";
 import { toast } from "sonner";
 import { saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { submitIntake } from "@/lib/api/intakes";
+import { listSkillRuns, getSkillRunFull } from "@/lib/api/skillRuns";
 import {
   ValidationDiffForField,
   sectionHasChange,
@@ -99,11 +100,28 @@ export function IntakeForm({
   const [proposals, setProposals] = useState<Proposals | null>(null);
   const isValidationPhase = payload.phase === "validation";
 
-  // Validation-phase AI proposals (skill output_parsed) are produced by the
-  // apply-intake-skill backend, which lands in Phase 7. Until then there are no
-  // proposals to diff against, so `proposals` stays null and the ValidationDiff
-  // affordances render nothing. The skill-run seam (skillRuns.ts) carries only the
-  // phase-input projection, not the heavy output_parsed payload.
+  // Validation-phase AI proposals: read the latest succeeded run's parsed output
+  // through the space-scoped seam (the same one-shot heavy read the admin review
+  // uses). Without it the ValidationDiff affordances render nothing — the client
+  // would see "gereviewd" with no visible refinements (live-UAT gap 2026-07-13).
+  useEffect(() => {
+    if (!isValidationPhase || proposals !== null) return;
+    let cancelled = false;
+    (async () => {
+      const runsRes = await listSkillRuns(payload.intake.id);
+      if (cancelled || !runsRes.success) return;
+      const latest =
+        runsRes.data.runs.find((r) => r.status === "succeeded") ?? runsRes.data.latest;
+      if (!latest || latest.status !== "succeeded") return;
+      const fullRes = await getSkillRunFull(payload.intake.id, latest.id);
+      if (cancelled || !fullRes.success) return;
+      const parsed = fullRes.data.output_parsed;
+      if (parsed && typeof parsed === "object") setProposals(parsed as Proposals);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isValidationPhase, proposals, payload.intake.id]);
 
  const sections = useMemo(
  () =>

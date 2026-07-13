@@ -96,7 +96,13 @@ function UserIntakeFillPage() {
         answers: answersMap,
         // Only drafts are editable; submitted/reviewed render read-only.
         editable: intake.status === "draft",
-        phase: "intake",
+        // Reviewed intakes enter the client-validation phase: the form shows Nestor's
+        // refinements (ValidationDiff) and "Akkoord — verstuur" drives the
+        // reviewed -> validated_by_client transition. Everything else is the plain form.
+        phase:
+          intake.status === "reviewed" || intake.status === "validated_by_client"
+            ? "validation"
+            : "intake",
       });
       setError(null);
       setLoading(false);
