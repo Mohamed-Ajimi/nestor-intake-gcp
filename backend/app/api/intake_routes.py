@@ -38,7 +38,9 @@ event loop (mirrors ``admin_routes.py`` / ``main.py``).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 import anyio
@@ -46,20 +48,27 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
+from app.core.config import get_settings
 from app.intake_canonical import (
     CANONICAL_TEMPLATE_ID,
     CANONICAL_TEMPLATE_NAME,
     CANONICAL_TEMPLATE_SCHEMA,
 )
 from app.db import audit
+from app.db.models.membership import OrganizationMembership
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
     SkillRunRepository,
 )
+from app.mail import render as mail_render
+from app.mail import resend as mail_resend
+
+_log = logging.getLogger(__name__)
 from app.db.session import (
     get_intake_and_answer_repos,
     get_intake_answer_repo,
@@ -204,6 +213,36 @@ class ContextPackView(BaseModel):
     text_content: str | None = None
     created_at: str | None = None
     notes: str | None = None
+
+
+class MemberView(BaseModel):
+    """One ACTIVE member of the intake's space — the RecipientPicker (Plan 04) list row.
+
+    The ``organization_memberships`` table has NO ``name`` column, so ``name`` is
+    always ``None`` here (kept in the shape so a later name source is additive). The
+    read is scoped to the intake's OWN space and active members only — a deactivated
+    member never appears (T-10-13).
+    """
+
+    id: str
+    email: str | None = None
+    name: str | None = None
+
+
+class MailRecipients(BaseModel):
+    """Send-endpoint body — membership ids ONLY (D-06 / TENANT-02).
+
+    Carries ``recipients: list[str]`` (``organization_memberships`` ids) and NOTHING
+    else — deliberately NO ``to`` / ``email`` / ``space_id`` field so a free-text
+    recipient address can never be honored (D-06 no-free-address; ``extra="forbid"``
+    rejects a smuggled ``to``/``email`` with a 422). The server resolves the emails
+    from ACTIVE memberships of the intake's own space; the client never names an
+    address.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    recipients: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +554,245 @@ def get_context_pack(
 
 
 # ---------------------------------------------------------------------------
+# Members read + intake-scoped mail send endpoints (NOTIF-01/02, Plan 10-03)
+# ---------------------------------------------------------------------------
+#
+# The members read is the concrete list the Plan-04 RecipientPicker consumes; the three
+# send endpoints resolve recipients server-side from ACTIVE memberships of the intake's
+# OWN space (D-06 — never a client-named address) and stamp the sent-at column ONLY on a
+# successful (2xx) Resend send (D-16 / Pitfall 1 — send THEN timestamp). A cross-space
+# intake id is an existence-hidden 404 for BOTH the read and every send (D-07 / T-10-06).
+
+# The Dutch subject lines, ported verbatim from the legacy send-pulse-mail.ts (:61-77) —
+# the parity source. `{client}` is the intake's client_name display value.
+_SUBJECT_VALIDATION = "Even valideren — onderzoeksvragen voor {client}"
+_SUBJECT_REMINDER = "Herinnering — onderzoeksvragen wachten op validatie ({client})"
+_SUBJECT_RESULTS = "Onderzoeksresultaten klaar — {client}"
+_SUBJECT_ADMIN_VALIDATED = "[Nestor Pulse] Klant heeft gevalideerd — {client}"
+
+
+def _active_members_stmt(space_id):
+    """Return the base SELECT for ACTIVE ``organization_memberships`` rows in ``space_id``.
+
+    The single active-member query shared by the members read and the send-endpoint
+    recipient resolution — filtered ``organization_id == space_id AND status ==
+    "active"`` so a deactivated member is NEVER surfaced NOR emailed (T-10-13 / D-06).
+    ``organization_memberships`` is a tenant ROOT table (not RLS-scoped), so the
+    ``space_id`` gate here is the isolation wall — it is derived from the intake row the
+    caller was already proven to own (repo.get 404-gate), never from the request.
+    """
+    return select(OrganizationMembership).where(
+        OrganizationMembership.organization_id == space_id,
+        OrganizationMembership.status == "active",
+    )
+
+
+def _resolve_active_member_emails(session, space_id, recipient_ids: list[str]) -> list[str]:
+    """Resolve ``recipient_ids`` to ACTIVE-member emails in ``space_id`` (D-06).
+
+    Every requested id MUST be an ACTIVE member of ``space_id`` — a requested id that is
+    not (a deactivated member, a foreign-space id, or a bogus id) is REJECTED with a 422
+    (never silently dropped-and-sent-to-fewer). An empty resolved list also raises — a
+    zero-recipient send never leaves the building. The emails come ONLY from the
+    membership rows (D-06 no-free-address); the request never names an address.
+    """
+    # Coerce the string ids to UUID for the pg8000 bind (membership.id is UUID).
+    try:
+        wanted = {uuid.UUID(str(rid)) for rid in recipient_ids}
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid recipient id"
+        )
+    if not wanted:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "No recipients supplied"
+        )
+
+    rows = (
+        session.execute(
+            _active_members_stmt(space_id).where(
+                OrganizationMembership.id.in_(wanted)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    resolved = {row.id: row.email for row in rows if row.email}
+
+    # Reject any requested id that is not an active member with a usable email — do NOT
+    # silently send to fewer than requested (the picker must not think a deactivated /
+    # unknown id was mailed).
+    missing = wanted - set(resolved)
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "One or more recipients are not active members of this space",
+        )
+    return list(resolved.values())
+
+
+@intake_router.get("/{intake_id}/members")
+def list_members(
+    intake_id: str,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> list[MemberView]:
+    """List the intake space's ACTIVE members ({id, email}), or 404 (D-07 / T-10-13).
+
+    The concrete read the Plan-04 RecipientPicker (``listSpaceMembers``) lists from.
+    ``repo.get`` 404-gates a cross-space/unknown intake id (existence-hidden, D-07) —
+    for the read as for the sends — BEFORE any membership query. Then the ACTIVE members
+    of the intake's OWN space are returned (deactivated members excluded). This reuses
+    the same active-member query the send endpoints resolve against.
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    rows = (
+        repo.session.execute(_active_members_stmt(intake.space_id)).scalars().all()
+    )
+    return [
+        MemberView(id=str(row.id), email=row.email, name=None) for row in rows
+    ]
+
+
+@intake_router.post("/{intake_id}/mail/validation")
+def send_validation_mail(
+    intake_id: str,
+    body: MailRecipients,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Send the validation-request mail; stamp ``validation_link_sent_at`` on 2xx only.
+
+    404 on a cross-space/unknown intake id (existence-hidden, D-07). Recipients resolve
+    ONLY from ACTIVE memberships of the intake's own space (D-06). The CTA is the
+    token-free ``{app_base_url}/intake/{intake_id}`` app route (NOTIF-01). On a
+    successful send the ``validation_link_sent_at`` column is stamped and a ``mail.sent``
+    audit row (no link) is written; on a send failure neither is (D-16 / Pitfall 1).
+    """
+    return _run_intake_send(
+        intake_id, body, repo, identity, is_reminder=False, is_results=False
+    )
+
+
+@intake_router.post("/{intake_id}/mail/reminder")
+def send_reminder_mail(
+    intake_id: str,
+    body: MailRecipients,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Send the reminder (isReminder) validation mail; writes NO timestamp (legacy parity).
+
+    404 on a cross-space/unknown intake id (D-07). Same recipient resolution + CTA as the
+    validation send, but the reminder path stamps NO column (there is no reminder-sent
+    column — legacy parity) and still audits ``mail.sent`` on a successful send only.
+    """
+    return _run_intake_send(
+        intake_id, body, repo, identity, is_reminder=True, is_results=False
+    )
+
+
+@intake_router.post("/{intake_id}/mail/results")
+def send_results_mail(
+    intake_id: str,
+    body: MailRecipients,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Send the results-ready mail; stamp ``results_link_sent_at`` on 2xx only.
+
+    404 on a cross-space/unknown intake id (D-07). Recipients resolve ONLY from ACTIVE
+    memberships of the intake's own space (D-06). The CTA is the token-free
+    ``{app_base_url}/intake/{intake_id}/results`` app route (NOTIF-01). On a successful
+    send the ``results_link_sent_at`` column is stamped + a ``mail.sent`` audit row (no
+    link) written; on failure neither is (D-16 / Pitfall 1).
+    """
+    return _run_intake_send(
+        intake_id, body, repo, identity, is_reminder=False, is_results=True
+    )
+
+
+def _run_intake_send(
+    intake_id: str,
+    body: MailRecipients,
+    repo: IntakeRepository,
+    identity: Identity,
+    *,
+    is_reminder: bool,
+    is_results: bool,
+) -> dict:
+    """404-gate the intake then render+send; stamp+audit on 2xx only (shared verb body).
+
+    The single body the three send endpoints delegate to: ``repo.get`` 404-gates a
+    cross-space/unknown intake id (existence-hidden, D-07 / T-10-06), recipient emails are
+    resolved server-side from ACTIVE memberships (D-06), the mail is sent FIRST, and only
+    on success is the sent-at column stamped (validation/results) and a ``mail.sent``
+    audit row written with structured metadata (no link/token). A send failure returns
+    ``{"success": False}`` with no timestamp / no audit (D-16 / Pitfall 1).
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    emails = _resolve_active_member_emails(repo.session, intake.space_id, body.recipients)
+
+    settings = get_settings()
+    base = (settings.app_base_url or "").rstrip("/")
+    client = intake.client_name or "team"
+
+    if is_results:
+        cta_url = f"{base}/intake/{intake.id}/results"
+        subject = _SUBJECT_RESULTS.format(client=client)
+        html = mail_render.render_results(
+            first_name=client,
+            project_title=client,
+            cta_url=cta_url,
+            app_base_url=settings.app_base_url,
+        )
+        mail_type = "results"
+        timestamp_field: str | None = "results_link_sent_at"
+    else:
+        cta_url = f"{base}/intake/{intake.id}"
+        subject = (
+            _SUBJECT_REMINDER.format(client=client)
+            if is_reminder
+            else _SUBJECT_VALIDATION.format(client=client)
+        )
+        html = mail_render.render_validation(
+            first_name=client,
+            project_title=client,
+            cta_url=cta_url,
+            is_reminder=is_reminder,
+            app_base_url=settings.app_base_url,
+        )
+        mail_type = "reminder" if is_reminder else "validation"
+        timestamp_field = None if is_reminder else "validation_link_sent_at"
+
+    # SEND FIRST (D-16 / Pitfall 1): a non-2xx raises here → NO timestamp, NO audit row.
+    try:
+        mail_resend.send(to=emails, subject=subject, html=html)
+    except Exception:  # noqa: BLE001 -- any transport failure is a non-send.
+        _log.warning("mail send failed for intake %s (type=%s)", intake.id, mail_type)
+        return {"success": False}
+
+    # 2xx only: stamp the sent-at column (if this type has one) then audit on the SAME tx.
+    if timestamp_field is not None:
+        repo.patch(intake_id, **{timestamp_field: datetime.now(timezone.utc)})
+    audit.log(
+        repo.session,
+        actor_uid=identity.uid,
+        event_type="mail.sent",
+        target=str(intake_id),
+        space_id=intake.space_id,
+        metadata={"type": mail_type, "recipient_count": len(emails)},
+    )
+    return {"success": True, "recipient_count": len(emails), "type": mail_type}
+
+
+# ---------------------------------------------------------------------------
 # Skill-run progress SSE stream (API-04) + full-run read (D-08)
 # ---------------------------------------------------------------------------
 #
@@ -704,10 +982,59 @@ def submit_intake(
               space_id=intake.space_id,
               metadata={"from": old_status, "to": new_status})
 
+    # admin_validated auto-fire (D-03 / RESEARCH Pattern 4): when the client's submit
+    # advances reviewed → validated_by_client, notify the ops address. This is fire-and-
+    # forget from the CLIENT's perspective — a mail failure must NEVER fail the validate
+    # (Pitfall 4). It is wrapped in try/except so the handler still returns the
+    # transitioned view; it does NOT share a tx that would roll back the status change on
+    # a mail error (the send is the LAST thing, after the status flip + audit).
+    if new_status == "validated_by_client":
+        try:
+            _send_admin_validated(intake)
+        except Exception:  # noqa: BLE001 -- operator-mail failure is silent-logged (Pitfall 4)
+            _log.warning(
+                "admin_validated mail failed for intake %s (client validate unaffected)",
+                intake_id,
+            )
+
     updated = repo.get(intake_id)
     if updated is None:  # pragma: no cover - patched row is in-scope by construction
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
     return _view(updated)
+
+
+def _send_admin_validated(intake) -> None:
+    """Fire the ``admin_validated`` ("klant heeft gevalideerd") ops mail (D-03 / D-08).
+
+    Reads the single ops address from ``get_settings().nestor_admin_email`` (D-08); if it
+    is unset, LOG and RETURN (do NOT raise — an unconfigured ops address must not fail the
+    client's validate). The CTA is the admin app route
+    ``{app_base_url}/admin/pulse/intakes/{intake_id}`` (token-free, NOTIF-01). Renders and
+    sends via the faked Resend seam. The CALLER wraps this in try/except so ANY failure
+    here (including a raised send) never fails the client's submit (Pitfall 4).
+    """
+    settings = get_settings()
+    admin_email = settings.nestor_admin_email
+    if not admin_email:
+        _log.info(
+            "NESTOR_ADMIN_EMAIL unset — skipping admin_validated mail for intake %s",
+            intake.id,
+        )
+        return
+
+    base = (settings.app_base_url or "").rstrip("/")
+    client = intake.client_name or "team"
+    html = mail_render.render_admin_validated(
+        client_name=client,
+        project_title=client,
+        cta_url=f"{base}/admin/pulse/intakes/{intake.id}",
+        app_base_url=settings.app_base_url,
+    )
+    mail_resend.send(
+        to=[admin_email],
+        subject=_SUBJECT_ADMIN_VALIDATED.format(client=client),
+        html=html,
+    )
 
 
 @intake_router.post("/{intake_id}/review")
