@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 6: Intake CRUD Parity & Frontend API Seam** - Frontend re-pointed off Supabase to `lib/api/*`; authenticated intake fill/submit/view + phase machine to `decomposed`
 - [ ] **Phase 7: AI Function Ports** - All seven pre-research AI functions on Cloud Run, space-scoped, DB connection released across LLM calls
 - [ ] **Phase 8: SSE Skill-Run Progress** - DB-backed Server-Sent Events stream replaces Supabase Realtime for skill-run progress
-- [ ] **Phase 9: GCS Storage** - Signed-URL upload/download via attached-SA `signBlob`, space-scoped, replacing `nestor-uploads`
+- [x] **Phase 9: GCS Storage** - Signed-URL upload/download via attached-SA `signBlob`, space-scoped, replacing `nestor-uploads` (completed 2026-07-13)
 - [ ] **Phase 10: Notifications** - Notification-only transactional email (no tokens) for invite/validation-ready/results-ready/reminders
 - [ ] **Phase 11: Internationalization (NL/FR/EN)** - react-i18next with all hardcoded Dutch strings externalized and a working language switcher
 - [ ] **Phase 12: Frontend Deploy, Cutover & Supabase Retirement** - SSR frontend on Cloud Run, end-to-end validated for both roles, Supabase paused then retired
@@ -146,7 +146,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Embeddings generation and semantic search run on Cloud Run with results filtered by `space_id` (an `EXPLAIN` shows index use with a tenant prefilter; a user's search never returns another space's artifacts)
   4. Audio transcription (Whisper) runs on Cloud Run
   5. AI/LLM calls release the DB session before the call and reopen to persist — no connection held across a 90–120s call
-**Plans**: 8 plans (4 waves)
+**Plans**: 8 plans (4 waves) + 3 gap-closure plans (combined 7+8+9 live-UAT findings, 2 waves)
   - [ ] 07-01-PLAN.md — Wave 0 RED test scaffold: 10 AI test modules + conftest fakes (faked external calls) (Wave 1)
   - [ ] 07-02-PLAN.md — 0009 migration + 3 new models (intake_sources/transcripts/extracted_insights) + parity columns + repository subclasses (Wave 1)
   - [ ] 07-03-PLAN.md — AI client seam: anthropic/openai SDKs + verbatim prompts + extract_json/cost ports + D-06 model-id config (Wave 1)
@@ -155,6 +155,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [ ] 07-05-PLAN.md — ai_routes surface (7 endpoints) + apply-intake-skill (AI-01) + generate-context-pack (AI-02) + mount + sweep (Wave 3)
   - [ ] 07-06-PLAN.md — Embeddings generation + semantic search, space-prefiltered (AI-04) (Wave 4)
   - [ ] 07-07-PLAN.md — structure-answers + extract-insights (AI-03) + transcribe-audio (AI-05, faked audio) (Wave 4)
+  - [ ] 07-09-PLAN.md — [gap] artifacts-read endpoint (GET /context-pack, existence-hidden) + skill discriminator on SkillRunView (Wave 1)
+  - [ ] 07-11-PLAN.md — [gap] AI trigger UI (structure/extract/embeddings/transcribe) + Kopieer-intake-link fix + template-asset static serving (Wave 1)
+  - [ ] 07-10-PLAN.md — [gap] ContextPackBlock read wiring + context-pack progress UX + apply-intake-skill run discriminator consumers (Wave 2)
 
 ### Phase 8: SSE Skill-Run Progress
 **Goal**: Skill-run progress streams to the admin UI via a stateless, DB-backed Server-Sent Events endpoint, replacing the Supabase Realtime subscription.
@@ -179,10 +182,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. A user can download an artifact only after the backend verifies they own the artifact's space, via a V4 signed URL with TTL ≤ 15 minutes
   3. Intake attachments and audio uploads are stored in GCS through the backend, never direct browser→storage, with objects namespaced by space
 **Plans**: 4 plans (2 waves)
-  - [ ] 09-01-PLAN.md — Storage foundation: app/storage seam (keys + gcs), config, no-SA-key grep-guard, Wave-0 RED tests + fake_gcs (Wave 1)
-  - [ ] 09-02-PLAN.md — Backend storage endpoints (upload/signed-url/delete) + combined-repos DI + transcribe seam swap (Wave 2)
-  - [ ] 09-03-PLAN.md — Frontend seam finalization (drop bucket, add category, FormData guard) + 5 call sites (Wave 2)
-  - [ ] 09-04-PLAN.md — Bucket + keyless-signBlob IAM (Terraform + gcloud runbook) + combined 7+8+9 live UAT (Wave 2)
+  - [x] 09-01-PLAN.md — Storage foundation: app/storage seam (keys + gcs), config, no-SA-key grep-guard, Wave-0 RED tests + fake_gcs (Wave 1)
+  - [x] 09-02-PLAN.md — Backend storage endpoints (upload/signed-url/delete) + combined-repos DI + transcribe seam swap (Wave 2)
+  - [x] 09-03-PLAN.md — Frontend seam finalization (drop bucket, add category, FormData guard) + 5 call sites (Wave 2)
+  - [x] 09-04-PLAN.md — Bucket + keyless-signBlob IAM (Terraform + gcloud runbook) + combined 7+8+9 live UAT (Wave 2)
 
 ### Phase 10: Notifications
 **Goal**: Transactional email becomes notification-only — it carries no access token and links route to authenticated pages — covering the full set of lifecycle events.
@@ -229,7 +232,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Intake CRUD Parity & Frontend API Seam | 11/13 | Gaps found (2 blockers) — gap plans 06-12/06-13 | 2026-06-29 |
 | 7. AI Function Ports | 0/8 | Planned (8 plans, 4 waves) | - |
 | 8. SSE Skill-Run Progress | 0/3 | Planned (3 plans, 1 wave) | - |
-| 9. GCS Storage | 0/4 | Planned (4 plans, 2 waves) | - |
+| 9. GCS Storage | 4/4 | Complete   | 2026-07-13 |
 | 10. Notifications | 0/TBD | Not started | - |
 | 11. Internationalization (NL/FR/EN) | 0/TBD | Not started | - |
 | 12. Frontend Deploy, Cutover & Supabase Retirement | 0/TBD | Not started | - |
