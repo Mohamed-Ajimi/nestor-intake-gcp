@@ -44,6 +44,7 @@ from app.api.admin_routes import admin_router
 from app.api.ai_routes import ai_router
 from app.api.auth_routes import auth_router, protected_router
 from app.api.intake_routes import intake_router
+from app.api.storage_routes import storage_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
 from app.db import base
@@ -145,6 +146,13 @@ protected_router.include_router(intake_router)
 #   request tx) and dispatches the work via BackgroundTasks (D-05). No second
 #   app.include_router for it — it rides the single protected_router include below.
 protected_router.include_router(ai_router)
+# - storage_router: the Phase-9 GCS storage surface (upload / signed-url / delete —
+#   DOC-01/02 / INFRA-03). Mounted UNDER protected_router so it inherits
+#   get_current_identity; each handler Depends(get_intake_and_source_repos) for its
+#   ownership-gated, tenant-scoped data access and reaches GCS only through the
+#   app.storage.gcs seam. No second app.include_router for it — it rides the single
+#   protected_router include below.
+protected_router.include_router(storage_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
 
