@@ -6,7 +6,14 @@ import { format, formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
-import { getIntake, submitIntake, reviewIntake } from "@/lib/api/intakes";
+import {
+  getIntake,
+  submitIntake,
+  reviewIntake,
+  sendIntakeMail,
+  type IntakeMailType,
+} from "@/lib/api/intakes";
+import { RecipientPicker } from "@/components/intake/RecipientPicker";
 import { listAnswers, saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { listSkillRuns } from "@/lib/api/skillRuns";
 import * as skills from "@/lib/api/skills";
@@ -532,6 +539,37 @@ function IntakeDetailPage() {
   const setBusyKey = (k: BusyKey, v: boolean) =>
     setBusy((b) => ({ ...b, [k]: v }));
 
+  // Recipient picker (Phase 10): which client-facing mail type is being sent, if any.
+  // Opening the picker sets the type; the picker self-loads the intake's active members
+  // (listSpaceMembers) and returns the selected membership ids to `handleSendMail`.
+  const [mailPickerType, setMailPickerType] = useState<IntakeMailType | null>(null);
+  // Map each mail type to the busy key NextStepBanner already reads.
+  const MAIL_BUSY_KEY: Record<IntakeMailType, BusyKey> = {
+    validation: "sendValidation",
+    reminder: "sendReminder",
+    results: "sendResults",
+  };
+
+  const handleSendMail = async (recipients: string[]) => {
+    if (!intake || !mailPickerType) return;
+    const type = mailPickerType;
+    const busyKey = MAIL_BUSY_KEY[type];
+    setBusyKey(busyKey, true);
+    try {
+      const res = await sendIntakeMail(intake.id, type, recipients);
+      if (!res.success) {
+        toast.error(`Versturen mislukt: ${res.error}`);
+        return;
+      }
+      toast.success("E-mail verstuurd.");
+      setMailPickerType(null);
+      // Refresh the intake so the sent-at markers (validation/results) re-drive the phase.
+      void load();
+    } finally {
+      setBusyKey(busyKey, false);
+    }
+  };
+
   const origin = () => (typeof window !== "undefined" ? window.location.origin : "");
 
   const copyLinkGeneric = async (url: string | null, missingMsg: string) => {
@@ -566,14 +604,14 @@ function IntakeDetailPage() {
     else toast("AI-review is nog niet geladen — wacht even.");
   };
 
-  // Transactional email is Phase 10 (notification-only). The CTAs stay wired so the
-  // NextStepBanner contract is unchanged; until then they surface a notice.
+  // Transactional email (Phase 10): each CTA opens the RecipientPicker, which self-loads
+  // the intake's active members and returns the selected membership ids to `handleSendMail`.
   const onSendValidationMail = async () => {
-    toast.message("E-mailverzending (validatie-link) komt in Phase 10.");
+    setMailPickerType("validation");
   };
 
   const onSendValidationReminder = async () => {
-    toast.message("Herinneringsmail komt in Phase 10.");
+    setMailPickerType("reminder");
   };
 
   const onGenerateContextPack = async () => {
@@ -619,7 +657,7 @@ function IntakeDetailPage() {
   };
 
   const onSendResultsMail = async () => {
-    toast.message("E-mailverzending (resultaten-link) komt in Phase 10.");
+    setMailPickerType("results");
   };
 
   const onArchive = async () => {
@@ -910,6 +948,20 @@ function IntakeDetailPage() {
        onCopyResultsLink={onCopyResultsLink}
        onArchive={onArchive}
      />
+
+     {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
+     {mailPickerType && (
+       <RecipientPicker
+         open={mailPickerType !== null}
+         onOpenChange={(o) => {
+           if (!o) setMailPickerType(null);
+         }}
+         intakeId={intake.id}
+         type={mailPickerType}
+         busy={Boolean(busy[MAIL_BUSY_KEY[mailPickerType]])}
+         onConfirm={handleSendMail}
+       />
+     )}
 
 
      {showSemanticSearch && (

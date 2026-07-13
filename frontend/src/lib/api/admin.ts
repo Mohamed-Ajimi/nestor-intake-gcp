@@ -68,6 +68,19 @@ export function reactivateUser(membershipId: string): Promise<ApiResult<AdminUse
   return apiFetch<AdminUser>(`/admin/users/${membershipId}/reactivate`, { method: "POST" });
 }
 
+/** Bare success flag from the invite-mail endpoint (the action link lives ONLY in the mail body). */
+export type MailResult = { success: boolean };
+
+/**
+ * (Re)send the invitation mail for a membership. Regenerates a fresh set-password
+ * action link server-side per send (D-10) and mails it — the link is NEVER returned
+ * to the browser (unlike `inviteUser`). One endpoint serves both the InviteUserDialog
+ * success state and the member-list resend action.
+ */
+export function sendInviteMail(membershipId: string): Promise<ApiResult<MailResult>> {
+  return apiFetch<MailResult>(`/admin/users/${membershipId}/invite-mail`, { method: "POST" });
+}
+
 // ---------------------------------------------------------------------------
 // Spaces — list / create / update / deactivate / reactivate (NO delete)
 // ---------------------------------------------------------------------------
