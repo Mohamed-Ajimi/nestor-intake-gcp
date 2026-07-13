@@ -6,6 +6,10 @@ import { openSkillRunStream } from "@/lib/api/skillRunStream";
 export type ActiveSkillRun = {
   id: string;
   status: string;
+  // The skill discriminator (07-09 `SkillRunView.skill`), e.g. "apply-intake-skill" or
+  // "context-pack". Threaded through so consumers (review-consume, context-pack reload)
+  // can tell which skill the latest run belongs to now that multiple skills land runs.
+  skill: string;
   triggered_at: string;
   completed_at: string | null;
   applied_at: string | null;
@@ -23,6 +27,7 @@ function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
   return {
     id: r.id,
     status: r.status,
+    skill: r.skill,
     triggered_at: r.applied_at ?? r.completed_at ?? new Date().toISOString(),
     completed_at: r.completed_at,
     applied_at: r.applied_at,

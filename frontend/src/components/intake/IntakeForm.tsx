@@ -115,9 +115,14 @@ export function IntakeForm({
     (async () => {
       const runsRes = await listSkillRuns(payload.intake.id);
       if (cancelled || !runsRes.success) return;
-      const latest =
-        runsRes.data.runs.find((r) => r.status === "succeeded") ?? runsRes.data.latest;
-      if (!latest || latest.status !== "succeeded") return;
+      // Proposals come ONLY from the apply-intake-skill run. Now that context-pack /
+      // structure-answers also land `succeeded` runs (07-09 projects `skill`), require the
+      // discriminator so a non-proposals run is never mistaken for the source (drop the
+      // bare-latest fallback — a succeeded context-pack run must not drive proposals).
+      const latest = runsRes.data.runs.find(
+        (r) => r.skill === "apply-intake-skill" && r.status === "succeeded",
+      );
+      if (!latest) return;
       const fullRes = await getSkillRunFull(payload.intake.id, latest.id);
       if (cancelled || !fullRes.success) return;
       const parsed = fullRes.data.output_parsed;

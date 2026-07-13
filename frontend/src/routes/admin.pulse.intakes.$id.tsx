@@ -231,6 +231,7 @@ function IntakeDetailPage() {
       ? {
           id: "starting",
           status: "running",
+          skill: activeRun?.skill ?? "apply-intake-skill",
           triggered_at: optimisticRunStartedAt,
           completed_at: null,
           applied_at: null,
@@ -240,6 +241,15 @@ function IntakeDetailPage() {
   const activeRunId = activeRun?.id;
   const activeRunStatus = activeRun?.status;
   const activeRunTriggeredAt = activeRun?.triggered_at;
+  // A one-shot signal that changes only when a CONTEXT-PACK run reaches a terminal
+  // status, so ContextPackBlock re-reads the pack even on a re-generate of an
+  // already-`decomposed` intake (where the status-driven reload would not fire). Gated on
+  // the skill discriminator so an apply-intake-skill terminal never bumps it.
+  const contextPackReloadSignal =
+    activeRun?.skill === "context-pack" &&
+    (activeRunStatus === "succeeded" || activeRunStatus === "failed")
+      ? `${activeRunStatus}:${activeRunId}`
+      : null;
   // Track which run we've already consumed into review-mode so we don't loop.
   const [consumedRunId, setConsumedRunId] = useState<string | null>(null);
   useEffect(() => {
@@ -624,6 +634,10 @@ function IntakeDetailPage() {
   // fetch the full row once and enter review-mode.
   useEffect(() => {
     if (!fullRun || !activeRun) return;
+    // Review mode is ONLY driven by an apply-intake-skill run. Now that context-pack (and
+    // other enrichment skills) also land `succeeded` runs, the latest run can be a
+    // context-pack run — guard on the skill discriminator so it never enters review mode.
+    if (activeRun.skill !== "apply-intake-skill") return;
     if (activeRun.id === consumedRunId) return;
     const parsed = (fullRun as { output_parsed?: ParsedSkillOutput }).output_parsed;
     if (!parsed) return;
@@ -1162,6 +1176,7 @@ function IntakeDetailPage() {
         intakeStatus={intake.status}
         intakeTitle={intake.title ?? ""}
         clientName={client?.name ?? "—"}
+        reloadSignal={contextPackReloadSignal}
       />
     </div>
   )}
