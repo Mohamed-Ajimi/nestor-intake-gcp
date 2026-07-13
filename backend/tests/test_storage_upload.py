@@ -52,9 +52,18 @@ AUTH = {"Authorization": "Bearer ignored-overridden"}
 # D-02: the 25 MB per-file ceiling (Whisper per-file limit; < Cloud Run's 32 MB cap).
 MAX_BYTES = 25 * 1024 * 1024
 
+# Local testcontainer credential ONLY for the connect-as app_superadmin engine (mirrors
+# test_admin_routes.py) — never a production secret.
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
 
 def _user(space_id: uuid.UUID) -> "Identity":
     return Identity(uid=f"u-{space_id}", email="u@x", role="user", space_id=str(space_id))
+
+
+def _superadmin() -> "Identity":
+    """A cross-tenant ``superadmin`` Identity (space_id None — no own space, CR-02)."""
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
 
 
 def _as(identity: "Identity"):
@@ -67,6 +76,36 @@ def _as(identity: "Identity"):
 def _patch_engine_factories(monkeypatch, user_engine) -> None:
     """Patch ONLY the engine factories session.py imported (testcontainer swap)."""
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
+
+
+def _patch_superadmin_engine(monkeypatch, sa_engine) -> None:
+    """Patch the superadmin engine factory session.py imported (CR-02 superadmin path)."""
+    monkeypatch.setattr(session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS the ``app_superadmin`` role (connect-as, not SET ROLE).
+
+    Mirrors test_admin_routes.py: ``current_user = 'app_superadmin'`` makes the 0003
+    ``*_superadmin_all`` bypass policy match, so ``create_in_space`` can insert the
+    space-scoped ``intake_sources`` row cross-tenant (the CR-02 superadmin upload path).
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 def _build_app():
@@ -297,6 +336,71 @@ def test_audio_upload_creates_source(engine, set_space, fake_gcs, monkeypatch):
         )
         assert row[1] == "audio", f"intake_sources.kind must be 'audio', got {row[1]!r}."
         assert str(row[2]) == str(space), "the source row must carry the intake's space_id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# Case: superadmin audio upload targets the intake's OWN space (CR-02)
+# ===========================================================================
+
+
+def test_superadmin_audio_upload_creates_source_in_space(
+    engine, set_space, fake_gcs, monkeypatch, superadmin_engine
+):
+    """A superadmin (null-space identity) audio upload must succeed, not 500 (CR-02).
+
+    The admin intake-detail page is operated by superadmins; a plain ``create()`` on a
+    null-space repo raises the RuntimeError guard -> unhandled 500. The handler branches
+    to ``create_in_space(intake.space_id, ...)`` so the space-scoped ``intake_sources``
+    row is written into the intake's OWN space. The upload runs AFTER the DB write (WR-05),
+    so a 201 proves both sides committed with no orphan.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/storage/uploads",
+            files={"file": ("gesprek.m4a", b"\x00\x01fake-audio", "audio/mp4")},
+            data={"category": "audio"},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 201, (
+            f"superadmin audio upload must be 201 (CR-02), got {resp.status_code} "
+            f"(body={resp.text!r})."
+        )
+        assert len(fake_gcs["uploads"]) == 1, "the audio bytes must reach the seam once."
+        key = fake_gcs["uploads"][0]["key"]
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            row = conn.execute(
+                text(
+                    f"SELECT storage_path, space_id FROM {SCHEMA}.intake_sources "
+                    "WHERE intake_id = :id"
+                ),
+                {"id": intake_id},
+            ).first()
+        assert row is not None, (
+            "CR-02: a superadmin audio upload must create the intake_sources row "
+            "in the intake's own space via create_in_space (no 500)."
+        )
+        assert row[0] == key, "storage_path must equal the object key."
+        assert str(row[1]) == str(space), (
+            "create_in_space must target the intake's OWN space, not null."
+        )
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
