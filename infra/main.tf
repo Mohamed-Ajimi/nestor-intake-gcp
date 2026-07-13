@@ -240,6 +240,62 @@ resource "google_project_iam_member" "runtime_identitytoolkit_admin" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+# ------------------------------------------------------ GCS uploads bucket (INFRA-03 / Phase 9)
+# The private object store that replaces the legacy Supabase `nestor-uploads` bucket
+# (D-12/D-07a). Hardened by construction:
+#   - uniform_bucket_level_access = true  -> no per-object ACLs; IAM is the ONLY
+#     access-control surface (removes the ACL foot-gun class entirely).
+#   - public_access_prevention = "enforced" -> zero public objects, ever; a stray
+#     allUsers/allAuthenticatedUsers grant cannot make an object world-readable
+#     (D-07a — mitigates T-09-14 information disclosure).
+#   - NO versioning block and NO lifecycle rules (D-12): objects are server-authored,
+#     space-scoped keys; retention/versioning is out of scope for this phase.
+#   - force_destroy = false: a `terraform destroy` cannot silently wipe tenant
+#     uploads while objects still exist.
+#
+# IaC-DRIFT: Terraform state was never adopted for this project (see the Phase 5/7/8
+# drift notes in DEPLOY-RUNBOOK.md and .planning/STATE.md). This resource — and the
+# two IAM bindings + the STORAGE_BUCKET env below — are the INTENDED end-state only;
+# they are INERT until applied out-of-band via the Phase-9 gcloud steps in
+# infra/DEPLOY-RUNBOOK.md (D-11). Reconcile via `terraform import` (or keep manual)
+# BEFORE the Phase 12 cutover.
+resource "google_storage_bucket" "uploads" {
+  name     = "${var.project}-nestor-uploads"
+  location = var.region
+
+  uniform_bucket_level_access = true       # IAM-only access control (no per-object ACLs)
+  public_access_prevention    = "enforced" # zero public objects (D-07a / T-09-14)
+
+  # Deliberately NO versioning block and NO lifecycle_rule blocks (D-12): out of scope.
+  force_destroy = false # never auto-wipe tenant uploads on destroy
+}
+
+# Bucket-scoped storage.objectAdmin for the runtime SA (least privilege, T-09-15).
+# Scoped to THIS bucket only — NOT a project-wide roles/storage.* grant — so the SA
+# can read/write/delete objects in the uploads bucket and nothing else. objectAdmin
+# (not objectViewer/objectCreator) is required because the backend both writes
+# uploads and deletes objects on cleanup (D-09).
+resource "google_storage_bucket_iam_member" "runtime_object_admin" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# Keyless signBlob grant (criterion 1 / T-09-13): the runtime SA impersonates ITSELF
+# to mint V4 signed download URLs via the IAM signBlob API — NO service-account JSON
+# key exists anywhere (app/storage/gcs.py signs with ADC + service_account_email +
+# access_token; the CI guard scripts/ci_no_sa_json_key.sh bans any SA-JSON-key path).
+# This serviceAccountTokenCreator self-binding is a SEPARATE grant from the object
+# access above (Pitfall 2): storage.objectAdmin lets the SA read/write objects, but
+# signing a URL requires the DISTINCT iam.serviceAccountTokenCreator role on the SA
+# principal itself. Without this binding, signed_download_url() 403s at signBlob even
+# though object access works.
+resource "google_service_account_iam_member" "runtime_token_creator_self" {
+  service_account_id = google_service_account.runtime.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 # -------------------------------------------------- Cloud Run SERVICE (D-04/INFRA-04)
 # gen2 (the v2 resource default), runtime SA, max-instances=4 (D-04 connection
 # math). Env carries ONLY non-secret connector config -- no stored credential,
@@ -305,6 +361,16 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "DB_NAME"
         value = google_sql_database.app.name
       }
+      # INFRA-03 (Phase 9): the GCS uploads bucket name (non-secret config, D-09).
+      # app.storage.gcs reads STORAGE_BUCKET at call time (get_settings().storage_bucket)
+      # to resolve the target bucket for upload/signed-URL/delete. Mirrors the
+      # INSTANCE_CONNECTION_NAME env above — a plain non-secret value, no Secret
+      # Manager reference. IaC-DRIFT: inert until the runbook `--update-env-vars
+      # STORAGE_BUCKET=...` (Step 9.4) sets it on the live service.
+      env {
+        name  = "STORAGE_BUCKET"
+        value = google_storage_bucket.uploads.name
+      }
       # Path B (D-05a): the secret RESOURCE NAME (NOT the password value) that
       # base.py::_load_superadmin_password() reads at runtime via Secret Manager.
       # `<secret resource name>/versions/latest` is the exact form
@@ -359,6 +425,14 @@ resource "google_cloud_run_v2_service" "api" {
     # per the runbook by default, so they are intentionally NOT in this edge.)
     google_secret_manager_secret_iam_member.runtime_anthropic_secret_accessor,
     google_secret_manager_secret_iam_member.runtime_openai_secret_accessor,
+    # INFRA-03 (Phase 9): the bucket + its bucket-scoped objectAdmin grant + the
+    # keyless-signBlob self-binding must exist before the service boots, or the
+    # first storage request (upload/signed-URL/delete) fails — objectAdmin 403 on
+    # object access, or signBlob 403 on URL signing (Pitfall 2). The STORAGE_BUCKET
+    # env already creates an implicit edge to the bucket; the two IAM bindings do
+    # not, so declare them explicitly.
+    google_storage_bucket_iam_member.runtime_object_admin,
+    google_service_account_iam_member.runtime_token_creator_self,
   ]
 }
 
