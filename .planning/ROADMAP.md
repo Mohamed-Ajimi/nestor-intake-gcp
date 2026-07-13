@@ -165,9 +165,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The SSE handler reads `skill_runs` state from Cloud SQL each tick (no in-memory state) so any instance can serve a reconnecting client
   3. The SSE stream is tenant-scoped — a user cannot stream another space's skill run
 **Plans**: 3 plans (1 wave)
-  - [ ] 08-01-PLAN.md — Backend SSE stream + full-run read (D-08): stream_session helpers, async StreamingResponse endpoint, RED suites (Wave 1)
-  - [ ] 08-02-PLAN.md — Frontend SSE reader + SSE-first useActiveSkillRun (poll fallback) + un-stubbed useSkillRunFull + terminal refresh (Wave 1)
-  - [ ] 08-03-PLAN.md — Cloud Run 900s request timeout (main.tf) + deploy-runbook live-apply note (Wave 1)
+  - [x] 08-01-PLAN.md — Backend SSE stream + full-run read (D-08): stream_session helpers, async StreamingResponse endpoint, RED suites (Wave 1)
+  - [x] 08-02-PLAN.md — Frontend SSE reader + SSE-first useActiveSkillRun (poll fallback) + un-stubbed useSkillRunFull + terminal refresh (Wave 1)
+  - [x] 08-03-PLAN.md — Cloud Run 900s request timeout (main.tf) + deploy-runbook live-apply note (Wave 1)
 **UI hint**: yes
 
 ### Phase 9: GCS Storage
@@ -178,7 +178,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. A GCS bucket replaces `nestor-uploads` and the backend mints signed URLs via IAM `signBlob` with no service-account JSON key present anywhere
   2. A user can download an artifact only after the backend verifies they own the artifact's space, via a V4 signed URL with TTL ≤ 15 minutes
   3. Intake attachments and audio uploads are stored in GCS through the backend, never direct browser→storage, with objects namespaced by space
-**Plans**: TBD
+**Plans**: 4 plans (2 waves)
+  - [ ] 09-01-PLAN.md — Storage foundation: app/storage seam (keys + gcs), config, no-SA-key grep-guard, Wave-0 RED tests + fake_gcs (Wave 1)
+  - [ ] 09-02-PLAN.md — Backend storage endpoints (upload/signed-url/delete) + combined-repos DI + transcribe seam swap (Wave 2)
+  - [ ] 09-03-PLAN.md — Frontend seam finalization (drop bucket, add category, FormData guard) + 5 call sites (Wave 2)
+  - [ ] 09-04-PLAN.md — Bucket + keyless-signBlob IAM (Terraform + gcloud runbook) + combined 7+8+9 live UAT (Wave 2)
 
 ### Phase 10: Notifications
 **Goal**: Transactional email becomes notification-only — it carries no access token and links route to authenticated pages — covering the full set of lifecycle events.
@@ -225,7 +229,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Intake CRUD Parity & Frontend API Seam | 11/13 | Gaps found (2 blockers) — gap plans 06-12/06-13 | 2026-06-29 |
 | 7. AI Function Ports | 0/8 | Planned (8 plans, 4 waves) | - |
 | 8. SSE Skill-Run Progress | 0/3 | Planned (3 plans, 1 wave) | - |
-| 9. GCS Storage | 0/TBD | Not started | - |
+| 9. GCS Storage | 0/4 | Planned (4 plans, 2 waves) | - |
 | 10. Notifications | 0/TBD | Not started | - |
 | 11. Internationalization (NL/FR/EN) | 0/TBD | Not started | - |
 | 12. Frontend Deploy, Cutover & Supabase Retirement | 0/TBD | Not started | - |
