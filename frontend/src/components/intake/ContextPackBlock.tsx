@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
+import * as skills from "@/lib/api/skills";
 
 type Pack = {
   id: string;
@@ -225,10 +226,21 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   };
 
   async function generateContextPack() {
-    // The generate-context-pack backend lands in Phase 7 (Bucket B). The escape-hatch
-    // button stays in the layout but surfaces a not-yet-available notice for now.
-    void intakeId;
-    toast.message("Context Pack-generatie komt in Phase 7.");
+    // Dispatch the Phase-7 context-pack run. NOTE: the pack DISPLAY (loadLatest /
+    // loadHistory above) still has no backend read surface — the run succeeds and the
+    // intake advances to `decomposed`, but the markdown render stays empty until an
+    // artifacts-read endpoint exists (logged as an integration gap, 2026-07-13 UAT).
+    setGenerating(true);
+    try {
+      const res = await skills.generateContextPack(intakeId);
+      if (!res.success) {
+        toast.error(`Context Pack starten mislukt: ${res.error}`);
+        return;
+      }
+      toast.success("Context Pack-generatie gestart — dit duurt ± 1–2 minuten.");
+    } finally {
+      setGenerating(false);
+    }
   }
 
   if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return null;

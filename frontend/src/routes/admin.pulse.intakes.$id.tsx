@@ -9,6 +9,7 @@ import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, Chevr
 import { getIntake, submitIntake, reviewIntake } from "@/lib/api/intakes";
 import { listAnswers, saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { listSkillRuns } from "@/lib/api/skillRuns";
+import * as skills from "@/lib/api/skills";
 import * as storage from "@/lib/api/storage";
 import { getTemplates } from "@/lib/api/templates";
 import type { IntakeField, IntakeSchema } from "@/lib/intake-types";
@@ -498,11 +499,23 @@ function IntakeDetailPage() {
   // tenzij de gebruiker de history-accordion opent.
 
   const runSkill = async () => {
-    // The apply-intake-skill AI backend lands in Phase 7. The CTA stays wired so the
-    // admin lifecycle layout is unchanged; until then it surfaces a not-yet-available
-    // notice rather than invoking an edge function (Bucket B — Phase 7 seam stub).
+    // Dispatch the Phase-7 apply-intake-skill run (202 + run id). The optimistic
+    // "running" banner + force-poll (Phase 8 machinery above) take over from here;
+    // the effect on activeRunTriggeredAt clears the optimistic state once the real
+    // run row is visible, and the SSE/poll path drives progress to the review panel.
     if (!intake) return;
-    toast.message("AI-analyse (Nestor-intake-skill) komt in Phase 7.");
+    setBusyKey("runSkill", true);
+    try {
+      const res = await skills.applyIntakeSkill(intake.id);
+      if (!res.success) {
+        toast.error(`AI-analyse starten mislukt: ${res.error}`);
+        return;
+      }
+      setOptimisticRunStartedAt(new Date().toISOString());
+      setSkillLoading(true);
+    } finally {
+      setBusyKey("runSkill", false);
+    }
   };
 
   // ============== Phase-driven CTA handlers ==============
@@ -560,8 +573,23 @@ function IntakeDetailPage() {
   };
 
   const onGenerateContextPack = async () => {
-    // The context-pack generation backend lands in Phase 7 (Bucket B seam stub).
-    toast.message("Context Pack-generatie komt in Phase 7.");
+    // Dispatch the Phase-7 context-pack run (202 + run id). The run finalizes
+    // server-side (research_artifacts row + status bump to decomposed); the page
+    // reloads intake/run state when the active-run poll observes the change.
+    if (!intake) return;
+    setBusyKey("generateContextPack", true);
+    try {
+      const res = await skills.generateContextPack(intake.id);
+      if (!res.success) {
+        toast.error(`Context Pack starten mislukt: ${res.error}`);
+        return;
+      }
+      toast.success("Context Pack-generatie gestart — dit duurt ± 1–2 minuten.");
+      setOptimisticRunStartedAt(new Date().toISOString());
+      setSkillLoading(true);
+    } finally {
+      setBusyKey("generateContextPack", false);
+    }
   };
 
   const onStartAutoResearch = async () => {
@@ -638,9 +666,28 @@ function IntakeDetailPage() {
   };
 
   const handleSemanticSearch = async () => {
-    // Semantic-search backend lands in Phase 7; the panel only renders post-research
-    // (hasArtifacts is false this milestone), so this surfaces a notice for now.
-    toast.message("Semantisch zoeken komt in Phase 7.");
+    // Space-scoped semantic search over artifact embeddings (Phase-7 AI-04 read half).
+    // Backend returns {id, artifact_id, chunk_text, distance}; the panel renders the
+    // legacy shape, so map similarity = 1 - distance and artifact_id -> source.
+    if (!intake || !searchQuery.trim()) return;
+    setSearching(true);
+    try {
+      const res = await skills.searchIntakeArtifacts(intake.id, searchQuery.trim());
+      if (!res.success) {
+        toast.error(`Zoeken mislukt: ${res.error}`);
+        return;
+      }
+      setSearchResults(
+        res.data.results.map((r) => ({
+          question_priority: 0,
+          source: r.artifact_id ?? "",
+          similarity: r.distance === null ? 0 : 1 - r.distance,
+          chunk_text: r.chunk_text,
+        })),
+      );
+    } finally {
+      setSearching(false);
+    }
   };
 
 
