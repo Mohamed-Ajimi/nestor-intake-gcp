@@ -35,6 +35,7 @@ from google.api_core import exceptions as api_exceptions
 from google.cloud import storage
 
 from app.core.config import get_settings
+from app.storage.keys import sanitize_filename
 
 # D-10: hard server-side ceiling for signed-URL lifetimes. A client may ask for
 # any expires_in; the effective TTL is clamped to <= 900 seconds (15 min).
@@ -103,6 +104,10 @@ def signed_download_url(
     wheel is the source of truth.
     """
     ttl = _clamp_ttl(ttl_seconds)
+    # WR-01: sanitize the download filename inside the seam (single choke point) so a
+    # client-influenced tail can never inject into the Content-Disposition header (strips
+    # quotes/semicolons/control chars via the shared keys.py sanitizer, T-09-02/T-09-04).
+    safe_filename = sanitize_filename(filename)
     credentials, _project = google.auth.default()
     credentials.refresh(google.auth.transport.requests.Request())
     blob = _bucket().blob(key)
@@ -112,7 +117,7 @@ def signed_download_url(
         method="GET",
         service_account_email=credentials.service_account_email,
         access_token=credentials.token,
-        response_disposition=f'attachment; filename="{filename}"',
+        response_disposition=f'attachment; filename="{safe_filename}"',
         response_type=content_type or None,
     )
 
