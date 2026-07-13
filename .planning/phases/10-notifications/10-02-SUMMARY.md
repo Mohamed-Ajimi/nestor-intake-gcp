@@ -102,3 +102,12 @@ None. The only new surface (Secret Manager → Cloud Run RESEND_API_KEY injectio
 
 - Plan 01 (mail module) and Plan 03 (endpoints) are inert **live** until Steps 10.1–10.4 run against the deployed service; the infra is authored but IaC-drift-inert (Phase 8 D-07), reconciled at Phase 12.
 - The mail module must read `RESEND_API_KEY` / `NESTOR_ADMIN_EMAIL` (`Settings.nestor_admin_email`) / `APP_BASE_URL` (`Settings.app_base_url`) from process env at call time — matching the env var names declared here.
+
+## Self-Check: PASSED
+
+- FOUND: infra/main.tf (RESEND_API_KEY secret + iam + env)
+- FOUND: infra/variables.tf (resend_api_key vars)
+- FOUND: infra/DEPLOY-RUNBOOK.md (Phase-10 section)
+- FOUND: .planning/phases/10-notifications/10-02-SUMMARY.md
+- FOUND commit 4042099 (Task 1 — Terraform)
+- FOUND commit e4a6701 (Task 2 — runbook)
