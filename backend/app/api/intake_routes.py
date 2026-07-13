@@ -393,6 +393,7 @@ def upsert_answers(
     intake_id: str,
     body: AnswerBatch,
     repos: tuple[IntakeRepository, IntakeAnswerRepository] = Depends(get_intake_and_answer_repos),
+    identity: Identity = Depends(get_current_identity),
 ) -> list[AnswerView]:
     """Upsert a section's answers in one round-trip (save-as-you-go, D-03).
 
@@ -405,11 +406,19 @@ def upsert_answers(
     """
     intake_repo, answers_repo = repos
     # Ownership pre-check (D-07): a cross-tenant/missing id is hidden as 404 BEFORE any write.
-    if intake_repo.get(intake_id) is None:
+    intake = intake_repo.get(intake_id)
+    if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     items = [item.model_dump() for item in body.answers]
-    answers_repo.upsert_batch(intake_id, items)
+    if identity.role == "superadmin":
+        # Superadmin has NO own space (null-space repo) — target the intake's OWN space,
+        # mirroring the storage CR-02 / intake-create fix. A plain upsert_batch() would
+        # hit the null-space RuntimeError guard -> 500 (live-UAT regression 2026-07-13:
+        # the admin AI-review apply path writes answers as superadmin).
+        answers_repo.upsert_batch_in_space(intake.space_id, intake_id, items)
+    else:
+        answers_repo.upsert_batch(intake_id, items)
     return [_answer_view(row) for row in answers_repo.list_for_intake(intake_id)]
 
 

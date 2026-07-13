@@ -73,6 +73,11 @@ def _user(space_id: uuid.UUID) -> "Identity":
     return Identity(uid=f"u-{space_id}", email="u@x", role="user", space_id=str(space_id))
 
 
+def _superadmin() -> "Identity":
+    """A cross-tenant ``superadmin`` Identity (space_id None — no own space)."""
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
 def _as(identity: "Identity"):
     """Return a ``get_current_identity`` override that yields ``identity`` (closure)."""
 
@@ -98,6 +103,41 @@ def _patch_engine_factories(monkeypatch, user_engine) -> None:
     ``set_space_context`` GUC) run verbatim. ``get_sessionmaker`` is left real.
     """
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
+
+
+# Local testcontainer credential ONLY for the connect-as app_superadmin engine (mirrors
+# test_admin_routes.py / test_storage_upload.py) — never a production secret.
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
+
+def _patch_superadmin_engine(monkeypatch, sa_engine) -> None:
+    """Patch the superadmin engine factory session.py imported (superadmin write path)."""
+    monkeypatch.setattr(session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS ``app_superadmin`` (connect-as, not SET ROLE).
+
+    Mirrors test_storage_upload.py: ``current_user = 'app_superadmin'`` makes the 0003
+    ``*_superadmin_all`` bypass policy match, so ``upsert_batch_in_space`` can write the
+    space-scoped answers cross-tenant (the admin AI-review apply path).
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +355,69 @@ def test_answers_value_json_accepts_any_json_value(engine, monkeypatch):
         assert by_key.get("flag_field") is True
         assert by_key.get("num_field") == 42
         assert by_key.get("obj_field") == {"nested": "ok"}
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_superadmin_answers_upsert_lands_in_intake_space(engine, monkeypatch, superadmin_engine):
+    """A superadmin (null-space identity) PATCH .../answers must succeed, not 500.
+
+    Live-UAT regression 2026-07-13: the admin AI-review apply path writes answers as
+    superadmin; ``upsert_batch`` on a null-space repo raises the RuntimeError guard ->
+    unhandled 500 (browser saw 'Failed to fetch'). The handler now branches to
+    ``upsert_batch_in_space(intake.space_id, ...)`` — same pattern as storage CR-02 and
+    the intake-create fix — so the row lands in the intake's OWN space.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Superadmin Answers Space")
+
+        _patch_engine_factories(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        # The intake is created by the space's OWN user (the normal client path)...
+        app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+        client = TestClient(app)
+        intake_id = client.post(
+            "/intakes",
+            json={"client_name": "Superadmin Answers Co"},
+            headers={"Authorization": "Bearer ignored-overridden"},
+        ).json()["id"]
+
+        # ... then a SUPERADMIN applies review answers onto it (the admin UI path).
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        resp = client.patch(
+            f"/intakes/{intake_id}/answers",
+            json={"answers": [{"field_key": "review_field", "value": "approved text"}]},
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code == 200, (
+            f"superadmin answers upsert must be 200 (upsert_batch_in_space), got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+
+        # The row landed in the intake's OWN space (not NULL, not anything else).
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_space_id', :sid, true)"),
+                {"sid": str(space_id)},
+            )
+            row = conn.execute(
+                text(
+                    f"SELECT value, space_id FROM {SCHEMA}.intake_answers "
+                    "WHERE intake_id = :id AND field_key = 'review_field'"
+                ),
+                {"id": intake_id},
+            ).first()
+        assert row is not None, "the superadmin-written answer row must exist in-space"
+        assert row[0] == "approved text"
+        assert str(row[1]) == str(space_id), "space_id must be the intake's own space"
     finally:
         app.dependency_overrides.clear()
         _cleanup_space(engine, space_id)

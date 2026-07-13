@@ -261,6 +261,53 @@ class IntakeAnswerRepository(TenantRepository[IntakeAnswer]):
         )
         self._s.execute(stmt)
 
+    def upsert_batch_in_space(self, space_id, intake_id, items):
+        """Superadmin-only section upsert into an EXPLICIT target space.
+
+        Mirrors :meth:`upsert_extracted_in_space` for the plain (human/AI-review) answer
+        columns: the tenant :meth:`upsert_batch` derives its space ONLY from the verified
+        Identity, so a SUPERADMIN (no own space) needs this audited cross-tenant path
+        against the intake's OWN space (resolved from the fetched intake row by the route,
+        never from the request). Valid ONLY on a superadmin-scoped repo
+        (``self._space_id is None``). Sets the tx-local GUC to the TARGET space and stamps
+        ``space_id`` on every row; the ``ON CONFLICT DO UPDATE`` carries an explicit
+        ``WHERE space_id = <target>`` so only rows in the chosen space are ever
+        overwritten (D-01 wall, unchanged). Live-UAT regression 2026-07-13: the admin
+        AI-review apply path (PATCH /answers as superadmin) 500'd here.
+        """
+        if self._space_id is not None:
+            raise RuntimeError(
+                "upsert_batch_in_space is superadmin-only — the user path must use "
+                "upsert_batch()"
+            )
+        rows = [
+            {
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "field_key": item["field_key"],
+                "value": item.get("value"),
+                "value_json": item.get("value_json"),
+            }
+            for item in items
+        ]
+        if not rows:
+            return
+        # Mirror create_in_space: set the tx-local GUC to the TARGET space so any
+        # definer-trigger write passes its space-isolation check (reverts at COMMIT).
+        set_space_context(self._s, space_id)
+        stmt = pg_insert(self.model).values(rows)
+        set_ = {
+            "value": stmt.excluded.value,
+            "value_json": stmt.excluded.value_json,
+        }
+        # D-01: overwrite only a conflicting row owned by the TARGET space.
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_intake_answers_intake_field",
+            set_=set_,
+            where=(self.model.space_id == space_id),
+        )
+        self._s.execute(stmt)
+
     def upsert_extracted(self, intake_id, items):
         """LLM-extracted answer upsert — the structure-answers handler's write path (A6).
 
