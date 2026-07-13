@@ -36,6 +36,10 @@ type Props = {
   intakeStatus: string | null;
   intakeTitle: string;
   clientName: string;
+  // A one-shot terminal signal (e.g. `${status}:${runId}`) that changes when a
+  // context-pack run terminates. The load effect re-reads the pack when it changes so a
+  // re-generate on an already-`decomposed` intake (status unchanged) still refreshes.
+  reloadSignal?: string | null;
 };
 
 const VISIBLE_STATUSES = new Set([
@@ -196,7 +200,13 @@ function downloadContextPackPDF(markdown: string, clientName: string, intakeTitl
   doc.save(`${slug}.pdf`);
 }
 
-export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientName }: Props) {
+export function ContextPackBlock({
+  intakeId,
+  intakeStatus,
+  intakeTitle,
+  clientName,
+  reloadSignal,
+}: Props) {
   const [latestPack, setLatestPack] = useState<Pack | null>(null);
   const [loadingPack, setLoadingPack] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -224,14 +234,6 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
     setLoadingPack(false);
   }, [intakeId]);
 
-  useEffect(() => {
-    if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return;
-    loadLatest();
-    // research_questions are written post-`decomposed` (Bucket E) and never render in
-    // this milestone, so there is no read here.
-    setQuestions([]);
-  }, [intakeStatus, loadLatest, intakeId]);
-
   const loadHistory = useCallback(async () => {
     // History comes from the same 07-09 read surface (`{ latest, history }`).
     const res = await getContextPack(intakeId);
@@ -241,6 +243,21 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
     }
     setHistory(res.data.history.map(toPack));
   }, [intakeId]);
+
+  useEffect(() => {
+    if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return;
+    loadLatest();
+    // A terminal context-pack run bumps `reloadSignal`; re-reading here refreshes the pack
+    // even when the status was already `decomposed` (a re-generate). The history is also
+    // re-fetched when it's already been opened, so it stays in sync.
+    if (history !== null) loadHistory();
+    // research_questions are written post-`decomposed` (Bucket E) and never render in
+    // this milestone, so there is no read here.
+    setQuestions([]);
+    // history is intentionally omitted from deps: it must not re-trigger on its own state
+    // change (that would loop). loadHistory is stable (useCallback on intakeId).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intakeStatus, loadLatest, loadHistory, intakeId, reloadSignal]);
 
   const toggleHistory = () => {
     const next = !historyOpen;

@@ -206,18 +206,24 @@ export function NextStepBanner(props: Props) {
       break;
 
     case "awaiting_context_pack":
-      body = (
-        <>
-          Klant heeft gevalideerd. Genereer de Context Pack — de briefing-PDF voor Nestor's
-          onderzoeker.
-          <Tooltip text="Bundelt de gevalideerde intake, gevoeligheden, blinde vlekken en onderzoeksvragen in één PDF die de research-fase voedt." />
-        </>
-      );
-      actions = (
-        <PrimaryBtn onClick={props.onGenerateContextPack} busy={busy.generateContextPack}>
-          {busy.generateContextPack ? "Bezig met genereren… (60–120s)" : "Genereer Context Pack"}
-        </PrimaryBtn>
-      );
+      if (activeRun?.status === "running") {
+        body =
+          "Context Pack wordt gegenereerd — Nestor bundelt de gevalideerde intake tot de briefing. Dit duurt ± 60–120 seconden. Je mag deze tab open laten.";
+        actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
+      } else {
+        body = (
+          <>
+            Klant heeft gevalideerd. Genereer de Context Pack — de briefing-PDF voor Nestor's
+            onderzoeker.
+            <Tooltip text="Bundelt de gevalideerde intake, gevoeligheden, blinde vlekken en onderzoeksvragen in één PDF die de research-fase voedt." />
+          </>
+        );
+        actions = (
+          <PrimaryBtn onClick={props.onGenerateContextPack} busy={busy.generateContextPack}>
+            {busy.generateContextPack ? "Bezig met genereren… (60–120s)" : "Genereer Context Pack"}
+          </PrimaryBtn>
+        );
+      }
       break;
 
     case "awaiting_research_start":
