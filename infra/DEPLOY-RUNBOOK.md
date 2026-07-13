@@ -229,6 +229,127 @@ gcloud run services describe nestor-api --region "$REGION" --project="$GOOGLE_PR
 
 ---
 
+## Phase 9 — GCS storage: bucket + keyless signBlob IAM + image redeploy
+
+Phase 9 replaces the legacy Supabase `nestor-uploads` bucket with a private, hardened
+GCS bucket and grants the runtime SA exactly two things: **bucket-scoped**
+`storage.objectAdmin` (read/write/delete objects) and a `serviceAccountTokenCreator`
+**self-binding** so it can mint V4 signed download URLs via IAM **signBlob** — with
+**no SA JSON key anywhere** (criterion 1). All steps run during the **combined 7+8+9
+UAT (D-13)** — ONE deploy, ONE session — NOT during plan execution.
+
+> **⚠️ IaC-DRIFT (same reality as the Phase 5/7/8 notes above).** The `infra/main.tf`
+> edits from plan 09-04 (`google_storage_bucket.uploads`, the `objectAdmin` bucket
+> binding, the `serviceAccountTokenCreator` self-binding, and the `STORAGE_BUCKET`
+> env) are the **intended end-state only** — Terraform state was never adopted, so
+> **nothing is live until you run the gcloud steps below by hand**. This extends the
+> STATE.md IaC-drift list (D-11); reconcile via `terraform import` (or keep manual)
+> **before the Phase 12 cutover**.
+
+Preamble — export the env once (mirrors Step 3 / Step 8.1):
+
+```bash
+export GOOGLE_PROJECT="<your-project-id>"
+export REGION="europe-west1"
+export RUNTIME_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export BUCKET="${GOOGLE_PROJECT}-nestor-uploads"
+```
+
+### Step 9.1 — Create the private, hardened bucket (D-12/D-07a)
+
+```bash
+gcloud storage buckets create "gs://${BUCKET}" \
+  --location="$REGION" \
+  --uniform-bucket-level-access \
+  --public-access-prevention \
+  --project="$GOOGLE_PROJECT"
+```
+
+`--uniform-bucket-level-access` makes IAM the ONLY access surface (no per-object
+ACLs); `--public-access-prevention` guarantees **zero public objects** (a stray
+allUsers grant cannot make an object world-readable, D-07a / T-09-14). No versioning,
+no lifecycle rules (D-12 — out of scope this phase).
+
+### Step 9.2 — Bucket-scoped `storage.objectAdmin` for the runtime SA (least privilege)
+
+```bash
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/storage.objectAdmin" \
+  --project="$GOOGLE_PROJECT"
+```
+
+Scoped to **THIS bucket only** — NOT a project-wide `roles/storage.*` grant
+(T-09-15). `objectAdmin` (not `objectViewer`/`objectCreator`) because the backend
+both writes uploads and deletes objects on cleanup (D-09).
+
+### Step 9.3 — Keyless signBlob grant: `serviceAccountTokenCreator` self-binding (criterion 1)
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/iam.serviceAccountTokenCreator" \
+  --project="$GOOGLE_PROJECT"
+```
+
+This is the runtime SA impersonating **itself** to sign URLs via the IAM signBlob
+API — **no SA JSON key** (T-09-13). It is a **SEPARATE** grant from the object access
+in Step 9.2 (**Pitfall 2**): `objectAdmin` lets the SA read/write objects, but
+signing a download URL requires the DISTINCT `iam.serviceAccountTokenCreator` role on
+the SA principal itself. Skip this and `signed_download_url()` **403s at signBlob**
+even though uploads/deletes work. The `scripts/ci_no_sa_json_key.sh` guard (09-01)
+enforces that no JSON-key signing path is ever committed.
+
+### Step 9.4 — Rebuild the image with the storage deps + inject `STORAGE_BUCKET` (Pitfall 7)
+
+The running container does **not** contain `google-cloud-storage` /
+`python-multipart` until rebuilt (**Pitfall 7** — same image-only-redeploy gap as
+Phase 7/8). Reuse the Step-3/8.1 Cloud Build idiom (never a local `docker build` —
+downloads are blocked on the dev box), then repoint the service **and** set the
+bucket env. **This same rebuild must ship the Phase-8 `skill-runs/stream` route** —
+live Cloud Run is still **v12** (no stream route), so 8+9 land in ONE image:
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build (pulls the new google-cloud-storage + python-multipart
+# deps AND the Phase-8 stream route into the image), then repoint the service.
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE" \
+  --update-env-vars="STORAGE_BUCKET=${BUCKET}"
+```
+
+`STORAGE_BUCKET` is a plain non-secret env (D-09) — the live equivalent of the
+`main.tf` service `env { name = "STORAGE_BUCKET" … }` block, inert until this
+command runs.
+
+### Step 9.5 — Combined 7+8+9 live UAT (D-13): ONE deploy, ONE session
+
+Run the whole pre-research flow end-to-end on the deployed service in a single
+session. This closes the **deferred Phase-7 UAT** (STATE.md pending todo) and the
+**Phase-8 SSE UAT** together with the new storage surface:
+
+1. Log in, open an intake.
+2. **Upload** an attachment **and** an audio file (Phase 9 upload path).
+3. Confirm **transcribe** runs on the audio (Phase 7 Whisper seam over the uploaded
+   object).
+4. Run **structure-answers** / **extract-insights** and then **apply-intake-skill**,
+   watching the **SSE progress stream** arrive at a ~2s cadence (Phase 8 — the stream
+   route must have shipped in the Step-9.4 rebuild).
+5. **Download** the produced artifacts via the **signed URLs** — confirm each forces
+   an **attachment** download with the **original filename** and the URL **expires
+   ≤15 min** (D-10 TTL clamp).
+6. Confirm criterion 1: **no SA JSON key** exists anywhere in the environment.
+
+Failure triage: signBlob **403** → the Step-9.3 `serviceAccountTokenCreator`
+self-binding is missing (**Pitfall 2**). Upload **422** → the FormData Content-Type
+guard (**Pitfall 3**). A storage endpoint **500** with `ModuleNotFoundError` → the
+Step-9.4 image rebuild did not include `google-cloud-storage` / `python-multipart`
+(**Pitfall 7**).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -239,4 +360,9 @@ gcloud run services describe nestor-api --region "$REGION" --project="$GOOGLE_PR
 - [ ] Step 8.1 — backend image rebuilt via Cloud Build with the new `skill-runs/stream` + full-run endpoints, service repointed (D-10 UAT)
 - [ ] Step 8.2 — `gcloud run services update nestor-api … --timeout=900` applied live (D-07; the `main.tf` edit alone is inert per drift)
 - [ ] Step 8.3 — live verify: console Request timeout reads 900s AND streamed events arrive at ~2s cadence (no ~300s drop)
-- [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover
+- [ ] Step 9.1 — private `${GOOGLE_PROJECT}-nestor-uploads` bucket created (uniform BLA + public-access-prevention enforced; no versioning/lifecycle) (D-07a/D-12)
+- [ ] Step 9.2 — bucket-scoped `roles/storage.objectAdmin` granted to the runtime SA (least privilege, T-09-15)
+- [ ] Step 9.3 — `roles/iam.serviceAccountTokenCreator` self-binding on the runtime SA for keyless signBlob (criterion 1, T-09-13; separate grant per Pitfall 2)
+- [ ] Step 9.4 — image rebuilt via Cloud Build with `google-cloud-storage` + `python-multipart` AND the Phase-8 stream route, service repointed + `STORAGE_BUCKET` env set (Pitfall 7; live is still v12)
+- [ ] Step 9.5 — combined 7+8+9 UAT: attachment + audio upload → transcribe → SSE-streamed apply-intake-skill → signed-URL download (attachment disposition, ≤15-min TTL); no SA JSON key anywhere (D-13)
+- [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover (now extended with the Phase-9 storage resources)
