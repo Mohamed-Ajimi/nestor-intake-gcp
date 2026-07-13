@@ -513,6 +513,9 @@ async def stream_skill_runs(
             if view != last_sent:  # emit-on-change (D-06)
                 yield _sse_data(view)
                 last_sent = view
+                # Reset the heartbeat clock on ANY frame — the invariant is "some byte
+                # every ~15s", so a data emit defers the next ping just like a ping does.
+                last_beat = anyio.current_time()
                 if view is not None and view["status"] in TERMINAL:
                     return
             elif anyio.current_time() - last_beat >= HEARTBEAT_SECONDS:
