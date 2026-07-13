@@ -37,6 +37,7 @@ Authoritative references:
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import (
@@ -99,6 +100,21 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_intake_id(intake_id: str) -> str:
+    """Coerce the raw ``intake_id`` path param to the canonical UUID string (WR-06).
+
+    ``intake_id`` is a bare ``str`` path param bound against a ``UUID`` column; a
+    non-UUID value (e.g. ``"abc"``) would otherwise raise ``invalid input syntax for
+    type uuid`` at execute and surface as an unhandled 500 instead of the D-07 404.
+    Reject a malformed id with 404 (existence hidden, D-08) and return the CANONICAL
+    lowercase form so object keys / prefix asserts never depend on the request casing.
+    """
+    try:
+        return str(uuid.UUID(intake_id))
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+
 def _filename_from_key(key: str) -> str:
     """Recover a human download filename from a server-authored object key.
 
@@ -137,6 +153,10 @@ def upload_file(
     tx (D-07) so the Phase-7 transcribe flow can find the object with no client bookkeeping.
     """
     intake_repo, source_repo = repos
+
+    # (0) NORMALIZE — coerce the id to canonical UUID form (malformed -> 404, WR-06) so
+    # the repo read never 500s and the object key / prefix use the canonical casing.
+    intake_id = _normalize_intake_id(intake_id)
 
     # (2a) TYPE — reject a category the server does not know (D-05 / build_object_key).
     if category not in CATEGORIES:
@@ -217,6 +237,9 @@ def create_signed_url(
     """
     intake_repo, _source_repo = repos
 
+    # Malformed id -> 404 (WR-06); canonical form drives the prefix assert below.
+    intake_id = _normalize_intake_id(intake_id)
+
     intake = intake_repo.get(intake_id)
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
@@ -254,6 +277,9 @@ def delete_objects(
     orphaned object). Returns the count of objects removed.
     """
     intake_repo, source_repo = repos
+
+    # Malformed id -> 404 (WR-06); canonical form drives the prefix asserts below.
+    intake_id = _normalize_intake_id(intake_id)
 
     intake = intake_repo.get(intake_id)
     if intake is None:
