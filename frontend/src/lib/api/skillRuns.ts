@@ -37,6 +37,33 @@ export function listSkillRuns(
 }
 
 /**
+ * Mirrors the backend `SkillRunFullView` — the heavy projection carrying the
+ * parsed skill output and the run's cost estimate. Read once, on demand, when the
+ * admin enters review mode (Phase 8 D-08 un-stubs this end of the seam).
+ */
+export type SkillRunFull = {
+  id: string;
+  output_parsed: unknown;
+  cost_estimate_usd: number | null;
+};
+
+/**
+ * Fetch a single skill run's full projection (`output_parsed` + cost). Space-scoped
+ * server-side; a run outside the caller's space is existence-hidden as 404 (D-04).
+ * Uses the standard short request-response transport — NOT the SSE stream (never fork
+ * the transport): this is a one-shot read the review flow performs after the terminal
+ * event, not a live push.
+ */
+export function getSkillRunFull(
+  intakeId: string,
+  runId: string,
+): Promise<ApiResult<SkillRunFull>> {
+  return apiFetch<SkillRunFull>(`/intakes/${intakeId}/skill-runs/${runId}`, {
+    method: "GET",
+  });
+}
+
+/**
  * Fetch the latest skill run and reconcile it into the `PhaseSkillRunInput` shape
  * `derivePhase` expects (`{ status, applied_at }` or null). The backend `status` is
  * passed through verbatim — `derivePhase` is the sole authority on what `"succeeded"`

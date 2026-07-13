@@ -269,7 +269,7 @@ function IntakeDetailPage() {
     !!activeRun &&
     activeRun.id !== consumedRunId &&
     !reviewMode;
-  const { data: fullRun } = useSkillRunFull(activeRun?.id, shouldFetchFull);
+  const { data: fullRun } = useSkillRunFull(intake?.id, activeRun?.id, shouldFetchFull);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -607,6 +607,23 @@ function IntakeDetailPage() {
     loadSkillRuns();
   }, [fullRun, activeRun, consumedRunId, loadSkillRuns]);
 
+  // Terminal SSE event → re-fetch the intake + skill runs (D-09) so `derivePhase`
+  // reflects the server-side status transition (e.g. → `decomposed`) WITHOUT a manual
+  // reload — Realtime-parity UX. The `useActiveSkillRun` hook flips `activeRunStatus`
+  // to a terminal value on the stream's terminal event; this effect reacts to it.
+  // Guarded by a ref so each terminal run drives exactly one refresh (no loop). This
+  // does NOT touch the review-mode effect above — the chain terminal → phase flips →
+  // shouldFetchFull true → useSkillRunFull fetches output_parsed → review effect fires
+  // stays wired.
+  const refreshedRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeRunId || !activeRunStatus) return;
+    if (activeRunStatus !== "succeeded" && activeRunStatus !== "failed") return;
+    if (refreshedRunRef.current === activeRunId) return;
+    refreshedRunRef.current = activeRunId;
+    void load();
+    void loadSkillRuns();
+  }, [activeRunId, activeRunStatus, load, loadSkillRuns]);
 
   const exitReviewMode = async () => {
     setReviewMode(false);

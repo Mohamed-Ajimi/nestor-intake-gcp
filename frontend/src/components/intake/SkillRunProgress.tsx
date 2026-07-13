@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { listSkillRuns, type SkillRun } from "@/lib/api/skillRuns";
+import { getSkillRunFull, listSkillRuns, type SkillRun } from "@/lib/api/skillRuns";
+import { openSkillRunStream } from "@/lib/api/skillRunStream";
 
 export type ActiveSkillRun = {
   id: string;
@@ -30,19 +31,24 @@ function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
 }
 
 /**
- * Latest skill-run for an intake, via a POLLED `skillRuns.listSkillRuns` read.
+ * Latest skill-run for an intake — SSE-first with the bounded 5s poll retained as the
+ * silent fallback (Phase 8, API-04, D-09/D-07a).
  *
- * This replaces the previous realtime websocket subscription (Bucket C). The live SSE
- * push lands in Phase 8 (API-04); until then a bounded 5s poll while the run is active
- * keeps the lifecycle UI live. The external contract (`{ data: ActiveSkillRun | null }`
- * and the second `_forcePoll` arg) is intentionally unchanged so callers — and the
- * Phase-8 SSE swap — need no edits.
+ * The live push (which the legacy Supabase Realtime subscription gave, then a 5s poll
+ * stood in for in Phase 6/7) is now driven by `openSkillRunStream`. The 5s poll block
+ * below is UNCHANGED and becomes the fallback path: it runs when the caller forces it
+ * (`_forcePoll === true`) or when the stream fails (`onFallback`, i.e. no token / 401·404
+ * / backoff exhausted) so the UI never goes blind.
+ *
+ * The external contract (`{ data: ActiveSkillRun | null }` and the second `_forcePoll`
+ * arg) is intentionally UNCHANGED — the whole point of the Phase 6/7 prep — so callers
+ * need zero edits. The terminal-event → detail-page refresh (load + loadSkillRuns) is
+ * wired at the route (D-09), not here, so the hook contract stays frozen.
  */
 export function useActiveSkillRun(
   intakeId: string | undefined,
   _forcePoll = false,
 ): { data: ActiveSkillRun | null } {
-  void _forcePoll;
   const [data, setData] = useState<ActiveSkillRun | null>(null);
 
   useEffect(() => {
@@ -52,6 +58,7 @@ export function useActiveSkillRun(
     }
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let stream: { close: () => void } | null = null;
     const pollStart = Date.now();
     const MAX_POLL_MS = 10 * 60 * 1000;
 
@@ -82,37 +89,92 @@ export function useActiveSkillRun(
       }, 5000);
     };
 
-    // Initial fetch, then bounded polling while the run is active.
-    void fetchLatest().then((next) => schedulePoll(next?.status));
+    // The tested 5s poll — invoked as the SSE fallback path or when `_forcePoll` is set.
+    const startPoll = () => {
+      if (cancelled) return;
+      void fetchLatest().then((next) => schedulePoll(next?.status));
+    };
+
+    if (_forcePoll) {
+      // Caller explicitly wants the poll (e.g. an optimistic run start pre-stream).
+      startPoll();
+    } else {
+      // SSE-first: map each event through `toActiveSkillRun` (reused unchanged). The
+      // terminal event's final snapshot has already been delivered by the preceding
+      // `onEvent`; on failure we silently degrade to the poll.
+      stream = openSkillRunStream(
+        intakeId,
+        (r) => {
+          if (!cancelled) setData(toActiveSkillRun(r));
+        },
+        () => {
+          /* terminal — final data already set by the preceding onEvent; route refreshes */
+        },
+        () => {
+          if (!cancelled) startPoll();
+        },
+      );
+    }
 
     return () => {
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
+      if (stream) stream.close();
     };
-  }, [intakeId]);
+  }, [intakeId, _forcePoll]);
 
   return { data };
 }
 
 /**
- * The full skill-run row (heavy `output_parsed` + cost) is produced by the Phase-7
- * apply-intake-skill backend and is NOT projected by the read-only skill-run seam
- * (`SkillRunView` carries only `{ id, status, applied_at, completed_at }`). Until Phase 7
- * there is nothing to fetch, so this returns `null` with its contract unchanged — the
- * admin AI-review flow simply does not enter review mode (correct pre-Phase-7, since no
- * real skill output exists yet).
+ * The full skill-run row (heavy `output_parsed` + cost) produced by the Phase-7
+ * apply-intake-skill backend. Phase 8 (D-08) un-stubs this against the new space-scoped
+ * `GET /intakes/{intakeId}/skill-runs/{runId}` read so the terminal SSE event actually
+ * feeds the AIReviewPanel review flow (dead until now).
+ *
+ * Gated on `enabled && intakeId && skillRunId` — the route only turns `enabled` true once
+ * the phase machine reaches `awaiting_review`, so the heavy `output_parsed` is fetched
+ * exactly once, on demand. Return-no-throw: on any failure `data` stays `null` (the
+ * review panel simply does not enter review mode). The `{ data }` shape is preserved.
  */
 export function useSkillRunFull(
+  intakeId: string | undefined,
   skillRunId: string | undefined,
   enabled: boolean,
 ): {
-  data:
-    | { id: string; output_parsed: unknown; cost_estimate_usd: number | null }
-    | null;
+  data: { id: string; output_parsed: unknown; cost_estimate_usd: number | null } | null;
 } {
-  void skillRunId;
-  void enabled;
-  return { data: null };
+  const [data, setData] = useState<{
+    id: string;
+    output_parsed: unknown;
+    cost_estimate_usd: number | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !intakeId || !skillRunId) {
+      setData(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const res = await getSkillRunFull(intakeId, skillRunId);
+      if (cancelled) return;
+      if (!res.success) {
+        console.warn("[SkillRunProgress] full run fetch failed", res.error);
+        return;
+      }
+      setData({
+        id: res.data.id,
+        output_parsed: res.data.output_parsed,
+        cost_estimate_usd: res.data.cost_estimate_usd,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [intakeId, skillRunId, enabled]);
+
+  return { data };
 }
 
 export function SkillRunProgress({ triggeredAt }: { triggeredAt: string }) {

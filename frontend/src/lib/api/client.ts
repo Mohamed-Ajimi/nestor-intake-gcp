@@ -21,7 +21,9 @@ export type ApiResult<T> = { success: true; data: T } | { success: false; error:
  * Mirrors `auth-context.tsx`'s `getToken` against the same `auth` singleton so the
  * transport stays a plain async module (no hook), reusable from anywhere.
  */
-async function currentIdToken(forceRefresh = false): Promise<string | null> {
+export async function currentIdToken(
+  forceRefresh = false,
+): Promise<string | null> {
   return auth.currentUser ? getIdToken(auth.currentUser, forceRefresh) : null;
 }
 
