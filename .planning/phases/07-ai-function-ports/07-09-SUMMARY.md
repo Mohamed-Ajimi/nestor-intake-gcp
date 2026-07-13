@@ -109,6 +109,10 @@ None - no external service configuration required. (Deploy is a standard image r
 - **07-10 (frontend) can now:** call `GET /intakes/{id}/context-pack` to render `ContextPackBlock.loadLatest`/`loadHistory` (previously stubbed), and filter skill runs on the new `skill` field so it no longer assumes "newest succeeded run == apply-intake-skill" (context-pack now also lands succeeded runs).
 - **Blocker for live UAT:** the change is authored + committed but NOT yet on the live Cloud Run revision — it needs the next image rebuild + redeploy before the endpoint is reachable in a live browser test.
 
+## Self-Check: PASSED
+
+All modified files exist on disk; all four commits (`a0464d7`, `a6a0289`, `445a7b8`, `1b77745`) are present in the branch history. Working tree clean. (SUMMARY.md is force-added — `.planning/` is gitignored in this repo.)
+
 ---
 *Phase: 07-ai-function-ports*
 *Completed: 2026-07-13*
