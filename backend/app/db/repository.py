@@ -44,6 +44,7 @@ from app.db.rls import set_space_context
 from app.auth.identity import Identity
 from app.db.base import Base
 from app.db.models.intake import Intake, IntakeAnswer, IntakeTemplate
+from app.db.models.research import ResearchArtifact
 from app.db.models.skill_run import SkillRun
 from app.db.models.sources import IntakeSource
 from app.db.models.transcripts import Transcript
@@ -456,6 +457,59 @@ class SkillRunRepository(TenantRepository[SkillRun]):
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+
+class ResearchArtifactRepository(TenantRepository[ResearchArtifact]):
+    """Tenant-scoped repository over ``nestor.research_artifacts`` (07-09 context-pack read).
+
+    Thin subclass — list/get/patch/create come from :class:`TenantRepository` and are
+    space-walled by ``_scope`` for free (D-01). Adds the two READ helpers the context-pack
+    display endpoint needs: the latest pack + the full pack history for an intake. Both
+    filter on ``source == "context-pack-generator"`` — the EXACT literal the write path
+    (``app.ai.skills.context_pack``) stamps — so ONLY context-pack artifacts surface, not
+    future post-``decomposed`` research-evidence rows (T-7-09-05). ``space_id`` is derived
+    ONLY from the verified Identity via ``_scope`` — never a method arg (TENANT-02).
+    """
+
+    model = ResearchArtifact
+
+    #: The exact ``source`` literal the generate-context-pack write path stamps.
+    _CONTEXT_PACK_SOURCE = "context-pack-generator"
+
+    def latest_context_pack_for_intake(self, intake_id):
+        """Return this intake's most recent context-pack artifact within scope, or ``None``.
+
+        A cross-tenant/missing intake matches the scoped ``WHERE`` against nothing → ``None``
+        (the handler renders that as an existence-hidden empty read, D-07).
+        """
+        return self._s.execute(
+            self._scope(
+                select(self.model)
+                .where(
+                    self.model.intake_id == intake_id,
+                    self.model.source == self._CONTEXT_PACK_SOURCE,
+                )
+                .order_by(self.model.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    def list_context_packs_for_intake(self, intake_id):
+        """Return this intake's context-pack artifacts within scope (newest first)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(
+                        self.model.intake_id == intake_id,
+                        self.model.source == self._CONTEXT_PACK_SOURCE,
+                    )
+                    .order_by(self.model.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
 
 
 class IntakeTemplateRepository(TenantRepository[IntakeTemplate]):

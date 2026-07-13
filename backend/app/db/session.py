@@ -43,6 +43,7 @@ from app.db.repository import (
     IntakeRepository,
     IntakeSourceRepository,
     IntakeTemplateRepository,
+    ResearchArtifactRepository,
     SkillRunRepository,
 )
 from app.db.rls import set_space_context
@@ -203,6 +204,33 @@ def get_skill_run_repo(identity: Identity = Depends(get_current_identity)):
         if space_id is not None:
             set_space_context(session, space_id)
         yield SkillRunRepository(session, identity)
+
+
+def get_research_artifact_repo(identity: Identity = Depends(get_current_identity)):
+    """Yield a tenant-scoped :class:`ResearchArtifactRepository` for the current request.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_skill_run_repo`,
+    differing ONLY in the repository class yielded. Backs the context-pack READ endpoint
+    (07-09): engine-by-role, default-deny 403 on a null user space BEFORE any session
+    (D-04 — mitigates T-7-09-03), ONE tx via ``maker.begin()`` (D-02), GUC set for the user
+    path only (Pitfall 2). The scoped read walls cross-tenant artifacts out (T-7-09-01).
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield ResearchArtifactRepository(session, identity)
 
 
 def get_intake_template_repo(identity: Identity = Depends(get_current_identity)):
