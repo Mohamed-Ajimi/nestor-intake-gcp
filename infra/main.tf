@@ -266,6 +266,22 @@ resource "google_storage_bucket" "uploads" {
   uniform_bucket_level_access = true       # IAM-only access control (no per-object ACLs)
   public_access_prevention    = "enforced" # zero public objects (D-07a / T-09-14)
 
+  # WR-02: two frontend paths (FinalReportBlock's blob download, ResearchResultsPanel's
+  # getArtifactText for PDF generation) `fetch()` the signed GCS URL directly from the app
+  # origin. A cross-origin fetch to storage.googleapis.com is browser-blocked unless the
+  # bucket echoes the origin — so mirror the Cloud Run CORS allowlist here. Read-only:
+  # method GET only (uploads/deletes go THROUGH the backend, never browser->bucket). The
+  # dynamic block emits NOTHING when cors_allowed_origins is empty (no broadening default).
+  dynamic "cors" {
+    for_each = length(var.cors_allowed_origins) > 0 ? [1] : []
+    content {
+      origin          = var.cors_allowed_origins
+      method          = ["GET"]
+      response_header = ["Content-Disposition", "Content-Type"]
+      max_age_seconds = 3600
+    }
+  }
+
   # Deliberately NO versioning block and NO lifecycle_rule blocks (D-12): out of scope.
   force_destroy = false # never auto-wipe tenant uploads on destroy
 }

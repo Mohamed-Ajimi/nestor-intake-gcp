@@ -270,6 +270,41 @@ ACLs); `--public-access-prevention` guarantees **zero public objects** (a stray
 allUsers grant cannot make an object world-readable, D-07a / T-09-14). No versioning,
 no lifecycle rules (D-12 — out of scope this phase).
 
+### Step 9.1b — Bucket CORS policy for browser `fetch()` of signed URLs (WR-02)
+
+Two frontend paths (`FinalReportBlock` blob download, `ResearchResultsPanel`
+`getArtifactText` for PDF generation) `fetch()` the signed GCS URL **directly** from the
+app origin. A cross-origin `fetch` to `storage.googleapis.com` is browser-blocked unless
+the bucket echoes the origin, so the bucket needs a CORS policy mirroring the Cloud Run
+`CORS_ALLOWED_ORIGINS` allowlist. (The `window.open(url)` navigation download paths are
+unaffected — this is only needed for the `fetch()`-then-blob paths.) Set the **same**
+origins you set on `CORS_ALLOWED_ORIGINS` for the Cloud Run service.
+
+```bash
+# ORIGINS must match the Cloud Run CORS_ALLOWED_ORIGINS allowlist (the app frontend
+# origins — Cloudflare Workers prod + any localhost dev origin).
+cat > /tmp/uploads-cors.json <<'JSON'
+[
+  {
+    "origin": ["https://REPLACE-WITH-FRONTEND-ORIGIN"],
+    "method": ["GET"],
+    "responseHeader": ["Content-Disposition", "Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
+JSON
+
+gcloud storage buckets update "gs://${BUCKET}" \
+  --cors-file=/tmp/uploads-cors.json \
+  --project="$GOOGLE_PROJECT"
+```
+
+Read-only (`method: ["GET"]`) — uploads and deletes go **through the backend**, never
+browser→bucket, so no `POST`/`PUT`/`DELETE` is exposed cross-origin on the bucket. Both
+consuming paths are post-`decomposed` gated today, so this is latent until those gates
+open; apply it before then. (Terraform equivalent: the `dynamic "cors"` block on
+`google_storage_bucket.uploads`, driven by `var.cors_allowed_origins`.)
+
 ### Step 9.2 — Bucket-scoped `storage.objectAdmin` for the runtime SA (least privilege)
 
 ```bash
@@ -361,6 +396,7 @@ Step-9.4 image rebuild did not include `google-cloud-storage` / `python-multipar
 - [ ] Step 8.2 — `gcloud run services update nestor-api … --timeout=900` applied live (D-07; the `main.tf` edit alone is inert per drift)
 - [ ] Step 8.3 — live verify: console Request timeout reads 900s AND streamed events arrive at ~2s cadence (no ~300s drop)
 - [ ] Step 9.1 — private `${GOOGLE_PROJECT}-nestor-uploads` bucket created (uniform BLA + public-access-prevention enforced; no versioning/lifecycle) (D-07a/D-12)
+- [ ] Step 9.1b — bucket CORS policy applied (GET-only, origins = Cloud Run `CORS_ALLOWED_ORIGINS`) so the frontend `fetch()` of signed URLs is not browser-blocked (WR-02)
 - [ ] Step 9.2 — bucket-scoped `roles/storage.objectAdmin` granted to the runtime SA (least privilege, T-09-15)
 - [ ] Step 9.3 — `roles/iam.serviceAccountTokenCreator` self-binding on the runtime SA for keyless signBlob (criterion 1, T-09-13; separate grant per Pitfall 2)
 - [ ] Step 9.4 — image rebuilt via Cloud Build with `google-cloud-storage` + `python-multipart` AND the Phase-8 stream route, service repointed + `STORAGE_BUCKET` env set (Pitfall 7; live is still v12)

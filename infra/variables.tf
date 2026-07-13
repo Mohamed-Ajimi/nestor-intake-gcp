@@ -81,6 +81,19 @@ variable "allow_unauthenticated" {
   default     = false
 }
 
+# ---------------------------------------------------- Frontend origins (WR-02 / Phase 9)
+# The browser origin allowlist for the app frontend (Cloudflare Workers / localhost). Used
+# BOTH by the Cloud Run CORS middleware (CORS_ALLOWED_ORIGINS env, set out-of-band per the
+# runbook) AND by the uploads-bucket CORS policy below: FinalReportBlock / ResearchResultsPanel
+# `fetch()` the signed GCS URL directly from the app origin, so `storage.googleapis.com` must
+# echo Access-Control-Allow-Origin for these origins or the browser blocks the read (WR-02).
+# Default is empty => NO cors block emitted (no broadening); set to the real frontend origins.
+variable "cors_allowed_origins" {
+  description = "Browser origins allowed to fetch() signed URLs from the uploads bucket (mirror of the Cloud Run CORS_ALLOWED_ORIGINS allowlist). Empty => no bucket CORS policy (WR-02)."
+  type        = list(string)
+  default     = []
+}
+
 # ---------------------------------------------------- AI provider keys (D-07 / Phase 7)
 # The LLM (Anthropic) + embedding/Whisper (OpenAI) credentials. Each is a Secret
 # Manager secret whose RESOURCE is declared in IaC, but whose VALUE (the version
