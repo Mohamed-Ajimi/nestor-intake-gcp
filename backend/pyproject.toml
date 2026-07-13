@@ -39,6 +39,17 @@ dependencies = [
     # rebuild (Pitfall 7 — new deps are not in the running image).
     "google-cloud-storage>=3,<4",
     "python-multipart>=0.0.9",
+    # Phase 10 notifications (10-01, NOTIF-01/02): Jinja2 HTML mail rendering with
+    # autoescape (the email-context XSS guard T-10-01). Verified at the 10-01
+    # blocking-human legitimacy checkpoint — Jinja2 is the Pallets project
+    # (github.com/pallets/jinja), MIT-licensed, stable 3.x line, no typo-squat.
+    "jinja2>=3.1,<4",
+    # httpx is the SYNC Resend transport in app/mail/resend.py (POST to
+    # api.resend.com). It was previously a dev-only dep (backs TestClient); it is
+    # promoted to a RUNTIME dep here because the mail send path uses it in
+    # production on Cloud Run. NOTE: the live image does not carry jinja2/httpx
+    # until the Phase 10 image rebuild (new deps are not in the running image).
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]

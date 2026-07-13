@@ -1,0 +1,14 @@
+{#
+  Set-password invite mail — the ONLY mail that carries an action link (D-09).
+  cta_url is the Firebase action link (the single link-carrying template).
+  New in Phase 10 (no legacy analog — the login-only model replaces bearer links).
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Kies je wachtwoord</h1>
+<p>Welkom bij Nestor Pulse. Er is een account voor je aangemaakt — stel hieronder je wachtwoord in om toegang te krijgen tot jullie portaal.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Stel je wachtwoord in →</a></p>
+<p style="margin-top: 24px;">Zodra je je wachtwoord hebt ingesteld, kun je inloggen om jullie intake, onderzoeksvragen en resultaten te bekijken.</p>
+<p style="margin-top: 24px;">Bij vragen — gewoon reply op deze mail.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">Deze link is persoonlijk en verloopt na verloop van tijd. Niet delen met derden.</div>
+{% endblock %}
