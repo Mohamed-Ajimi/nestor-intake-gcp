@@ -31,14 +31,15 @@ const TERMINAL = new Set(["succeeded", "failed"]);
  * Open an SSE stream for an intake's latest skill run and drive it into React state.
  *
  * @param intakeId    the intake whose latest run is streamed (per-intake addressing, D-06a)
- * @param onEvent     called with each parsed `SkillRun` snapshot (map via `toActiveSkillRun`)
+ * @param onEvent     called with each parsed snapshot — `null` when the intake has no run
+ *                    yet (a `data: null` frame); map via `toActiveSkillRun`, which guards null
  * @param onTerminal  called once the run reaches a terminal status; the stream then closes
  * @param onFallback  called when the stream is unavailable (no token / 401·404 / backoff
  *                    exhausted) — the caller starts the existing 5s poll (D-07a)
  */
 export function openSkillRunStream(
   intakeId: string,
-  onEvent: (r: SkillRun) => void,
+  onEvent: (r: SkillRun | null) => void,
   onTerminal: () => void,
   onFallback: () => void,
 ): StreamHandle {
@@ -99,21 +100,27 @@ export function openSkillRunStream(
           const frame = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
           // Take the `data:` payload lines; ignore `:`-comment heartbeat lines (": ping").
+          // Per the SSE spec, strip only ONE optional leading space after the colon and
+          // join multiple `data:` lines with a newline — a bare .trim()+join("") would
+          // mangle any future multi-line or whitespace-significant payload.
           const data = frame
             .split("\n")
             .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trim())
-            .join("");
+            .map((l) => l.slice(5).replace(/^ /, ""))
+            .join("\n");
           if (!data) continue;
-          let r: SkillRun;
+          let r: SkillRun | null;
           try {
-            r = JSON.parse(data) as SkillRun;
+            // A `data: null` snapshot (intake with no runs yet) parses to `null`.
+            r = JSON.parse(data) as SkillRun | null;
           } catch {
             // Malformed frame (T-08-10): skip it, keep reading.
             continue;
           }
           onEvent(r);
-          if (TERMINAL.has(r.status)) {
+          // Guard the terminal check for a null snapshot — `null.status` would throw
+          // (escaping the JSON try/catch) and trigger a needless retry (IN-02).
+          if (r && TERMINAL.has(r.status)) {
             closed = true;
             onTerminal();
             return;
