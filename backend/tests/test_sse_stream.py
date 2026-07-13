@@ -221,21 +221,31 @@ def test_stream_reads_db_each_tick(engine, set_space, monkeypatch):
     monkeypatch.setattr(intake_routes_mod, "TICK_SECONDS", 0.05)
     monkeypatch.setattr(intake_routes_mod, "MAX_STREAM_SECONDS", 30)
 
-    # Flip the run to terminal via a fresh scoped write. The seeded snapshot is
-    # `running`; the per-tick re-read must then surface `succeeded`.
-    _set_run_status(engine, set_space, space, run_id, TERMINAL_SUCCESS)
-
     app = _build_app()
     app.dependency_overrides[get_current_identity] = _as(_user(space))
     try:
+        # Consume the stream incrementally: flip the run to terminal via a fresh
+        # scoped write only AFTER the `running` snapshot frame arrives, so the
+        # `succeeded` value can only come from a per-tick DB re-read — a cached
+        # in-memory snapshot could never surface it.
+        statuses = []
         with TestClient(app).stream(
             "GET",
             f"/intakes/{intake_id}/skill-runs/stream",
             headers={"Authorization": "Bearer overridden"},
         ) as resp:
             assert resp.status_code == 200
-            payloads = _data_payloads(resp)
-        statuses = [p["status"] for p in payloads if p is not None]
+            flipped = False
+            for line in resp.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = json.loads(line[5:].strip())
+                if payload is None:
+                    continue
+                statuses.append(payload["status"])
+                if not flipped and payload["status"] == "running":
+                    _set_run_status(engine, set_space, space, run_id, TERMINAL_SUCCESS)
+                    flipped = True
         # Snapshot `running` then the per-tick-read `succeeded` (terminal, closes stream).
         assert "running" in statuses, f"expected the seeded running snapshot, got {statuses!r}"
         assert statuses[-1] == TERMINAL_SUCCESS, (
