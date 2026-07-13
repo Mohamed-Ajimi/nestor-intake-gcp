@@ -124,7 +124,9 @@ export function RecipientPicker({
           ) : (
             <div className="grid gap-2">
               {members.map((m) => {
-                const label = m.name ?? m.email;
+                // Backend filters email-less members out of the read (WR-02), so `email` is
+                // always present here; the `?? "(geen naam)"` is a defensive last resort.
+                const label = m.name ?? m.email ?? "(geen naam)";
                 return (
                   <label
                     key={m.id}

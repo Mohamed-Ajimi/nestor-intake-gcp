@@ -94,7 +94,10 @@ export function reviewIntake(id: string): Promise<ApiResult<Intake>> {
  */
 export type SpaceMember = {
   id: string; // membership id — the send-endpoint recipient identifier
-  email: string;
+  // Backend `MemberView.email` is `str | None` (the DB column is nullable). The members
+  // read now filters `email IS NOT NULL` server-side (WR-02), so in practice every row
+  // here has a usable email — but the type mirrors the backend contract honestly.
+  email: string | null;
   name?: string | null;
 };
 
