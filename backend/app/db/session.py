@@ -41,6 +41,7 @@ from app.db.base import get_engine, get_sessionmaker, get_superadmin_engine
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
+    IntakeSourceRepository,
     IntakeTemplateRepository,
     SkillRunRepository,
 )
@@ -138,6 +139,45 @@ def get_intake_and_answer_repos(identity: Identity = Depends(get_current_identit
         yield (
             IntakeRepository(session, identity),
             IntakeAnswerRepository(session, identity),
+        )
+
+
+def get_intake_and_source_repos(identity: Identity = Depends(get_current_identity)):
+    """Yield BOTH an :class:`IntakeRepository` and an :class:`IntakeSourceRepository`
+    bound to the SAME session — for the storage router's ownership-gated upload/delete.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to
+    :func:`get_intake_and_answer_repos` (engine-by-role, default-deny 403 on a null user
+    space BEFORE any session, ONE tx via ``maker.begin()``, GUC set for the user path
+    only), differing ONLY in that the SECOND repository yielded is an
+    :class:`IntakeSourceRepository`.
+
+    Why combined: the storage upload/delete handlers must FIRST verify the caller OWNS
+    ``intake_id`` (``IntakeRepository.get`` -> None -> 404, D-08) BEFORE writing/cleaning
+    an ``intake_sources`` row (``IntakeSourceRepository``). Both must run on ONE
+    transaction (D-02); yielding both repos from the SAME ``session`` here keeps the
+    ownership read and the source-row create/delete atomic (D-07 / D-09), with NO second
+    ``maker.begin()`` / second dependency. ``space_id`` on the source-row create is
+    injected from the verified Identity (TENANT-02) — never a request/method arg.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield (
+            IntakeRepository(session, identity),
+            IntakeSourceRepository(session, identity),
         )
 
 

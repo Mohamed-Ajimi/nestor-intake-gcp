@@ -33,6 +33,7 @@ from app.api import ai_routes as ai_routes_mod  # noqa: E402  (RED until 07-07)
 from app.db import ai_session as ai_session_mod  # noqa: E402  (RED until 07-04)
 import app.ai.clients as ai_clients_mod  # noqa: E402  (RED until 07-03)
 import app.ai.skills as ai_skills_mod  # noqa: E402  (RED until 07-07)
+from app.ai.skills import transcribe as transcribe_mod  # noqa: E402  (Phase 9 seam swap)
 
 get_current_identity = dependencies.get_current_identity
 Identity = identity_mod.Identity
@@ -105,6 +106,37 @@ def _cleanup(engine, space_id) -> None:
             text(f"DELETE FROM {SCHEMA}.organizations WHERE id = :id"),
             {"id": space_id},
         )
+
+
+def test_download_delegates_to_gcs(monkeypatch):
+    """The REAL ``download_audio_bytes`` delegates to ``app.storage.gcs.download_bytes``.
+
+    Phase 9 seam swap: the body no longer raises NotImplementedError — it reads the
+    object the ``intake_sources`` row points at, keyed off ``storage_path``, through the
+    ``app.storage.gcs.download_bytes`` seam (no DB session, no inline SDK client). This
+    test patches THAT seam with a capture-fake and asserts (1) it was called with the
+    EXACT storage_path from the source DTO and (2) its bytes are returned verbatim.
+    """
+    gcs_mod = pytest.importorskip("app.storage.gcs")
+
+    captured: dict[str, object] = {}
+    sentinel = b"\x00\x01real-gcs-audio-bytes"
+
+    def _capture(key: str) -> bytes:
+        captured["key"] = key
+        return sentinel
+
+    # Patch the seam the transcribe module imported (`from app.storage import gcs`).
+    monkeypatch.setattr(gcs_mod, "download_bytes", _capture)
+
+    key = "space-uuid/intake-uuid/audio/uuid-gesprek.m4a"
+    result = transcribe_mod.download_audio_bytes({"storage_path": key})
+
+    assert captured.get("key") == key, (
+        f"download_audio_bytes must delegate with the source's storage_path, "
+        f"got {captured.get('key')!r} != {key!r}."
+    )
+    assert result == sentinel, "the seam's bytes must be returned verbatim."
 
 
 def test_transcribe_faked_whisper_writes_scoped_transcripts(

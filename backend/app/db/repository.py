@@ -35,7 +35,7 @@ from __future__ import annotations
 import uuid
 from typing import Generic, TypeVar
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -444,6 +444,30 @@ class IntakeSourceRepository(TenantRepository[IntakeSource]):
             .scalars()
             .all()
         )
+
+    def delete_by_storage_path(self, intake_id, storage_path):
+        """Delete this intake's source row(s) pointing at ``storage_path``; return rowcount.
+
+        The storage-delete handler (09-02) calls this to clean the ``intake_sources``
+        ref matching a just-deleted GCS object in the SAME tx as the object delete
+        (D-09 / T-09-09 — no dangling ref). The delete is routed through :meth:`_scope`,
+        so a ``user`` can only ever remove a row in THEIR own space (the explicit
+        ``WHERE space_id = self._space_id`` wall, D-01) — a cross-tenant / forged
+        ``storage_path`` matches nothing and ``rowcount == 0``. ``space_id`` is derived
+        ONLY from the verified Identity via ``_scope`` — never a method arg (TENANT-02).
+        The handler additionally asserts the key prefix before ever calling this, so a
+        forged key never reaches the DB (D-08).
+        """
+        stmt = self._scope(
+            delete(self.model).where(
+                self.model.intake_id == intake_id,
+                self.model.storage_path == storage_path,
+            )
+        )
+        result = self._s.execute(
+            stmt, execution_options={"synchronize_session": False}
+        )
+        return result.rowcount
 
 
 class TranscriptRepository(TenantRepository[Transcript]):

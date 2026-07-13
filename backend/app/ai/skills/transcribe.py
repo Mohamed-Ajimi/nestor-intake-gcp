@@ -39,6 +39,7 @@ from typing import Any
 
 from app.ai import clients
 from app.auth.identity import Identity
+from app.storage import gcs
 from app.core.config import get_settings
 from app.db.ai_session import run_with_session_release
 from app.db.repository import (
@@ -57,20 +58,21 @@ def _now() -> datetime:
 
 
 def download_audio_bytes(source: dict[str, Any] | None = None, **kwargs: Any) -> bytes:
-    """Fetch an audio source's bytes — Phase 7 seam (the real fetch is Phase 9 / D-08).
+    """Fetch an audio source's bytes from GCS keyed off its ``storage_path`` (Phase 9 / D-08).
 
-    The audio download couples to Google Cloud Storage, which is out of scope this phase
-    (D-08): the real implementation lands in Phase 9 and REPLACES this body, reading the
-    object the source row points at. The transcribe contract test monkeypatches this seam
-    (``app.ai.skills.download_audio_bytes``, ``raising=False``) so no bytes ever go over the
-    wire in Phase 7.
+    Delegates to the :func:`app.storage.gcs.download_bytes` seam — the single place the
+    backend reads an object — using the ``storage_path`` the ``intake_sources`` row carries
+    (projected into the DTO by ``run_transcribe``'s ``read_fn``). Runs inside the AI-06
+    no-DB-connection window: it holds NO DB session, only the object key.
 
-    Constructs NO object-store client here on purpose — keeping the Phase 9 coupling behind
-    this one seam is what makes the swap a single-function change.
+    Constructs NO object-store client here — the GCS coupling lives behind
+    ``app.storage.gcs`` (the test monkeypatch target). The transcribe contract test still
+    monkeypatches THIS function (``app.ai.skills.download_audio_bytes``) to avoid the wire;
+    the new delegation test patches ``app.storage.gcs.download_bytes`` to prove the wiring.
     """
-    raise NotImplementedError(
-        "download_audio_bytes is wired to object storage in Phase 9 (D-08); faked in tests"
-    )
+    if not source or not source.get("storage_path"):
+        raise ValueError("download_audio_bytes requires a source with a storage_path")
+    return gcs.download_bytes(source["storage_path"])
 
 
 def _chunk_segments(segments: list[Any], max_words: int = _MAX_WORDS_PER_CHUNK) -> list[dict[str, Any]]:
@@ -143,6 +145,9 @@ def run_transcribe(
             "file_name": source.file_name,
             "language": source.language,
             "space_id": str(source.space_id),
+            # The GCS object key the audio-fetch seam downloads (Phase 9 / D-08). Projected
+            # here so download_audio_bytes carries the key into the no-DB CALL window.
+            "storage_path": source.storage_path,
         }
 
     def call_fn(dto: dict[str, Any]) -> dict[str, Any]:
