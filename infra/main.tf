@@ -251,6 +251,15 @@ resource "google_cloud_run_v2_service" "api" {
   template {
     service_account = google_service_account.runtime.email
 
+    # D-07: raise the Cloud Run request timeout to 900s so a long-lived
+    # `text/event-stream` (SSE) skill-run-progress connection is not severed at
+    # the 300s Cloud Run default (streams would otherwise reliably die at ~5 min).
+    # Paired with the app's 10-min in-handler MAX_STREAM_SECONDS cap (plan 08-01)
+    # so a hung run can never hold a connection for the full 900s window.
+    # IaC-DRIFT: Terraform state was never adopted; this edit is inert until the
+    # out-of-band `gcloud run services update ... --timeout=900` in DEPLOY-RUNBOOK.md.
+    timeout = "900s"
+
     # D-01a: scale to ZERO when idle (min_instance_count = 0 — warm-pool knob OFF,
     # no idle cost) while max stays capped so worst-case pooled connections stay
     # under the Cloud SQL tier (D-04 math: 4 * (pool 2 + overflow 3) = 20 << 100).
