@@ -475,7 +475,7 @@ export function IntakeForm({
   <button
   type="button"
   onClick={handleSubmit}
-  disabled={submitting || !editable}
+  disabled={submitting || (!editable && !isValidation)}
   className="btn-primary"
   >
   {submitting ? "Versturen…" : isValidation ? "Akkoord — verstuur" : schema.submit.label}
