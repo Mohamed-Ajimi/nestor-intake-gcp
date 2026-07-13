@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { getSkillRunFull, listSkillRuns, type SkillRun } from "@/lib/api/skillRuns";
 import { openSkillRunStream } from "@/lib/api/skillRunStream";
@@ -36,9 +36,16 @@ function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
  *
  * The live push (which the legacy Supabase Realtime subscription gave, then a 5s poll
  * stood in for in Phase 6/7) is now driven by `openSkillRunStream`. The 5s poll block
- * below is UNCHANGED and becomes the fallback path: it runs when the caller forces it
- * (`_forcePoll === true`) or when the stream fails (`onFallback`, i.e. no token / 401·404
- * / backoff exhausted) so the UI never goes blind.
+ * below is the safety net: it runs concurrently with the stream on mount so a run that
+ * starts out-of-band, before the page mounts, or on a different instance the SSE
+ * connection is not pinned to is not invisible until the 10-min cap (WR-01). The poll
+ * self-stops as soon as `status` leaves `running`/`queued`, so the two racing briefly is
+ * cheap and idempotent. It also runs when the stream fails (`onFallback`, i.e. no token /
+ * 401·404 / backoff exhausted) so the UI never goes blind.
+ *
+ * `_forcePoll` is read through a ref (WR-06): toggling it must NOT tear down and reopen the
+ * live SSE stream mid-run. The effect depends only on `intakeId`, so the connection is
+ * opened once per intake and survives the caller's `skillLoading` flip.
  *
  * The external contract (`{ data: ActiveSkillRun | null }` and the second `_forcePoll`
  * arg) is intentionally UNCHANGED — the whole point of the Phase 6/7 prep — so callers
@@ -50,6 +57,11 @@ export function useActiveSkillRun(
   _forcePoll = false,
 ): { data: ActiveSkillRun | null } {
   const [data, setData] = useState<ActiveSkillRun | null>(null);
+
+  // Read `_forcePoll` through a ref so toggling it does NOT re-run the effect and tear
+  // down the live SSE stream mid-run (WR-06). The effect depends only on `intakeId`.
+  const forcePollRef = useRef(_forcePoll);
+  forcePollRef.current = _forcePoll;
 
   useEffect(() => {
     if (!intakeId) {
@@ -89,26 +101,32 @@ export function useActiveSkillRun(
       }, 5000);
     };
 
-    // The tested 5s poll — invoked as the SSE fallback path or when `_forcePoll` is set.
+    // The tested 5s poll — started on mount alongside SSE, and re-invoked as the SSE
+    // fallback path. Idempotent: `schedulePoll` clears any pending timer first.
     const startPoll = () => {
       if (cancelled) return;
       void fetchLatest().then((next) => schedulePoll(next?.status));
     };
 
-    if (_forcePoll) {
-      // Caller explicitly wants the poll (e.g. an optimistic run start pre-stream).
-      startPoll();
-    } else {
-      // SSE-first: map each event through `toActiveSkillRun` (reused unchanged). The
-      // terminal event's final snapshot has already been delivered by the preceding
-      // `onEvent`; on failure we silently degrade to the poll.
+    // Always start the poll on mount — it self-stops once the run leaves running/queued,
+    // and it covers the pre-run / out-of-band / cross-instance gap the SSE snapshot alone
+    // cannot (WR-01). When the caller forces it (an optimistic run start pre-stream) this
+    // is the only transport that matters until a run surfaces.
+    startPoll();
+
+    if (!forcePollRef.current) {
+      // SSE is the primary live-push channel: map each event through `toActiveSkillRun`
+      // (which guards null snapshots). On a terminal event, close our own side of the
+      // connection deterministically rather than waiting for the server to close (WR-02);
+      // the final snapshot was already delivered by the preceding `onEvent` and the route
+      // refreshes (load + loadSkillRuns). On stream failure we lean on the poll started above.
       stream = openSkillRunStream(
         intakeId,
         (r) => {
           if (!cancelled) setData(toActiveSkillRun(r));
         },
         () => {
-          /* terminal — final data already set by the preceding onEvent; route refreshes */
+          stream?.close(); // terminal — release the connection now
         },
         () => {
           if (!cancelled) startPoll();
@@ -121,7 +139,9 @@ export function useActiveSkillRun(
       if (pollTimer) clearTimeout(pollTimer);
       if (stream) stream.close();
     };
-  }, [intakeId, _forcePoll]);
+    // `_forcePoll` is intentionally read via `forcePollRef` (not referenced in this effect
+    // body) so toggling it does not tear down the live stream mid-run (WR-06).
+  }, [intakeId]);
 
   return { data };
 }
