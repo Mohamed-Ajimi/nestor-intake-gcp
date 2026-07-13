@@ -170,6 +170,65 @@ the flow ceiling at `decomposed` — these keys must never reach `run-research`.
 
 ---
 
+## Phase 8 — SSE skill-run-progress: image redeploy + 900s request timeout
+
+Phase 8 adds a live Server-Sent-Events stream for skill-run progress. Two manual
+steps make it work on the **live** `nestor-api` service. Both are executed during
+the **combined 7+8 UAT (D-10)** — NOT during plan execution.
+
+> **⚠️ IaC-DRIFT (same reality as above).** Editing `infra/main.tf` (which now
+> declares `template.timeout = "900s"`) **does NOT change the live service** —
+> Terraform state was never adopted, so the `.tf` edit is the intended end-state
+> only. The timeout is **not applied** until you run the `gcloud run services
+> update … --timeout=900` command below by hand. Do not assume the `.tf` diff
+> shipped anything live.
+
+### Step 8.1 — Redeploy the backend image (new stream + full-run endpoints)
+
+The new routes `GET /intakes/{id}/skill-runs/stream` (the SSE `text/event-stream`)
+and `GET /intakes/{id}/skill-runs/{run_id}` (terminal full-run fetch) do not exist
+in the running container until the image is rebuilt. Reuse the Step-3 Cloud Build
+idiom (never a local `docker build` — downloads are blocked on the dev box):
+
+```bash
+export REGION="europe-west1"
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build, then repoint the service at the new tag.
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --image "$IMAGE" --project="$GOOGLE_PROJECT"
+```
+
+### Step 8.2 — Apply the 900s request timeout live (D-07)
+
+Raise the request timeout so a long-lived `text/event-stream` connection is not
+cut at the 300s Cloud Run default (streams reliably die at ~5 min otherwise). This
+is the live equivalent of the `template.timeout = "900s"` now in `main.tf`:
+
+```bash
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" --timeout=900
+```
+
+The 900s window is paired with the app's 10-min in-handler `MAX_STREAM_SECONDS`
+cap (plan 08-01), so a hung run can never hold a connection for the full 900s.
+
+### Step 8.3 — Verify (console + live stream)
+
+```bash
+# Confirm the live service now reports a 900s request timeout.
+gcloud run services describe nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.timeoutSeconds)'   # expect: 900
+```
+
+- In the Cloud Run **console**, confirm the service **Request timeout** reads
+  **900s** (not the 300s default).
+- Open an intake and start a skill run: streamed progress events must arrive at a
+  **~2s cadence** (a steady trickle), **not** as a single terminal burst — and the
+  connection must **not drop at ~300s**. A terminal-only burst or a ~5-min drop
+  means either the image redeploy (8.1) or the timeout apply (8.2) was skipped.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -177,4 +236,7 @@ the flow ceiling at `decomposed` — these keys must never reach `run-research`.
 - [ ] Step 3 — image rebuilt via Cloud Build with `anthropic` + `openai`, service repointed
 - [ ] Step 4 — `min-instances=0` + CPU always-allocated + native key injection
 - [ ] Step 5 — wiring verified without printing any secret value
+- [ ] Step 8.1 — backend image rebuilt via Cloud Build with the new `skill-runs/stream` + full-run endpoints, service repointed (D-10 UAT)
+- [ ] Step 8.2 — `gcloud run services update nestor-api … --timeout=900` applied live (D-07; the `main.tf` edit alone is inert per drift)
+- [ ] Step 8.3 — live verify: console Request timeout reads 900s AND streamed events arrive at ~2s cadence (no ~300s drop)
 - [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover
