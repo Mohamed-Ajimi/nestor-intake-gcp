@@ -127,3 +127,8 @@ Task 3 is `tdd="true"`, but its implementation (the `render_*` functions) was au
 
 - ca77227 — `feat(10-01): mail module — Resend transport, Jinja2 render, 5 Dutch templates`
 - b912c6d — `test(10-01): fake_resend fixture + render tests lock NOTIF-01 + autoescape`
+- 8676434 — `docs(10-01): complete mail module plan — SUMMARY`
+
+## Self-Check: PASSED
+
+All 9 created source/test files and the SUMMARY exist on disk; all three commits (ca77227, b912c6d, 8676434) are reachable in git; working tree clean.
