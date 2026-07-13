@@ -193,21 +193,30 @@ def upload_file(
     space_id = str(intake.space_id)
     key = build_object_key(space_id, intake_id, category, filename or "file")
 
-    # (5) Upload the bytes through the seam (never construct an SDK client inline).
-    gcs.upload_object(key, data, content_type=file.content_type)
-
-    # (6) AUDIO — auto-register a space-scoped intake_sources row in the SAME tx (D-07).
-    # space_id is injected from the verified Identity inside the repo (TENANT-02) — never
-    # passed here; a superadmin path would use create_in_space, but uploads run as the
-    # tenant user in practice, and the repo raises loudly on a NULL-space create (WR-01).
+    # (5) AUDIO — register the space-scoped intake_sources row BEFORE the GCS upload
+    # (WR-05): GCS is not transactional, so writing the object first would orphan it in
+    # the bucket if the DB write or the request-tx commit failed. Creating the row first
+    # means a DB failure raises here (rolled back with the tx) with NO object written; a
+    # subsequent upload failure then also rolls the row back — neither side is orphaned.
     if category == "audio":
-        source_repo.create(
+        source_values = dict(
             intake_id=intake_id,
             kind="audio",
             storage_path=key,
             file_name=filename or None,
             language=None,
         )
+        if identity.role == "superadmin":
+            # (CR-02) A superadmin has NO own space (null-space repo) — target the
+            # intake's OWN space, mirroring the intake-create fix (D-05 / Pitfall 3).
+            # A plain create() would hit the null-space RuntimeError guard -> 500.
+            source_repo.create_in_space(intake.space_id, **source_values)
+        else:
+            source_repo.create(**source_values)
+
+    # (6) Upload the bytes through the seam (never construct an SDK client inline). Runs
+    # AFTER the audio row create so a failed upload rolls the row back with the tx (WR-05).
+    gcs.upload_object(key, data, content_type=file.content_type)
 
     return UploadedFileMeta(
         path=key,
