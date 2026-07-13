@@ -58,6 +58,8 @@ import secrets
 
 from firebase_admin import auth
 
+from app.core.config import get_settings
+
 
 def create_invited_user(email: str, *, role: str, space_id: str) -> str:
     """Create the IdP account with a random password and set role/space_id claims.
@@ -87,11 +89,27 @@ def generate_set_password_link(email: str) -> str:
     """Return a one-time Firebase action link for the user to set their password.
 
     The SAME mechanism serves the invite "set password" and later "forgot password"
-    flows (D-02). The operator conveys this link to the invitee manually until the
-    self-service email flow lands (Phase 10). ``ActionCodeSettings`` is optional and
-    omitted here — the bare link is sufficient for Phase 5.
+    flows (D-02). Phase 10 pins the link's continue URL to the BRANDED in-app handler
+    ``{app_base_url}/auth/action`` via ``ActionCodeSettings`` (D-11) — so the invitee
+    lands on the Dutch in-app set-password page, not Firebase's hosted page. The base URL
+    comes from ``get_settings().app_base_url`` (config/env, NEVER a literal — A6). If
+    ``app_base_url`` is unset we FALL BACK to the bare link (Phase-5 behavior) rather than
+    raising, so an unconfigured base URL degrades gracefully instead of failing the invite.
+
+    The mockable ``auth`` seam is preserved (tests patch
+    ``app.auth.admin_users.auth.generate_password_reset_link`` /
+    ``app.auth.admin_users.auth.ActionCodeSettings``).
     """
-    return auth.generate_password_reset_link(email)
+    app_base_url = get_settings().app_base_url
+    if not app_base_url:
+        # No base URL configured — keep the Phase-5 bare-link behavior (do NOT raise).
+        return auth.generate_password_reset_link(email)
+
+    acs = auth.ActionCodeSettings(
+        url=f"{app_base_url.rstrip('/')}/auth/action",
+        handle_code_in_app=True,
+    )
+    return auth.generate_password_reset_link(email, action_code_settings=acs)
 
 
 def deactivate_user(uid: str) -> None:
