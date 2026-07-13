@@ -1206,6 +1206,7 @@ function IntakeDetailPage() {
  <FieldDisplay
  field={field}
  value={a?.value}
+ intakeId={intake.id}
  editedByClient={a?.edited_by_client ?? false}
  clientEditedAt={a?.client_edited_at ?? null}
  />

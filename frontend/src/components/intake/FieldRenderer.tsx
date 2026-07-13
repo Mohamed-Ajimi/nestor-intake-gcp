@@ -137,7 +137,7 @@ function FieldControl({ field, value, onChange, intakeId, disabled }: Props) {
  case "files":
  return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={true} disabled={disabled} />;
  case "download":
- return <DownloadControl field={field} />;
+ return <DownloadControl field={field} intakeId={intakeId} />;
  case "proposal_list":
  return <ProposalListControl value={value} onChange={onChange} disabled={disabled} />;
  default:
@@ -371,11 +371,14 @@ function FileControl({
  disabled?: boolean;
 }) {
  const [uploading, setUploading] = useState<number | null>(null);
- const bucket = field.storage_bucket ?? "nestor-uploads";
- const prefix = (field.storage_path_prefix ?? `intakes/{intake_id}/${field.key}`).replace(
- "{intake_id}",
- intakeId,
- );
+ // The server authors the stored key (D-05); the browser only tags a category.
+ // Audio-accept fields land under "audio" (they seed intake_sources), all other
+ // client attachments under "attachments".
+ const isAudioField =
+ Array.isArray(field.accept) &&
+ field.accept.length > 0 &&
+ field.accept.every((a) => a.toLowerCase().startsWith("audio/") || a.toLowerCase().startsWith(".mp") || a.toLowerCase().startsWith(".wav") || a.toLowerCase().startsWith(".m4a") || a.toLowerCase().startsWith(".aac") || a.toLowerCase().startsWith(".ogg"));
+ const category = isAudioField ? "audio" : "attachments";
 
  const files: any[] = multi ? (Array.isArray(value) ? value : []) : value ? [value] : [];
  const acceptOnlyPdf =
@@ -395,13 +398,11 @@ function FileControl({
  toast.error(`${f.name} is te groot (max ${field.max_size_mb}MB)`);
  return null;
  }
- const path = `${prefix}/${crypto.randomUUID()}-${f.name}`;
  const res = await storage.uploadFile({
  intakeId,
- bucket,
- path,
  file: f,
  filename: f.name,
+ category,
  contentType: f.type || undefined,
  });
  if (!res.success) {
@@ -409,7 +410,7 @@ function FileControl({
  return null;
  }
  return {
- path: res.data.path ?? path,
+ path: res.data.path,
  filename: f.name,
  size: f.size,
  uploaded_at: res.data.uploaded_at ?? new Date().toISOString(),
@@ -424,7 +425,7 @@ function FileControl({
  if (!uploaded) return;
  const next = [...files];
  if (replace && next[slotIndex]?.path) {
- void storage.removeFile({ bucket, paths: [next[slotIndex].path] });
+ void storage.removeFile({ intakeId, paths: [next[slotIndex].path] });
  }
  next[slotIndex] = uploaded;
  onChange(next.filter(Boolean));
@@ -457,7 +458,7 @@ function FileControl({
  const removeFile = async (idx: number) => {
  const f = files[idx];
  if (f?.path) {
- void storage.removeFile({ bucket, paths: [f.path] });
+ void storage.removeFile({ intakeId, paths: [f.path] });
  }
  if (multi) {
  onChange(files.filter((_, i) => i !== idx));
@@ -578,14 +579,14 @@ function FileControl({
  );
 }
 
-function DownloadControl({ field }: { field: IntakeField }) {
+function DownloadControl({ field, intakeId }: { field: IntakeField; intakeId: string }) {
  const [loading, setLoading] = useState(false);
  const handleClick = async () => {
- if (!field.storage_bucket || !field.storage_path) return;
+ if (!field.storage_path) return;
  setLoading(true);
  try {
  const res = await storage.signedDownloadUrl({
- bucket: field.storage_bucket,
+ intakeId,
  path: field.storage_path,
  expiresIn: 300,
  });

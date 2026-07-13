@@ -7,8 +7,6 @@ import * as storage from "@/lib/api/storage";
 import { derivePhase, phaseShowsResearch } from "@/lib/intake-phase";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
-const BUCKET = "nestor-uploads";
-
 const SOURCES = [
   { value: "claude", label: "Claude" },
   { value: "gemini", label: "Gemini" },
@@ -317,6 +315,7 @@ function QuestionBlock({
             {uploadedArtifacts.map((a) => (
               <ArtifactRow
                 key={a.id}
+                intakeId={intakeId}
                 artifact={a}
                 isClientChoice={question?.client_answer_artifact_id === a.id}
                 onDeleted={onChanged}
@@ -361,13 +360,11 @@ function PendingUploadForm({
     void type;
     try {
       for (const file of files) {
-        const path = `intakes/${intakeId}/research/${questionId ?? "general"}/${crypto.randomUUID()}-${file.name}`;
         const res = await storage.uploadFile({
           intakeId,
-          bucket: BUCKET,
-          path,
           file,
           filename: file.name,
+          category: "artifacts",
           contentType: file.type || undefined,
         });
         if (!res.success) throw new Error(res.error);
@@ -473,16 +470,14 @@ function NoteModal({
     try {
       const ts = Date.now();
       const filename = (title.trim() ? title.trim().replace(/[^\w-]+/g, "_") : `note-${ts}`) + ".txt";
-      const path = `intakes/${intakeId}/research/${questionId ?? "general"}/${crypto.randomUUID()}-${filename}`;
       const blob = new Blob([text], { type: "text/plain" });
       // Note content routes through the storage seam; the research-artifact
       // DB record + embedding belong to the research backend (Phase 7+).
       const res = await storage.uploadFile({
         intakeId,
-        bucket: BUCKET,
-        path,
         file: blob,
         filename,
+        category: "artifacts",
         contentType: "text/plain",
       });
       if (!res.success) throw new Error(res.error);
@@ -542,13 +537,13 @@ function NoteModal({
   );
 }
 
-function ArtifactRow({ artifact, isClientChoice, onDeleted }: { artifact: Artifact; isClientChoice?: boolean; onDeleted: () => void | Promise<void> }) {
+function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intakeId: string; artifact: Artifact; isClientChoice?: boolean; onDeleted: () => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
 
   const open = async () => {
     if (!artifact.storage_path) return;
     const res = await storage.signedDownloadUrl({
-      bucket: BUCKET,
+      intakeId,
       path: artifact.storage_path,
       expiresIn: 300,
     });
@@ -566,7 +561,7 @@ function ArtifactRow({ artifact, isClientChoice, onDeleted }: { artifact: Artifa
       // The research-artifact DB record is owned by the research backend
       // (Phase 7+); here we only remove the stored object via the seam.
       if (artifact.storage_path) {
-        const res = await storage.removeFile({ bucket: BUCKET, paths: [artifact.storage_path] });
+        const res = await storage.removeFile({ intakeId, paths: [artifact.storage_path] });
         if (!res.success) throw new Error(res.error);
       }
       toast.success("Verwijderd");

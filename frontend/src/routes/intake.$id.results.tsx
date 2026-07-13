@@ -195,7 +195,7 @@ function UserIntakeResultsPage() {
               </h2>
               <dl>
                 {section.fields.map((field) => (
-                  <FieldDisplay key={field.key} field={field} value={answers[field.key]} />
+                  <FieldDisplay key={field.key} field={field} value={answers[field.key]} intakeId={id} />
                 ))}
               </dl>
             </section>

@@ -19,7 +19,6 @@ import * as storage from "@/lib/api/storage";
 import { cn } from "@/lib/utils";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
-const BUCKET = "nestor-uploads";
 const RECENT_MAX = 5;
 
 export type RRPQuestion = {
@@ -143,13 +142,13 @@ export function ResearchResultsPanel({
       void token;
       if (mode !== "admin" || !storagePath) return null;
       const res = await storage.signedDownloadUrl({
-        bucket: BUCKET,
+        intakeId: intake.id,
         path: storagePath,
         expiresIn: 300,
       });
       return res.success ? res.data.url : null;
     },
-    [mode, token],
+    [mode, token, intake.id],
   );
 
   const openArtifact = useCallback(
