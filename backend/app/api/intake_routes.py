@@ -37,9 +37,13 @@ event loop (mirrors ``admin_routes.py`` / ``main.py``).
 
 from __future__ import annotations
 
+import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_identity
@@ -61,6 +65,9 @@ from app.db.session import (
     get_skill_run_repo,
     get_tenant_repo,
 )
+# The stream's DB access lives in app/db/stream_session.py — NOT a raw DB symbol — so this
+# route module stays clean for the ci_no_raw_db_access.sh grep-guard (docstring above).
+from app.db.stream_session import check_intake_in_scope, read_latest_run_dict
 
 # The intake feature router. It carries NO auth dependency of its own — it is mounted
 # UNDER protected_router in app/main.py, inheriting Depends(get_current_identity), and
@@ -146,6 +153,20 @@ class SkillRunsView(BaseModel):
 
     latest: SkillRunView | None = None
     runs: list[SkillRunView]
+
+
+class SkillRunFullView(BaseModel):
+    """Full read of ONE skill run — the D-08 projection the AIReviewPanel consumes.
+
+    Phase 7 writes ``output_parsed`` (the parsed Claude JSON: refined/additional/dropped
+    questions + gaps) and ``cost_estimate_usd`` on a finished run, but nothing projected
+    them until now — the review flow was a dead end. This surfaces exactly those two fields
+    (plus the id) within scope; the terminal SSE event finally leads somewhere.
+    """
+
+    id: str
+    output_parsed: dict | None = None
+    cost_estimate_usd: float | None = None
 
 
 class TemplateView(BaseModel):
@@ -407,6 +428,123 @@ def list_skill_runs(
     return SkillRunsView(
         latest=_skill_run_view(latest) if latest is not None else None,
         runs=[_skill_run_view(run) for run in runs],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Skill-run progress SSE stream (API-04) + full-run read (D-08)
+# ---------------------------------------------------------------------------
+#
+# The stream is the DB-backed, stateless, tenant-scoped replacement for the interim 5s poll
+# (and the retired Supabase Realtime subscription). Statelessness (criterion #2) and
+# cross-tenant denial (criterion #3) hold BY CONSTRUCTION: every tick is a fresh scoped
+# SELECT via ``read_latest_run_dict`` (no in-memory run state — a reconnecting client on any
+# instance sees identical state), and a cross-space intake is an existence-hidden 404 raised
+# in the pre-flight BEFORE any stream opens (D-04).
+#
+# Injectable knobs (module-level so tests can ``monkeypatch`` them tiny — RESEARCH Pitfall 4):
+TICK_SECONDS = 2.0  # D-07 — one indexed SELECT every 2s
+HEARTBEAT_SECONDS = 15.0  # D-06 — ``: ping`` keeps proxies/Cloud Run from reaping idle streams
+MAX_STREAM_SECONDS = 10 * 60  # D-07 — in-handler cap (MAX_POLL_MS parity); a run this long hung
+# The ONLY terminal statuses (D-05 / skill-run-status-succeeded-contract) — verbatim, no synonyms.
+TERMINAL = {"succeeded", "failed"}
+# Defeat proxy buffering so events arrive live per-tick, not in a burst at close (Pitfall 3).
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _sse_data(view: dict | None) -> str:
+    """Frame one SSE data event. ``view`` may be ``None`` → emits ``data: null`` (Open Q2)."""
+    return f"data: {json.dumps(view)}\n\n"
+
+
+@intake_router.get("/{intake_id}/skill-runs/stream")
+async def stream_skill_runs(
+    intake_id: str,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+) -> StreamingResponse:
+    """Stream the intake's latest skill-run status as ``text/event-stream`` (API-04).
+
+    The codebase's FIRST and ONLY ``async def`` handler (deliberate, surgical): every DB
+    touch goes through :func:`run_in_threadpool` so the blocking pg8000 read never runs on
+    the event loop, and ``anyio.sleep`` between ticks releases the thread (Pitfall 1). Do
+    NOT convert any other handler to async.
+
+    PRE-FLIGHT (D-04, runs BEFORE the stream opens so the denial test is a plain GET):
+    ``check_intake_in_scope`` in the threadpool — a ``PermissionError`` (null-space user)
+    → 403, a falsy result (cross-tenant / missing) → existence-hidden 404.
+
+    STREAM: a snapshot event at connect, then data events only when the DB state differs
+    from the last sent (emit-on-change, D-06), a ``: ping`` comment every ~15s, and a hard
+    10-min cap. Closes on the terminal event (``succeeded``/``failed``) or on client
+    disconnect. This handler is defined BEFORE ``get_skill_run_full`` so the literal
+    ``/skill-runs/stream`` route is matched before the parameterized ``/skill-runs/{run_id}``.
+    """
+    # Pre-flight in-scope 404/403 (D-04) — the sync/pg8000 read runs in the threadpool.
+    try:
+        in_scope = await run_in_threadpool(check_intake_in_scope, identity, intake_id)
+    except PermissionError:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No space — not authorized")
+    if not in_scope:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    async def event_gen():
+        started = anyio.current_time()
+        last_beat = started
+        # Snapshot at connect (D-06). view may be None → ``data: null``.
+        view = await run_in_threadpool(read_latest_run_dict, identity, intake_id)
+        yield _sse_data(view)
+        last_sent = view
+        if view is not None and view["status"] in TERMINAL:
+            return
+        while True:
+            if await request.is_disconnected():  # free abandoned streams promptly
+                return
+            if anyio.current_time() - started > MAX_STREAM_SECONDS:  # 10-min cap (D-07)
+                return
+            await anyio.sleep(TICK_SECONDS)  # thread released here
+            view = await run_in_threadpool(read_latest_run_dict, identity, intake_id)
+            if view != last_sent:  # emit-on-change (D-06)
+                yield _sse_data(view)
+                last_sent = view
+                if view is not None and view["status"] in TERMINAL:
+                    return
+            elif anyio.current_time() - last_beat >= HEARTBEAT_SECONDS:
+                yield ": ping\n\n"  # comment heartbeat (D-06)
+                last_beat = anyio.current_time()
+
+    return StreamingResponse(
+        event_gen(), media_type="text/event-stream", headers=SSE_HEADERS
+    )
+
+
+@intake_router.get("/{intake_id}/skill-runs/{run_id}")
+def get_skill_run_full(
+    intake_id: str,
+    run_id: str,
+    repo: SkillRunRepository = Depends(get_skill_run_repo),
+) -> SkillRunFullView:
+    """Read ONE skill run's full projection within scope, or 404 (D-08 / D-04).
+
+    A sibling of :func:`list_skill_runs` (same router, same scoped repo). ``repo.get`` is
+    space-scoped, so a cross-tenant ``run_id`` returns ``None`` → existence-hidden 404. A
+    run whose ``intake_id`` does not match the path ``intake_id`` is ALSO a 404 (the BOLA
+    guard — never leak that the run exists under a different intake). Projects
+    ``output_parsed`` + ``cost_estimate_usd`` (Numeric → float) for the AIReviewPanel.
+    """
+    run = repo.get(run_id)
+    if run is None or str(run.intake_id) != intake_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill run not found")
+    return SkillRunFullView(
+        id=str(run.id),
+        output_parsed=run.output_parsed,
+        cost_estimate_usd=(
+            float(run.cost_estimate_usd) if run.cost_estimate_usd is not None else None
+        ),
     )
 
 
