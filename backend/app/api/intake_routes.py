@@ -145,9 +145,17 @@ class AnswerBatch(BaseModel):
 
 
 class SkillRunView(BaseModel):
-    """Read-shaped view of one skill run — ``status`` is mapped VERBATIM (Pitfall 1)."""
+    """Read-shaped view of one skill run — ``status`` is mapped VERBATIM (Pitfall 1).
+
+    ``skill`` is the run's skill NAME (``apply-intake-skill`` / ``context-pack`` / ...) so
+    the frontend can DISAMBIGUATE which flow produced a run. With context-pack now also
+    landing ``succeeded`` runs (07-09), consumers that used to assume "newest succeeded run
+    == apply-intake-skill" can filter on this field instead (07-10). The ORM column carries
+    ``server_default="apply-intake-skill"`` so legacy rows read back a non-null value.
+    """
 
     id: str
+    skill: str
     status: str
     applied_at: str | None = None
     completed_at: str | None = None
@@ -230,6 +238,7 @@ def _skill_run_view(run) -> SkillRunView:
     """Project a ``SkillRun`` ORM row — ``status`` mapped verbatim, no remap (Pitfall 1)."""
     return SkillRunView(
         id=str(run.id),
+        skill=run.skill,
         status=run.status,
         applied_at=(run.applied_at.isoformat() if run.applied_at else None),
         completed_at=(run.completed_at.isoformat() if run.completed_at else None),
