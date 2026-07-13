@@ -8,6 +8,7 @@ import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 import * as skills from "@/lib/api/skills";
+import { getContextPack, type ContextPackView } from "@/lib/api/contextPack";
 
 type Pack = {
   id: string;
@@ -17,11 +18,28 @@ type Pack = {
   model: string | null;
 };
 
+// Map the backend `ContextPackView` (text_content/created_at, no cost/model) onto the
+// UI `Pack` shape the modal/PDF/history consumers already key off. The markdown
+// (`output`) is what renders; cost/model are cosmetic metadata already null-tolerant.
+function toPack(v: ContextPackView): Pack {
+  return {
+    id: v.id,
+    output: v.text_content,
+    cost_estimate_usd: null,
+    completed_at: v.created_at,
+    model: null,
+  };
+}
+
 type Props = {
   intakeId: string;
   intakeStatus: string | null;
   intakeTitle: string;
   clientName: string;
+  // A one-shot terminal signal (e.g. `${status}:${runId}`) that changes when a
+  // context-pack run terminates. The load effect re-reads the pack when it changes so a
+  // re-generate on an already-`decomposed` intake (status unchanged) still refreshes.
+  reloadSignal?: string | null;
 };
 
 const VISIBLE_STATUSES = new Set([
@@ -182,7 +200,13 @@ function downloadContextPackPDF(markdown: string, clientName: string, intakeTitl
   doc.save(`${slug}.pdf`);
 }
 
-export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientName }: Props) {
+export function ContextPackBlock({
+  intakeId,
+  intakeStatus,
+  intakeTitle,
+  clientName,
+  reloadSignal,
+}: Props) {
   const [latestPack, setLatestPack] = useState<Pack | null>(null);
   const [loadingPack, setLoadingPack] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -196,28 +220,44 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   const [questionsOpen, setQuestionsOpen] = useState(true);
 
   const loadLatest = useCallback(async () => {
-    // The context-pack artifact (markdown output + cost + model) is produced by the
-    // generate-context-pack backend in Phase 7; the read-only skill-run seam does not
-    // project it (Bucket B). Until Phase 7 there is no pack to show — render the empty
-    // state. Intake id retained as the Phase-7 wiring point.
-    void intakeId;
-    setLatestPack(null);
+    // Read the generated pack from the 07-09 backend surface
+    // (`GET /intakes/{id}/context-pack`). Existence-hidden empty read → `latest: null`.
+    setLoadingPack(true);
+    const res = await getContextPack(intakeId);
+    if (!res.success) {
+      setLatestPack(null);
+      setError(res.error);
+      setLoadingPack(false);
+      return;
+    }
+    setLatestPack(res.data.latest ? toPack(res.data.latest) : null);
     setLoadingPack(false);
+  }, [intakeId]);
+
+  const loadHistory = useCallback(async () => {
+    // History comes from the same 07-09 read surface (`{ latest, history }`).
+    const res = await getContextPack(intakeId);
+    if (!res.success) {
+      setHistory([]);
+      return;
+    }
+    setHistory(res.data.history.map(toPack));
   }, [intakeId]);
 
   useEffect(() => {
     if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return;
     loadLatest();
+    // A terminal context-pack run bumps `reloadSignal`; re-reading here refreshes the pack
+    // even when the status was already `decomposed` (a re-generate). The history is also
+    // re-fetched when it's already been opened, so it stays in sync.
+    if (history !== null) loadHistory();
     // research_questions are written post-`decomposed` (Bucket E) and never render in
     // this milestone, so there is no read here.
     setQuestions([]);
-  }, [intakeStatus, loadLatest, intakeId]);
-
-  const loadHistory = useCallback(async () => {
-    // Context-pack run history depends on the Phase-7 generation backend (see loadLatest).
-    void intakeId;
-    setHistory([]);
-  }, [intakeId]);
+    // history is intentionally omitted from deps: it must not re-trigger on its own state
+    // change (that would loop). loadHistory is stable (useCallback on intakeId).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intakeStatus, loadLatest, loadHistory, intakeId, reloadSignal]);
 
   const toggleHistory = () => {
     const next = !historyOpen;
