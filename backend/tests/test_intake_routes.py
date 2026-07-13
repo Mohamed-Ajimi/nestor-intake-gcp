@@ -603,3 +603,273 @@ def test_create_in_space_is_superadmin_only():
     user_repo = IntakeRepository(None, _user(uuid.uuid4()))
     with pytest.raises(RuntimeError, match="superadmin-only"):
         user_repo.create_in_space(uuid.uuid4(), client_name="X")
+
+
+# ===========================================================================
+# (z1) skill-run discriminator — SkillRunView carries `skill` (07-09)
+# ===========================================================================
+
+
+def _seed_intake_direct(engine, set_space, space_id, intake_id, status="decomposed") -> None:
+    """Seed one org + one intake directly (mirrors test_skill_run_full._seed_intake)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"INSERT INTO {SCHEMA}.organizations (id, name) VALUES (:id, :name)"),
+            {"id": space_id, "name": "07-09 space"},
+        )
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
+                "VALUES (:id, :space_id, :status)"
+            ),
+            {"id": intake_id, "space_id": space_id, "status": status},
+        )
+
+
+def _seed_run_with_skill(
+    engine, set_space, space_id, intake_id, run_id, skill, status="succeeded"
+) -> None:
+    """Seed one skill_run with an explicit ``skill`` name (07-09 discriminator)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.skill_runs "
+                "(id, space_id, intake_id, skill, status) "
+                "VALUES (:id, :space_id, :intake_id, :skill, :status)"
+            ),
+            {
+                "id": run_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "skill": skill,
+                "status": status,
+            },
+        )
+
+
+def _seed_context_pack(
+    engine,
+    set_space,
+    space_id,
+    intake_id,
+    artifact_id,
+    text_content,
+    source="context-pack-generator",
+    notes="Context Pack — auto-generated briefing voor Nestor onderzoeker",
+) -> None:
+    """Seed one research_artifacts row (context-pack shape by default — 07-09)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.research_artifacts "
+                "(id, space_id, intake_id, source, artifact_type, text_content, "
+                "embed_status, notes) "
+                "VALUES (:id, :space_id, :intake_id, :source, 'note', :text_content, "
+                "'pending', :notes)"
+            ),
+            {
+                "id": artifact_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "source": source,
+                "text_content": text_content,
+                "notes": notes,
+            },
+        )
+
+
+def _cleanup_spaces(engine, *space_ids) -> None:
+    """Delete the seeded orgs (CASCADE removes intakes/runs/artifacts)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        for space_id in space_ids:
+            conn.execute(
+                text(f"DELETE FROM {SCHEMA}.organizations WHERE id = :id"),
+                {"id": space_id},
+            )
+
+
+def test_skill_run_view_carries_skill_discriminator(engine, set_space, monkeypatch):
+    """SkillRunView.skill equals the row's skill for BOTH an apply and a context-pack run (07-09).
+
+    With context-pack now producing succeeded runs too, the consumers can no longer assume
+    "newest succeeded run == apply-intake-skill"; the projected ``skill`` lets them filter.
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    apply_run = uuid.uuid4()
+    pack_run = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id)
+    _seed_run_with_skill(
+        engine, set_space, space_id, intake_id, apply_run, skill="apply-intake-skill"
+    )
+    _seed_run_with_skill(
+        engine, set_space, space_id, intake_id, pack_run, skill="context-pack"
+    )
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/skill-runs",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        by_id = {run["id"]: run["skill"] for run in body["runs"]}
+        assert by_id.get(str(apply_run)) == "apply-intake-skill", (
+            "the apply run's projected skill must equal its row's skill"
+        )
+        assert by_id.get(str(pack_run)) == "context-pack", (
+            "the context-pack run's projected skill must equal its row's skill"
+        )
+        assert body["latest"] is not None and "skill" in body["latest"], (
+            "latest must also carry the skill discriminator"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+# ===========================================================================
+# (z2) context-pack read — latest + history for the owner, source-filtered (07-09)
+# ===========================================================================
+
+
+def test_context_pack_read_returns_pack_for_owner(engine, set_space, monkeypatch):
+    """GET /intakes/{id}/context-pack returns the seeded pack under latest + history (07-09).
+
+    A non-context-pack research_artifact (different ``source``) must NOT appear — the read is
+    pinned to ``source == 'context-pack-generator'`` (T-7-09-05).
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    pack_id = uuid.uuid4()
+    other_id = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id)
+    _seed_context_pack(
+        engine, set_space, space_id, intake_id, pack_id, text_content="# Briefing\n\nBody."
+    )
+    # A non-context-pack artifact in the SAME intake/space — must be excluded by the filter.
+    _seed_context_pack(
+        engine,
+        set_space,
+        space_id,
+        intake_id,
+        other_id,
+        text_content="research evidence, not a pack",
+        source="run-research-evidence",
+        notes=None,
+    )
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/context-pack",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["latest"] is not None, "the owner must see the generated pack under latest"
+        assert body["latest"]["id"] == str(pack_id)
+        assert body["latest"]["text_content"] == "# Briefing\n\nBody."
+        history_ids = {a["id"] for a in body["history"]}
+        assert str(pack_id) in history_ids, "history must list the pack artifact"
+        assert str(other_id) not in history_ids, (
+            "a non-context-pack-generator artifact must NOT surface (source filter, T-7-09-05)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+def test_context_pack_read_empty_when_no_pack(engine, set_space, monkeypatch):
+    """An in-scope intake with no pack reads {latest: null, history: []} (not a 404) — 07-09."""
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id, status="submitted")
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/context-pack",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"latest": None, "history": []}, (
+            "no pack yet must be a scoped-empty 200, never a 404 (absence of pack != absence "
+            "of intake)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+# ===========================================================================
+# (z3) context-pack cross-tenant — the space filter hides existence (07-09 / T-7-09-01)
+# ===========================================================================
+
+
+def test_context_pack_read_cross_tenant_is_existence_hidden(
+    engine, set_space, two_spaces, monkeypatch
+):
+    """A space-A caller reading space-B's intake pack reads {latest: null, history: []} (07-09).
+
+    The scoped repo's per-user space WHERE walls space-B's artifact out, so the cross-tenant
+    read is INDISTINGUISHABLE from an in-scope intake with no pack — existence hidden, never a
+    200-with-foreign-data and never a distinguishable 403 (T-7-09-01). The read runs as the
+    space-scoped app role (NOT superadmin — a superuser would void the RLS wall, per the
+    backend-test-harness lesson).
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_b = uuid.uuid4()
+    pack_b = uuid.uuid4()
+    # Seed a real pack owned by space-B ...
+    _seed_intake_direct(engine, set_space, space_b, intake_b)
+    _seed_context_pack(
+        engine, set_space, space_b, intake_b, pack_b, text_content="space-B secret briefing"
+    )
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    # ... but the caller is a space-A user (their own space has no such artifact).
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_b}/context-pack",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, (
+            f"cross-tenant pack read must be an existence-hidden 200, got {r.status_code} "
+            f"({r.text!r})"
+        )
+        assert r.json() == {"latest": None, "history": []}, (
+            "the space filter must hide space-B's pack from a space-A caller — no row leaks"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
