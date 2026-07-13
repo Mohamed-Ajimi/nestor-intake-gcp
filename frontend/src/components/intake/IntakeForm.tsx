@@ -99,6 +99,11 @@ export function IntakeForm({
   const [confirmDialog, setConfirmDialog] = useState(false);
   const [proposals, setProposals] = useState<Proposals | null>(null);
   const isValidationPhase = payload.phase === "validation";
+  // Per-card "Houd Nestor's voorstel" confirmations, lifted out of DiffCard so they
+  // survive section navigation (cards unmount on next/back — live-UAT issue 2026-07-13).
+  const [confirmedDiffKeys, setConfirmedDiffKeys] = useState<ReadonlySet<string>>(new Set());
+  const confirmDiffKey = (cardKey: string) =>
+    setConfirmedDiffKeys((prev) => new Set(prev).add(cardKey));
 
   // Validation-phase AI proposals: read the latest succeeded run's parsed output
   // through the space-scoped seam (the same one-shot heavy read the admin review
@@ -443,6 +448,8 @@ export function IntakeForm({
  field={f}
  answer={answers[f.key]}
  proposals={proposals}
+ confirmedKeys={confirmedDiffKeys}
+ onConfirmKey={confirmDiffKey}
  onRevert={(key, value) => {
  // Revert marks the field dirty; it persists with the section batch on leave.
  handleChange(key, value);

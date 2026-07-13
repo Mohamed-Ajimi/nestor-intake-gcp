@@ -97,6 +97,8 @@ function DiffCard({
   rationale,
   onRevert,
   meta,
+  confirmed,
+  onConfirm,
 }: {
   label?: string;
   original: string;
@@ -104,8 +106,12 @@ function DiffCard({
   rationale?: string;
   onRevert: () => void | Promise<void>;
   meta?: string;
+  // Confirmation is LIFTED state (keyed per card in IntakeForm) so it survives
+  // section navigation — local useState reset on unmount, so cards re-asked for
+  // confirmation after every next/back (live-UAT issue 2026-07-13).
+  confirmed: boolean;
+  onConfirm: () => void;
 }) {
-  const [confirmed, setConfirmed] = useState(false);
   const [reverting, setReverting] = useState(false);
 
   if (confirmed) {
@@ -168,7 +174,7 @@ function DiffCard({
         </button>
         <button
           type="button"
-          onClick={() => setConfirmed(true)}
+          onClick={onConfirm}
           className="inline-flex items-center gap-1.5 border border-ink bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90"
         >
           <Check className="h-3.5 w-3.5" />
@@ -186,11 +192,16 @@ export function ValidationDiffForField({
   answer,
   proposals,
   onRevert,
+  confirmedKeys,
+  onConfirmKey,
 }: {
   field: IntakeField;
   answer: any;
   proposals: Proposals | null | undefined;
   onRevert: (key: string, value: any) => Promise<void> | void;
+  // Lifted confirmation state (see DiffCard): survives section navigation.
+  confirmedKeys: ReadonlySet<string>;
+  onConfirmKey: (cardKey: string) => void;
 }) {
   if (!proposals) return null;
 
@@ -220,6 +231,8 @@ export function ValidationDiffForField({
               original={rq.current ?? ""}
               suggested={rq.suggested}
               rationale={rq.rationale}
+              confirmed={confirmedKeys.has(`${field.key}:rq-${idx}`)}
+              onConfirm={() => onConfirmKey(`${field.key}:rq-${idx}`)}
               onRevert={async () => {
                 const cur = items[idx];
                 const isObj = cur && typeof cur === "object";
@@ -249,6 +262,8 @@ export function ValidationDiffForField({
       original={p.current ?? ""}
       suggested={p.suggested}
       rationale={p.rationale}
+      confirmed={confirmedKeys.has(field.key)}
+      onConfirm={() => onConfirmKey(field.key)}
       onRevert={async () => {
         // For radio fields with allow_text, preserve text
         if (field.type === "radio" && typeof answer === "object" && answer !== null) {
