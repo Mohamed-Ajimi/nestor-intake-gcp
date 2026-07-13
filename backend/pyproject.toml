@@ -29,6 +29,16 @@ dependencies = [
     # Versions verified on PyPI 2026-06-30 (07-RESEARCH § Standard Stack :83-84).
     "anthropic==0.113.0",
     "openai==2.44.0",
+    # Phase 9 GCS storage (09-01, T-09-SC): both verified against PyPI at the
+    # blocking-human legitimacy checkpoint — google-cloud-storage is the official
+    # googleapis client (github.com/googleapis/python-storage); python-multipart
+    # is the Kludex DISTRIBUTION (github.com/Kludex/python-multipart), NOT the
+    # deprecated bare `multipart` package (do not add that one). google-auth
+    # arrives transitively via google-cloud-storage — do NOT pin it separately.
+    # NOTE: the live Cloud Run image does not have these until the 09-04 runbook
+    # rebuild (Pitfall 7 — new deps are not in the running image).
+    "google-cloud-storage>=3,<4",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

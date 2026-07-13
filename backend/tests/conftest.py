@@ -657,3 +657,97 @@ def seed_artifact_embeddings():
         return ids
 
     return _seed
+
+
+# ===========================================================================
+# Phase 9 — fake_gcs: the app.storage.gcs seam faked (no bucket, no network)
+# ===========================================================================
+#
+# Clones the fake_openai / fake_anthropic discipline for the GCS seam: the
+# storage suites monkeypatch ALL FOUR seam functions —
+# ``app.storage.gcs.upload_object`` / ``app.storage.gcs.signed_download_url`` /
+# ``app.storage.gcs.delete_object`` / ``app.storage.gcs.download_bytes`` —
+# with capture-only fakes, so no storage test ever reaches a real bucket or
+# constructs SDK credentials. The fixture imports ``app.storage.gcs`` LAZILY
+# (importorskip inside the fixture body), so conftest itself stays importable
+# on a box without google-cloud-storage installed.
+
+
+@pytest.fixture
+def fake_gcs(monkeypatch):
+    """Monkeypatch the four ``app.storage.gcs`` seam functions; return the capture dict.
+
+    Usage::
+
+        def test_x(fake_gcs, ...):
+            ...  # drive an endpoint that uploads
+            assert fake_gcs["uploads"][0]["key"].startswith(f"{space}/{intake}/")
+
+    Captures (one list per seam function, append-per-call):
+
+    - ``uploads``:      {key, data, content_type}
+    - ``signed_urls``:  {key, ttl_seconds, filename, content_type, disposition}
+    - ``deletes``:      {key}
+    - ``downloads``:    {key}
+
+    The signed-url fake returns a deterministic ``https://signed.example/{key}``
+    and records the ``ttl_seconds`` + ``filename`` it was called with;
+    ``disposition`` records the attachment header the real seam would emit.
+    Both the ``app.storage.gcs`` module attributes AND the ``app.storage``
+    package-level re-exports are patched, so a consumer that bound either name
+    is intercepted.
+    """
+    gcs_mod = pytest.importorskip("app.storage.gcs")
+    storage_pkg = pytest.importorskip("app.storage")
+
+    calls: dict[str, list[dict[str, Any]]] = {
+        "uploads": [],
+        "signed_urls": [],
+        "deletes": [],
+        "downloads": [],
+    }
+
+    def _fake_upload(key: str, data: bytes, content_type: str | None = None) -> None:
+        calls["uploads"].append(
+            {"key": key, "data": data, "content_type": content_type}
+        )
+
+    def _fake_signed_url(
+        key: str,
+        *,
+        ttl_seconds: int,
+        filename: str,
+        content_type: str | None = None,
+    ) -> str:
+        calls["signed_urls"].append(
+            {
+                "key": key,
+                "ttl_seconds": ttl_seconds,
+                "filename": filename,
+                "content_type": content_type,
+                # What the REAL seam always emits (T-09-04): forced download.
+                "disposition": f'attachment; filename="{filename}"',
+            }
+        )
+        return f"https://signed.example/{key}"
+
+    def _fake_delete(key: str) -> None:
+        calls["deletes"].append({"key": key})
+
+    def _fake_download(key: str) -> bytes:
+        calls["downloads"].append({"key": key})
+        return b"\x00\x01fake-gcs-bytes"
+
+    for name, fake in (
+        ("upload_object", _fake_upload),
+        ("signed_download_url", _fake_signed_url),
+        ("delete_object", _fake_delete),
+        ("download_bytes", _fake_download),
+    ):
+        monkeypatch.setattr(gcs_mod, name, fake)
+        # Package-level re-exports bind the ORIGINAL function objects — patch
+        # them too so `from app.storage import download_bytes` consumers are
+        # intercepted as well (raising=False: tolerate a slimmed __init__).
+        monkeypatch.setattr(storage_pkg, name, fake, raising=False)
+
+    return calls
