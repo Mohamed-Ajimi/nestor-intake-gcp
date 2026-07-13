@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 type Props = {
  field: IntakeField;
  value: unknown;
+ intakeId?: string;
  editedByClient?: boolean;
  clientEditedAt?: string | null;
 };
@@ -61,7 +62,7 @@ function formatBytes(n: number) {
  return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
-export function FieldDisplay({ field, value, editedByClient, clientEditedAt }: Props) {
+export function FieldDisplay({ field, value, intakeId, editedByClient, clientEditedAt }: Props) {
  if (field.type === "download") return null;
 
  const empty = isEmpty(value);
@@ -78,7 +79,7 @@ export function FieldDisplay({ field, value, editedByClient, clientEditedAt }: P
 
  return (
  <Row label={field.label} required={field.required} editedByClient={editedByClient} clientEditedAt={clientEditedAt}>
- <ValueRenderer field={field} value={value} />
+ <ValueRenderer field={field} value={value} intakeId={intakeId} />
  </Row>
  );
 }
@@ -120,7 +121,15 @@ function Row({
  );
 }
 
-function ValueRenderer({ field, value }: { field: IntakeField; value: unknown }) {
+function ValueRenderer({
+ field,
+ value,
+ intakeId,
+}: {
+ field: IntakeField;
+ value: unknown;
+ intakeId?: string;
+}) {
  switch (field.type) {
  case "text":
  case "email":
@@ -182,6 +191,7 @@ function ValueRenderer({ field, value }: { field: IntakeField; value: unknown })
  key={sf.key}
  field={sf}
  value={obj?.[sf.key]}
+ intakeId={intakeId}
  />
  ))}
  </div>
@@ -199,7 +209,7 @@ function ValueRenderer({ field, value }: { field: IntakeField; value: unknown })
  );
  }
  case "file": {
- return <FileRow file={value as FileMeta} bucket={field.storage_bucket} />;
+ return <FileRow file={value as FileMeta} intakeId={intakeId} />;
  }
  case "files": {
  const arr = (value as FileMeta[]) ?? [];
@@ -207,7 +217,7 @@ function ValueRenderer({ field, value }: { field: IntakeField; value: unknown })
  <ul className="space-y-1.5">
  {arr.map((f, i) => (
  <li key={i}>
- <FileRow file={f} bucket={field.storage_bucket} />
+ <FileRow file={f} intakeId={intakeId} />
  </li>
  ))}
  </ul>
@@ -259,17 +269,17 @@ function ValueRenderer({ field, value }: { field: IntakeField; value: unknown })
 
 type FileMeta = { path: string; filename: string; size?: number; uploaded_at?: string };
 
-function FileRow({ file, bucket }: { file: FileMeta | undefined; bucket?: string }) {
+function FileRow({ file, intakeId }: { file: FileMeta | undefined; intakeId?: string }) {
  const [busy, setBusy] = useState(false);
  if (!file?.path) return <span className="text-ink/40">—</span>;
  const open = async () => {
- if (!bucket) {
+ if (!intakeId) {
  toast.error("Storage niet geconfigureerd");
  return;
  }
  setBusy(true);
  try {
- const res = await signedDownloadUrl({ bucket, path: file.path, expiresIn: 300 });
+ const res = await signedDownloadUrl({ intakeId, path: file.path, expiresIn: 300 });
  if (!res.success) {
  toast.error("Download mislukt");
  return;

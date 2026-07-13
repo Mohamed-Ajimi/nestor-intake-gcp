@@ -4,8 +4,6 @@ import { Loader2, Upload, Download } from "lucide-react";
 import * as storage from "@/lib/api/storage";
 import { derivePhase, phaseShowsFinalReport } from "@/lib/intake-phase";
 
-const BUCKET = "nestor-uploads";
-
 type Artifact = {
   id: string;
   filename: string;
@@ -68,14 +66,14 @@ export function FinalReportBlock({
   const onPick = async (file: File) => {
     setBusy(true);
     try {
-      const safeName = sanitizeFilenameForStorage(file.name);
-      const path = `intakes/${intakeId}/final-report/${crypto.randomUUID()}-${safeName}`;
+      // The server authors the stored key (D-05); we tag the file with its
+      // category and send the original filename. sanitizeFilenameForStorage is
+      // retained for display-side name normalization only.
       const res = await storage.uploadFile({
         intakeId,
-        bucket: BUCKET,
-        path,
         file,
         filename: file.name,
+        category: "reports",
         contentType: file.type || undefined,
       });
       if (!res.success) throw new Error(res.error);
@@ -112,7 +110,7 @@ export function FinalReportBlock({
   const onDownload = async () => {
     if (!artifact?.storage_path) return;
     const signed = await storage.signedDownloadUrl({
-      bucket: BUCKET,
+      intakeId,
       path: artifact.storage_path,
       expiresIn: 300,
     });
