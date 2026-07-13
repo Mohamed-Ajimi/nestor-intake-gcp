@@ -17,6 +17,7 @@ import type { PhaseSkillRunInput } from "@/lib/intake-phase";
 export type SkillRun = {
   id: string;
   status: string;
+  skill: string;
   applied_at: string | null;
   completed_at: string | null;
 };

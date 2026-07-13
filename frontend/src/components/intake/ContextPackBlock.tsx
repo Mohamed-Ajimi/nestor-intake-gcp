@@ -8,6 +8,7 @@ import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 import * as skills from "@/lib/api/skills";
+import { getContextPack, type ContextPackView } from "@/lib/api/contextPack";
 
 type Pack = {
   id: string;
@@ -16,6 +17,19 @@ type Pack = {
   completed_at: string | null;
   model: string | null;
 };
+
+// Map the backend `ContextPackView` (text_content/created_at, no cost/model) onto the
+// UI `Pack` shape the modal/PDF/history consumers already key off. The markdown
+// (`output`) is what renders; cost/model are cosmetic metadata already null-tolerant.
+function toPack(v: ContextPackView): Pack {
+  return {
+    id: v.id,
+    output: v.text_content,
+    cost_estimate_usd: null,
+    completed_at: v.created_at,
+    model: null,
+  };
+}
 
 type Props = {
   intakeId: string;
@@ -196,12 +210,17 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   const [questionsOpen, setQuestionsOpen] = useState(true);
 
   const loadLatest = useCallback(async () => {
-    // The context-pack artifact (markdown output + cost + model) is produced by the
-    // generate-context-pack backend in Phase 7; the read-only skill-run seam does not
-    // project it (Bucket B). Until Phase 7 there is no pack to show — render the empty
-    // state. Intake id retained as the Phase-7 wiring point.
-    void intakeId;
-    setLatestPack(null);
+    // Read the generated pack from the 07-09 backend surface
+    // (`GET /intakes/{id}/context-pack`). Existence-hidden empty read → `latest: null`.
+    setLoadingPack(true);
+    const res = await getContextPack(intakeId);
+    if (!res.success) {
+      setLatestPack(null);
+      setError(res.error);
+      setLoadingPack(false);
+      return;
+    }
+    setLatestPack(res.data.latest ? toPack(res.data.latest) : null);
     setLoadingPack(false);
   }, [intakeId]);
 
@@ -214,9 +233,13 @@ export function ContextPackBlock({ intakeId, intakeStatus, intakeTitle, clientNa
   }, [intakeStatus, loadLatest, intakeId]);
 
   const loadHistory = useCallback(async () => {
-    // Context-pack run history depends on the Phase-7 generation backend (see loadLatest).
-    void intakeId;
-    setHistory([]);
+    // History comes from the same 07-09 read surface (`{ latest, history }`).
+    const res = await getContextPack(intakeId);
+    if (!res.success) {
+      setHistory([]);
+      return;
+    }
+    setHistory(res.data.history.map(toPack));
   }, [intakeId]);
 
   const toggleHistory = () => {
