@@ -201,6 +201,39 @@ resource "google_secret_manager_secret_iam_member" "runtime_openai_secret_access
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
 
+# ------------------------------------------------ Resend transactional email (D-13 / Phase 10)
+# The RESEND_API_KEY credential — the ONLY new secret this phase adds. Structurally a
+# verbatim copy of the anthropic_api_key trio above: the secret RESOURCE + a
+# resource-scoped secretAccessor grant to the runtime SA are declared in IaC, and the
+# VALUE is seeded out-of-band per the runbook (drift-honest default => count 0 => NO
+# Terraform-managed version, so the key never enters committed state, T-10-04). The
+# Cloud Run env below injects it natively via value_source.secret_key_ref (version
+# "latest"); the mail module reads RESEND_API_KEY from the process env at call time and
+# must NEVER log it.
+resource "google_secret_manager_secret" "resend_api_key" {
+  secret_id = var.resend_api_key_secret_id
+
+  replication {
+    auto {}
+  }
+}
+
+# Optional seed of the RESEND_API_KEY value — same drift-honest semantics as the
+# anthropic_api_key version above (default "" => count 0 => seed manually per the runbook,
+# T-10-04). secret_key_ref below uses version = "latest" so it binds whichever version
+# exists, manual or seeded.
+resource "google_secret_manager_secret_version" "resend_api_key" {
+  count       = var.resend_api_key == "" ? 0 : 1
+  secret      = google_secret_manager_secret.resend_api_key.id
+  secret_data = var.resend_api_key
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_resend_secret_accessor" {
+  secret_id = google_secret_manager_secret.resend_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 # --------------------------------------------------------- Artifact Registry (D-01)
 resource "google_artifact_registry_repository" "backend" {
   location      = var.region
@@ -387,6 +420,20 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "STORAGE_BUCKET"
         value = google_storage_bucket.uploads.name
       }
+      # Phase 10 (D-08 / D-15): two PLAIN non-secret mail-config env vars (mirror the
+      # STORAGE_BUCKET pattern above — no Secret Manager reference). NESTOR_ADMIN_EMAIL is
+      # the ops recipient of the admin_validated notification; APP_BASE_URL is the origin
+      # the mail module uses to build CTA links + the logo asset URL. IaC-DRIFT: inert
+      # until the runbook `--update-env-vars NESTOR_ADMIN_EMAIL=...,APP_BASE_URL=...`
+      # (Phase-10 step) sets them on the live service.
+      env {
+        name  = "NESTOR_ADMIN_EMAIL"
+        value = var.nestor_admin_email
+      }
+      env {
+        name  = "APP_BASE_URL"
+        value = var.app_base_url
+      }
       # Path B (D-05a): the secret RESOURCE NAME (NOT the password value) that
       # base.py::_load_superadmin_password() reads at runtime via Secret Manager.
       # `<secret resource name>/versions/latest` is the exact form
@@ -424,6 +471,20 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
+      # Phase 10 (D-13): RESEND_API_KEY injected NATIVELY from Secret Manager via
+      # value_source.secret_key_ref (mirror the ANTHROPIC/OPENAI keys above). The KEY
+      # VALUE never appears in this config or in Terraform state; only the secret
+      # reference does. The mail module reads RESEND_API_KEY from the process env at call
+      # time and must NEVER log it (T-10-04).
+      env {
+        name = "RESEND_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.resend_api_key.secret_id
+            version = "latest"
+          }
+        }
+      }
     }
   }
 
@@ -441,6 +502,11 @@ resource "google_cloud_run_v2_service" "api" {
     # per the runbook by default, so they are intentionally NOT in this edge.)
     google_secret_manager_secret_iam_member.runtime_anthropic_secret_accessor,
     google_secret_manager_secret_iam_member.runtime_openai_secret_accessor,
+    # Phase 10 (D-13): the RESEND_API_KEY secret's runtime SA read grant must exist
+    # before the service boots, or native secret_key_ref injection fails to resolve
+    # `latest` at deploy time. (The secret VERSION is seeded out-of-band per the runbook
+    # by default, so it is intentionally NOT in this edge.)
+    google_secret_manager_secret_iam_member.runtime_resend_secret_accessor,
     # INFRA-03 (Phase 9): the bucket + its bucket-scoped objectAdmin grant + the
     # keyless-signBlob self-binding must exist before the service boots, or the
     # first storage request (upload/signed-URL/delete) fails — objectAdmin 403 on

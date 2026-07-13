@@ -128,3 +128,46 @@ variable "openai_api_key" {
   default     = ""
   sensitive   = true
 }
+
+# ---------------------------------------------------- Transactional email (D-13 / Phase 10)
+# The Resend transactional-email credential — the ONLY new secret Phase 10 adds. The
+# `agenic.be` sender domain is already verified. Same drift-honest handling as the AI
+# provider keys: the secret RESOURCE + the runtime SA's scoped secretAccessor grant are
+# declared in IaC, but the VALUE (version payload) is seeded out-of-band per the deploy
+# runbook by default (T-10-04) — the key never lands in committed IaC/state. The Cloud Run
+# service env injects it natively via value_source.secret_key_ref; the mail module reads
+# RESEND_API_KEY from the process env at call time and must NEVER log it.
+
+variable "resend_api_key_secret_id" {
+  description = "Secret Manager secret ID holding RESEND_API_KEY (Resend transactional-email credential, D-13). The secret RESOURCE + the runtime SA's scoped secretAccessor grant are declared in IaC; the VALUE (version payload) is added out-of-band per infra/DEPLOY-RUNBOOK.md (default: no Terraform-managed version), so the key never lands in committed state (T-10-04)."
+  type        = string
+  default     = "nestor-resend-api-key"
+}
+
+variable "resend_api_key" {
+  description = "Optional RESEND_API_KEY VALUE to seed the secret version at apply time. Default \"\" => Terraform creates NO version (add it manually via `gcloud secrets versions add` per DEPLOY-RUNBOOK.md — the drift-honest default). When non-empty the value is written to a secret version and is then in Terraform state, so prefer the manual path in shared environments (T-10-04)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# ---------------------------------------------------- Mail non-secret config (D-08 / Phase 10)
+# Two PLAIN (non-secret) Cloud Run env vars the mail module reads at call time:
+#   - NESTOR_ADMIN_EMAIL -> Settings.nestor_admin_email (D-08): the ops address that
+#     receives the admin_validated notification.
+#   - APP_BASE_URL -> Settings.app_base_url: the origin used to build mail CTA links and
+#     the logo asset URL (closes the Phase 9 D-07a handoff — no more public Supabase URL).
+# Both default "" and are IaC-DRIFT-inert until the runbook `--update-env-vars` step sets
+# them live (mirror the STORAGE_BUCKET drift semantics).
+
+variable "nestor_admin_email" {
+  description = "Ops address that receives the admin_validated mail notification (D-08 -> Settings.nestor_admin_email). Plain non-secret Cloud Run env; default \"\" and IaC-drift-inert until the runbook `--update-env-vars NESTOR_ADMIN_EMAIL=...` step sets it live (Phase 10)."
+  type        = string
+  default     = ""
+}
+
+variable "app_base_url" {
+  description = "Deployed frontend origin used to build mail CTA links + the logo asset URL (-> Settings.app_base_url, D-15). Plain non-secret Cloud Run env; default \"\" and IaC-drift-inert until the runbook `--update-env-vars APP_BASE_URL=...` step sets it live (Phase 10)."
+  type        = string
+  default     = ""
+}
