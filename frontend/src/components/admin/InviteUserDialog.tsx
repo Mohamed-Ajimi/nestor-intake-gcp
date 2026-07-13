@@ -19,12 +19,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { inviteUser, type Space } from "@/lib/api/admin";
+import { Mail } from "lucide-react";
+import { inviteUser, sendInviteMail, type Space } from "@/lib/api/admin";
 
 // Screen 1 — Invite user (USER-01 / D-01 / D-02 / D-03). The role is server-fixed to
 // "user" and shown read-only (D-01a) — there is NO role control. On success the dialog
-// renders the one-time action link in a copyable monospace field with the manual-delivery
-// marker; the link is never persisted client-side (T-5-19).
+// renders the one-time action link in a copyable monospace field AND a "send invitation
+// mail" action (D-10) — the copy-link fallback stays (D-04); the link is never persisted
+// client-side (T-5-19).
 
 const inviteSchema = z.object({
   email: z.string().email("Ongeldig e-mailadres"),
@@ -36,11 +38,15 @@ export function InviteUserDialog({
   onOpenChange,
   spaces,
   onInvited,
+  resolveMembershipId,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   spaces: Space[];
   onInvited?: () => void;
+  // Resolve the just-invited user's MEMBERSHIP id (the invite response only carries a uid).
+  // Backed by the parent's freshly-reloaded user list; returns null until the row is visible.
+  resolveMembershipId?: (email: string, spaceId: string) => string | null;
 }) {
   const [email, setEmail] = useState("");
   const [spaceId, setSpaceId] = useState("");
@@ -48,6 +54,8 @@ export function InviteUserDialog({
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [actionLink, setActionLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [sendingMail, setSendingMail] = useState(false);
+  const [mailSent, setMailSent] = useState(false);
 
   // Reset all state whenever the dialog (re)opens.
   useEffect(() => {
@@ -58,6 +66,8 @@ export function InviteUserDialog({
       setFieldError(null);
       setActionLink(null);
       setCopied(false);
+      setSendingMail(false);
+      setMailSent(false);
     }
   }, [open]);
 
@@ -106,6 +116,28 @@ export function InviteUserDialog({
     }
   }
 
+  // Send the invitation mail (D-10) — regenerates a fresh action link server-side and mails
+  // it. The membership id is resolved from the parent's reloaded user list (the invite
+  // response only carries a uid). Copy-link stays as the fallback (D-04).
+  async function handleSendMail() {
+    const membershipId = resolveMembershipId?.(email.trim(), spaceId) ?? null;
+    if (!membershipId) {
+      toast.error(
+        "Kon de gebruiker niet terugvinden — stuur de uitnodiging opnieuw vanuit de gebruikerslijst.",
+      );
+      return;
+    }
+    setSendingMail(true);
+    const res = await sendInviteMail(membershipId);
+    setSendingMail(false);
+    if (!res.success) {
+      toast.error(res.error);
+      return;
+    }
+    setMailSent(true);
+    toast.success("Uitnodigingsmail verstuurd");
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[520px]">
@@ -119,8 +151,7 @@ export function InviteUserDialog({
             </DialogHeader>
             <div className="grid gap-4 py-2">
               <p className="text-sm text-ink/70">
-                Bezorg deze link handmatig aan de gebruiker — e-mailverzending wordt later
-                toegevoegd (Fase 10).
+                Verstuur de uitnodigingsmail, of bezorg de link handmatig aan de gebruiker.
               </p>
               <div className="grid gap-2">
                 <input
@@ -130,11 +161,28 @@ export function InviteUserDialog({
                   className="w-full border border-ink bg-paperLight px-3 py-2 font-mono text-xs text-ink outline-none"
                 />
                 <div className="flex items-center justify-between gap-3">
-                  <span className="badge-dashed">HANDMATIG BEZORGEN — nog geen e-mail</span>
-                  <Button type="button" variant="outline" size="sm" onClick={handleCopy}>
-                    {copied ? <Check /> : <Copy />}
-                    Kopieer link
-                  </Button>
+                  <span className="badge-dashed">
+                    {mailSent ? "MAIL VERSTUURD" : "MAIL OF HANDMATIG BEZORGEN"}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSendMail}
+                      disabled={sendingMail}
+                    >
+                      <Mail />
+                      {sendingMail
+                        ? "Versturen…"
+                        : mailSent
+                          ? "Opnieuw versturen"
+                          : "Verstuur uitnodigingsmail"}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={handleCopy}>
+                      {copied ? <Check /> : <Copy />}
+                      Kopieer link
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

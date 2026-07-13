@@ -22,6 +22,7 @@ import {
   listSpaces,
   listUsers,
   reactivateUser,
+  sendInviteMail,
   type AdminUser,
   type Space,
 } from "@/lib/api/admin";
@@ -114,6 +115,29 @@ function UsersPage() {
     void load();
   }
 
+  // Resend the invitation mail for a member (D-10) — one endpoint serves this row action
+  // and the InviteUserDialog success state. Regenerates a fresh action link server-side.
+  async function handleResendInvite(u: AdminUser) {
+    setBusyId(u.id);
+    const res = await sendInviteMail(u.id);
+    setBusyId(null);
+    if (!res.success) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Uitnodigingsmail verstuurd");
+  }
+
+  // Resolve a membership id from the (freshly reloaded) user list so the InviteUserDialog
+  // success state can send the invitation mail — the invite response carries a uid, not a
+  // membership id (D-10). Matches on email + space; returns null if not yet visible.
+  function resolveMembershipId(email: string, spaceId: string): string | null {
+    const match = users.find(
+      (u) => u.space_id === spaceId && (u.email ?? "").toLowerCase() === email.toLowerCase(),
+    );
+    return match?.id ?? null;
+  }
+
   async function handleConfirmDeactivate() {
     if (!confirmUser) return;
     const target = confirmUser;
@@ -194,14 +218,24 @@ function UsersPage() {
                     <td className="px-4 py-3 text-right">
                       {active ? (
                         <div className="flex flex-col items-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={Boolean(guardrail) || busyId === u.id}
-                            onClick={() => setConfirmUser(u)}
-                          >
-                            Deactiveren
-                          </Button>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={busyId === u.id || !u.email}
+                              onClick={() => handleResendInvite(u)}
+                            >
+                              Herstuur uitnodiging
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={Boolean(guardrail) || busyId === u.id}
+                              onClick={() => setConfirmUser(u)}
+                            >
+                              Deactiveren
+                            </Button>
+                          </div>
                           {guardrail && (
                             <span className="font-mono text-[10px] normal-case tracking-normal text-ink/50">
                               {guardrail}
@@ -232,6 +266,7 @@ function UsersPage() {
         onOpenChange={setInviteOpen}
         spaces={spaces}
         onInvited={() => void load()}
+        resolveMembershipId={resolveMembershipId}
       />
 
       <AlertDialog
