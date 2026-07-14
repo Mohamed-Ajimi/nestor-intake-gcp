@@ -111,12 +111,28 @@ def _load_membership(
     The lookup is on ``provider_user_id == identity.uid`` — the Identity Platform subject id
     the invite flow stamps onto the membership. Identity is the ONLY source (never request
     input). A superadmin with no membership row returns ``None`` (Open Q1).
+
+    Selection is DETERMINISTIC (WR-03): only ``active`` rows are considered (a deactivated
+    membership's locale must neither resolve nor be written), the caller's ``space_id``
+    scopes the row when the token carries one, and a stable ordering + ``first()`` means
+    a uid with multiple membership rows can never raise ``MultipleResultsFound`` (500).
+    The D-07 resolution semantics are unchanged: one row in, one row out.
     """
-    return session.execute(
-        select(OrganizationMembership).where(
-            OrganizationMembership.provider_user_id == identity.uid
+    stmt = select(OrganizationMembership).where(
+        OrganizationMembership.provider_user_id == identity.uid,
+        OrganizationMembership.status == "active",
+    )
+    if identity.space_id:
+        # Pitfall 6 (mirrors _resolve_me): identity.space_id is a str, the column is
+        # UUID(as_uuid=True); coerce so the pg8000 bind/compare is unambiguous.
+        stmt = stmt.where(
+            OrganizationMembership.organization_id
+            == uuid.UUID(str(identity.space_id))
         )
-    ).scalar_one_or_none()
+    stmt = stmt.order_by(
+        OrganizationMembership.created_at, OrganizationMembership.id
+    ).limit(1)
+    return session.execute(stmt).scalars().first()
 
 
 @me_router.get("/me")

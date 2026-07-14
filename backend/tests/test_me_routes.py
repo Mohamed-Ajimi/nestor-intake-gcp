@@ -483,3 +483,51 @@ def test_superadmin_no_membership_patch_persists_nothing(
         )
     finally:
         app.dependency_overrides.clear()
+
+
+# ===========================================================================
+# (f) WR-03 regression — duplicate membership rows must never 500 the endpoint
+# ===========================================================================
+
+
+def test_get_me_survives_duplicate_membership_rows(engine, monkeypatch):
+    """A uid with ACTIVE membership rows in TWO spaces -> GET /me is 200 (never 500).
+
+    Nothing in the schema prevents one ``provider_user_id`` from holding rows in two
+    organizations (uniqueness is on ``(organization_id, user_id)``). The resolver must
+    stay deterministic: scope to the caller's OWN ``space_id`` and ``first()`` a stable
+    ordering — never ``scalar_one_or_none`` -> ``MultipleResultsFound`` -> 500 (WR-03).
+    """
+    from fastapi.testclient import TestClient
+
+    space_a = uuid.uuid4()
+    space_b = uuid.uuid4()
+    uid = f"u-{uuid.uuid4()}"
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "Dup Space A", default_locale="nl")
+            _create_space(conn, space_b, "Dup Space B", default_locale="fr")
+            _create_membership(conn, space_a, uid, locale="en")
+            _create_membership(conn, space_b, uid, locale="fr")
+
+        _patch_engine_factories(monkeypatch, engine)
+        app = _build_app()
+        # Identity scoped to space B — the resolver must pick B's row deterministically.
+        app.dependency_overrides[get_current_identity] = _as(_user(uid, space_b))
+
+        client = TestClient(app)
+        resp = client.get("/me", headers={"Authorization": "Bearer ignored-overridden"})
+
+        assert resp.status_code == 200, (
+            f"GET /me with duplicate membership rows must be 200 (never 500), "
+            f"got {resp.status_code} ({resp.text!r})"
+        )
+        body = resp.json()
+        assert body["locale"] == "fr", (
+            "the resolver must pick the caller's OWN space's membership row (WR-03)"
+        )
+        assert body["space_default_locale"] == "fr"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_a)
+        _cleanup_space(engine, space_b)
