@@ -1,0 +1,24 @@
+# Phase 12 / INFRA-05 — keep the Docker build context clean and reproducible.
+#
+# Crucially excludes any local `.output` (which on a dev box is a STALE cloudflare
+# preset build) so `COPY . .` never drags it into the image — the build stage always
+# produces a fresh node-server `.output` inside the container (T-12-05). node_modules
+# is excluded so `npm ci` resolves cleanly from the committed lockfile.
+
+node_modules
+.output
+.nitro
+.tanstack
+dist
+
+# VCS / local env — never bake env files or git metadata into the image
+.git
+.gitignore
+.env
+.env.*
+
+# editor / OS cruft
+.DS_Store
+*.log
+.vscode
+.idea

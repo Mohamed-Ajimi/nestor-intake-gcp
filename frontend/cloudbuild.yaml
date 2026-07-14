@@ -1,0 +1,43 @@
+# cloudbuild.yaml — build + push the Nestor frontend SSR image (INFRA-05).
+#
+# WHY a config (Pitfall 2): `gcloud builds submit --tag IMAGE` cannot pass
+# `--build-arg`, and the frontend REQUIRES build-time public config (Vite inlines
+# `import.meta.env.VITE_*` into the client bundle at build time). So the docker
+# build is driven from this config, which forwards the public VITE_* substitution
+# values as `--build-arg` into the Dockerfile's build stage.
+#
+# PUBLIC config only: VITE_API_BASE_URL and the Firebase web config are public
+# (the Firebase apiKey is a public project identifier, not a secret). There is
+# DELIBERATELY NO Supabase substitution/build-arg anywhere here (D-08/D-09) — the
+# Dockerfile's D-11 bundle guard fails the build if a Supabase signature leaks.
+#
+# INVOCATION (run from repo root; deploy happens separately in Plan 12-05):
+#   gcloud builds submit frontend \
+#     --config=frontend/cloudbuild.yaml \
+#     --substitutions=\
+# _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/nestor-frontend:latest,\
+# _API_BASE_URL=https://<backend-cloud-run-url>,\
+# _FB_API_KEY=<firebase-web-api-key>,\
+# _FB_AUTH_DOMAIN=<project>.firebaseapp.com,\
+# _FB_PROJECT_ID=<project>
+
+steps:
+  - id: build
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "--build-arg=VITE_API_BASE_URL=${_API_BASE_URL}"
+      - "--build-arg=VITE_FIREBASE_API_KEY=${_FB_API_KEY}"
+      - "--build-arg=VITE_FIREBASE_AUTH_DOMAIN=${_FB_AUTH_DOMAIN}"
+      - "--build-arg=VITE_FIREBASE_PROJECT_ID=${_FB_PROJECT_ID}"
+      - "-t=${_IMAGE}"
+      - "."
+
+# Push the built image to the registry referenced by _IMAGE.
+images:
+  - "${_IMAGE}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"
