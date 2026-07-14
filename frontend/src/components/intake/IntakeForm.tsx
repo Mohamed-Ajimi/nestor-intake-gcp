@@ -43,9 +43,13 @@ function validateField(field: IntakeField, value: any, t: TFunction): string | n
  if (field.type === "email" && typeof value === "string") {
  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return t("validation.invalidEmail");
  }
- if (field.type === "longtext" && field.validation?.min_length) {
- if (typeof value === "string" && value.length < field.validation.min_length)
- return t("validation.minChars", { count: field.validation.min_length });
+ // The canonical schema stores min_length at the FIELD level (IntakeField.min_length,
+ // passed through localizeSchema's ...rest); a nested validation.min_length is also
+ // honoured for forward-compat (WR-07 — the nested-only read made the rule dead).
+ const minLen = field.validation?.min_length ?? field.min_length;
+ if (field.type === "longtext" && minLen) {
+ if (typeof value === "string" && value.length < minLen)
+ return t("validation.minChars", { count: minLen });
  }
  if (field.type === "list" && Array.isArray(value)) {
  if (field.min_items && value.length < field.min_items)
