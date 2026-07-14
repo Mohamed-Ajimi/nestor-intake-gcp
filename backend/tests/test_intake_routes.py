@@ -873,3 +873,197 @@ def test_context_pack_read_cross_tenant_is_existence_hidden(
     finally:
         app.dependency_overrides.clear()
         _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# (z4) sources read — GET /intakes/{id}/sources (12-03 / QA-05)
+#
+# The transcribe CTA needs the intake's audio source ids. This is that scoped read
+# surface, mirroring the context-pack read's existence-hidden discipline (T-12-07): the
+# scoped repo's per-user space WHERE walls a cross-tenant/missing intake to a scoped-empty
+# list (200 empty), never a distinguishable 403. The projection exposes ONLY
+# id/kind/file_name/language/created_at — NEVER space_id/storage_bucket/storage_path
+# (T-12-08 — no tenant/storage identifier leaks to the browser).
+# ===========================================================================
+
+
+def _seed_source(
+    engine,
+    set_space,
+    space_id,
+    intake_id,
+    source_id,
+    *,
+    kind="audio",
+    file_name="interview.m4a",
+    language="nl",
+    storage_bucket="nestor-intake-uploads",
+    storage_path="sources/interview.m4a",
+) -> None:
+    """Seed one intake_sources row (audio by default — 12-03)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.intake_sources "
+                "(id, space_id, intake_id, kind, storage_bucket, storage_path, "
+                "file_name, language) "
+                "VALUES (:id, :space_id, :intake_id, :kind, :bucket, :path, "
+                ":file_name, :language)"
+            ),
+            {
+                "id": source_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "kind": kind,
+                "bucket": storage_bucket,
+                "path": storage_path,
+                "file_name": file_name,
+                "language": language,
+            },
+        )
+
+
+def test_sources_read_returns_intake_sources_for_owner(engine, set_space, monkeypatch):
+    """GET /intakes/{id}/sources returns the intake's sources within scope (12-03 / QA-05).
+
+    Each item carries id/kind/file_name/language/created_at and NO space_id/storage_bucket/
+    storage_path (T-12-08 — no tenant/storage identifier leaks).
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    src_a = uuid.uuid4()
+    src_b = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id)
+    _seed_source(
+        engine, set_space, space_id, intake_id, src_a, file_name="a.m4a", language="nl"
+    )
+    _seed_source(
+        engine, set_space, space_id, intake_id, src_b, file_name="b.wav", language="en"
+    )
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/sources",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        items = r.json()["sources"]
+        assert len(items) == 2, f"the owner must see both sources, got {len(items)}"
+        by_id = {row["id"]: row for row in items}
+        assert str(src_a) in by_id and str(src_b) in by_id
+        one = by_id[str(src_a)]
+        assert one["kind"] == "audio"
+        assert one["file_name"] == "a.m4a"
+        assert one["language"] == "nl"
+        assert "created_at" in one
+        # T-12-08: the projection must NEVER leak tenant/storage identifiers.
+        for leaked in ("space_id", "storage_bucket", "storage_path"):
+            assert leaked not in one, (
+                f"the sources projection must NOT expose {leaked!r} (T-12-08)"
+            )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+def test_sources_read_empty_when_no_sources(engine, set_space, monkeypatch):
+    """An in-scope intake with no sources reads a scoped-empty list, not a 404 (12-03)."""
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id, status="submitted")
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_id))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/sources",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json() == {"sources": []}, (
+            "no sources yet must be a scoped-empty 200, never a 404"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)
+
+
+def test_sources_read_cross_tenant_is_existence_hidden(
+    engine, set_space, two_spaces, monkeypatch
+):
+    """A space-A caller reading space-B's intake sources reads a scoped-empty list (T-12-07).
+
+    The scoped repo's per-user space WHERE walls space-B's source out, so the cross-tenant
+    read is INDISTINGUISHABLE from an in-scope intake with no sources — existence hidden,
+    never a 200-with-foreign-data and never a distinguishable 403. The read runs as the
+    space-scoped app role (NOT superadmin — a superuser would void the RLS wall).
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_b = uuid.uuid4()
+    src_b = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_b, intake_b)
+    _seed_source(engine, set_space, space_b, intake_b, src_b, file_name="secret.m4a")
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_b}/sources",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, (
+            f"cross-tenant sources read must be an existence-hidden 200, got "
+            f"{r.status_code} ({r.text!r})"
+        )
+        assert r.json() == {"sources": []}, (
+            "the space filter must hide space-B's source from a space-A caller (T-12-07)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
+
+
+def test_sources_read_superadmin_sees_any_space(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """A superadmin sees the sources for any space's intake (0003 bypass) — 12-03."""
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    src = uuid.uuid4()
+    _seed_intake_direct(engine, set_space, space_id, intake_id)
+    _seed_source(engine, set_space, space_id, intake_id, src, file_name="sa.m4a")
+    _patch_engine_factories(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/sources",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, r.text
+        items = r.json()["sources"]
+        ids = {row["id"] for row in items}
+        assert str(src) in ids, (
+            "a superadmin must see any space's sources (0003 bypass)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_id)

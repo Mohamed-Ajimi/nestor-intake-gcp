@@ -64,6 +64,7 @@ from app.db.models.organization import Organization
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
+    IntakeSourceRepository,
     ResearchArtifactRepository,
     SkillRunRepository,
 )
@@ -74,6 +75,7 @@ _log = logging.getLogger(__name__)
 from app.db.session import (
     get_intake_and_answer_repos,
     get_intake_answer_repo,
+    get_intake_source_repo,
     get_research_artifact_repo,
     get_skill_run_repo,
     get_tenant_repo,
@@ -217,6 +219,33 @@ class ContextPackView(BaseModel):
     notes: str | None = None
 
 
+class IntakeSourceView(BaseModel):
+    """Read-shaped view of ONE intake source upload — the transcribe CTA's source list.
+
+    Projects ONLY in-scope, non-identifying fields (T-12-08): the id, the ``kind``
+    ('audio'|'document'|...), the display ``file_name``, its ``language``, and
+    ``created_at``. Deliberately carries NO ``space_id`` and no ``storage_bucket`` /
+    ``storage_path`` — no tenant identifier and no GCS object location ever leak to the
+    browser (mirrors the ``ContextPackView`` / ``SkillRunFullView`` projection discipline).
+    """
+
+    id: str
+    kind: str | None = None
+    file_name: str | None = None
+    language: str | None = None
+    created_at: str | None = None
+
+
+class IntakeSourcesView(BaseModel):
+    """The sources read projection: the intake's uploads (a ``{ sources: [...] }`` wrapper).
+
+    A wrapper (not a bare list) so the shape is additively extensible and matches the
+    frontend seam's ``{ sources }`` contract (plan 05 / 12-03 Task 2).
+    """
+
+    sources: list[IntakeSourceView]
+
+
 class MemberView(BaseModel):
     """One ACTIVE member of the intake's space — the RecipientPicker (Plan 04) list row.
 
@@ -309,6 +338,21 @@ def _context_pack_view(artifact) -> ContextPackView:
         text_content=artifact.text_content,
         created_at=(artifact.created_at.isoformat() if artifact.created_at else None),
         notes=artifact.notes,
+    )
+
+
+def _intake_source_view(source) -> IntakeSourceView:
+    """Project an ``IntakeSource`` ORM row — id/kind/file_name/language/created_at ONLY.
+
+    NEVER projects ``space_id`` / ``storage_bucket`` / ``storage_path`` (T-12-08 — no
+    tenant/storage identifier leaks to the browser; same discipline as _context_pack_view).
+    """
+    return IntakeSourceView(
+        id=str(source.id),
+        kind=source.kind,
+        file_name=source.file_name,
+        language=source.language,
+        created_at=(source.created_at.isoformat() if source.created_at else None),
     )
 
 
@@ -553,6 +597,36 @@ def get_context_pack(
         "latest": _context_pack_view(latest),
         "history": [_context_pack_view(a) for a in history],
     }
+
+
+# ---------------------------------------------------------------------------
+# Sources (read-only projection feeding the transcribe CTA — 12-03 / QA-05)
+# ---------------------------------------------------------------------------
+
+
+@intake_router.get("/{intake_id}/sources")
+def list_intake_sources(
+    intake_id: str,
+    repo: IntakeSourceRepository = Depends(get_intake_source_repo),
+) -> IntakeSourcesView:
+    """Return the intake's source uploads within scope — the transcribe CTA's list (12-03).
+
+    A sibling of :func:`list_skill_runs` (same router, same scoped-repo Depends pattern).
+    The transcribe dispatch (``POST /sources/{source_id}/transcribe``) already exists; this
+    is the missing READ that feeds it real ``source_id`` values. Each row is projected
+    through :func:`_intake_source_view` to id/kind/file_name/language/created_at ONLY —
+    NEVER space_id/storage_bucket/storage_path (T-12-08 — no tenant/storage leak).
+
+    EXISTENCE-HIDDEN (D-07 / T-12-07, mirrors :func:`get_context_pack`): the scoped repo
+    applies the per-user space ``WHERE`` (omitted for superadmin via the 0003 bypass). A
+    cross-tenant or missing intake matches ZERO in-scope sources, so it reads
+    ``{"sources": []}`` — identical to an in-scope intake that simply has no uploads yet.
+    Absence of sources is NOT absence of the intake, so this is a scoped-empty 200, never a
+    404 and never a distinguishable 403; a stranger cannot tell "no sources" from "not your
+    intake" (no BOLA/IDOR enumeration).
+    """
+    rows = repo.list_for_intake(intake_id)
+    return IntakeSourcesView(sources=[_intake_source_view(row) for row in rows])
 
 
 # ---------------------------------------------------------------------------

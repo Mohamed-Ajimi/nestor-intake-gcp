@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2, Sparkles } from "lucide-react";
 import * as skills from "@/lib/api/skills";
+import { getIntakeSources, type IntakeSourceView } from "@/lib/api/sources";
 import type { ApiResult } from "@/lib/api/client";
 import type { SkillDispatch } from "@/lib/api/skills";
 
@@ -24,6 +25,25 @@ type SkillKey = "structure" | "extract" | "embeddings" | "transcribe";
 export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
   const { t } = useTranslation("intake");
   const [busy, setBusy] = useState<SkillKey | null>(null);
+  // The intake's audio sources feed the transcribe CTA real source ids (12-03). The read
+  // is space-scoped server-side (existence-hidden) — the seam renders whatever it returns.
+  const [audioSources, setAudioSources] = useState<IntakeSourceView[]>([]);
+  // Which audio source's transcribe is currently in-flight (drives the per-button spinner).
+  const [transcribingId, setTranscribingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await getIntakeSources(intakeId);
+      if (cancelled) return;
+      if (res.success) {
+        setAudioSources(res.data.sources.filter((s) => s.kind === "audio"));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [intakeId]);
 
   if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return null;
 
@@ -101,28 +121,44 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           {busy === "embeddings" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           {t("aiSkills.embeddingsBtn")}
         </button>
-        {/* No sources-read surface exists yet (only the transcribe dispatch), so the
-            transcribe CTA is gated with an explanatory disabled state rather than a
-            hand-rolled backend read. Once an intake exposes its audio sources, wire each
-            source to the transcribe trigger per source id — the trigger already exists;
-            only the source_id read is missing. Kept as the explicit wiring point below. */}
-        <button
-          type="button"
-          className={btnCls}
-          disabled
-          title={t("aiSkills.transcribeDisabledTitle")}
-          onClick={() =>
-            run(
-              "transcribe",
-              t("aiSkills.transcribeStarted"),
-              // Disabled until a sources-read surface supplies source.id; the dispatch
-              // itself is ready. Passing an empty id here is unreachable (button disabled).
-              () => skills.transcribeSource(intakeId, ""),
-            )
-          }
-        >
-          {t("aiSkills.transcribeBtn")}
-        </button>
+        {/* Transcribe: one enabled button per audio source (each wired to its real source
+            id via the 12-03 sources read). When the intake has no audio source yet, a single
+            disabled CTA with an explanatory title stands in. The transcribe dispatch itself
+            already exists (`skills.transcribeSource`); this only feeds it real source ids. */}
+        {audioSources.length === 0 ? (
+          <button
+            type="button"
+            className={btnCls}
+            disabled
+            title={t("aiSkills.transcribeDisabledTitle")}
+          >
+            {t("aiSkills.transcribeBtn")}
+          </button>
+        ) : (
+          audioSources.map((source) => (
+            <button
+              key={source.id}
+              type="button"
+              className={btnCls}
+              disabled={busy !== null}
+              onClick={() => {
+                setTranscribingId(source.id);
+                void run(
+                  "transcribe",
+                  t("aiSkills.transcribeStarted"),
+                  () => skills.transcribeSource(intakeId, source.id),
+                ).finally(() => setTranscribingId(null));
+              }}
+            >
+              {busy === "transcribe" && transcribingId === source.id && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              )}
+              {t("aiSkills.transcribeSourceBtn", {
+                name: source.file_name ?? t("aiSkills.transcribeSourceFallback"),
+              })}
+            </button>
+          ))
+        )}
       </div>
       <p className="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink/40">
         {t("aiSkills.progressNote")}

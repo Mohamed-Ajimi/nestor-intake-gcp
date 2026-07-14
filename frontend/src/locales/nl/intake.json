@@ -225,6 +225,8 @@
     "embeddingsBtn": "Genereer embeddings",
     "embeddingsStarted": "Embeddings genereren gestart — dit duurt even.",
     "transcribeBtn": "Transcribeer audio",
+    "transcribeSourceBtn": "Transcribeer {{name}}",
+    "transcribeSourceFallback": "audiobron",
     "transcribeStarted": "Transcriptie gestart — dit duurt even.",
     "transcribeDisabledTitle": "Transcriptie start vanaf een geüploade audiobron (nog geen bronnen-overzicht beschikbaar).",
     "progressNote": "Voortgang verschijnt in het skill-run-overzicht."

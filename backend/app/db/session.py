@@ -182,6 +182,36 @@ def get_intake_and_source_repos(identity: Identity = Depends(get_current_identit
         )
 
 
+def get_intake_source_repo(identity: Identity = Depends(get_current_identity)):
+    """Yield a tenant-scoped :class:`IntakeSourceRepository` for the current request.
+
+    Sync generator dependency (Pitfall 5) — body IDENTICAL to :func:`get_skill_run_repo`,
+    differing ONLY in the repository class yielded. Backs the sources READ endpoint
+    (12-03 / QA-05): engine-by-role, default-deny 403 on a null user space BEFORE any
+    session (D-04), ONE tx via ``maker.begin()`` (D-02), GUC set for the user path only
+    (Pitfall 2). The scoped ``list_for_intake`` read walls cross-tenant sources out
+    (existence-hidden, T-12-07). A single-repo provider is used here (not the combined
+    ``get_intake_and_source_repos``) because the read needs NO ownership pre-check write
+    gate — the scoped repo IS the wall (mirrors ``get_research_artifact_repo``).
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield IntakeSourceRepository(session, identity)
+
+
 def get_skill_run_repo(identity: Identity = Depends(get_current_identity)):
     """Yield a tenant-scoped :class:`SkillRunRepository` for the current request.
 

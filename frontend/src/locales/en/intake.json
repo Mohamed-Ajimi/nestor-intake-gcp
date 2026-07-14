@@ -225,6 +225,8 @@
     "embeddingsBtn": "Generate embeddings",
     "embeddingsStarted": "Generating embeddings started — this takes a moment.",
     "transcribeBtn": "Transcribe audio",
+    "transcribeSourceBtn": "Transcribe {{name}}",
+    "transcribeSourceFallback": "audio source",
     "transcribeStarted": "Transcription started — this takes a moment.",
     "transcribeDisabledTitle": "Transcription starts from an uploaded audio source (no source overview available yet).",
     "progressNote": "Progress appears in the skill-run overview."
