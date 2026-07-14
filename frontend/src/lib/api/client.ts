@@ -12,8 +12,17 @@ import { getIdToken, signOut } from "firebase/auth";
 // authorization decision and reads NO role/space_id from the browser — the backend
 // gates every admin route on the verified token.
 
-/** Discriminated result: success carries typed `data`, failure carries `error`. */
-export type ApiResult<T> = { success: true; data: T } | { success: false; error: string };
+/**
+ * Discriminated result: success carries typed `data`, failure carries `error`.
+ *
+ * The failure variant additionally carries an OPTIONAL machine `code` (Phase 11 / D-11):
+ * when the backend emits `{"detail": "...", "code": "SOME_CODE"}`, toast callers resolve
+ * the code via `resolveErrorKey` (lib/i18n/error-codes.ts) to a translated message and
+ * fall back to the raw `error` string when unmapped. `error` itself is unchanged.
+ */
+export type ApiResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string; code?: string };
 
 /**
  * Fetch the current user's Firebase ID token, or `null` when signed out.
@@ -74,6 +83,15 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<Api
       const message =
         typeof detail === "string" && detail.length > 0 ? detail : `HTTP ${resp.status}`;
 
+      // Phase 11 (D-11) ADDITIVE code extraction: surface a top-level machine `code`
+      // when the backend sends one, WITHOUT touching the string-`detail` path above —
+      // the raw `error` message stays the guaranteed fallback for unmapped codes.
+      const rawCode =
+        body && typeof body === "object" && "code" in body
+          ? (body as { code?: unknown }).code
+          : undefined;
+      const code = typeof rawCode === "string" && rawCode.length > 0 ? rawCode : undefined;
+
       // Disabled/revoked-session eject UX: the backend is still the authority (it
       // returned 401); we simply clear the dead client session and bounce to login
       // so the user isn't stranded behind a wall of 401s. The `{success,error}`
@@ -94,7 +112,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<Api
         }
       }
 
-      return { success: false, error: message };
+      return { success: false, error: message, code };
     }
 
     return { success: true, data: (body as T) ?? (undefined as T) };
