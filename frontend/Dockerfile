@@ -53,7 +53,8 @@ RUN npm run build
 # D-11 bundle guard (INFRA-05 / T-12-04): fail the build if ANY Supabase signature
 # reached the shipped bundle. This is the frontend analog of the backend Dockerfile's
 # build-time `python -c "import ..."` smoke check — fail NOW, not at runtime.
-RUN sh scripts/ci_no_supabase_in_bundle.sh .output
+# bash, not sh: node:22-slim's /bin/sh is dash, which rejects the guard's `set -o pipefail`.
+RUN bash scripts/ci_no_supabase_in_bundle.sh .output
 
 # ---------------------------------------------------------------------------
 # Stage 2 — runtime: carry only the built .output and run the Node SSR server.
