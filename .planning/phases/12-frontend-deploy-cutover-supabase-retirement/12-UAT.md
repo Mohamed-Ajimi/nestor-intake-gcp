@@ -122,3 +122,25 @@ AND both roles of the two-role E2E). Any unchecked box means parity is NOT prove
 MUST NOT proceed to Supabase-independence sign-off.
 
 - Gate: [ ] PARITY GREEN
+
+## Known gaps (recorded during the 12-05 cutover, 2026-07-14)
+
+1. **Mail deferred (operator decision):** the `nestor-resend-api-key` secret exists with the
+   runtime-SA accessor grant but has NO version — the operator chose to skip mail this session.
+   `RESEND_API_KEY` is deliberately NOT mapped (a version-less secret ref would break revision
+   startup). All mail-dependent items above (10-UAT items, invite-mail locale, invite click-through,
+   validation/results sends, and the REAL-invite-flow leg of the user-role E2E) cannot pass until
+   the key is added and `--update-secrets=RESEND_API_KEY=nestor-resend-api-key:latest` is applied.
+2. **NDA PDF not dropped (operator decision):** `frontend/public/templates/NDA/…` is absent from
+   the deployed image — the NDA download 404s. Closing requires the out-of-band PDF drop + a
+   frontend image rebuild/redeploy.
+3. **Backend suite 218/223:** 5 failures, all in mail tests (`test_mail_render`, `test_mail_locale`,
+   `test_mail_endpoints`), diagnosed as TEST defects, not app bugs: absolute audit-row counts
+   against the shared Cloud Build DB (cross-test leakage) and a raw-`&` assertion vs Jinja2's
+   correct `&amp;` attribute escaping. App send-first/single-audit logic verified correct by
+   inspection. Needs a test-harness fix (delta counts / per-test isolation) in a gaps plan.
+4. **Latent backend config bug (found live):** comma-separated `CORS_ALLOWED_ORIGINS` crashes
+   startup — pydantic-settings JSON-decodes `list[str]` env values BEFORE the comma-splitting
+   `field_validator` runs (rev 00021 failed to start; recovered with rev 00022 using the JSON-array
+   form). The validator's comma-separated claim in `backend/app/core/config.py` is unreachable;
+   fix with `NoDecode`/custom source or correct the docstring.
