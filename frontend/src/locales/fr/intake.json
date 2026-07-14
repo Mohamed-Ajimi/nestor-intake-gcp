@@ -225,6 +225,8 @@
     "embeddingsBtn": "Générer les embeddings",
     "embeddingsStarted": "Génération d'embeddings démarrée — cela prend un moment.",
     "transcribeBtn": "Transcrire l'audio",
+    "transcribeSourceBtn": "Transcrire {{name}}",
+    "transcribeSourceFallback": "source audio",
     "transcribeStarted": "Transcription démarrée — cela prend un moment.",
     "transcribeDisabledTitle": "La transcription démarre depuis une source audio téléversée (aucun aperçu des sources disponible pour l'instant).",
     "progressNote": "La progression apparaît dans l'aperçu des exécutions de compétences."
