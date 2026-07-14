@@ -7,10 +7,13 @@ import { getMe, patchLocale } from "@/lib/api/me";
 import { LOCALE_STORAGE_KEY } from "@/components/LanguageSwitcher";
 
 /**
- * Read (and consume) a pending pre-login language choice from localStorage.
- * The pre-login switcher (auth.login.tsx, persist=false) writes this key; the
- * post-login boot below reads it, persists it via patchLocale, and clears it so it
- * is applied exactly once. SSR-guarded — never touches storage on the server.
+ * Read a stored language choice from localStorage. The pre-login switcher
+ * (auth.login.tsx, persist=false) AND the post-login switcher (persist=true) write
+ * this key; the post-login boot below reads it, tries to persist it via patchLocale,
+ * and clears it ONLY when the server actually persisted it (locale echoed back
+ * non-null). For a membership-less superadmin the server persists NOTHING (Open Q1),
+ * so the key survives as the standing fallback across reloads (WR-02).
+ * SSR-guarded — never touches storage on the server.
  */
 function readPendingPreLoginLocale(): SupportedLocale | null {
   if (typeof window === "undefined") return null;
@@ -141,8 +144,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Resolution order (first hit wins):
   //   pending pre-login localStorage choice → /me locale → /me space_default_locale
   //   → detectLocale() → "nl".
-  // A pending pre-login choice is ALSO persisted to the profile via patchLocale and
-  // then cleared, so the pre-login FR/EN escape survives the first login.
+  // A stored choice is ALSO persisted to the profile via patchLocale; it is cleared
+  // only once the server confirms the persist, so a membership-less superadmin (whose
+  // PATCH persists nothing, Open Q1) keeps the localStorage value as the standing
+  // fallback across reloads (WR-02).
   //
   // getMe/patchLocale are return-no-throw (ApiResult): on failure we fall back to the
   // detected/nl language. Locale is NEVER read from a Firebase claim (RESEARCH Runtime
@@ -173,11 +178,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (i18n.language !== resolved) void i18n.changeLanguage(resolved);
 
-      // Persist a pending pre-login choice to the profile, then clear it so it is
-      // applied exactly once. Best-effort (return-no-throw) — ignore the outcome.
+      // Persist a stored choice to the profile; clear the key ONLY when the server
+      // confirmed it persisted (locale echoed back). A membership-less superadmin
+      // persists nothing server-side (Open Q1), so the key must survive as the
+      // standing fallback for the next reload (WR-02). Best-effort (return-no-throw).
       if (pending) {
-        void patchLocale(pending);
-        clearPendingPreLoginLocale();
+        const res = await patchLocale(pending);
+        if (!cancelled && res.success && res.data.locale === pending) {
+          clearPendingPreLoginLocale();
+        }
       }
     })();
 

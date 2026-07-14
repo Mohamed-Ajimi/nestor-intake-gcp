@@ -28,7 +28,7 @@ const TRIGGER_CLASS =
   "flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 " +
   "font-mono text-xs uppercase tracking-wider text-ink";
 
-function rememberPreLoginChoice(lang: SupportedLocale) {
+function rememberLocalChoice(lang: SupportedLocale) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, lang);
@@ -47,12 +47,15 @@ export function LanguageSwitcher({ persist = true }: { persist?: boolean }) {
   function handleSelect(lang: SupportedLocale) {
     // Instant UI flip first — persistence is async and best-effort.
     void i18n.changeLanguage(lang);
+    // ALWAYS remember the choice locally (WR-02): for persist=false this is the
+    // pre-login choice picked up by the post-login boot reconcile (D-09); for
+    // persist=true it is the standing fallback for a membership-less superadmin,
+    // whose PATCH /me/locale persists NOTHING server-side (Open Q1) — without it
+    // every reload would reset the UI to the space default.
+    rememberLocalChoice(lang);
     if (persist) {
       // D-10 auto-persist: ignore failure — the flip already happened, no toast.
       void patchLocale(lang);
-    } else {
-      // Pre-login: no session to PATCH against — remember for post-login reconcile.
-      rememberPreLoginChoice(lang);
     }
     setOpen(false);
   }
