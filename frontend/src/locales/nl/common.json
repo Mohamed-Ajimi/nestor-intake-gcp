@@ -1,0 +1,14 @@
+{
+  "language": {
+    "label": "Taal",
+    "nl": "Nederlands",
+    "fr": "Frans",
+    "en": "Engels"
+  },
+  "errors": {
+    "intakeNotFound": "Intake niet gevonden.",
+    "invalidLocale": "Ongeldige taalkeuze.",
+    "mailSendFailed": "E-mail versturen mislukt.",
+    "recipientInvalid": "Ongeldige ontvanger."
+  }
+}

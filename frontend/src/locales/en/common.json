@@ -1,0 +1,14 @@
+{
+  "language": {
+    "label": "Language",
+    "nl": "Dutch",
+    "fr": "French",
+    "en": "English"
+  },
+  "errors": {
+    "intakeNotFound": "Intake not found.",
+    "invalidLocale": "Invalid language selection.",
+    "mailSendFailed": "Failed to send the email.",
+    "recipientInvalid": "Invalid recipient."
+  }
+}
