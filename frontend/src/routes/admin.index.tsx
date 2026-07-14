@@ -1,7 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { signOut } from "firebase/auth";
 import agenicLogo from "@/assets/agenic-logo.png";
-import { supabase } from "@/lib/supabase";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 import { VerticalIcon } from "@/components/admin/VerticalIcon";
 
@@ -63,9 +64,10 @@ function AdminHomePage() {
   const { session } = useAuth();
   const { t } = useTranslation("admin");
 
+  // Firebase signOut (Phase 3 auth) — the legacy supabase.auth.signOut() was a no-op
+  // here (guard returned with no client) and never ended the Firebase session (WR-06).
   async function handleLogout() {
-    if (!supabase) return;
-    await supabase.auth.signOut();
+    await signOut(auth);
     navigate({ to: "/auth/login" });
   }
 
