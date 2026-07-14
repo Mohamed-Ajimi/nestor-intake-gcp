@@ -459,5 +459,17 @@
       "fileFallback": "fichier",
       "note": "NOTE"
     }
+  },
+  "validationDiff": {
+    "confirmedBadge": "Confirmé — proposition de Nestor conservée",
+    "changedByNestor": "Adapté par Nestor",
+    "original": "original",
+    "proposal": "proposition (actuellement utilisée)",
+    "why": "Pourquoi",
+    "empty": "— vide —",
+    "busy": "En cours…",
+    "revert": "Rétablir l'original",
+    "keep": "Garder la proposition de Nestor",
+    "questionLabel": "Question {{index}}"
   }
 }

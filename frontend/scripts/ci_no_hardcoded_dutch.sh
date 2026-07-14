@@ -36,7 +36,7 @@
 set -euo pipefail
 
 # Dutch stopwords that only appear in prose, not identifiers (word-bounded, case-insensitive).
-PATTERN='\b(niet|geen|wordt|klant|ingelogd|opnieuw|versturen|opslaan|verwijderen|annuleren|beschikbaar|vernieuwen|ruimte|gebruiker|verplicht|mislukt)\b'
+PATTERN='\b(niet|geen|wordt|klant|ingelogd|opnieuw|versturen|opslaan|verwijderen|annuleren|beschikbaar|vernieuwen|ruimte|gebruiker|verplicht|mislukt|uitloggen|terug|overzicht|beheer|kies)\b'
 
 # Surfaces where Dutch is deliberate, generated, or out of scope (see header).
 #

@@ -14,18 +14,17 @@ type Product = {
   slug: string;
   name: string;
   tag: string;
-  description: string;
   enabled: boolean;
   route: string;
 };
 
+// Descriptions are localized — looked up at render time via t(`home.products.${slug}`)
+// (Phase 11, WR-05). Tags are English brand labels shared across locales.
 const PRODUCTS: Product[] = [
   {
     slug: "pulse",
     name: "nestor pulse",
     tag: "Premium research",
-    description:
-      "De master research-engine. Custom diepgaand onderzoek voor strategische beslissingen.",
     enabled: true,
     route: "/admin/pulse/intakes",
   },
@@ -33,8 +32,6 @@ const PRODUCTS: Product[] = [
     slug: "sales",
     name: "nestor sales",
     tag: "Sales prep preset",
-    description:
-      "Preset van Pulse, gericht op pre-sales briefings, lead-research en pitch-voorbereiding.",
     enabled: true,
     route: "/admin/sales",
   },
@@ -42,8 +39,6 @@ const PRODUCTS: Product[] = [
     slug: "echo",
     name: "nestor echo",
     tag: "Consumer research preset",
-    description:
-      "Preset van Pulse, gericht op het ontrafelen van wat klanten echt willen, wat hen blokkeert en wat hun beslissingen drijft.",
     enabled: false,
     route: "/admin/echo/coming-soon",
   },
@@ -51,8 +46,6 @@ const PRODUCTS: Product[] = [
     slug: "edge",
     name: "nestor edge",
     tag: "Competitive research preset",
-    description:
-      "Preset van Pulse, gericht op concurrentiebewegingen, sterktes/zwaktes en kansen om voorbij te steken.",
     enabled: false,
     route: "/admin/edge/coming-soon",
   },
@@ -60,8 +53,6 @@ const PRODUCTS: Product[] = [
     slug: "flux",
     name: "nestor flux",
     tag: "Market shifts preset",
-    description:
-      "Preset van Pulse, gericht op trends die op je business afkomen en concrete implicaties.",
     enabled: false,
     route: "/admin/flux/coming-soon",
   },
@@ -70,7 +61,7 @@ const PRODUCTS: Product[] = [
 function AdminHomePage() {
   const navigate = useNavigate();
   const { session } = useAuth();
-  const { t } = useTranslation("common");
+  const { t } = useTranslation("admin");
 
   async function handleLogout() {
     if (!supabase) return;
@@ -87,7 +78,7 @@ function AdminHomePage() {
             nestor — verified intelligence that compounds
           </p>
           <h1 className="mt-2 font-serif text-4xl lowercase tracking-tight text-ink">
-            kies een product
+            {t("home.title")}
           </h1>
         </header>
 
@@ -107,10 +98,10 @@ function AdminHomePage() {
                 <h2 className="mt-2 font-serif text-2xl lowercase tracking-tight text-ink">
                   {p.name}
                 </h2>
-                <p className="mt-3 text-sm text-ink/70">{p.description}</p>
+                <p className="mt-3 text-sm text-ink/70">{t(`home.products.${p.slug}`)}</p>
                 {!p.enabled && (
                   <p className="mt-4 font-mono text-[10px] uppercase tracking-wider text-ink/50">
-                    {t("comingSoon.badge")}
+                    {t("comingSoon.badge", { ns: "common" })}
                   </p>
                 )}
               </>
@@ -148,7 +139,7 @@ function AdminHomePage() {
             onClick={handleLogout}
             className="font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline"
           >
-            Uitloggen
+            {t("shell.logout")}
           </button>
         </footer>
       </div>

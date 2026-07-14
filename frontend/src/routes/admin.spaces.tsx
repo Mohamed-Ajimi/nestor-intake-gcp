@@ -113,11 +113,11 @@ function SpacesPage() {
   }
 
   return (
-    <ProductShell product="beheer" items={ADMIN_NAV}>
+    <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-            spaces
+            {t("spaces.title")}
           </h1>
           <p className="mt-1 font-sans text-sm italic text-ink/60">
             {t("spaces.subtitle")}

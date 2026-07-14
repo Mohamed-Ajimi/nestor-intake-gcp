@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import { signOut } from "firebase/auth";
 import agenicLogo from "@/assets/agenic-logo.png";
 import { auth } from "@/lib/firebase";
@@ -23,6 +24,7 @@ export function ProductShell({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const navigate = useNavigate();
   const { session, isSuperadmin } = useAuth();
+  const { t } = useTranslation("admin");
 
   const isActive = (to: string, exact: boolean) =>
     exact ? pathname === to : pathname === to || pathname.startsWith(to + "/");
@@ -40,7 +42,7 @@ export function ProductShell({
           to="/admin"
           className="font-mono text-[11px] uppercase tracking-wider text-ink/60 hover:text-ink"
         >
-          ← Terug naar overzicht
+          {t("shell.backToOverview")}
         </Link>
 
         <Link to="/admin" className="mt-6 block">
@@ -54,7 +56,7 @@ export function ProductShell({
         </Link>
 
         {/* Global space switcher (D-04 / TENANT-04) — superadmin-only. Mounted on the
-            SAME isSuperadmin gate as the "Beheer" nav below so a `user` NEVER renders it
+            SAME isSuperadmin gate as the shell.manage nav below so a `user` NEVER renders it
             (absent from the DOM, not merely hidden). The selection is UX-only view-filter
             state; the backend remains the sole tenant authority. */}
         {isSuperadmin && (
@@ -97,7 +99,7 @@ export function ProductShell({
         {isSuperadmin && (
           <nav className="mt-8 flex flex-col gap-1 border-t border-ink/15 pt-4">
             <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/40">
-              Beheer
+              {t("shell.manage")}
             </p>
             {ADMIN_NAV.map((item) => {
               const active = isActive(item.to, item.exact);
@@ -126,7 +128,7 @@ export function ProductShell({
             onClick={handleLogout}
             className="mt-3 font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline"
           >
-            Uitloggen
+            {t("shell.logout")}
           </button>
         </div>
       </aside>

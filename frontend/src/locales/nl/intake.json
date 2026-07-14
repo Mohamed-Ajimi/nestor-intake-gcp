@@ -459,5 +459,17 @@
       "fileFallback": "bestand",
       "note": "NOTITIE"
     }
+  },
+  "validationDiff": {
+    "confirmedBadge": "Bevestigd — Nestor's voorstel behouden",
+    "changedByNestor": "Aangepast door Nestor",
+    "original": "origineel",
+    "proposal": "voorstel (huidig gebruikt)",
+    "why": "Waarom",
+    "empty": "— leeg —",
+    "busy": "Bezig…",
+    "revert": "Zet terug naar origineel",
+    "keep": "Houd Nestor's voorstel",
+    "questionLabel": "Vraag {{index}}"
   }
 }

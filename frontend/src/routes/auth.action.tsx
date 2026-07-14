@@ -13,7 +13,7 @@ import { auth } from "@/lib/firebase";
 // so the first-run flow stays in the app's look and language instead of Firebase's
 // hosted page. One route serves BOTH the invite set-password flow and the (later)
 // forgot-password flow — mechanically the same Firebase `resetPassword` operation —
-// so all copy is neutral ("Kies je wachtwoord"), never "reset".
+// so all copy is neutral ("choose your password"), never "reset".
 export const Route = createFileRoute("/auth/action")({
   component: ActionPage,
 });

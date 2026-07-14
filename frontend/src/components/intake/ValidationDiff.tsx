@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { IntakeField, IntakeSection } from "@/lib/intake-types";
 import { Sparkles, RotateCcw, Check } from "lucide-react";
 
@@ -113,12 +114,13 @@ function DiffCard({
   onConfirm: () => void;
 }) {
   const [reverting, setReverting] = useState(false);
+  const { t } = useTranslation("intake");
 
   if (confirmed) {
     return (
       <div className="mt-2 flex items-center gap-2 border border-ink/30 bg-paper2 px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
         <Check className="h-3.5 w-3.5 text-emerald-700" />
-        Bevestigd — Nestor's voorstel behouden
+        {t("validationDiff.confirmedBadge")}
       </div>
     );
   }
@@ -127,20 +129,20 @@ function DiffCard({
     <div className="mt-3 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4 text-ink">
       <div className="mb-3 flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink">
         <Sparkles className="h-3.5 w-3.5" />
-        AANGEPAST DOOR NESTOR
+        {t("validationDiff.changedByNestor")}
         {label && <span className="text-ink/60"> · {label}</span>}
         {meta && <span className="text-ink/40"> · {meta}</span>}
       </div>
 
       <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-        origineel
+        {t("validationDiff.original")}
       </div>
       <div className="border border-ink/30 bg-paper p-3 text-sm whitespace-pre-wrap text-ink/70">
-        {original || <span className="italic text-ink/40">— leeg —</span>}
+        {original || <span className="italic text-ink/40">{t("validationDiff.empty")}</span>}
       </div>
 
       <div className="mt-3 mb-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-        voorstel (huidig gebruikt)
+        {t("validationDiff.proposal")}
       </div>
       <div className="border border-ink/30 bg-paper p-3 text-sm whitespace-pre-wrap text-ink">
         {suggested}
@@ -149,7 +151,7 @@ function DiffCard({
       {rationale && (
         <p className="mt-3 text-sm">
           <span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-            Waarom
+            {t("validationDiff.why")}
           </span>
           <span className="font-sans italic text-ink/70">{rationale}</span>
         </p>
@@ -170,7 +172,7 @@ function DiffCard({
           className="inline-flex items-center gap-1.5 border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-50"
         >
           <RotateCcw className="h-3.5 w-3.5" />
-          {reverting ? "Bezig…" : "Zet terug naar origineel"}
+          {reverting ? t("validationDiff.busy") : t("validationDiff.revert")}
         </button>
         <button
           type="button"
@@ -178,7 +180,7 @@ function DiffCard({
           className="inline-flex items-center gap-1.5 border border-ink bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90"
         >
           <Check className="h-3.5 w-3.5" />
-          Houd Nestor's voorstel
+          {t("validationDiff.keep")}
         </button>
       </div>
     </div>
@@ -203,6 +205,7 @@ export function ValidationDiffForField({
   confirmedKeys: ReadonlySet<string>;
   onConfirmKey: (cardKey: string) => void;
 }) {
+  const { t } = useTranslation("intake");
   if (!proposals) return null;
 
   if (field.key === "research_questions") {
@@ -226,7 +229,7 @@ export function ValidationDiffForField({
           return (
             <DiffCard
               key={`rq-${idx}-${i}`}
-              label={`Vraag ${idx + 1}`}
+              label={t("validationDiff.questionLabel", { index: idx + 1 })}
               meta={meta || undefined}
               original={rq.current ?? ""}
               suggested={rq.suggested}

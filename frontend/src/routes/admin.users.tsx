@@ -162,7 +162,7 @@ function UsersPage() {
   }
 
   return (
-    <ProductShell product="beheer" items={ADMIN_NAV}>
+    <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">

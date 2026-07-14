@@ -1,4 +1,20 @@
 {
+  "shell": {
+    "backToOverview": "← Retour à l'aperçu",
+    "manage": "Gestion",
+    "productManage": "gestion",
+    "logout": "Se déconnecter"
+  },
+  "home": {
+    "title": "choisissez un produit",
+    "products": {
+      "pulse": "Le moteur de recherche maître. Recherche approfondie sur mesure pour les décisions stratégiques.",
+      "sales": "Preset de Pulse, axé sur les briefings pré-vente, la recherche de leads et la préparation de pitchs.",
+      "echo": "Preset de Pulse, axé sur ce que les clients veulent vraiment, ce qui les bloque et ce qui guide leurs décisions.",
+      "edge": "Preset de Pulse, axé sur les mouvements concurrentiels, les forces/faiblesses et les occasions de prendre l'avantage.",
+      "flux": "Preset de Pulse, axé sur les tendances qui arrivent vers votre business et leurs implications concrètes."
+    }
+  },
   "intakeDetail": {
     "unknownClient": "Client inconnu",
     "status": {
@@ -142,6 +158,7 @@
     "saved": "Client enregistré"
   },
   "spaces": {
+    "title": "espaces",
     "subtitle": "Gérer les espaces clients — créer, modifier nom/slug et désactiver.",
     "new": "+ Nouvel espace",
     "empty": {

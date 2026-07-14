@@ -1,4 +1,20 @@
 {
+  "shell": {
+    "backToOverview": "← Back to overview",
+    "manage": "Manage",
+    "productManage": "manage",
+    "logout": "Log out"
+  },
+  "home": {
+    "title": "choose a product",
+    "products": {
+      "pulse": "The master research engine. Custom in-depth research for strategic decisions.",
+      "sales": "Preset of Pulse, focused on pre-sales briefings, lead research and pitch preparation.",
+      "echo": "Preset of Pulse, focused on unravelling what customers really want, what blocks them and what drives their decisions.",
+      "edge": "Preset of Pulse, focused on competitor moves, strengths/weaknesses and opportunities to get ahead.",
+      "flux": "Preset of Pulse, focused on trends heading towards your business and their concrete implications."
+    }
+  },
   "intakeDetail": {
     "unknownClient": "Unknown client",
     "status": {
@@ -142,6 +158,7 @@
     "saved": "Client saved"
   },
   "spaces": {
+    "title": "spaces",
     "subtitle": "Manage client spaces — create, edit name/slug and deactivate.",
     "new": "+ New space",
     "empty": {
