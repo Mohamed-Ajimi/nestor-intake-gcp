@@ -48,8 +48,20 @@ from app.mail import resend as mail_resend
 
 _log = logging.getLogger(__name__)
 
-# Dutch subject for the set-password invite mail (the ONLY link-carrying mail, D-09).
-_INVITE_SUBJECT = "Welkom bij Nestor Pulse — stel je wachtwoord in"
+# Per-locale subjects for the set-password invite mail (the ONLY link-carrying mail,
+# D-09). Mirrors intake_routes._SUBJECTS (D-12): the subject is selected with the SAME
+# resolved locale as the rendered body so the two can never desync; an unknown locale
+# falls back to "nl" (the render layer's fallback base).
+_INVITE_SUBJECTS: dict[str, str] = {
+    "nl": "Welkom bij Nestor Pulse — stel je wachtwoord in",
+    "fr": "Bienvenue chez Nestor Pulse — définissez votre mot de passe",
+    "en": "Welcome to Nestor Pulse — set your password",
+}
+
+
+def _invite_subject_for(locale: str) -> str:
+    """Return the invite subject in ``locale`` (nl fallback — matches the body fallback)."""
+    return _INVITE_SUBJECTS.get(locale) or _INVITE_SUBJECTS["nl"]
 
 # The app-level allowed space-locale set (D-07 / V5 input validation). Enforced IN CODE,
 # NOT a PG enum (mirrors the organizations.default_locale / status column rationale, 0010).
@@ -331,7 +343,11 @@ def send_invite_mail(
         # Fresh action link per send (D-10). Its continue URL is /auth/action (Task 2).
         action_link = admin_users.generate_set_password_link(membership.email)
         html = mail_render.render_invite(cta_url=action_link, locale=invite_locale)
-        mail_resend.send(to=[membership.email], subject=_INVITE_SUBJECT, html=html)
+        mail_resend.send(
+            to=[membership.email],
+            subject=_invite_subject_for(invite_locale),
+            html=html,
+        )
     except Exception:  # noqa: BLE001 -- any transport/link failure is a non-send.
         _log.warning("invite mail send failed for membership %s", membership_id)
         return MailResult(success=False)
