@@ -2,6 +2,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { confirmPasswordReset, verifyPasswordResetCode } from "firebase/auth";
 import { FirebaseError } from "firebase/app";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import { auth } from "@/lib/firebase";
 
@@ -28,25 +30,26 @@ type VerifyState =
 // so the user gets an inline hint before the round-trip.
 const MIN_PASSWORD_LENGTH = 6;
 
-/** Map a Firebase error code to a friendly Dutch message. */
-function dutchAuthError(code: string): string {
+/** Map a Firebase error code to a friendly, localized message (auth namespace). */
+function authErrorMessage(t: TFunction<"auth">, code: string): string {
   switch (code) {
     case "auth/expired-action-code":
     case "auth/invalid-action-code":
-      return "Deze link is verlopen of ongeldig — vraag een nieuwe link aan.";
+      return t("action.errors.expiredLink");
     case "auth/weak-password":
-      return "Kies een sterker wachtwoord (minimaal 6 tekens).";
+      return t("action.errors.weakPassword");
     case "auth/user-disabled":
-      return "Dit account is uitgeschakeld. Neem contact op met de beheerder.";
+      return t("action.errors.userDisabled");
     case "auth/user-not-found":
-      return "Dit account bestaat niet meer. Vraag een nieuwe uitnodiging aan.";
+      return t("action.errors.userNotFound");
     default:
-      return "Er ging iets mis. Vraag een nieuwe link aan of probeer opnieuw.";
+      return t("action.errors.generic");
   }
 }
 
 function ActionPage() {
   const navigate = useNavigate();
+  const { t } = useTranslation("auth");
 
   // Read mode + oobCode from the URL Firebase redirected to
   // (?mode=resetPassword&oobCode=...). Guarded for SSR: window is undefined there,
@@ -106,11 +109,11 @@ function ActionPage() {
       return;
     }
     if (password.length < MIN_PASSWORD_LENGTH) {
-      setFieldError("Kies een sterker wachtwoord (minimaal 6 tekens).");
+      setFieldError(t("action.errors.weakPassword"));
       return;
     }
     if (password !== confirmPassword) {
-      setFieldError("De wachtwoorden komen niet overeen.");
+      setFieldError(t("action.errors.mismatch"));
       return;
     }
 
@@ -119,20 +122,20 @@ function ActionPage() {
       // Apply the new password. Works identically for a freshly-invited user
       // (who has a random password they never knew) and a forgot-password user.
       await confirmPasswordReset(auth, oobCode, password);
-      toast.success("Wachtwoord ingesteld. Log in met je nieuwe wachtwoord.");
+      toast.success(t("action.success"));
       navigate({ to: "/auth/login" });
     } catch (err) {
       const code = err instanceof FirebaseError ? err.code : "";
       if (code === "auth/weak-password") {
         // Weak password is a field-level problem: keep the form, show it inline.
-        setFieldError(dutchAuthError(code));
+        setFieldError(authErrorMessage(t, code));
       } else if (code === "auth/expired-action-code" || code === "auth/invalid-action-code") {
         // The code expired/was consumed between verify and submit: fall back to
         // the whole-page re-request message.
         setVerify({ status: "invalid" });
-        toast.error(dutchAuthError(code));
+        toast.error(authErrorMessage(t, code));
       } else {
-        const message = dutchAuthError(code);
+        const message = authErrorMessage(t, code);
         setFieldError(message);
         toast.error(message);
       }
@@ -146,38 +149,33 @@ function ActionPage() {
       <div className="w-full max-w-md border border-ink bg-paper p-10">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink/60">Agenic × Nestor</p>
         <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-          Kies je wachtwoord
+          {t("action.heading")}
         </h1>
 
         {verify.status === "verifying" && (
-          <p className="mt-8 text-sm text-ink/60">Even geduld — je link wordt gecontroleerd…</p>
+          <p className="mt-8 text-sm text-ink/60">{t("action.verifying")}</p>
         )}
 
         {verify.status === "unsupported" && (
           <div className="mt-8 space-y-4">
-            <p className="text-sm text-ink/70">
-              Deze link kan niet worden verwerkt. Open de link uit je uitnodigingsmail opnieuw, of
-              vraag een nieuwe link aan.
-            </p>
+            <p className="text-sm text-ink/70">{t("action.unsupported")}</p>
             <a
               href="/auth/login"
               className="inline-block font-mono text-xs uppercase tracking-wider text-ink underline"
             >
-              Naar inloggen
+              {t("action.toLogin")}
             </a>
           </div>
         )}
 
         {verify.status === "invalid" && (
           <div className="mt-8 space-y-4">
-            <p className="text-sm text-red-600">
-              Deze link is verlopen of ongeldig — vraag een nieuwe link aan.
-            </p>
+            <p className="text-sm text-red-600">{t("action.errors.expiredLink")}</p>
             <a
               href="/auth/login"
               className="inline-block font-mono text-xs uppercase tracking-wider text-ink underline"
             >
-              Naar inloggen
+              {t("action.toLogin")}
             </a>
           </div>
         )}
@@ -185,14 +183,15 @@ function ActionPage() {
         {verify.status === "ready" && (
           <>
             <p className="mt-3 text-sm text-ink/60">
-              Stel een wachtwoord in voor <span className="font-mono text-ink">{verify.email}</span>.
+              {t("action.setPasswordFor")}{" "}
+              <span className="font-mono text-ink">{verify.email}</span>.
             </p>
             <form onSubmit={handleSubmit} className="mt-8 space-y-4">
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="nieuw wachtwoord"
+                placeholder={t("action.newPasswordPlaceholder")}
                 autoComplete="new-password"
                 required
                 autoFocus
@@ -202,7 +201,7 @@ function ActionPage() {
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="bevestig wachtwoord"
+                placeholder={t("action.confirmPasswordPlaceholder")}
                 autoComplete="new-password"
                 required
                 className="w-full border border-ink/20 bg-paper px-4 py-3 text-sm outline-none focus:border-ink"
@@ -212,7 +211,7 @@ function ActionPage() {
                 disabled={submitting}
                 className="w-full bg-ink px-4 py-3 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
               >
-                {submitting ? "Bezig..." : "Wachtwoord instellen"}
+                {submitting ? t("action.submitting") : t("action.submit")}
               </button>
             </form>
             {fieldError && <p className="mt-4 text-sm text-red-600">{fieldError}</p>}
