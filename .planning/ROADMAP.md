@@ -229,10 +229,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. A parity checklist is green: a full `draft → … → decomposed` run completes on GCP for both a superadmin and a user, exercising auth, isolation, AI ports, SSE, storage, and i18n
   3. AMENDED (D-08): The legacy Supabase project is NOT touched (no pause, delete, or dashboard action). "Retirement" = independence: zero Supabase env vars, calls, or keys in the deployed system, proven by the D-11 bundle guard.
 **Plans**: 5 plans (3 waves)
-  - [ ] 12-01-PLAN.md -- Bundle guard (D-11) + consolidated 12-UAT parity checklist (Wave 1)
+  - [x] 12-01-PLAN.md -- Bundle guard (D-11) + consolidated 12-UAT parity checklist (Wave 1)
   - [ ] 12-02-PLAN.md -- Frontend containerization: node-server preset + Dockerfile + cloudbuild + hide sales nav (Wave 2)
-  - [ ] 12-03-PLAN.md -- D-12 residual closure: sources-read endpoint + transcribe CTA wiring (Wave 1)
-  - [ ] 12-04-PLAN.md -- IaC frontend service by construction + Phase-12 DEPLOY-RUNBOOK (Wave 1)
+  - [x] 12-03-PLAN.md -- D-12 residual closure: sources-read endpoint + transcribe CTA wiring (Wave 1)
+  - [x] 12-04-PLAN.md -- IaC frontend service by construction + Phase-12 DEPLOY-RUNBOOK (Wave 1)
   - [ ] 12-05-PLAN.md -- Live deploy + two-role parity gate execution (checkpoint) (Wave 3)
 **UI hint**: yes
 
@@ -254,4 +254,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. GCS Storage | 4/4 | Complete   | 2026-07-13 |
 | 10. Notifications | 5/5 | Complete    | 2026-07-13 |
 | 11. Internationalization (NL/FR/EN) | 9/9 | Complete    | 2026-07-14 |
-| 12. Frontend Deploy, Cutover & Supabase Retirement | 0/TBD | Not started | - |
+| 12. Frontend Deploy, Cutover & Supabase Retirement | 3/5 | In Progress|  |

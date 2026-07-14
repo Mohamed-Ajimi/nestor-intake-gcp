@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 12 context gathered
-last_updated: "2026-07-14T14:55:04.060Z"
-last_activity: 2026-07-14 -- Phase 12 planning complete
+last_updated: "2026-07-14T15:00:31.128Z"
+last_activity: 2026-07-14 -- Phase 12 execution started
 progress:
   total_phases: 12
   completed_phases: 11
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-18)
 
 **Core value:** A logged-in superadmin or client user can run an intake end-to-end on GCP — from form submission through AI skill application to a validated, decomposed context pack — with each client's data fully isolated to its own space, and the legacy Supabase system retired.
-**Current focus:** Phase 12 — frontend deploy, cutover & supabase retirement
+**Current focus:** Phase 12 — frontend-deploy-cutover-supabase-retirement
 
 ## Current Position
 
-Phase: 12
-Plan: Not started
+Phase: 12 (frontend-deploy-cutover-supabase-retirement) — EXECUTING
+Plan: 1 of 5
 Next: Phase 06 (intake-crud-parity-and-frontend-api-seam)
-Status: Ready to execute
-Last activity: 2026-07-14 -- Phase 12 planning complete
+Status: Executing Phase 12
+Last activity: 2026-07-14 -- Phase 12 execution started
 
 Progress: 5 / 12 phases complete
 
