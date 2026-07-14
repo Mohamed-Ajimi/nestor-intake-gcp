@@ -1,1 +1,118 @@
-{}
+{
+  "intakeDetail": {
+    "unknownClient": "Unknown client",
+    "status": {
+      "draft": "Draft",
+      "submitted": "Submitted",
+      "reviewed": "Reviewed",
+      "validated_by_client": "Validated",
+      "decomposed": "Decomposed",
+      "in_research": "In research",
+      "delivered": "Delivered",
+      "archived": "Archived"
+    },
+    "statusBanner": {
+      "draft": "Client is still filling in the form. Link shared but not yet submitted.",
+      "submitted": "Client has submitted. Ready for your review.",
+      "reviewed": "Reviewed by you. Awaiting client validation.",
+      "validated_by_client": "Client has validated. Ready for decomposition.",
+      "decomposed": "Decomposition done. Ready for research.",
+      "in_research": "Nestor is researching.",
+      "delivered": "Delivered to client.",
+      "archived": "Archived."
+    },
+    "statusHint": {
+      "reviewed": "The client only sees the changes once you click 'Send for validation' (coming in a future update).",
+      "validated_by_client": "Ready for decomposition."
+    },
+    "header": {
+      "intakes": "Intakes",
+      "lastEdited": "Last edited",
+      "deliveredOn": "Delivered on"
+    },
+    "action": {
+      "edit": "Edit",
+      "cancel": "Cancel",
+      "save": "Save",
+      "copy": "Copy"
+    },
+    "editBanner": {
+      "title": "EDITING",
+      "body": "Changes are not saved until you click Save."
+    },
+    "sections": {
+      "nav": "Sections"
+    },
+    "field": {
+      "changed": "Changed"
+    },
+    "info": {
+      "title": "Intake info",
+      "client": "Client",
+      "product": "Product",
+      "status": "Status",
+      "createdAt": "Created",
+      "lastEdited": "Last edited",
+      "deliveredOn": "Delivered on",
+      "initialIntakeLink": "Initial intake link",
+      "initialIntakeLinkSubtitle": "Works while status = Draft",
+      "validationLink": "Validation link",
+      "validationLinkSubtitle": "Same page in validation mode (status = Reviewed)",
+      "validation": "Validation",
+      "validatedOn": "Client validated on {{date}}",
+      "notYetValidated": "Not yet validated",
+      "resultsLink": "Client results link",
+      "resultsLinkTooltip": "What the client sees: one summarized report (download) + questions overview + AI search. No access to raw research files or filenames.",
+      "resultsLinkHint": "Works once status = Delivered"
+    },
+    "history": {
+      "title": "Previous skill runs",
+      "loading": "Loading…",
+      "error": "error",
+      "running": "running…"
+    },
+    "search": {
+      "title": "Search research data (semantic)",
+      "placeholder": "e.g. 'customers complain about the access code' or 'pricing transparency competitors'",
+      "button": "Search",
+      "results": "{{count}} results — most relevant first"
+    },
+    "deliveredAt": {
+      "laterPhase": "Saving the delivery date will come in a later phase.",
+      "hint": "The date the client sees on the results page."
+    },
+    "confirm": {
+      "archive": "Archive project?",
+      "discardChanges": "Unsaved changes will be discarded. Continue?"
+    },
+    "error": {
+      "notFound": "Intake not found.",
+      "notFoundOrDeleted": "This intake does not exist or was deleted.",
+      "backToList": "Back to list"
+    },
+    "toast": {
+      "linkCopied": "Link copied",
+      "copyFailed": "Copy failed",
+      "intakeNotLoaded": "Intake not loaded yet",
+      "aiReviewNotLoaded": "AI review is not loaded yet — please wait.",
+      "sendFailed": "Send failed",
+      "statusUnavailable": "Status change not available via the API (stops at decomposed).",
+      "statusNotUpdated": "Status not updated",
+      "statusUpdated": "Status updated",
+      "aiStartFailed": "Failed to start AI analysis",
+      "mailNotSent": "Send failed — the email was not sent. Please try again.",
+      "mailSent": "Email sent.",
+      "contextPackStartFailed": "Failed to start Context Pack",
+      "contextPackStarted": "Context Pack generation started — this takes about 1–2 minutes.",
+      "autoResearchOutOfScope": "Automatic research is out of scope for this phase (stops at decomposed).",
+      "researchOutOfScope": "Research is out of scope for this phase (stops at decomposed).",
+      "scrollToContextPack": "Scroll to Context Pack below.",
+      "scrollToFinalReport": "Scroll to the client report block below.",
+      "searchFailed": "Search failed",
+      "noChanges": "No changes",
+      "saveFailed": "Save failed",
+      "cleanupFailed": "Failed to clean up old files",
+      "changesSaved": "Changes saved"
+    }
+  }
+}

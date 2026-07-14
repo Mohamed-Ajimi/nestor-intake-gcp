@@ -3,7 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveSkillRun, useSkillRunFull, type ActiveSkillRun } from "@/components/intake/SkillRunProgress";
 import { format, formatDistanceToNow } from "date-fns";
-import { nl } from "date-fns/locale";
+import { useTranslation } from "react-i18next";
+import i18n from "@/lib/i18n";
+import { getDateLocale } from "@/lib/i18n/date-locale";
+import { resolveErrorKey } from "@/lib/i18n/error-codes";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import {
@@ -107,20 +110,18 @@ type SkillRun = {
 };
 
 
-const STATUS_OPTIONS: { value: string; label: string }[] = [
- { value: "draft", label: "Concept" },
- { value: "submitted", label: "Ingediend" },
- { value: "reviewed", label: "Gereviewd" },
- { value: "validated_by_client", label: "Gevalideerd" },
- { value: "decomposed", label: "Gedecomposeerd" },
- { value: "in_research", label: "In onderzoek" },
- { value: "delivered", label: "Geleverd" },
- { value: "archived", label: "Gearchiveerd" },
-];
-
-const STATUS_LABEL: Record<string, string> = Object.fromEntries(
- STATUS_OPTIONS.map((s) => [s.value, s.label]),
-);
+// Status values are the stable domain keys; labels/banners/hints are looked up in the
+// admin catalog at render time via t("intakeDetail.status.<value>") etc. (Phase 11).
+const STATUS_VALUES = [
+ "draft",
+ "submitted",
+ "reviewed",
+ "validated_by_client",
+ "decomposed",
+ "in_research",
+ "delivered",
+ "archived",
+] as const;
 
 const STATUS_VARIANT: Record<string, { cls: string; mark?: "ink" | "green" | null }> = {
  draft: { cls: "badge-dashed" },
@@ -133,31 +134,29 @@ const STATUS_VARIANT: Record<string, { cls: string; mark?: "ink" | "green" | nul
  archived: { cls: "badge-outline text-ink/40 border-ink/40" },
 };
 
-const STATUS_BANNER: Record<string, string> = {
- draft: "Klant is nog aan het invullen. Link gedeeld maar nog niet ingediend.",
- submitted: "Klant heeft ingediend. Klaar voor jouw review.",
- reviewed: "Door jou gereviewd. Wacht op klant-validatie.",
- validated_by_client: "Klant heeft gevalideerd. Klaar voor decompositie.",
- decomposed: "Decompositie gedaan. Klaar voor onderzoek.",
- in_research: "Nestor onderzoekt.",
- delivered: "Geleverd aan klant.",
- archived: "Gearchiveerd.",
-};
-
-const STATUS_HINT: Record<string, string> = {
- reviewed:
- "Klant ziet de wijzigingen pas wanneer je 'Stuur voor validatie' klikt (komt in volgende update).",
- validated_by_client: "Klaar voor decompositie.",
-};
+// Status banners/hints that exist in the catalog. A value absent from these sets has no
+// banner/hint (guards the render sites, which only show when a catalog entry exists).
+const STATUS_WITH_BANNER = new Set([
+ "draft",
+ "submitted",
+ "reviewed",
+ "validated_by_client",
+ "decomposed",
+ "in_research",
+ "delivered",
+ "archived",
+]);
+const STATUS_WITH_HINT = new Set(["reviewed", "validated_by_client"]);
 
 // Phase machine lives in @/lib/intake-phase. The detail-page derives a single
 // Phase from intake + latest intake-skill-run + hasResearchArtifacts.
 
 
 function StatusPill({ status }: { status: string | null }) {
+ const { t } = useTranslation("admin");
  if (!status) return null;
  const v = STATUS_VARIANT[status] ?? { cls: "badge-outline" };
- const label = (STATUS_LABEL[status] ?? status).toUpperCase();
+ const label = t(`intakeDetail.status.${status}`, status).toUpperCase();
  return (
  <span className={cn(v.cls)}>
  {v.mark === "green" && <span className="mark-green" />}
@@ -170,7 +169,7 @@ function StatusPill({ status }: { status: string | null }) {
 function fmt(d: string | null | undefined) {
  if (!d) return "—";
  try {
- return format(new Date(d), "d MMM yyyy 'om' HH:mm", { locale: nl });
+ return format(new Date(d), "d MMM yyyy 'om' HH:mm", { locale: getDateLocale(i18n.language) });
  } catch {
  return d;
  }
@@ -193,6 +192,7 @@ function isEmptyVal(v: unknown): boolean {
 
 function IntakeDetailPage() {
  const { id } = Route.useParams();
+  const { t, i18n } = useTranslation("admin");
   const { session } = useAuth();
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
@@ -320,7 +320,7 @@ function IntakeDetailPage() {
  });
  setSuccessUrl(`${window.location.origin}/intake/${token}`);
  } catch (e) {
- toast.error(`Versturen mislukt: ${(e as Error).message}`);
+ toast.error(`${t("intakeDetail.toast.sendFailed")}: ${(e as Error).message}`);
  } finally {
  setSubmittingReview(false);
  }
@@ -330,7 +330,8 @@ function IntakeDetailPage() {
  setLoading(true);
  const intakeRes = await getIntake(id);
  if (!intakeRes.success) {
- setError(intakeRes.error || "Intake niet gevonden.");
+ const codeKey = resolveErrorKey(intakeRes.code);
+ setError(codeKey ? t(codeKey) : intakeRes.error || t("intakeDetail.error.notFound"));
  setLoading(false);
  return;
  }
@@ -452,9 +453,9 @@ function IntakeDetailPage() {
  const url = `${window.location.origin}/intake/${intake.id}`;
  try {
  await navigator.clipboard.writeText(url);
- toast.success("Link gekopieerd");
+ toast.success(t("intakeDetail.toast.linkCopied"));
  } catch {
- toast.error("Kopiëren mislukt");
+ toast.error(t("intakeDetail.toast.copyFailed"));
  }
  };
 
@@ -470,16 +471,19 @@ function IntakeDetailPage() {
  res = await submitIntake(intake.id);
  } else {
  setUpdatingStatus(false);
- toast.error("Statuswijziging niet beschikbaar via de API (stopt bij decomposed).");
+ toast.error(t("intakeDetail.toast.statusUnavailable"));
  return;
  }
  setUpdatingStatus(false);
  if (!res.success) {
- toast.error("Status niet bijgewerkt: " + res.error);
+ const codeKey = resolveErrorKey(res.code);
+ toast.error(
+ codeKey ? t(codeKey) : `${t("intakeDetail.toast.statusNotUpdated")}: ${res.error}`,
+ );
  return;
  }
  setIntake({ ...intake, status: res.data.status });
- toast.success("Status bijgewerkt");
+ toast.success(t("intakeDetail.toast.statusUpdated"));
  };
 
  const loadSkillRuns = useCallback(async () => {
@@ -524,7 +528,8 @@ function IntakeDetailPage() {
     try {
       const res = await skills.applyIntakeSkill(intake.id);
       if (!res.success) {
-        toast.error(`AI-analyse starten mislukt: ${res.error}`);
+        const codeKey = resolveErrorKey(res.code);
+        toast.error(codeKey ? t(codeKey) : `${t("intakeDetail.toast.aiStartFailed")}: ${res.error}`);
         return;
       }
       setOptimisticRunStartedAt(new Date().toISOString());
@@ -558,7 +563,8 @@ function IntakeDetailPage() {
     try {
       const res = await sendIntakeMail(intake.id, type, recipients);
       if (!res.success) {
-        toast.error(`Versturen mislukt: ${res.error}`);
+        const codeKey = resolveErrorKey(res.code);
+        toast.error(codeKey ? t(codeKey) : `${t("intakeDetail.toast.sendFailed")}: ${res.error}`);
         return;
       }
       // D-16: the backend returns HTTP 200 with `{ success: false }` when the Resend
@@ -567,10 +573,10 @@ function IntakeDetailPage() {
       // `res.data.success` — otherwise a failed send toasts success and the operator
       // never learns the client didn't get the mail.
       if (!res.data.success) {
-        toast.error("Versturen mislukt — de mail is niet verstuurd. Probeer opnieuw.");
+        toast.error(t("intakeDetail.toast.mailNotSent"));
         return; // keep the picker open so the operator can retry
       }
-      toast.success("E-mail verstuurd.");
+      toast.success(t("intakeDetail.toast.mailSent"));
       setMailPickerType(null);
       // Refresh the intake so the sent-at markers (validation/results) re-drive the phase.
       void load();
@@ -588,9 +594,9 @@ function IntakeDetailPage() {
     }
     try {
       await navigator.clipboard.writeText(url);
-      toast.success("Link gekopieerd");
+      toast.success(t("intakeDetail.toast.linkCopied"));
     } catch {
-      toast.error("Kopiëren mislukt");
+      toast.error(t("intakeDetail.toast.copyFailed"));
     }
   };
 
@@ -598,19 +604,25 @@ function IntakeDetailPage() {
   // Validation renders on the SAME /intake/{id} page when status is `reviewed`; results
   // is /intake/{id}/results. All three copy handlers build from intake.id.
   const onCopyIntakeLink = () =>
-    copyLinkGeneric(intake ? `${origin()}/intake/${intake.id}` : null, "Intake nog niet geladen");
+    copyLinkGeneric(
+      intake ? `${origin()}/intake/${intake.id}` : null,
+      t("intakeDetail.toast.intakeNotLoaded"),
+    );
   const onCopyValidationLink = () =>
-    copyLinkGeneric(intake ? `${origin()}/intake/${intake.id}` : null, "Intake nog niet geladen");
+    copyLinkGeneric(
+      intake ? `${origin()}/intake/${intake.id}` : null,
+      t("intakeDetail.toast.intakeNotLoaded"),
+    );
   const onCopyResultsLink = () =>
     copyLinkGeneric(
       intake ? `${origin()}/intake/${intake.id}/results` : null,
-      "Intake nog niet geladen",
+      t("intakeDetail.toast.intakeNotLoaded"),
     );
 
   const onOpenAIReview = () => {
     const el = document.querySelector("[data-ai-review-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    else toast("AI-review is nog niet geladen — wacht even.");
+    else toast(t("intakeDetail.toast.aiReviewNotLoaded"));
   };
 
   // Transactional email (Phase 10): each CTA opens the RecipientPicker, which self-loads
@@ -632,10 +644,11 @@ function IntakeDetailPage() {
     try {
       const res = await skills.generateContextPack(intake.id);
       if (!res.success) {
-        toast.error(`Context Pack starten mislukt: ${res.error}`);
+        const codeKey = resolveErrorKey(res.code);
+        toast.error(codeKey ? t(codeKey) : `${t("intakeDetail.toast.contextPackStartFailed")}: ${res.error}`);
         return;
       }
-      toast.success("Context Pack-generatie gestart — dit duurt ± 1–2 minuten.");
+      toast.success(t("intakeDetail.toast.contextPackStarted"));
       setOptimisticRunStartedAt(new Date().toISOString());
       setSkillLoading(true);
     } finally {
@@ -646,23 +659,23 @@ function IntakeDetailPage() {
   const onStartAutoResearch = async () => {
     // Deep-research is out of milestone scope — the flow stops at decomposed (INTAKE-05).
     // No invoke and no transition past decomposed is reachable from this surface.
-    toast.message("Automatische research valt buiten deze fase (stopt bij decomposed).");
+    toast.message(t("intakeDetail.toast.autoResearchOutOfScope"));
   };
 
   const onStartManualResearch = async () => {
-    toast.message("Onderzoek valt buiten deze fase (stopt bij decomposed).");
+    toast.message(t("intakeDetail.toast.researchOutOfScope"));
   };
 
   const onDownloadContextPack = () => {
     const el = document.querySelector("[data-context-pack-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    else toast("Scroll naar Context Pack hieronder.");
+    else toast(t("intakeDetail.toast.scrollToContextPack"));
   };
 
   const onUploadFinalReport = () => {
     const el = document.querySelector("[data-final-report-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    else toast("Scroll naar het klant-rapport blok hieronder.");
+    else toast(t("intakeDetail.toast.scrollToFinalReport"));
   };
 
   const onSendResultsMail = async () => {
@@ -671,7 +684,7 @@ function IntakeDetailPage() {
 
   const onArchive = async () => {
     if (!intake) return;
-    if (!confirm("Project archiveren?")) return;
+    if (!confirm(t("intakeDetail.confirm.archive"))) return;
     setBusyKey("archive", true);
     await handleStatusChange("archived");
     setBusyKey("archive", false);
@@ -729,7 +742,8 @@ function IntakeDetailPage() {
     try {
       const res = await skills.searchIntakeArtifacts(intake.id, searchQuery.trim());
       if (!res.success) {
-        toast.error(`Zoeken mislukt: ${res.error}`);
+        const codeKey = resolveErrorKey(res.code);
+        toast.error(codeKey ? t(codeKey) : `${t("intakeDetail.toast.searchFailed")}: ${res.error}`);
         return;
       }
       setSearchResults(
@@ -748,7 +762,7 @@ function IntakeDetailPage() {
 
  const handleCancel = () => {
  if (hasChanges) {
- if (!confirm("Niet-opgeslagen wijzigingen worden verwijderd. Doorgaan?")) return;
+ if (!confirm(t("intakeDetail.confirm.discardChanges"))) return;
  }
  // WR-04: drop queued deletes — the stored objects the draft would have removed must
  // survive a cancel (the persisted answers still reference them).
@@ -760,7 +774,7 @@ function IntakeDetailPage() {
  const handleSave = async () => {
  if (!intake) return;
  if (!hasChanges) {
- toast("Geen wijzigingen");
+ toast(t("intakeDetail.toast.noChanges"));
  setEditMode(false);
  return;
  }
@@ -776,7 +790,8 @@ function IntakeDetailPage() {
  const res = await saveAnswers(intake.id, batch);
  if (!res.success) {
  setSaving(false);
- toast.error(`Opslaan mislukt: ${res.error}`);
+ const codeKey = resolveErrorKey(res.code);
+ toast.error(codeKey ? t(codeKey) : `${t("intakeDetail.toast.saveFailed")}: ${res.error}`);
  return;
  }
  // WR-04: the draft is now persisted — it is finally safe to delete the objects that
@@ -787,11 +802,11 @@ function IntakeDetailPage() {
  if (toRemove.length > 0) {
  const del = await storage.removeFile({ intakeId: intake.id, paths: toRemove });
  if (!del.success) {
- toast.error(`Oude bestanden opruimen mislukt: ${del.error}`);
+ toast.error(`${t("intakeDetail.toast.cleanupFailed")}: ${del.error}`);
  }
  }
  setSaving(false);
- toast.success("Wijzigingen opgeslagen");
+ toast.success(t("intakeDetail.toast.changesSaved"));
  setEditMode(false);
  await load();
  };
@@ -817,14 +832,14 @@ function IntakeDetailPage() {
  return (
  <div className="mx-auto max-w-md py-16 text-center">
  <p className="text-sm text-ink/60">
- Deze intake bestaat niet of werd verwijderd.
+ {t("intakeDetail.error.notFoundOrDeleted")}
  </p>
  <Link
  to="/admin/pulse/intakes"
  className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-ink hover:underline"
  >
  <ArrowLeft className="h-4 w-4" />
- Terug naar lijst
+ {t("intakeDetail.error.backToList")}
  </Link>
  </div>
  );
@@ -836,10 +851,13 @@ function IntakeDetailPage() {
  ? projectNameAnswer.trim()
  : null;
  const headerTitle = projectNameStr
- ? `${client?.name ?? "Onbekende klant"} — ${projectNameStr}`
+ ? `${client?.name ?? t("intakeDetail.unknownClient")} — ${projectNameStr}`
  : intake.title || intake.product?.name || "";
  const intakeUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`;
- const statusHint = intake.status ? STATUS_HINT[intake.status] : undefined;
+ const statusHint =
+ intake.status && STATUS_WITH_HINT.has(intake.status)
+ ? t(`intakeDetail.statusHint.${intake.status}`)
+ : undefined;
  const currentPhase = phase ?? "awaiting_client_submission";
  const showAIReview = phaseShowsAIReview(currentPhase);
  const showContextPack = phaseShowsContextPack(currentPhase);
@@ -862,17 +880,24 @@ function IntakeDetailPage() {
  className="inline-flex items-center gap-1 text-xs font-medium text-ink/60 hover:text-ink"
  >
  <ArrowLeft className="h-3.5 w-3.5" />
- Intakes
+ {t("intakeDetail.header.intakes")}
  </Link>
  <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
  <div>
  <h1 className="text-xl font-semibold tracking-tight text-ink">{headerTitle}</h1>
               <p className="mt-0.5 text-xs text-ink/60">
-                Laatst bewerkt {formatDistanceToNow(new Date(intake.updated_at), { addSuffix: true, locale: nl })}
+                {t("intakeDetail.header.lastEdited")}{" "}
+                {formatDistanceToNow(new Date(intake.updated_at), {
+                  addSuffix: true,
+                  locale: getDateLocale(i18n.language),
+                })}
                 {intake.delivered_at && (
                   <>
                     <span className="mx-2 text-ink/30">·</span>
-                    Geleverd op {format(new Date(intake.delivered_at), "d MMM yyyy", { locale: nl })}
+                    {t("intakeDetail.header.deliveredOn")}{" "}
+                    {format(new Date(intake.delivered_at), "d MMM yyyy", {
+                      locale: getDateLocale(i18n.language),
+                    })}
                   </>
                 )}
               </p>
@@ -885,9 +910,9 @@ function IntakeDetailPage() {
  onChange={(e) => handleStatusChange(e.target.value)}
  className="border border-ink/10 bg-paper px-2.5 py-1.5 text-xs font-medium text-ink/80 focus:border-ink focus:outline-none"
  >
- {STATUS_OPTIONS.map((o) => (
- <option key={o.value} value={o.value}>
- {o.label}
+ {STATUS_VALUES.map((value) => (
+ <option key={value} value={value}>
+ {t(`intakeDetail.status.${value}`)}
  </option>
  ))}
  </select>
@@ -901,7 +926,7 @@ function IntakeDetailPage() {
  className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80"
  >
  <Pencil className="h-3.5 w-3.5" />
- Bewerken
+ {t("intakeDetail.action.edit")}
  </button>
  ) : (
  <>
@@ -911,7 +936,7 @@ function IntakeDetailPage() {
  className="inline-flex items-center gap-1.5 border border-ink/10 bg-paper px-3 py-1.5 text-xs font-medium text-ink/70 hover:bg-ink/5"
  >
  <X className="h-3.5 w-3.5" />
- Annuleren
+ {t("intakeDetail.action.cancel")}
  </button>
  <button
  type="button"
@@ -924,7 +949,7 @@ function IntakeDetailPage() {
  ) : (
  <Save className="h-3.5 w-3.5" />
  )}
- Opslaan
+ {t("intakeDetail.action.save")}
  </button>
  </>
  )}
@@ -976,7 +1001,7 @@ function IntakeDetailPage() {
      {showSemanticSearch && (
        <section className="border border-ink/20 bg-paperLight p-4 mb-6">
          <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60 mb-2">
-           Zoek in research data (semantic)
+           {t("intakeDetail.search.title")}
          </div>
          <div className="flex gap-2">
            <input
@@ -984,7 +1009,7 @@ function IntakeDetailPage() {
              value={searchQuery}
              onChange={(e) => setSearchQuery(e.target.value)}
              onKeyDown={(e) => e.key === "Enter" && handleSemanticSearch()}
-             placeholder="bv. 'klanten klagen over toegangscode' of 'pricing transparantie concurrenten'"
+             placeholder={t("intakeDetail.search.placeholder")}
              className="flex-1 border border-ink/30 px-3 py-2 font-mono text-sm bg-paper"
            />
            <button
@@ -993,13 +1018,13 @@ function IntakeDetailPage() {
              disabled={searching}
              className="font-mono text-xs uppercase tracking-wider bg-ink text-paperLight px-4 py-2 disabled:opacity-50"
            >
-             {searching ? "…" : "🔍 Zoek"}
+             {searching ? "…" : `🔍 ${t("intakeDetail.search.button")}`}
            </button>
          </div>
          {searchResults.length > 0 && (
            <div className="mt-4 space-y-2">
              <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
-               {searchResults.length} resultaten — meest relevante eerst
+               {t("intakeDetail.search.results", { count: searchResults.length })}
              </div>
              {searchResults.map((r, i) => (
                <div key={i} className="border-l-2 border-fluoYellow pl-3 py-2">
@@ -1054,16 +1079,18 @@ function IntakeDetailPage() {
 
  {editMode && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
- <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">BEWERKEN</div>
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
+ {t("intakeDetail.editBanner.title")}
+ </div>
  <div className="text-ink font-sans">
- Wijzigingen zijn niet opgeslagen tot je op Opslaan klikt.
+ {t("intakeDetail.editBanner.body")}
  </div>
  </div>
  )}
 
- {!editMode && !reviewMode && intake.status && STATUS_BANNER[intake.status] && (
+ {!editMode && !reviewMode && intake.status && STATUS_WITH_BANNER.has(intake.status) && (
  <div className="mb-6 border border-ink/10 bg-paper2 px-4 py-3 text-sm text-ink/70">
- {STATUS_BANNER[intake.status]}
+ {t(`intakeDetail.statusBanner.${intake.status}`)}
  </div>
  )}
 
@@ -1071,7 +1098,7 @@ function IntakeDetailPage() {
  <aside className="hidden lg:block">
  <nav className="sticky top-28 space-y-1">
  <p className="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
- Secties
+ {t("intakeDetail.sections.nav")}
  </p>
  {sections.map((s) => {
  const isActive = activeSection === s.id;
@@ -1098,10 +1125,10 @@ function IntakeDetailPage() {
  <main className="min-w-0 space-y-10">
  <section className="border border-ink/10 bg-paper p-6">
  <h2 className="text-sm font-semibold uppercase tracking-wide text-ink/60">
- Intake-info
+ {t("intakeDetail.info.title")}
  </h2>
  <dl className="mt-4">
- <Meta label="Klant">
+ <Meta label={t("intakeDetail.info.client")}>
  {client ? (
  <Link to="/admin/pulse/clients" className="text-ink hover:underline">
  {client.name}
@@ -1110,7 +1137,7 @@ function IntakeDetailPage() {
  "—"
  )}
  </Meta>
- <Meta label="Product">
+ <Meta label={t("intakeDetail.info.product")}>
  {intake.product ? (
  <>
  <span className="text-ink">{intake.product.name}</span>
@@ -1122,13 +1149,13 @@ function IntakeDetailPage() {
  intake.product_slug
  )}
  </Meta>
- <Meta label="Status">
+ <Meta label={t("intakeDetail.info.status")}>
  <StatusPill status={intake.status} />
  </Meta>
-                  <Meta label="Aangemaakt">{fmt(intake.created_at)}</Meta>
-                  <Meta label="Laatst bewerkt">{fmt(intake.updated_at)}</Meta>
+                  <Meta label={t("intakeDetail.info.createdAt")}>{fmt(intake.created_at)}</Meta>
+                  <Meta label={t("intakeDetail.info.lastEdited")}>{fmt(intake.updated_at)}</Meta>
                   {(intake.status === "delivered" || intake.status === "archived") && (
-                    <Meta label="Geleverd op">
+                    <Meta label={t("intakeDetail.info.deliveredOn")}>
                       <DeliveredAtEditor
                         intakeId={intake.id}
                         value={intake.delivered_at}
@@ -1136,36 +1163,36 @@ function IntakeDetailPage() {
                       />
                     </Meta>
                   )}
- <Meta label="Initiële intake-link">
+ <Meta label={t("intakeDetail.info.initialIntakeLink")}>
  <LinkRow
  url={intakeUrl}
- subtitle="Werkt zolang status = Concept"
+ subtitle={t("intakeDetail.info.initialIntakeLinkSubtitle")}
  placeholder="—"
  />
  </Meta>
- <Meta label="Validatie-link">
+ <Meta label={t("intakeDetail.info.validationLink")}>
  <LinkRow
  url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
- subtitle="Zelfde pagina in validatie-modus (status = Beoordeeld)"
+ subtitle={t("intakeDetail.info.validationLinkSubtitle")}
  placeholder="—"
  />
  </Meta>
- <Meta label="Validatie">
+ <Meta label={t("intakeDetail.info.validation")}>
  {intake.client_validated_at ? (
  <span className="text-emerald-700">
- Klant heeft gevalideerd op {fmt(intake.client_validated_at)}
+ {t("intakeDetail.info.validatedOn", { date: fmt(intake.client_validated_at) })}
  </span>
  ) : (
- <span className="text-ink/60">Nog niet gevalideerd</span>
+ <span className="text-ink/60">{t("intakeDetail.info.notYetValidated")}</span>
  )}
  </Meta>
  <Meta
  label={
  <span className="inline-flex items-center gap-1">
- Klant-resultaten-link
+ {t("intakeDetail.info.resultsLink")}
  <span
  className="cursor-help text-ink/40"
- title="Wat de klant ziet: één samengevat rapport (download) + vragen-overzicht + AI-zoek. Geen toegang tot raw research files of filenames."
+ title={t("intakeDetail.info.resultsLinkTooltip")}
  >
  ⓘ
  </span>
@@ -1189,7 +1216,7 @@ function IntakeDetailPage() {
  >
  <span className="flex items-center gap-2">
  {historyOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
- Eerdere skill-runs
+ {t("intakeDetail.history.title")}
  {skillRuns && skillRuns.length > 0 && (
  <span className="text-xs text-ink/60">({skillRuns.length})</span>
  )}
@@ -1198,7 +1225,7 @@ function IntakeDetailPage() {
  {historyOpen && (
  <div className="border-t border-ink/5 px-6 py-3">
  {loadingRuns ? (
- <p className="text-sm text-ink/60">Laden…</p>
+ <p className="text-sm text-ink/60">{t("intakeDetail.history.loading")}</p>
  ) : skillRuns && skillRuns.length > 0 ? (
  <ul className="divide-y divide-ink/5">
  {skillRuns.map((r) => {
@@ -1212,10 +1239,10 @@ function IntakeDetailPage() {
  <span className="text-ink/60">— €{(r.cost_estimate_usd * 0.92).toFixed(2)}</span>
  )}
  {r.status === "failed" && r.error_message && (
-  <span className="text-red-600">— fout: {r.error_message}</span>
+  <span className="text-red-600">— {t("intakeDetail.history.error")}: {r.error_message}</span>
  )}
  {r.status === "running" && (
- <span className="text-ink/60">— bezig…</span>
+ <span className="text-ink/60">— {t("intakeDetail.history.running")}</span>
  )}
  </li>
  );
@@ -1314,7 +1341,7 @@ function IntakeDetailPage() {
  <div className="flex items-center gap-2 mb-1">
  {changed && (
  <span className="border border-ink bg-agenic-yellow px-2 py-0.5 font-mono text-xs uppercase tracking-wider text-ink">
- Gewijzigd
+ {t("intakeDetail.field.changed")}
  </span>
  )}
  </div>
@@ -1386,6 +1413,7 @@ function DeliveredAtEditor({
   value: string | null;
   onSaved: (v: string | null) => void;
 }) {
+  const { t } = useTranslation("admin");
   const [date, setDate] = useState(value ? value.slice(0, 10) : "");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -1398,7 +1426,7 @@ function DeliveredAtEditor({
     // write for it this milestone; reflect the change locally and surface a notice.
     const iso = new Date(date + "T12:00:00Z").toISOString();
     void intakeId;
-    toast.message("Leverdatum bewaren komt in een latere fase.");
+    toast.message(t("intakeDetail.deliveredAt.laterPhase"));
     onSaved(iso);
   };
   return (
@@ -1422,7 +1450,7 @@ function DeliveredAtEditor({
           </button>
         )}
       </div>
-      <p className="text-xs text-ink/50">De datum die de klant ziet op de resultaten-pagina.</p>
+      <p className="text-xs text-ink/50">{t("intakeDetail.deliveredAt.hint")}</p>
     </div>
   );
 }
@@ -1434,6 +1462,7 @@ function ResultsLinkRow({
  intakeId: string;
  hasFinalReport: boolean;
 }) {
+ const { t } = useTranslation("admin");
  // Authenticated results route since Phase 6 — /intake/{id}/results (no bearer token).
  void hasFinalReport;
  const url =
@@ -1442,9 +1471,9 @@ function ResultsLinkRow({
  const copy = async () => {
  try {
  await navigator.clipboard.writeText(url);
- toast.success("Link gekopieerd");
+ toast.success(t("intakeDetail.toast.linkCopied"));
  } catch {
- toast.error("Kopiëren mislukt");
+ toast.error(t("intakeDetail.toast.copyFailed"));
  }
  };
 
@@ -1463,10 +1492,10 @@ function ResultsLinkRow({
  className="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:bg-ink/5"
  >
  <Copy className="h-3.5 w-3.5" />
- Kopieer
+ {t("intakeDetail.action.copy")}
  </button>
  </div>
- <p className="text-xs text-ink/40">Werkt zodra status = Geleverd</p>
+ <p className="text-xs text-ink/40">{t("intakeDetail.info.resultsLinkHint")}</p>
  </div>
  );
 }
@@ -1480,13 +1509,14 @@ function LinkRow({
  subtitle: string;
  placeholder: string;
 }) {
+ const { t } = useTranslation("admin");
  const copy = async () => {
  if (!url) return;
  try {
  await navigator.clipboard.writeText(url);
- toast.success("Link gekopieerd");
+ toast.success(t("intakeDetail.toast.linkCopied"));
  } catch {
- toast.error("Kopiëren mislukt");
+ toast.error(t("intakeDetail.toast.copyFailed"));
  }
  };
  return (
@@ -1506,7 +1536,7 @@ function LinkRow({
  className="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/10 hover:bg-ink/5"
  >
  <Copy className="h-3.5 w-3.5" />
- Kopieer
+ {t("intakeDetail.action.copy")}
  </button>
  </>
  ) : (
