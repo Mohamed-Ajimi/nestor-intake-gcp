@@ -31,6 +31,8 @@ Authoritative references:
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -88,8 +90,12 @@ def _resolve_me(session: Session, identity: Identity) -> Me:
 
     space_default = _DEFAULT_LOCALE
     if identity.space_id:
+        # Pitfall 6 (mirrors AdminRepo._as_uuid): identity.space_id is a str, the column is
+        # UUID(as_uuid=True); coerce so the pg8000 bind/compare is unambiguous.
         org = session.execute(
-            select(Organization).where(Organization.id == identity.space_id)
+            select(Organization).where(
+                Organization.id == uuid.UUID(str(identity.space_id))
+            )
         ).scalar_one_or_none()
         if org is not None:
             space_default = org.default_locale
