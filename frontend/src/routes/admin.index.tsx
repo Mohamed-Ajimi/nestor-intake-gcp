@@ -30,10 +30,14 @@ const PRODUCTS: Product[] = [
     route: "/admin/pulse/intakes",
   },
   {
+    // D-09 (Phase 12): sales nav hidden — code retained but this card renders
+    // dimmed/non-navigable (like echo/edge/flux). With VITE_SUPABASE_* never set
+    // at build time, the retained admin.sales.* routes + salesMail/supabase code
+    // are inert (supabase client is null). Do NOT delete the sales code.
     slug: "sales",
     name: "nestor sales",
     tag: "Sales prep preset",
-    enabled: true,
+    enabled: false,
     route: "/admin/sales",
   },
   {
