@@ -127,6 +127,10 @@ None — no external service configuration required. The 0010 migration runs via
 - **Ready for later 11 mail work:** the membership `locale` + org `default_locale` columns are the source the per-recipient mail-locale resolution will read.
 - **Gate:** the three test modules + the 0010 migration run in the Cloud Build suite (the phase-gate runner); no local execution on this box (dev-machine-no-python-docker).
 
+## Self-Check: PASSED
+
+All 6 created source/test files exist on disk; all task/fix/docs commit hashes (`c6ed250`, `63bf08f`, `e1b3bdd`, `996daf9`, `c35b974`) are present in git history.
+
 ---
 *Phase: 11-internationalization-nl-fr-en*
 *Completed: 2026-07-14*
