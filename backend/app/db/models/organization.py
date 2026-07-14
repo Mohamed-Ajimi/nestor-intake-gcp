@@ -34,6 +34,14 @@ class Organization(Base):
     status: Mapped[str] = mapped_column(
         String, nullable=False, server_default="active"
     )
+    # D-07 (i18n / 0010) space default language — the base of the locale resolution
+    # chain (user override -> space default -> "nl"). App-level allowed set
+    # {"nl","fr","en"} enforced IN CODE (me_routes _ALLOWED), NOT a PG enum — mirrors
+    # the status column rationale (avoids alembic enum-alter friction). server_default
+    # "nl" backfills existing rows non-null on the 0010 apply.
+    default_locale: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="nl"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

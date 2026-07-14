@@ -257,6 +257,46 @@ def get_intake_template_repo(identity: Identity = Depends(get_current_identity))
         yield IntakeTemplateRepository(session, identity)
 
 
+def get_me_session(identity: Identity = Depends(get_current_identity)):
+    """Yield the request ``Session`` for the ``/me`` locale endpoints (Phase 11).
+
+    ``GET /me`` / ``PATCH /me/locale`` read the caller's own membership + its organization
+    (both ROOT tables — ``organization_memberships`` / ``organizations`` — NOT RLS-scoped),
+    for BOTH roles. Unlike :func:`get_tenant_repo`, this does NOT default-deny a caller with
+    no space: a ``superadmin`` legitimately has ``space_id`` None (and may have NO membership
+    row at all — Open Q1), and the ``/me`` resolution must still return ``locale: null`` +
+    ``space_default_locale: "nl"`` for them rather than 403.
+
+    Engine-by-role mirrors the rest of ``session.py`` (D-05): a ``superadmin`` opens the tx on
+    the ``app_superadmin`` engine (0003 bypass; NO GUC — Pitfall 2); a ``user`` opens it on the
+    app engine and sets the tenant GUC so any incidental RLS-scoped read stays space-scoped
+    (the two root tables this endpoint reads are not RLS-scoped, but the GUC-set keeps the
+    user path identical to every other tenant dependency and safe if the read set ever grows).
+
+    Sync generator dependency (Pitfall 5) — pg8000 is blocking; never ``async def``. Yields the
+    bound ``Session`` directly (not a repo): ``/me`` needs cross-cutting reads of two root
+    tables keyed on the verified ``identity``, not a tenant/admin repository surface.
+    """
+    if identity.role == "superadmin":
+        engine = get_superadmin_engine()
+        space_id = None
+    else:
+        # A ``user`` always carries a space (their membership's org); a null space is a
+        # broken/forbidden state, rejected BEFORE any session opens (D-04 default-deny).
+        if not identity.space_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "No space — not authorized"
+            )
+        engine = get_engine()
+        space_id = identity.space_id
+
+    maker = get_sessionmaker(engine)
+    with maker.begin() as session:  # ONE tx/request; commit/rollback + conn return
+        if space_id is not None:
+            set_space_context(session, space_id)
+        yield session
+
+
 def get_admin_session(identity: Identity = Depends(get_current_identity)):
     """Yield an :class:`AdminRepo` for the current request — superadmin ONLY (Phase 5).
 
