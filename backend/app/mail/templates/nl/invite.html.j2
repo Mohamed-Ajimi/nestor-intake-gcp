@@ -1,7 +1,9 @@
 {#
-  Set-password invite mail — the ONLY mail that carries an action link (D-09).
+  Set-password invite mail (NL) — the ONLY mail that carries an action link (D-09).
   cta_url is the Firebase action link (the single link-carrying template).
   New in Phase 10 (no legacy analog — the login-only model replaces bearer links).
+  D-02 (Phase 11): NL is the canonical variant — prose preserved VERBATIM from the
+  original top-level invite.html.j2. autoescape stays ON (T-11-01); no `| safe`.
 #}{% extends "_base.html.j2" %}
 {% block content %}
 <h1>Kies je wachtwoord</h1>

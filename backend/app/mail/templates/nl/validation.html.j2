@@ -1,8 +1,10 @@
 {#
-  Validation-request / reminder mail — ported from buildValidationHtml
+  Validation-request / reminder mail (NL) — ported from buildValidationHtml
   (send-pulse-mail.ts:132-149), incl. the isReminder greeting/intro branch.
   NOTIF-01: cta_url is {app_base_url}/intake/{intake_id} — an intake-id app route,
   NEVER a bearer validation token.
+  D-02 (Phase 11): NL is the canonical variant — this prose is preserved VERBATIM from
+  the original top-level validation.html.j2. autoescape stays ON (T-11-01); no `| safe`.
 #}{% extends "_base.html.j2" %}
 {% block content %}
 {% if is_reminder %}
