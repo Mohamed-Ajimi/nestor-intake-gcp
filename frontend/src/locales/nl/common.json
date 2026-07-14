@@ -5,6 +5,16 @@
     "fr": "Frans",
     "en": "Engels"
   },
+  "status": {
+    "draft": "Concept",
+    "submitted": "Ingediend",
+    "reviewed": "Gereviewd",
+    "validated_by_client": "Gevalideerd",
+    "decomposed": "Gedecomposeerd",
+    "in_research": "In onderzoek",
+    "delivered": "Geleverd",
+    "archived": "Gearchiveerd"
+  },
   "errors": {
     "intakeNotFound": "Intake niet gevonden.",
     "invalidLocale": "Ongeldige taalkeuze.",

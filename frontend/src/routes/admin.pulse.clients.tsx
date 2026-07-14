@@ -1,9 +1,10 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Search, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { StatusPill, STATUS_LABEL } from "@/components/intake/_status";
+import { StatusPill } from "@/components/intake/_status";
 import { listIntakes } from "@/lib/api/intakes";
 import { listSpaces } from "@/lib/api/admin";
 
@@ -33,9 +34,10 @@ type SpaceRow = {
   status_counts: Record<string, number>;
 };
 
-function statusSummary(counts: Record<string, number>) {
+// `t` is threaded in from the component (labels live in common:status.*, WR-04).
+function statusSummary(counts: Record<string, number>, t: TFunction) {
   return Object.entries(counts)
-    .map(([k, v]) => `${v} ${STATUS_LABEL[k]?.toLowerCase() ?? k}`)
+    .map(([k, v]) => `${v} ${t(`common:status.${k}`, { defaultValue: k }).toLowerCase()}`)
     .join(", ");
 }
 
@@ -211,7 +213,7 @@ function ClientsPage() {
                         <div>{t("clients.projectCount", { count: c.project_count })}</div>
                         {c.project_count > 0 && (
                           <div className="text-xs text-ink/50">
-                            {statusSummary(c.status_counts)}
+                            {statusSummary(c.status_counts, t)}
                           </div>
                         )}
                       </td>

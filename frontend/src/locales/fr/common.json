@@ -5,6 +5,16 @@
     "fr": "Français",
     "en": "Anglais"
   },
+  "status": {
+    "draft": "Brouillon",
+    "submitted": "Soumis",
+    "reviewed": "Révisé",
+    "validated_by_client": "Validé",
+    "decomposed": "Décomposé",
+    "in_research": "En recherche",
+    "delivered": "Livré",
+    "archived": "Archivé"
+  },
   "errors": {
     "intakeNotFound": "Intake introuvable.",
     "invalidLocale": "Choix de langue non valide.",

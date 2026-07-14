@@ -5,6 +5,16 @@
     "fr": "French",
     "en": "English"
   },
+  "status": {
+    "draft": "Draft",
+    "submitted": "Submitted",
+    "reviewed": "Reviewed",
+    "validated_by_client": "Validated",
+    "decomposed": "Decomposed",
+    "in_research": "In research",
+    "delivered": "Delivered",
+    "archived": "Archived"
+  },
   "errors": {
     "intakeNotFound": "Intake not found.",
     "invalidLocale": "Invalid language selection.",
