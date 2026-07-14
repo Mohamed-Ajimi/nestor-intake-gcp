@@ -1,6 +1,35 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { getIdToken, getIdTokenResult, onIdTokenChanged, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import i18n from "@/lib/i18n";
+import { detectLocale, type SupportedLocale } from "@/lib/i18n/detect";
+import { getMe, patchLocale } from "@/lib/api/me";
+import { LOCALE_STORAGE_KEY } from "@/components/LanguageSwitcher";
+
+/**
+ * Read (and consume) a pending pre-login language choice from localStorage.
+ * The pre-login switcher (auth.login.tsx, persist=false) writes this key; the
+ * post-login boot below reads it, persists it via patchLocale, and clears it so it
+ * is applied exactly once. SSR-guarded — never touches storage on the server.
+ */
+function readPendingPreLoginLocale(): SupportedLocale | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    return v === "nl" || v === "fr" || v === "en" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingPreLoginLocale() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(LOCALE_STORAGE_KEY);
+  } catch {
+    /* ignore — best-effort cleanup */
+  }
+}
 
 // The verified `role` custom claim, minted server-side by Identity Platform and
 // read here for UX gating ONLY — the backend remains the sole authority.
@@ -48,6 +77,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>(null);
+  // Guards the boot-locale reconciliation to exactly once per authenticated session:
+  // holds the uid we already reconciled for (reset to null on sign-out).
+  const bootedLocaleUidRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +105,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!user) {
         if (!cancelled) setRole(null);
+        // Allow the boot-locale reconciliation to run again for the next sign-in.
+        bootedLocaleUidRef.current = null;
         return;
       }
 
@@ -96,6 +130,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubscribe();
     };
   }, []);
+
+  // Boot-locale reconciliation (Pitfall 1 / Pitfall 2, D-09): once the Firebase
+  // session and role claim have settled, resolve the UI language ONCE per
+  // authenticated session and apply it via i18n.changeLanguage. This is a client-only,
+  // post-auth-settle effect — it never runs on the SSR shell (the SSR shell renders nl
+  // deterministically, and `session` is null there), so the resolved changeLanguage
+  // never lands on an SSR'd node.
+  //
+  // Resolution order (first hit wins):
+  //   pending pre-login localStorage choice → /me locale → /me space_default_locale
+  //   → detectLocale() → "nl".
+  // A pending pre-login choice is ALSO persisted to the profile via patchLocale and
+  // then cleared, so the pre-login FR/EN escape survives the first login.
+  //
+  // getMe/patchLocale are return-no-throw (ApiResult): on failure we fall back to the
+  // detected/nl language. Locale is NEVER read from a Firebase claim (RESEARCH Runtime
+  // State — it lives in Cloud SQL, not the token).
+  useEffect(() => {
+    // Wait for the settle + role to resolve; only reconcile for a signed-in user.
+    if (loading || !session || !role) return;
+    const uid = session.uid;
+    // Once-per-session guard: skip if we already reconciled for this uid.
+    if (bootedLocaleUidRef.current === uid) return;
+    bootedLocaleUidRef.current = uid;
+
+    let cancelled = false;
+    void (async () => {
+      const pending = readPendingPreLoginLocale();
+
+      let meLocale: SupportedLocale | null = null;
+      let spaceDefault: SupportedLocale | null = null;
+      const me = await getMe();
+      if (me.success) {
+        meLocale = me.data.locale;
+        spaceDefault = me.data.space_default_locale;
+      }
+      if (cancelled) return;
+
+      const resolved: SupportedLocale =
+        pending ?? meLocale ?? spaceDefault ?? detectLocale() ?? "nl";
+
+      if (i18n.language !== resolved) void i18n.changeLanguage(resolved);
+
+      // Persist a pending pre-login choice to the profile, then clear it so it is
+      // applied exactly once. Best-effort (return-no-throw) — ignore the outcome.
+      if (pending) {
+        void patchLocale(pending);
+        clearPendingPreLoginLocale();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, session, role]);
 
   return (
     <AuthContext.Provider

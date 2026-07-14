@@ -1,9 +1,12 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { getIdTokenResult, signInWithEmailAndPassword } from "firebase/auth";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { apiUrl, auth } from "@/lib/firebase";
 import { landingPathForRole, useAuth, type Role } from "@/lib/auth-context";
+import { LanguageSwitcher, LOCALE_STORAGE_KEY } from "@/components/LanguageSwitcher";
+import { detectLocale } from "@/lib/i18n/detect";
 
 // WR-02: a failed login-sync handshake throws this so the catch can surface an
 // authorization-specific message and NOT navigate to /admin (vs. a sign-in error).
@@ -15,11 +18,33 @@ export const Route = createFileRoute("/auth/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
+  const { t, i18n } = useTranslation("auth");
   const { session, loading, role, getToken } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Pre-login language (D-08/D-09): on first client render, if the visitor has not
+  // yet made an explicit choice (no pending pre-login localStorage entry), initialize
+  // the display language from `detectLocale()` (browser → nl/fr/en else nl). This runs
+  // client-side only — `detectLocale` is `typeof window`-guarded, and this effect never
+  // runs on the SSR shell (Pitfall 1). The pre-login switcher below (persist=false)
+  // writes the choice to localStorage so the post-login boot can reconcile it (Task 3).
+  useEffect(() => {
+    let chosen: string | null = null;
+    try {
+      chosen = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    } catch {
+      /* ignore — detection falls back to the browser default */
+    }
+    if (!chosen) {
+      const detected = detectLocale();
+      if (detected !== i18n.language) void i18n.changeLanguage(detected);
+    }
+    // Run once on mount — subsequent language flips go through the switcher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Already signed in (revisiting the login URL): bounce to the role's landing page.
   // Wait for `role` to resolve so a superadmin isn't briefly routed to /intake.
@@ -44,7 +69,7 @@ function LoginPage() {
       // WR-02: getToken() returns null until auth.currentUser is populated — never
       // send "Bearer null"; await a real token first.
       const token = await getToken();
-      if (!token) throw new SyncError("Geen ID-token na inloggen. Probeer opnieuw.");
+      if (!token) throw new SyncError(t("login.errors.noToken"));
 
       const resp = await fetch(apiUrl("/auth/session"), {
         method: "POST",
@@ -54,7 +79,7 @@ function LoginPage() {
       // be ignored — surface it and DO NOT navigate to /admin, where the user would
       // otherwise hit a wall of 403s with no actionable error.
       if (!resp.ok) {
-        throw new SyncError("Account is niet gemachtigd voor toegang.");
+        throw new SyncError(t("login.errors.unauthorized"));
       }
 
       // Force-refresh so the next request carries the freshly-written claims.
@@ -76,9 +101,9 @@ function LoginPage() {
         setError(err.message);
         toast.error(err.message);
       } else {
-        const message = err instanceof Error ? err.message : "Inloggen mislukt. Probeer opnieuw.";
-        setError("Inloggen mislukt. Controleer je email en wachtwoord.");
-        toast.error(`Inloggen mislukt: ${message}`);
+        const message = err instanceof Error ? err.message : t("login.errors.generic");
+        setError(t("login.errors.credentials"));
+        toast.error(t("login.errors.toast", { message }));
       }
     } finally {
       setSending(false);
@@ -88,9 +113,17 @@ function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-paper2 px-6">
       <div className="w-full max-w-md border border-ink bg-paper p-10">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink/60">Agenic × Nestor</p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="font-mono text-xs uppercase tracking-[0.2em] text-ink/60">
+            Agenic × Nestor
+          </p>
+          {/* D-08: pre-login switcher — persist=false writes localStorage only (no session yet). */}
+          <div className="w-36 shrink-0">
+            <LanguageSwitcher persist={false} />
+          </div>
+        </div>
         <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-          Inloggen bij admin
+          {t("login.heading")}
         </h1>
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-4">
@@ -98,7 +131,7 @@ function LoginPage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="email"
+            placeholder={t("login.emailPlaceholder")}
             autoComplete="email"
             required
             autoFocus
@@ -108,7 +141,7 @@ function LoginPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="wachtwoord"
+            placeholder={t("login.passwordPlaceholder")}
             autoComplete="current-password"
             required
             className="w-full border border-ink/20 bg-paper px-4 py-3 text-sm outline-none focus:border-ink"
@@ -118,14 +151,12 @@ function LoginPage() {
             disabled={sending}
             className="w-full bg-ink px-4 py-3 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
           >
-            {sending ? "Bezig..." : "Inloggen"}
+            {sending ? t("login.submitting") : t("login.submit")}
           </button>
         </form>
         {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
         <div className="mt-8 border-t border-ink/10 pt-6 space-y-2">
-          <p className="text-xs text-ink/60">
-            Geen account? Toegang wordt door de beheerder aangemaakt.
-          </p>
+          <p className="text-xs text-ink/60">{t("login.noAccount")}</p>
         </div>
       </div>
     </div>
