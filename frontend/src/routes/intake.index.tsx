@@ -1,7 +1,9 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { formatDistanceToNow } from "date-fns";
-import { nl } from "date-fns/locale";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import { Inbox } from "lucide-react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -58,14 +60,16 @@ type RowCta = { label: string; target: "fill" | "results" };
 
 // Status → contextual CTA (06-UI-SPEC § Net-New 2). draft fills; submitted/reviewed view
 // answers read-only (still /intake/$id); validated/decomposed view the result set.
-function rowCta(status: string | null): RowCta {
-  if (status === "draft") return { label: "Aanvraag invullen", target: "fill" };
+// `t` is threaded in from the component (this pure helper cannot call hooks).
+function rowCta(status: string | null, t: TFunction): RowCta {
+  if (status === "draft") return { label: t("list.ctaFill"), target: "fill" };
   if (status === "submitted" || status === "reviewed")
-    return { label: "Antwoorden bekijken", target: "fill" };
-  return { label: "Bekijk resultaat", target: "results" };
+    return { label: t("list.ctaView"), target: "fill" };
+  return { label: t("list.ctaResult"), target: "results" };
 }
 
 function UserIntakeListPage() {
+  const { t, i18n } = useTranslation("intake");
   const { session } = useAuth();
   const navigate = useNavigate();
   const [intakes, setIntakes] = useState<IntakeListRow[]>([]);
@@ -79,7 +83,7 @@ function UserIntakeListPage() {
       const res = await listIntakes();
       if (cancelled) return;
       if (!res.success) {
-        setError("Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.");
+        setError(t("route.loadFailed"));
         setIntakes([]);
         setLoading(false);
         return;
@@ -91,12 +95,12 @@ function UserIntakeListPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const spaceName = intakes.find((i) => i.client_name)?.client_name ?? null;
 
   const openRow = (row: IntakeListRow) => {
-    const cta = rowCta(row.status);
+    const cta = rowCta(row.status, t);
     if (cta.target === "results") {
       navigate({ to: "/intake/$id/results", params: { id: row.id } });
     } else {
@@ -117,7 +121,7 @@ function UserIntakeListPage() {
       <div className="mx-auto max-w-4xl px-6 py-12">
         {/* Minimal authenticated chrome — no admin nav, no space switcher */}
         <div className="mb-10 flex items-center justify-between">
-          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">Agenic</p>
+          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">{t("list.brand")}</p>
           <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-ink/60">
             {session?.email && <span className="font-medium text-ink/70">{session.email}</span>}
             <button
@@ -125,17 +129,19 @@ function UserIntakeListPage() {
               onClick={handleLogout}
               className="underline-offset-2 hover:text-ink hover:underline"
             >
-              Uitloggen
+              {t("list.logout")}
             </button>
           </div>
         </div>
 
         <header className="mb-8">
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-            intakes
+            {t("list.heading")}
           </h1>
           <p className="mt-1 text-sm text-ink/60">
-            {spaceName ? `Jouw intakes voor ${spaceName}.` : "Jouw intakes."}
+            {spaceName
+              ? t("list.subtitleForSpace", { name: spaceName })
+              : t("list.subtitle")}
           </p>
         </header>
 
@@ -144,13 +150,13 @@ function UserIntakeListPage() {
             <TableHeader>
               <TableRow className="border-ink hover:bg-transparent">
                 <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">
-                  Titel
+                  {t("list.colTitle")}
                 </TableHead>
                 <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">
-                  Status
+                  {t("list.colStatus")}
                 </TableHead>
                 <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">
-                  Laatst bewerkt
+                  {t("list.colLastEdited")}
                 </TableHead>
                 <TableHead className="px-4 text-right font-mono text-xs uppercase tracking-wider text-ink">
                   {""}
@@ -180,18 +186,17 @@ function UserIntakeListPage() {
                     <div className="flex flex-col items-center text-center">
                       <Inbox className="h-8 w-8 text-ink/30" />
                       <p className="mt-3 text-sm font-medium text-ink">
-                        Nog geen intake klaargezet
+                        {t("list.empty")}
                       </p>
                       <p className="mt-1 max-w-md text-sm text-ink/60">
-                        Zodra je intake klaarstaat, verschijnt die hier. Je krijgt bericht zodra er
-                        iets voor je is.
+                        {t("list.emptyBody")}
                       </p>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : (
                 intakes.map((row) => {
-                  const cta = rowCta(row.status);
+                  const cta = rowCta(row.status, t);
                   return (
                     <TableRow
                       key={row.id}
@@ -199,7 +204,7 @@ function UserIntakeListPage() {
                       onClick={() => openRow(row)}
                     >
                       <TableCell className="px-4 py-3 text-sm text-ink/70">
-                        {row.title ?? row.client_name ?? "—"}
+                        {row.title ?? row.client_name ?? t("list.dash")}
                       </TableCell>
                       <TableCell className="px-4 py-3">
                         <StatusPill status={row.status} />
@@ -208,9 +213,9 @@ function UserIntakeListPage() {
                         {row.updated_at
                           ? formatDistanceToNow(new Date(row.updated_at), {
                               addSuffix: true,
-                              locale: nl,
+                              locale: getDateLocale(i18n.language),
                             })
-                          : "—"}
+                          : t("list.dash")}
                       </TableCell>
                       <TableCell className="px-4 py-3 text-right">
                         <span className="font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 group-hover:underline">

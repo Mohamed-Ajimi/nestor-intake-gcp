@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
@@ -38,6 +39,7 @@ export const Route = createFileRoute("/intake/$id")({
 
 function UserIntakeFillPage() {
   const { id } = Route.useParams();
+  const { t } = useTranslation("intake");
   const { session } = useAuth();
   const navigate = useNavigate();
   const [payload, setPayload] = useState<IntakePayload | null>(null);
@@ -57,14 +59,14 @@ function UserIntakeFillPage() {
       if (cancelled) return;
 
       if (!intakeRes.success || !answersRes.success || !templatesRes.success) {
-        setError("Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.");
+        setError(t("route.loadFailed"));
         setLoading(false);
         return;
       }
 
       const template = templatesRes.data[0];
       if (!template) {
-        setError("Geen intakesjabloon beschikbaar voor deze ruimte.");
+        setError(t("route.noTemplate"));
         setLoading(false);
         return;
       }
@@ -110,7 +112,7 @@ function UserIntakeFillPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, t]);
 
   const handleLogout = async () => {
     try {
@@ -123,7 +125,7 @@ function UserIntakeFillPage() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-paper px-6">
-        <p className="font-mono text-xs uppercase tracking-wider text-ink/40">Laden…</p>
+        <p className="font-mono text-xs uppercase tracking-wider text-ink/40">{t("route.loading")}</p>
       </div>
     );
   }
@@ -132,7 +134,7 @@ function UserIntakeFillPage() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-paper px-6 text-center">
         <p className="max-w-md text-sm text-red-600">
-          {error ?? "Kon de intake(s) niet laden. Probeer de pagina te vernieuwen."}
+          {error ?? t("route.loadFailed")}
         </p>
         <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-ink/60">
           <button
@@ -140,7 +142,7 @@ function UserIntakeFillPage() {
             onClick={() => navigate({ to: "/intake" })}
             className="underline-offset-2 hover:text-ink hover:underline"
           >
-            Terug naar overzicht
+            {t("route.backToOverview")}
           </button>
           {session?.email && (
             <button
@@ -148,7 +150,7 @@ function UserIntakeFillPage() {
               onClick={handleLogout}
               className="underline-offset-2 hover:text-ink hover:underline"
             >
-              Uitloggen
+              {t("route.logout")}
             </button>
           )}
         </div>
