@@ -114,5 +114,31 @@
       "cleanupFailed": "Oude bestanden opruimen mislukt",
       "changesSaved": "Wijzigingen opgeslagen"
     }
+  },
+  "clientDrawer": {
+    "title": "klant bewerken",
+    "clientData": "Klantgegevens",
+    "primaryContact": "Hoofdcontact",
+    "name": "Naam",
+    "industry": "Industrie",
+    "country": "Land",
+    "website": "Website",
+    "role": "Rol",
+    "rolePlaceholder": "bv. CEO",
+    "email": "Email",
+    "phone": "Telefoon",
+    "save": "Opslaan",
+    "saving": "Opslaan…",
+    "cancel": "Annuleren",
+    "projectsTitle": "Projecten bij deze klant",
+    "loading": "Laden…",
+    "noProjects": "Nog geen projecten.",
+    "createdAt": "Aangemaakt",
+    "deliveredAt": "Geleverd",
+    "lastEdited": "Laatst bewerkt",
+    "openIntake": "Open intake →",
+    "newProject": "+ Nieuw project voor deze klant",
+    "nameRequired": "Naam is verplicht",
+    "saved": "Klant opgeslagen"
   }
 }

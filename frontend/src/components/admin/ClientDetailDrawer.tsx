@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { nl } from "date-fns/locale";
+import { useTranslation } from "react-i18next";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ export function ClientDetailDrawer({
   client: ClientDrawerInitial | null;
   onSaved: () => void;
 }) {
+  const { t, i18n } = useTranslation("admin");
   const [v, setV] = useState({
     name: "",
     country: "BE",
@@ -91,7 +93,7 @@ export function ClientDetailDrawer({
   const submit = async () => {
     if (!supabase || !client) return;
     if (!v.name.trim()) {
-      toast.error("Naam is verplicht");
+      toast.error(t("clientDrawer.nameRequired"));
       return;
     }
     setSaving(true);
@@ -114,7 +116,7 @@ export function ClientDetailDrawer({
       toast.error(error.message);
       return;
     }
-    toast.success("Klant opgeslagen");
+    toast.success(t("clientDrawer.saved"));
     onSaved();
   };
 
@@ -127,7 +129,7 @@ export function ClientDetailDrawer({
         <div className="border-b border-ink px-6 py-5">
           <SheetHeader>
             <SheetTitle className="font-serif text-2xl font-normal lowercase tracking-tight text-ink">
-              klant bewerken
+              {t("clientDrawer.title")}
             </SheetTitle>
           </SheetHeader>
         </div>
@@ -135,57 +137,57 @@ export function ClientDetailDrawer({
         {client && (
           <div className="px-6 py-6 space-y-6">
             <section className="space-y-4">
-              <SectionTitle>Klantgegevens</SectionTitle>
-              <Field id="d-name" label="Naam">
+              <SectionTitle>{t("clientDrawer.clientData")}</SectionTitle>
+              <Field id="d-name" label={t("clientDrawer.name")}>
                 <Input id="d-name" value={v.name} onChange={(e) => upd("name", e.target.value)} />
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field id="d-ind" label="Industrie">
+                <Field id="d-ind" label={t("clientDrawer.industry")}>
                   <Input id="d-ind" value={v.industry} onChange={(e) => upd("industry", e.target.value)} />
                 </Field>
-                <Field id="d-co" label="Land">
+                <Field id="d-co" label={t("clientDrawer.country")}>
                   <Input id="d-co" value={v.country} onChange={(e) => upd("country", e.target.value)} />
                 </Field>
               </div>
-              <Field id="d-web" label="Website">
+              <Field id="d-web" label={t("clientDrawer.website")}>
                 <Input id="d-web" type="url" placeholder="https://" value={v.website} onChange={(e) => upd("website", e.target.value)} />
               </Field>
             </section>
 
             <section className="space-y-4 border-t border-ink/15 pt-5">
-              <SectionTitle>Hoofdcontact</SectionTitle>
+              <SectionTitle>{t("clientDrawer.primaryContact")}</SectionTitle>
               <div className="grid grid-cols-2 gap-3">
-                <Field id="d-cn" label="Naam">
+                <Field id="d-cn" label={t("clientDrawer.name")}>
                   <Input id="d-cn" value={v.primary_contact_name} onChange={(e) => upd("primary_contact_name", e.target.value)} />
                 </Field>
-                <Field id="d-cr" label="Rol">
-                  <Input id="d-cr" value={v.primary_contact_role} onChange={(e) => upd("primary_contact_role", e.target.value)} placeholder="bv. CEO" />
+                <Field id="d-cr" label={t("clientDrawer.role")}>
+                  <Input id="d-cr" value={v.primary_contact_role} onChange={(e) => upd("primary_contact_role", e.target.value)} placeholder={t("clientDrawer.rolePlaceholder")} />
                 </Field>
               </div>
-              <Field id="d-ce" label="Email">
+              <Field id="d-ce" label={t("clientDrawer.email")}>
                 <Input id="d-ce" type="email" value={v.primary_contact_email} onChange={(e) => upd("primary_contact_email", e.target.value)} />
               </Field>
-              <Field id="d-cp" label="Telefoon">
+              <Field id="d-cp" label={t("clientDrawer.phone")}>
                 <Input id="d-cp" value={v.primary_contact_phone} onChange={(e) => upd("primary_contact_phone", e.target.value)} placeholder="+32 …" />
               </Field>
               <div className="flex gap-2 pt-1">
                 <Button onClick={submit} disabled={saving}>
-                  {saving ? "Opslaan…" : "Opslaan"}
+                  {saving ? t("clientDrawer.saving") : t("clientDrawer.save")}
                 </Button>
                 <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
-                  Annuleren
+                  {t("clientDrawer.cancel")}
                 </Button>
               </div>
             </section>
 
             <section className="space-y-3 border-t border-ink/15 pt-5">
               <SectionTitle>
-                Projecten bij deze klant{projects ? ` (${projects.length})` : ""}
+                {t("clientDrawer.projectsTitle")}{projects ? ` (${projects.length})` : ""}
               </SectionTitle>
               {projects === null ? (
-                <p className="font-mono text-xs uppercase tracking-wider text-ink/40">Laden…</p>
+                <p className="font-mono text-xs uppercase tracking-wider text-ink/40">{t("clientDrawer.loading")}</p>
               ) : projects.length === 0 ? (
-                <p className="font-mono text-xs uppercase tracking-wider text-ink/40">Nog geen projecten.</p>
+                <p className="font-mono text-xs uppercase tracking-wider text-ink/40">{t("clientDrawer.noProjects")}</p>
               ) : (
                 <div className="space-y-3">
                   {projects.map((p) => (
@@ -201,10 +203,10 @@ export function ClientDetailDrawer({
                             </span>
                           </div>
                           <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-                            Aangemaakt: {format(new Date(p.created_at), "d MMM yyyy", { locale: nl })}
+                            {t("clientDrawer.createdAt")}: {format(new Date(p.created_at), "d MMM yyyy", { locale: getDateLocale(i18n.language) })}
                             {p.status === "delivered" && p.delivered_at
-                              ? ` · Geleverd: ${format(new Date(p.delivered_at), "d MMM yyyy", { locale: nl })}`
-                              : ` · Laatst bewerkt: ${format(new Date(p.updated_at), "d MMM HH:mm", { locale: nl })}`}
+                              ? ` · ${t("clientDrawer.deliveredAt")}: ${format(new Date(p.delivered_at), "d MMM yyyy", { locale: getDateLocale(i18n.language) })}`
+                              : ` · ${t("clientDrawer.lastEdited")}: ${format(new Date(p.updated_at), "d MMM HH:mm", { locale: getDateLocale(i18n.language) })}`}
                           </div>
                         </div>
                         <span className={statusPillClass(p.status)}>
@@ -218,7 +220,7 @@ export function ClientDetailDrawer({
                           className="font-mono text-[11px] uppercase tracking-wider text-ink underline-offset-4 hover:underline"
                           onClick={() => onOpenChange(false)}
                         >
-                          Open intake →
+                          {t("clientDrawer.openIntake")}
                         </Link>
                       </div>
                     </div>
@@ -236,7 +238,7 @@ export function ClientDetailDrawer({
                     search={{ client_id: client.id }}
                     onClick={() => onOpenChange(false)}
                   >
-                    + Nieuw project voor deze klant
+                    {t("clientDrawer.newProject")}
                   </Link>
                 </Button>
               </div>

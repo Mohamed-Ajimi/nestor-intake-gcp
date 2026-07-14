@@ -114,5 +114,31 @@
       "cleanupFailed": "Échec du nettoyage des anciens fichiers",
       "changesSaved": "Modifications enregistrées"
     }
+  },
+  "clientDrawer": {
+    "title": "modifier le client",
+    "clientData": "Données client",
+    "primaryContact": "Contact principal",
+    "name": "Nom",
+    "industry": "Secteur",
+    "country": "Pays",
+    "website": "Site web",
+    "role": "Rôle",
+    "rolePlaceholder": "p. ex. CEO",
+    "email": "E-mail",
+    "phone": "Téléphone",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "cancel": "Annuler",
+    "projectsTitle": "Projets de ce client",
+    "loading": "Chargement…",
+    "noProjects": "Aucun projet pour l'instant.",
+    "createdAt": "Créé le",
+    "deliveredAt": "Livré",
+    "lastEdited": "Dernière modification",
+    "openIntake": "Ouvrir l'intake →",
+    "newProject": "+ Nouveau projet pour ce client",
+    "nameRequired": "Le nom est obligatoire",
+    "saved": "Client enregistré"
   }
 }

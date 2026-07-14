@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth-context";
 import { ActiveSpaceProvider } from "@/lib/active-space";
 import { ADMIN_NAV } from "@/components/admin/adminNav";
 import { SpaceSwitcher } from "@/components/admin/SpaceSwitcher";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 type Item = { to: string; label: string; exact: boolean };
 
@@ -61,6 +62,14 @@ export function ProductShell({
             <SpaceSwitcher />
           </div>
         )}
+
+        {/* Persisting NL/FR/EN switcher (D-08 admin location) — mounted in the same
+            chrome as the space switcher. Available to EVERY admin user (not superadmin-
+            gated): a `user` also needs to pick their display language. `persist` writes
+            the choice to their membership via PATCH /me/locale (best-effort). */}
+        <div className="mt-4">
+          <LanguageSwitcher persist />
+        </div>
 
         <nav className="mt-6 flex flex-col gap-1">
           {items.map((item) => {

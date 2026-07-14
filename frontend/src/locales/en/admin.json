@@ -114,5 +114,31 @@
       "cleanupFailed": "Failed to clean up old files",
       "changesSaved": "Changes saved"
     }
+  },
+  "clientDrawer": {
+    "title": "edit client",
+    "clientData": "Client data",
+    "primaryContact": "Primary contact",
+    "name": "Name",
+    "industry": "Industry",
+    "country": "Country",
+    "website": "Website",
+    "role": "Role",
+    "rolePlaceholder": "e.g. CEO",
+    "email": "Email",
+    "phone": "Phone",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "projectsTitle": "Projects for this client",
+    "loading": "Loading…",
+    "noProjects": "No projects yet.",
+    "createdAt": "Created",
+    "deliveredAt": "Delivered",
+    "lastEdited": "Last edited",
+    "openIntake": "Open intake →",
+    "newProject": "+ New project for this client",
+    "nameRequired": "Name is required",
+    "saved": "Client saved"
   }
 }
