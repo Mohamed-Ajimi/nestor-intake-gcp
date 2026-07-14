@@ -125,12 +125,11 @@ MUST NOT proceed to Supabase-independence sign-off.
 
 ## Known gaps (recorded during the 12-05 cutover, 2026-07-14)
 
-1. **Mail deferred (operator decision):** the `nestor-resend-api-key` secret exists with the
-   runtime-SA accessor grant but has NO version — the operator chose to skip mail this session.
-   `RESEND_API_KEY` is deliberately NOT mapped (a version-less secret ref would break revision
-   startup). All mail-dependent items above (10-UAT items, invite-mail locale, invite click-through,
-   validation/results sends, and the REAL-invite-flow leg of the user-role E2E) cannot pass until
-   the key is added and `--update-secrets=RESEND_API_KEY=nestor-resend-api-key:latest` is applied.
+1. **RESOLVED (same session):** mail was initially deferred, but the operator provided the Resend
+   key later in the session — version 1 added to `nestor-resend-api-key`, `RESEND_API_KEY` mapped
+   (rev 00023, /readyz 200). All mail-dependent items above are now TESTABLE. Operator note: the
+   key transited the assistant chat — rotate it in Resend after UAT and add the new value as
+   version 2 (no service change needed; the env references `:latest`).
 2. **NDA PDF not dropped (operator decision):** `frontend/public/templates/NDA/…` is absent from
    the deployed image — the NDA download 404s. Closing requires the out-of-band PDF drop + a
    frontend image rebuild/redeploy.
