@@ -9,6 +9,31 @@
     "intakeNotFound": "Intake introuvable.",
     "invalidLocale": "Choix de langue non valide.",
     "mailSendFailed": "L'envoi de l'e-mail a échoué.",
-    "recipientInvalid": "Destinataire non valide."
+    "recipientInvalid": "Destinataire non valide.",
+    "notLoggedIn": "Non connecté. Veuillez vous reconnecter."
+  },
+  "actions": {
+    "save": "Enregistrer"
+  },
+  "workflow": {
+    "steps": {
+      "submitted": "Soumis par le client",
+      "reviewed": "Vérifié par vous",
+      "validatedByClient": "Validé par le client",
+      "decomposed": "Décomposition",
+      "inResearch": "En recherche",
+      "delivered": "Livré"
+    },
+    "archivedNotice": "Cet intake est archivé.",
+    "draftNotice": "Le client est encore en train de compléter."
+  },
+  "accessDenied": {
+    "brand": "Agenic ›",
+    "title": "accès refusé",
+    "body": "Ce compte n'a pas accès à l'espace d'administration. Contactez un administrateur si vous pensez qu'il s'agit d'une erreur.",
+    "logout": "Se déconnecter"
+  },
+  "comingSoon": {
+    "badge": "⌀ Bientôt disponible"
   }
 }

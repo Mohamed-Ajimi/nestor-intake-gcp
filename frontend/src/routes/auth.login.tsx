@@ -87,7 +87,7 @@ function LoginPage() {
 
       // Route by the freshly-minted role claim, read straight from the refreshed
       // token so routing is deterministic and does not race the auth-context effect:
-      // superadmin → /admin, everyone else → /intake (avoids the admin "geen toegang"
+      // superadmin → /admin, everyone else → /intake (avoids the admin "no access"
       // wall a non-superadmin would otherwise hit).
       const result = auth.currentUser ? await getIdTokenResult(auth.currentUser) : null;
       const claim = result?.claims.role;

@@ -98,7 +98,7 @@ function AuthRedirector() {
  if (path === "/admin/login" || path === "/auth/login") {
  // Wait for the role claim to resolve so a superadmin is never briefly sent to
  // /intake. Route by role: superadmin → /admin, user → /intake (avoids the
- // admin "geen toegang" wall for non-superadmins).
+ // admin "no access" wall for non-superadmins).
  if (!role) return;
  router.navigate({ to: landingPathForRole(role) });
  }
