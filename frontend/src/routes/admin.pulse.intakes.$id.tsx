@@ -22,7 +22,8 @@ import { listSkillRuns } from "@/lib/api/skillRuns";
 import * as skills from "@/lib/api/skills";
 import * as storage from "@/lib/api/storage";
 import { getTemplates } from "@/lib/api/templates";
-import type { IntakeField, IntakeSchema } from "@/lib/intake-types";
+import type { IntakeField, IntakeSchema, LocalizedIntakeSchema } from "@/lib/intake-types";
+import { localizeSchema } from "@/lib/i18n/localizeSchema";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
 import { FieldRenderer } from "@/components/intake/FieldRenderer";
 import { IntakeWorkflowStepper } from "@/components/intake/IntakeWorkflowStepper";
@@ -409,7 +410,20 @@ function IntakeDetailPage() {
  return m;
  }, [answers]);
 
- const sections = intake?.template?.schema?.sections ?? [];
+ // The template carries the RAW multi-locale schema (LocalizedString objects, Phase 11).
+ // Flatten to the active locale at the consumption seam — rendering the raw objects
+ // makes React throw "Objects are not valid as a React child" (CR-01). Re-resolves on
+ // language change (nl fallback, D-05), mirroring IntakeForm's useMemo pattern.
+ const sections = useMemo(
+ () =>
+ intake?.template?.schema
+ ? localizeSchema(
+ intake.template.schema as unknown as LocalizedIntakeSchema,
+ i18n.language,
+ ).sections
+ : [],
+ [intake?.template?.schema, i18n.language],
+ );
 
  const allFields = useMemo(() => {
  const list: IntakeField[] = [];
