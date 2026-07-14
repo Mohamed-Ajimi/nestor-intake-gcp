@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: ready_to_plan
-stopped_at: Phase 6 UI-SPEC approved
-last_updated: "2026-06-29T19:58:43.569Z"
-last_activity: 2026-06-29 -- Phase 06 execution started
+stopped_at: Phase 11 complete (9/9) — ready to discuss Phase 12
+last_updated: 2026-07-14T12:57:46.058Z
+last_activity: 2026-07-14 -- Phase 11 execution started
 progress:
   total_phases: 12
-  completed_phases: 6
-  total_plans: 33
-  completed_plans: 31
-  percent: 50
+  completed_phases: 10
+  total_plans: 65
+  completed_plans: 65
+  percent: 83
 ---
 
 # Project State
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-18)
 
 **Core value:** A logged-in superadmin or client user can run an intake end-to-end on GCP — from form submission through AI skill application to a validated, decomposed context pack — with each client's data fully isolated to its own space, and the legacy Supabase system retired.
-**Current focus:** Phase 06 — intake-crud-parity-frontend-api-seam
+**Current focus:** Phase 12 — frontend deploy, cutover & supabase retirement
 
 ## Current Position
 
-Phase: 7
+Phase: 12
 Plan: Not started
 Next: Phase 06 (intake-crud-parity-and-frontend-api-seam)
 Status: Ready to plan
-Last activity: 2026-06-30
+Last activity: 2026-07-14
 
 Progress: 5 / 12 phases complete
 
@@ -37,7 +37,7 @@ Progress: 5 / 12 phases complete
 
 **Velocity:**
 
-- Total plans completed: 28
+- Total plans completed: 63
 - Average duration: — min
 - Total execution time: 0.0 hours
 
@@ -50,6 +50,11 @@ Progress: 5 / 12 phases complete
 | 03 | 4 | - | - |
 | 04 | 4 | - | - |
 | 06 | 13 | - | - |
+| 08 | 3 | - | - |
+| 09 | 4 | - | - |
+| 07 | 11 | - | - |
+| 10 | 5 | - | - |
+| 11 | 9 | - | - |
 
 **Recent Trend:**
 
@@ -98,7 +103,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [2026-07-13] COMBINED 7+8+9 LIVE UAT RUN — core flow PROVEN live (upload → apply-intake-skill (first real Claude call, €0.04) → review → client validation → context pack → decomposed → signed-URL download). Scores: 07-UAT 3 pass/4 blocked; 08-HUMAN-UAT 2 pass/1 blocked; 09-HUMAN-UAT 5 pass/4 blocked. Deployed rev nestor-api-00017-zbt (bucket+IAM+CORS applied; 900s timeout; STORAGE_BUCKET set). 12+ inline fixes committed during the session (superadmin answers upsert, value_json Any, AI trigger wiring, client validation phase, FieldControl crash, submit gating). REMAINING: (a) audio follow-up session — transcribe E2E, superadmin audio upload, delete + WR-04 click-through, cross-space browser denial; (b) gap-closure plans from 07-UAT Gaps (missing UI triggers for structure/extract/transcribe/embeddings, artifacts-read endpoint + ContextPackBlock display, context-pack progress UX, Kopieer-intake-link, NDA template-asset serving). Resume audio: /gsd-verify-work 9.
 
 ### Blockers/Concerns
 
@@ -126,6 +131,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-29T15:54:17.179Z
-Stopped at: Phase 6 UI-SPEC approved
-Resume file: .planning/phases/06-intake-crud-parity-frontend-api-seam/06-UI-SPEC.md
+Last session: 2026-07-14T07:57:38.584Z
+Stopped at: Phase 11 context gathered
+Resume file: .planning/phases/11-internationalization-nl-fr-en/11-CONTEXT.md

@@ -68,13 +68,13 @@ Requirements for the cutover milestone. Each maps to roadmap phases. "Done" bar 
 
 ### Notifications
 
-- [ ] **NOTIF-01**: Transactional email is notification-only — it carries no access token; links point to authenticated routes
-- [ ] **NOTIF-02**: Email is sent for invitation, validation-ready, results-ready, and reminders
+- [x] **NOTIF-01**: Transactional email is notification-only — it carries no access token; links point to authenticated routes
+- [x] **NOTIF-02**: Email is sent for invitation, validation-ready, results-ready, and reminders
 
 ### Internationalization
 
-- [ ] **I18N-01**: The UI supports NL, FR, and EN via an i18n framework; all hardcoded Dutch strings (labels, banners, toasts, date locale) are externalized
-- [ ] **I18N-02**: A user can switch language; a default locale applies per user/space
+- [x] **I18N-01**: The UI supports NL, FR, and EN via an i18n framework; all hardcoded Dutch strings (labels, banners, toasts, date locale) are externalized
+- [x] **I18N-02**: A user can switch language; a default locale applies per user/space
 
 ### Quality, Security & Cutover
 
@@ -151,10 +151,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | AI-04 | Phase 7 | Pending |
 | AI-05 | Phase 7 | Pending |
 | AI-06 | Phase 7 | Pending |
-| NOTIF-01 | Phase 10 | Pending |
-| NOTIF-02 | Phase 10 | Pending |
-| I18N-01 | Phase 11 | Pending |
-| I18N-02 | Phase 11 | Pending |
+| NOTIF-01 | Phase 10 | Complete |
+| NOTIF-02 | Phase 10 | Complete |
+| I18N-01 | Phase 11 | Complete |
+| I18N-02 | Phase 11 | Complete |
 | QA-01 | Phase 4 | Pending |
 | QA-02 | Phase 1 | Complete |
 | QA-03 | Phase 6 | Pending |

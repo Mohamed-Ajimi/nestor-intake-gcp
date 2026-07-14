@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: SSE Skill-Run Progress** - DB-backed Server-Sent Events stream replaces Supabase Realtime for skill-run progress
 - [x] **Phase 9: GCS Storage** - Signed-URL upload/download via attached-SA `signBlob`, space-scoped, replacing `nestor-uploads` (completed 2026-07-13)
 - [x] **Phase 10: Notifications** - Notification-only transactional email (no tokens) for invite/validation-ready/results-ready/reminders (completed 2026-07-13)
-- [ ] **Phase 11: Internationalization (NL/FR/EN)** - react-i18next with all hardcoded Dutch strings externalized and a working language switcher
+- [x] **Phase 11: Internationalization (NL/FR/EN)** - react-i18next with all hardcoded Dutch strings externalized and a working language switcher (completed 2026-07-14)
 - [ ] **Phase 12: Frontend Deploy, Cutover & Supabase Retirement** - SSR frontend on Cloud Run, end-to-end validated for both roles, Supabase paused then retired
 
 ## Phase Details
@@ -209,15 +209,15 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. The UI renders fully in NL, FR, and EN — all labels, banners, toasts, error messages, and date locale are externalized to i18n keys (no hardcoded Dutch strings remain)
   2. A user can switch language and a default locale applies per user/space
 **Plans**: 9 plans (4 waves)
-  - [ ] 11-01-PLAN.md — Frontend i18n foundation: i18next init + provider + LanguageSwitcher + detect/date-locale/error-codes helpers + /me seam + catalog skeleton + CI guard (Wave 1)
-  - [ ] 11-02-PLAN.md — Backend foundation: 0010 locale columns + /me GET/PATCH resolution chain + CodedError contract (Wave 1)
-  - [ ] 11-03-PLAN.md — Intake schema multi-locale + localizeSchema + form chrome externalize + client switcher mount (Wave 2)
-  - [ ] 11-04-PLAN.md — Admin detail (56 strings) + ProductShell switcher + space default_locale field + admin date-locale (Wave 2)
-  - [ ] 11-05-PLAN.md — Intake results/AI/artifact components + PDF pre-resolved labels + date-locale sites (Wave 3)
-  - [ ] 11-06-PLAN.md — Auth pages externalize + pre-login switcher + SSR-safe boot-locale reconciliation (Wave 2)
-  - [ ] 11-07-PLAN.md — Remaining admin dialogs + pulse routes externalize (Wave 3)
-  - [ ] 11-08-PLAN.md — Mail locale variants (nl/fr/en) + recipient-locale resolution in send path (Wave 3)
-  - [ ] 11-09-PLAN.md — Long-tail common sweep + FULL CI Dutch-string guard gate (Wave 4)
+  - [x] 11-01-PLAN.md — Frontend i18n foundation: i18next init + provider + LanguageSwitcher + detect/date-locale/error-codes helpers + /me seam + catalog skeleton + CI guard (Wave 1)
+  - [x] 11-02-PLAN.md — Backend foundation: 0010 locale columns + /me GET/PATCH resolution chain + CodedError contract (Wave 1)
+  - [x] 11-03-PLAN.md — Intake schema multi-locale + localizeSchema + form chrome externalize + client switcher mount (Wave 2)
+  - [x] 11-04-PLAN.md — Admin detail (56 strings) + ProductShell switcher + space default_locale field + admin date-locale (Wave 2)
+  - [x] 11-05-PLAN.md — Intake results/AI/artifact components + PDF pre-resolved labels + date-locale sites (Wave 3)
+  - [x] 11-06-PLAN.md — Auth pages externalize + pre-login switcher + SSR-safe boot-locale reconciliation (Wave 2)
+  - [x] 11-07-PLAN.md — Remaining admin dialogs + pulse routes externalize (Wave 3)
+  - [x] 11-08-PLAN.md — Mail locale variants (nl/fr/en) + recipient-locale resolution in send path (Wave 3)
+  - [x] 11-09-PLAN.md — Long-tail common sweep + FULL CI Dutch-string guard gate (Wave 4)
 **UI hint**: yes
 
 ### Phase 12: Frontend Deploy, Cutover & Supabase Retirement
@@ -248,5 +248,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. SSE Skill-Run Progress | 0/3 | Planned (3 plans, 1 wave) | - |
 | 9. GCS Storage | 4/4 | Complete   | 2026-07-13 |
 | 10. Notifications | 5/5 | Complete    | 2026-07-13 |
-| 11. Internationalization (NL/FR/EN) | 0/8 | Planned (8 plans, 3 waves) | - |
+| 11. Internationalization (NL/FR/EN) | 9/9 | Complete    | 2026-07-14 |
 | 12. Frontend Deploy, Cutover & Supabase Retirement | 0/TBD | Not started | - |

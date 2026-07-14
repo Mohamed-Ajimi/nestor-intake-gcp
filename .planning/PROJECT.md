@@ -45,11 +45,11 @@ feature parity the re-platform must preserve. -->
 - [ ] Identity Platform auth replacing Supabase GoTrue; **login required for everyone**
 - [ ] Per-client **spaces** with real org-scoped isolation enforced at the API layer
 - [ ] **superadmin** (Agenic, cross-tenant) and **user** (own space only) roles
-- [ ] Bearer-link client access removed; email becomes notification-only ("something is ready, log in")
+- [x] Bearer-link client access removed; email becomes notification-only ("something is ready, log in") — Validated in Phase 10: notifications (code complete + review-fixed; live UAT pending in 10-HUMAN-UAT.md)
 - [ ] Frontend data layer re-pointed off Supabase to the new GCP API client
 - [ ] All pre-research AI functions ported to Cloud Run (apply-intake-skill, generate-context-pack, structure-answers, extract-insights, embeddings + semantic search, transcribe-audio)
-- [ ] GCS storage replacing the `nestor-uploads` bucket
-- [ ] Multi-language UI: **NL / FR / EN** (i18n)
+- [x] GCS storage replacing the `nestor-uploads` bucket — Validated in Phase 9: gcs-storage (code complete + review-fixed; live UAT pending in 09-HUMAN-UAT.md)
+- [x] Multi-language UI: **NL / FR / EN** (i18n) — Validated in Phase 11: internationalization (code complete + review-fixed; live UAT pending in 11-HUMAN-UAT.md)
 - [ ] Frontend hosted on GCP (Cloud Run or Firebase Hosting)
 - [ ] End-to-end flow validated on GCP for superadmin + user; Supabase project retired
 
@@ -125,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-18 after initialization*
+*Last updated: 2026-07-14 after Phase 11 (internationalization NL/FR/EN) — phase complete (9/9 plans, review-fixed: 2 critical + 9 warnings closed); 6 HUMAN-UAT items pend the next deploy (image rebuild + alembic 0010) — see 11-HUMAN-UAT.md; only Phase 12 (cutover) remains*
