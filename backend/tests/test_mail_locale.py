@@ -180,18 +180,33 @@ def test_render_admin_validated_has_no_locale_param():
 # SEND PATH (Task 2) — per-recipient locale, mixed list, admin-UI-independence, D-16
 # ---------------------------------------------------------------------------
 
-pytestmark_integration = pytest.mark.integration
+# The send-path deps (fastapi/firebase/sqlalchemy) are imported SOFTLY so a box missing
+# them still COLLECTS the render-level cases above (they only need jinja2). A missing dep
+# marks the send-path cases skipped individually via ``_SEND_SKIP`` rather than skipping the
+# whole module (which module-level ``importorskip`` would do). Cloud Build has every dep.
+try:  # noqa: SIM105 -- explicit set of names for the send-path section
+    from app.api import admin_routes as _admin_routes
+    from app.api import intake_routes as _send  # noqa: F401
+    from app.auth import admin_users
+    from app.auth import dependencies
+    from app.auth import identity as identity_mod
+    from app.db import session as session_mod
 
-_send = pytest.importorskip("app.api.intake_routes")
-_admin_routes = pytest.importorskip("app.api.admin_routes")
-dependencies = pytest.importorskip("app.auth.dependencies")
-identity_mod = pytest.importorskip("app.auth.identity")
-session_mod = pytest.importorskip("app.db.session")
-admin_users = pytest.importorskip("app.auth.admin_users")
+    get_current_identity = dependencies.get_current_identity
+    Identity = identity_mod.Identity
+    admin_router = _admin_routes.admin_router
+    _SEND_SKIP = None
+except Exception as exc:  # noqa: BLE001 -- any missing send-path dep -> skip that section
+    _SEND_SKIP = f"send-path deps unavailable: {exc!r}"
 
-get_current_identity = dependencies.get_current_identity
-Identity = identity_mod.Identity
-admin_router = _admin_routes.admin_router
+# Send-path cases are integration (need Docker/live PG) AND require the send-path deps.
+# Compose the two marks into one reusable decorator applied per send-path test.
+def pytestmark_integration(func):
+    """Apply the integration mark + a skip-if-send-deps-missing guard to a send-path test."""
+    func = pytest.mark.integration(func)
+    if _SEND_SKIP is not None:
+        func = pytest.mark.skip(reason=_SEND_SKIP)(func)
+    return func
 
 SCHEMA = "nestor"
 _SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only

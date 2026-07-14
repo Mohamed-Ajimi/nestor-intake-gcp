@@ -321,10 +321,16 @@ def send_invite_mail(
     # Any transport failure — a Resend non-2xx (`raise_for_status`), a network error, a
     # missing RESEND_API_KEY (`KeyError`), or an IdP failure generating the fresh link —
     # returns `MailResult(success=False)` with NO audit row (audit-on-success-only).
+    # D-07 (Phase 11): the invitee has NO membership locale yet at invite time, so the
+    # invite body resolves to the TARGET SPACE's default_locale -> "nl" (never the sending
+    # superadmin's UI). A missing space row (should not happen for a real membership) -> "nl".
+    space = repo.get_space(membership.organization_id)
+    invite_locale = (space.default_locale if space is not None else None) or "nl"
+
     try:
         # Fresh action link per send (D-10). Its continue URL is /auth/action (Task 2).
         action_link = admin_users.generate_set_password_link(membership.email)
-        html = mail_render.render_invite(cta_url=action_link)
+        html = mail_render.render_invite(cta_url=action_link, locale=invite_locale)
         mail_resend.send(to=[membership.email], subject=_INVITE_SUBJECT, html=html)
     except Exception:  # noqa: BLE001 -- any transport/link failure is a non-send.
         _log.warning("invite mail send failed for membership %s", membership_id)
