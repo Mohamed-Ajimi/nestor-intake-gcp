@@ -79,7 +79,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { useEffect } from "react";
 import { useRouter } from "@tanstack/react-router";
+import { I18nextProvider } from "react-i18next";
 import { AuthProvider, useAuth, landingPathForRole } from "@/lib/auth-context";
+// Side-effect import: initializes the single i18next instance synchronously at module
+// load (bundled catalogs, deterministic nl default — see lib/i18n/index.ts). The
+// resolved post-login changeLanguage lands in the client boot (11-06), NEVER in a
+// useEffect on the SSR shell (Pitfall 1); `<html lang>` above stays deterministic.
+import i18n from "@/lib/i18n";
 
 const queryClient = new QueryClient();
 
@@ -107,11 +113,13 @@ function RootComponent() {
  }, []);
  return (
  <QueryClientProvider client={queryClient}>
+ <I18nextProvider i18n={i18n}>
  <AuthProvider>
  <AuthRedirector />
  <Outlet />
  <Toaster position="top-right" />
  </AuthProvider>
+ </I18nextProvider>
  </QueryClientProvider>
  );
 }

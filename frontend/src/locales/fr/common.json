@@ -1,0 +1,14 @@
+{
+  "language": {
+    "label": "Langue",
+    "nl": "Néerlandais",
+    "fr": "Français",
+    "en": "Anglais"
+  },
+  "errors": {
+    "intakeNotFound": "Intake introuvable.",
+    "invalidLocale": "Choix de langue non valide.",
+    "mailSendFailed": "L'envoi de l'e-mail a échoué.",
+    "recipientInvalid": "Destinataire non valide."
+  }
+}
