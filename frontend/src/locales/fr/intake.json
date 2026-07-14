@@ -1,1 +1,105 @@
-{}
+{
+  "validation": {
+    "required": "Champ obligatoire",
+    "invalidEmail": "Adresse e-mail invalide",
+    "minChars": "Au moins {{count}} caractères",
+    "minItems": "Au moins {{count}} éléments",
+    "fillRequired": "Veuillez remplir les champs obligatoires."
+  },
+  "save": {
+    "unsaved": "Non enregistré",
+    "saving": "Enregistrement…",
+    "saved": "Toutes les modifications sont enregistrées",
+    "failed": "Échec de l'enregistrement",
+    "sectionFailed": "Échec de l'enregistrement — vos modifications dans cette section n'ont pas été enregistrées. Réessayez."
+  },
+  "form": {
+    "brand": "Agenic",
+    "for": "Pour : {{name}}",
+    "estimatedTime": "Temps indicatif : {{minutes}} min",
+    "step": "Étape {{current}} / {{total}}",
+    "optional": "Facultatif",
+    "attention": "ATTENTION",
+    "fieldEmpty": "{{label}} est vide",
+    "previous": "Précédent",
+    "next": "Suivant",
+    "submit": "Envoyer",
+    "submitting": "Envoi…",
+    "submitFailed": "Échec de l'envoi : {{error}}",
+    "changed": "Modifié"
+  },
+  "validationPhase": {
+    "titleSuffix": " — Validation",
+    "subtitle": "Examinez les précisions de Nestor, cochez les questions supplémentaires et donnez votre accord.",
+    "banner": "VALIDATION",
+    "bannerBody": "Nestor a affiné votre intake. Parcourez-le une fois, cochez d'éventuelles questions supplémentaires et cliquez sur « Accord — envoyer » quand vous avez terminé.",
+    "approveSubmit": "Accord — envoyer",
+    "doneTitle": "Merci — votre validation est arrivée.",
+    "doneMessage": "Nestor démarre maintenant la décomposition et la recherche."
+  },
+  "confirm": {
+    "title": "En êtes-vous sûr ?",
+    "body": "Certains champs recommandés sont encore vides. Voulez-vous quand même envoyer ?",
+    "cancel": "Annuler",
+    "confirm": "Envoyer quand même"
+  },
+  "field": {
+    "examples": "Exemples",
+    "unsupported": "Type de champ non pris en charge : {{type}}",
+    "noProposals": "Pas de propositions supplémentaires.",
+    "includeInResearch": "Inclure dans la recherche ?",
+    "choose": "— Choisir —",
+    "specify": "Précisez…",
+    "itemFallback": "Élément",
+    "addItem": "+ Ajouter",
+    "onlyPdf": "Seuls les fichiers PDF sont autorisés. Enregistrez d'abord votre PowerPoint/Word/Excel en PDF.",
+    "tooLarge": "{{name}} est trop volumineux (max {{max}} Mo)",
+    "uploadFailed": "Échec du téléversement : {{error}}",
+    "removeFailed": "Échec de la suppression du fichier : {{error}}",
+    "maxFiles": "Maximum {{max}} fichiers.",
+    "slot": "Emplacement {{index}}",
+    "busy": "En cours…",
+    "replace": "Remplacer",
+    "remove": "Supprimer",
+    "uploading": "Téléversement…",
+    "choosePdf": "+ Choisir un PDF",
+    "removeLong": "Supprimer",
+    "chooseFile": "Choisir un fichier",
+    "loading": "Chargement…",
+    "download": "Télécharger"
+  },
+  "display": {
+    "missing": "— manquant",
+    "lastEditedByClient": "Dernière modification par le client",
+    "other": "Autre : {{text}}",
+    "type": "Type : {{kind}}",
+    "includedInResearch": "INCLUS DANS LA RECHERCHE",
+    "notIncluded": "NON INCLUS",
+    "storageNotConfigured": "Stockage non configuré",
+    "downloadFailed": "Échec du téléchargement",
+    "open": "Ouvrir"
+  },
+  "route": {
+    "loadFailed": "Impossible de charger l'intake. Actualisez la page.",
+    "noTemplate": "Aucun modèle d'intake disponible pour cet espace.",
+    "loading": "Chargement…",
+    "backToOverview": "Retour à l'aperçu",
+    "logout": "Se déconnecter"
+  },
+  "list": {
+    "brand": "Agenic",
+    "logout": "Se déconnecter",
+    "heading": "intakes",
+    "subtitleForSpace": "Vos intakes pour {{name}}.",
+    "subtitle": "Vos intakes.",
+    "colTitle": "Titre",
+    "colStatus": "Statut",
+    "colLastEdited": "Dernière modification",
+    "empty": "Aucun intake préparé pour l'instant",
+    "emptyBody": "Dès qu'un intake est prêt, il apparaîtra ici. Vous serez averti dès qu'il y a quelque chose pour vous.",
+    "dash": "—",
+    "ctaFill": "Remplir la demande",
+    "ctaView": "Voir les réponses",
+    "ctaResult": "Voir le résultat"
+  }
+}

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { format } from "date-fns";
-import { nl } from "date-fns/locale";
+import { useTranslation } from "react-i18next";
+import i18n from "@/lib/i18n";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import { Download } from "lucide-react";
 import { toast } from "sonner";
 import type { IntakeField } from "@/lib/intake-types";
@@ -30,7 +32,7 @@ function isEmpty(v: unknown): boolean {
 
 function formatDate(d: string) {
  try {
- return format(new Date(d), "dd MMM yyyy", { locale: nl });
+ return format(new Date(d), "dd MMM yyyy", { locale: getDateLocale(i18n.language) });
  } catch {
  return d;
  }
@@ -63,6 +65,7 @@ function formatBytes(n: number) {
 }
 
 export function FieldDisplay({ field, value, intakeId, editedByClient, clientEditedAt }: Props) {
+ const { t } = useTranslation("intake");
  if (field.type === "download") return null;
 
  const empty = isEmpty(value);
@@ -72,7 +75,7 @@ export function FieldDisplay({ field, value, intakeId, editedByClient, clientEdi
  if (empty && field.required) {
  return (
  <Row label={field.label} required editedByClient={editedByClient} clientEditedAt={clientEditedAt}>
- <span className="font-medium" style={{ color: "#FF2D87" }}>— ontbreekt</span>
+ <span className="font-medium" style={{ color: "#FF2D87" }}>{t("display.missing")}</span>
  </Row>
  );
  }
@@ -102,6 +105,7 @@ function Row({
  editedByClient?: boolean;
  clientEditedAt?: string | null;
 }) {
+ const { t } = useTranslation("intake");
  return (
  <div className="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
  <dt className="font-sans text-sm font-normal text-ink/70">
@@ -112,7 +116,7 @@ function Row({
  <div>{children}</div>
  {editedByClient && (
  <div className="mt-1 font-sans text-xs font-normal text-ink/60">
- Laatst gewijzigd door klant
+ {t("display.lastEditedByClient")}
  {clientEditedAt ? ` · ${formatEditedAt(clientEditedAt)}` : ""}
  </div>
  )}
@@ -130,6 +134,7 @@ function ValueRenderer({
  value: unknown;
  intakeId?: string;
 }) {
+ const { t } = useTranslation("intake");
  switch (field.type) {
  case "text":
  case "email":
@@ -146,7 +151,7 @@ function ValueRenderer({
  const opt = field.options?.find((o) => o.value === choice);
  const label = opt?.label ?? choice;
  if (typeof v === "object" && v.choice === "other") {
- return <span>Anders: {v.text || "—"}</span>;
+ return <span>{t("display.other", { text: v.text || "—" })}</span>;
  }
  return <span>{label}</span>;
  }
@@ -174,7 +179,7 @@ function ValueRenderer({
  <div className="font-sans text-ink">{text}</div>
  {kind && (
  <div className="font-sans text-sm text-ink/60">
- Type: {kind}
+ {t("display.type", { kind })}
  </div>
  )}
  {rationale && (
@@ -251,9 +256,9 @@ function ValueRenderer({
  )}
  <div className="font-mono text-xs uppercase tracking-wider">
  {item.approved ? (
- <span className="text-ink/70">OPGENOMEN IN RESEARCH</span>
+ <span className="text-ink/70">{t("display.includedInResearch")}</span>
  ) : (
- <span className="text-ink/40">NIET OPGENOMEN</span>
+ <span className="text-ink/40">{t("display.notIncluded")}</span>
  )}
  </div>
  </div>
@@ -270,18 +275,19 @@ function ValueRenderer({
 type FileMeta = { path: string; filename: string; size?: number; uploaded_at?: string };
 
 function FileRow({ file, intakeId }: { file: FileMeta | undefined; intakeId?: string }) {
+ const { t } = useTranslation("intake");
  const [busy, setBusy] = useState(false);
  if (!file?.path) return <span className="text-ink/40">—</span>;
  const open = async () => {
  if (!intakeId) {
- toast.error("Storage niet geconfigureerd");
+ toast.error(t("display.storageNotConfigured"));
  return;
  }
  setBusy(true);
  try {
  const res = await signedDownloadUrl({ intakeId, path: file.path, expiresIn: 300 });
  if (!res.success) {
- toast.error("Download mislukt");
+ toast.error(t("display.downloadFailed"));
  return;
  }
  window.open(res.data.url, "_blank");
@@ -308,7 +314,7 @@ function FileRow({ file, intakeId }: { file: FileMeta | undefined; intakeId?: st
  )}
  >
  <Download className="h-3.5 w-3.5" />
- Open
+ {t("display.open")}
  </button>
  </div>
  );

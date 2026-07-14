@@ -1,1 +1,105 @@
-{}
+{
+  "validation": {
+    "required": "Verplicht veld",
+    "invalidEmail": "Ongeldig e-mailadres",
+    "minChars": "Minstens {{count}} tekens",
+    "minItems": "Minstens {{count}} items",
+    "fillRequired": "Vul de verplichte velden in."
+  },
+  "save": {
+    "unsaved": "Niet opgeslagen",
+    "saving": "Opslaan…",
+    "saved": "Alle wijzigingen opgeslagen",
+    "failed": "Opslaan mislukt",
+    "sectionFailed": "Opslaan mislukt — je wijzigingen in deze sectie zijn niet bewaard. Probeer opnieuw."
+  },
+  "form": {
+    "brand": "Agenic",
+    "for": "Voor: {{name}}",
+    "estimatedTime": "Richttijd: {{minutes}} min",
+    "step": "Stap {{current}} / {{total}}",
+    "optional": "Optioneel",
+    "attention": "LET OP",
+    "fieldEmpty": "{{label}} is leeg",
+    "previous": "Vorige",
+    "next": "Volgende",
+    "submit": "Versturen",
+    "submitting": "Versturen…",
+    "submitFailed": "Versturen mislukt: {{error}}",
+    "changed": "Aangepast"
+  },
+  "validationPhase": {
+    "titleSuffix": " — Validatie",
+    "subtitle": "Bekijk Nestor's aanscherpingen, vink extra vragen aan, en geef akkoord.",
+    "banner": "VALIDATIE",
+    "bannerBody": "Nestor heeft jullie intake aangescherpt. Loop hem éénmalig door, vink eventuele extra vragen aan, en klik \"Akkoord — verstuur\" wanneer je klaar bent.",
+    "approveSubmit": "Akkoord — verstuur",
+    "doneTitle": "Dank — je validatie is binnen.",
+    "doneMessage": "Nestor start nu met decompositie en research."
+  },
+  "confirm": {
+    "title": "Weet je het zeker?",
+    "body": "Sommige aanbevolen velden zijn nog leeg. Wil je toch versturen?",
+    "cancel": "Annuleren",
+    "confirm": "Toch versturen"
+  },
+  "field": {
+    "examples": "Voorbeelden",
+    "unsupported": "Unsupported field type: {{type}}",
+    "noProposals": "Geen extra voorstellen.",
+    "includeInResearch": "Opnemen in research?",
+    "choose": "— Kies —",
+    "specify": "Specificeer…",
+    "itemFallback": "Item",
+    "addItem": "+ Voeg toe",
+    "onlyPdf": "Alleen PDF bestanden toegestaan. Sla je PowerPoint/Word/Excel eerst op als PDF.",
+    "tooLarge": "{{name}} is te groot (max {{max}}MB)",
+    "uploadFailed": "Upload mislukt: {{error}}",
+    "removeFailed": "Bestand verwijderen mislukt: {{error}}",
+    "maxFiles": "Maximum {{max}} bestanden.",
+    "slot": "Slot {{index}}",
+    "busy": "Bezig…",
+    "replace": "Vervang",
+    "remove": "Verwijder",
+    "uploading": "Uploaden…",
+    "choosePdf": "+ PDF kiezen",
+    "removeLong": "Verwijderen",
+    "chooseFile": "Bestand kiezen",
+    "loading": "Laden…",
+    "download": "Download"
+  },
+  "display": {
+    "missing": "— ontbreekt",
+    "lastEditedByClient": "Laatst gewijzigd door klant",
+    "other": "Anders: {{text}}",
+    "type": "Type: {{kind}}",
+    "includedInResearch": "OPGENOMEN IN RESEARCH",
+    "notIncluded": "NIET OPGENOMEN",
+    "storageNotConfigured": "Storage niet geconfigureerd",
+    "downloadFailed": "Download mislukt",
+    "open": "Open"
+  },
+  "route": {
+    "loadFailed": "Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.",
+    "noTemplate": "Geen intakesjabloon beschikbaar voor deze ruimte.",
+    "loading": "Laden…",
+    "backToOverview": "Terug naar overzicht",
+    "logout": "Uitloggen"
+  },
+  "list": {
+    "brand": "Agenic",
+    "logout": "Uitloggen",
+    "heading": "intakes",
+    "subtitleForSpace": "Jouw intakes voor {{name}}.",
+    "subtitle": "Jouw intakes.",
+    "colTitle": "Titel",
+    "colStatus": "Status",
+    "colLastEdited": "Laatst bewerkt",
+    "empty": "Nog geen intake klaargezet",
+    "emptyBody": "Zodra je intake klaarstaat, verschijnt die hier. Je krijgt bericht zodra er iets voor je is.",
+    "dash": "—",
+    "ctaFill": "Aanvraag invullen",
+    "ctaView": "Antwoorden bekijken",
+    "ctaResult": "Bekijk resultaat"
+  }
+}

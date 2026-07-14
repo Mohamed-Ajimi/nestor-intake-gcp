@@ -1,30 +1,66 @@
 {
-  "title": "Nestor Pulse — Intake",
+  "title": {
+    "nl": "Nestor Pulse — Intake",
+    "fr": "Nestor Pulse — Intake",
+    "en": "Nestor Pulse — Intake"
+  },
   "submit": {
-    "label": "Intake versturen",
-    "confirmation_title": "Bedankt — intake ontvangen",
-    "confirmation_message": "We bekijken jullie input binnen 1-2 werkdagen en nemen contact op via {{contact_email}} voor een eerste validatie. Vergeet niet de getekende overeenkomst te mailen naar nestor@agenic.be als je hem nog niet hebt geüpload."
+    "label": {
+      "nl": "Intake versturen",
+      "fr": "Envoyer l'intake",
+      "en": "Submit intake"
+    },
+    "confirmation_title": {
+      "nl": "Bedankt — intake ontvangen",
+      "fr": "Merci — intake reçu",
+      "en": "Thank you — intake received"
+    },
+    "confirmation_message": {
+      "nl": "We bekijken jullie input binnen 1-2 werkdagen en nemen contact op via {{contact_email}} voor een eerste validatie. Vergeet niet de getekende overeenkomst te mailen naar nestor@agenic.be als je hem nog niet hebt geüpload.",
+      "fr": "Nous examinons votre contribution sous 1 à 2 jours ouvrables et vous contacterons via {{contact_email}} pour une première validation. N'oubliez pas d'envoyer la convention signée par e-mail à nestor@agenic.be si vous ne l'avez pas encore téléversée.",
+      "en": "We'll review your input within 1-2 business days and reach out via {{contact_email}} for an initial validation. Don't forget to email the signed agreement to nestor@agenic.be if you haven't uploaded it yet."
+    }
   },
   "version": 1,
   "sections": [
     {
       "id": "nda",
-      "title": "Voor we starten — Service-overeenkomst",
+      "title": {
+        "nl": "Voor we starten — Service-overeenkomst",
+        "fr": "Avant de commencer — Convention de service",
+        "en": "Before we start — Service agreement"
+      },
       "fields": [
         {
           "key": "nda_download",
-          "help": "Print, vul in en teken — of teken digitaal in je eigen tool.",
+          "help": {
+            "nl": "Print, vul in en teken — of teken digitaal in je eigen tool.",
+            "fr": "Imprimez, complétez et signez — ou signez numériquement dans votre propre outil.",
+            "en": "Print, fill in and sign — or sign digitally in your own tool."
+          },
           "type": "download",
-          "label": "Stap 1 — Download de overeenkomst",
+          "label": {
+            "nl": "Stap 1 — Download de overeenkomst",
+            "fr": "Étape 1 — Téléchargez la convention",
+            "en": "Step 1 — Download the agreement"
+          },
           "storage_path": "templates/NDA/Agenic-Nestor-Overeenkomst.pdf",
           "storage_bucket": "nestor-uploads",
           "display_filename": "Agenic × Nestor — Overeenkomst.pdf"
         },
         {
           "key": "nda_signed_upload",
-          "help": "PDF of een duidelijke scan/foto. Max 25 MB.",
+          "help": {
+            "nl": "PDF of een duidelijke scan/foto. Max 25 MB.",
+            "fr": "PDF ou un scan/une photo lisible. Max 25 Mo.",
+            "en": "PDF or a clear scan/photo. Max 25 MB."
+          },
           "type": "file",
-          "label": "Stap 2 — Upload de getekende overeenkomst",
+          "label": {
+            "nl": "Stap 2 — Upload de getekende overeenkomst",
+            "fr": "Étape 2 — Téléversez la convention signée",
+            "en": "Step 2 — Upload the signed agreement"
+          },
           "accept": [
             ".pdf",
             ".jpg",
@@ -36,69 +72,129 @@
           "soft_required": true,
           "storage_bucket": "nestor-uploads",
           "storage_path_prefix": "intakes/{intake_id}/nda/",
-          "soft_required_message": "Je hebt nog geen getekende overeenkomst geüpload. Je kan toch verder met de intake — vergeet hem dan zeker te mailen naar nestor@agenic.be."
+          "soft_required_message": {
+            "nl": "Je hebt nog geen getekende overeenkomst geüpload. Je kan toch verder met de intake — vergeet hem dan zeker te mailen naar nestor@agenic.be.",
+            "fr": "Vous n'avez pas encore téléversé de convention signée. Vous pouvez tout de même poursuivre l'intake — n'oubliez pas de l'envoyer par e-mail à nestor@agenic.be.",
+            "en": "You haven't uploaded a signed agreement yet. You can still continue with the intake — just be sure to email it to nestor@agenic.be."
+          }
         }
       ],
       "soft_gate": true,
-      "description": "Voor jullie research starten, vragen we de Nestor service-overeenkomst (incl. wederzijdse vertrouwelijkheidsclausule) te ondertekenen. Download, teken, upload. Of mail het ondertekend naar nestor@agenic.be — dan kun je deze stap overslaan."
+      "description": {
+        "nl": "Voor jullie research starten, vragen we de Nestor service-overeenkomst (incl. wederzijdse vertrouwelijkheidsclausule) te ondertekenen. Download, teken, upload. Of mail het ondertekend naar nestor@agenic.be — dan kun je deze stap overslaan.",
+        "fr": "Avant de démarrer votre recherche, nous vous demandons de signer la convention de service Nestor (incl. clause de confidentialité mutuelle). Téléchargez, signez, téléversez. Ou envoyez-la signée à nestor@agenic.be — vous pouvez alors sauter cette étape.",
+        "en": "Before your research starts, we ask you to sign the Nestor service agreement (incl. mutual confidentiality clause). Download, sign, upload. Or email it signed to nestor@agenic.be — then you can skip this step."
+      }
     },
     {
       "id": "client_info",
-      "title": "Wie zijn jullie?",
+      "title": {
+        "nl": "Wie zijn jullie?",
+        "fr": "Qui êtes-vous ?",
+        "en": "Who are you?"
+      },
       "fields": [
         {
           "key": "client_name",
           "type": "text",
-          "label": "Klantnaam (organisatie)",
+          "label": {
+            "nl": "Klantnaam (organisatie)",
+            "fr": "Nom du client (organisation)",
+            "en": "Client name (organisation)"
+          },
           "required": true,
-          "placeholder": "bv. Acme NV"
+          "placeholder": {
+            "nl": "bv. Acme NV",
+            "fr": "p.ex. Acme SA",
+            "en": "e.g. Acme Inc."
+          }
         },
         {
           "key": "project_name",
           "type": "text",
-          "label": "Projectnaam",
+          "label": {
+            "nl": "Projectnaam",
+            "fr": "Nom du projet",
+            "en": "Project name"
+          },
           "required": true,
-          "placeholder": "bv. EU-expansie 2026"
+          "placeholder": {
+            "nl": "bv. EU-expansie 2026",
+            "fr": "p.ex. Expansion UE 2026",
+            "en": "e.g. EU expansion 2026"
+          }
         },
         {
           "key": "contact_name",
           "type": "text",
-          "label": "Naam primaire contactpersoon",
+          "label": {
+            "nl": "Naam primaire contactpersoon",
+            "fr": "Nom du contact principal",
+            "en": "Primary contact name"
+          },
           "required": true
         },
         {
           "key": "contact_email",
           "type": "email",
-          "label": "E-mail",
+          "label": {
+            "nl": "E-mail",
+            "fr": "E-mail",
+            "en": "Email"
+          },
           "required": true
         },
         {
           "key": "contact_phone",
           "type": "tel",
-          "label": "Telefoon",
+          "label": {
+            "nl": "Telefoon",
+            "fr": "Téléphone",
+            "en": "Phone"
+          },
           "required": false
         },
         {
           "key": "company_intro",
-          "help": "Wat jullie doen, voor wie, en waar jullie vandaag staan in jullie markt.",
+          "help": {
+            "nl": "Wat jullie doen, voor wie, en waar jullie vandaag staan in jullie markt.",
+            "fr": "Ce que vous faites, pour qui, et où vous en êtes aujourd'hui sur votre marché.",
+            "en": "What you do, for whom, and where you stand in your market today."
+          },
           "rows": 5,
           "type": "longtext",
-          "label": "Vertel in één paragraaf wie jullie zijn",
+          "label": {
+            "nl": "Vertel in één paragraaf wie jullie zijn",
+            "fr": "Décrivez en un paragraphe qui vous êtes",
+            "en": "Tell us in one paragraph who you are"
+          },
           "required": true,
           "min_length": 100
         }
       ],
-      "description": "Basisgegevens. Helpt ons om jullie context goed te kaderen."
+      "description": {
+        "nl": "Basisgegevens. Helpt ons om jullie context goed te kaderen.",
+        "fr": "Données de base. Elles nous aident à bien cadrer votre contexte.",
+        "en": "Basic details. Helps us frame your context properly."
+      }
     },
     {
       "id": "research_goal",
-      "title": "Wat moet er beslist of begrepen worden?",
+      "title": {
+        "nl": "Wat moet er beslist of begrepen worden?",
+        "fr": "Que faut-il décider ou comprendre ?",
+        "en": "What needs to be decided or understood?"
+      },
       "fields": [
         {
           "key": "decision_or_goal",
           "rows": 4,
           "type": "longtext",
-          "label": "Beslissing of doel (1-2 zinnen)",
+          "label": {
+            "nl": "Beslissing of doel (1-2 zinnen)",
+            "fr": "Décision ou objectif (1-2 phrases)",
+            "en": "Decision or goal (1-2 sentences)"
+          },
           "examples": {
             "bad": [
               "We willen onze internationale strategie optimaliseren."
@@ -110,11 +206,19 @@
           "required": true
         }
       ],
-      "description": "Zonder beslissing wordt research een leesoefening. Met beslissing wordt het een instrument."
+      "description": {
+        "nl": "Zonder beslissing wordt research een leesoefening. Met beslissing wordt het een instrument.",
+        "fr": "Sans décision, la recherche devient un exercice de lecture. Avec une décision, elle devient un instrument.",
+        "en": "Without a decision, research becomes a reading exercise. With a decision, it becomes an instrument."
+      }
     },
     {
       "id": "research_questions",
-      "title": "Onderzoeksvragen",
+      "title": {
+        "nl": "Onderzoeksvragen",
+        "fr": "Questions de recherche",
+        "en": "Research questions"
+      },
       "fields": [
         {
           "key": "questions",
@@ -125,20 +229,36 @@
                 "key": "text",
                 "rows": 2,
                 "type": "longtext",
-                "label": "Onderzoeksvraag",
+                "label": {
+                  "nl": "Onderzoeksvraag",
+                  "fr": "Question de recherche",
+                  "en": "Research question"
+                },
                 "required": true
               },
               {
                 "key": "kind",
                 "type": "select",
-                "label": "Type",
+                "label": {
+                  "nl": "Type",
+                  "fr": "Type",
+                  "en": "Type"
+                },
                 "options": [
                   {
-                    "label": "Beslissing",
+                    "label": {
+                      "nl": "Beslissing",
+                      "fr": "Décision",
+                      "en": "Decision"
+                    },
                     "value": "decision"
                   },
                   {
-                    "label": "Verkenning",
+                    "label": {
+                      "nl": "Verkenning",
+                      "fr": "Exploration",
+                      "en": "Exploration"
+                    },
                     "value": "exploration"
                   }
                 ],
@@ -147,18 +267,30 @@
             ]
           },
           "type": "list",
-          "label": "Vragen (1 tot 5)",
+          "label": {
+            "nl": "Vragen (1 tot 5)",
+            "fr": "Questions (1 à 5)",
+            "en": "Questions (1 to 5)"
+          },
           "required": true,
           "max_items": 5,
           "min_items": 1
         }
       ],
-      "description": "De concrete vragen die jullie beantwoord willen zien. Liever 2 scherpe dan 5 vage."
+      "description": {
+        "nl": "De concrete vragen die jullie beantwoord willen zien. Liever 2 scherpe dan 5 vage.",
+        "fr": "Les questions concrètes auxquelles vous voulez une réponse. Mieux vaut 2 questions précises que 5 vagues.",
+        "en": "The concrete questions you want answered. Better 2 sharp ones than 5 vague ones."
+      }
     },
     {
       "id": "extra_questions_nestor",
       "phase": "validation",
-      "title": "Extra vragen — voorstel Nestor",
+      "title": {
+        "nl": "Extra vragen — voorstel Nestor",
+        "fr": "Questions supplémentaires — proposition de Nestor",
+        "en": "Extra questions — Nestor's proposal"
+      },
       "fields": [
         {
           "key": "extra_questions_proposed",
@@ -169,65 +301,117 @@
                 "key": "text",
                 "rows": 2,
                 "type": "longtext",
-                "label": "Vraag"
+                "label": {
+                  "nl": "Vraag",
+                  "fr": "Question",
+                  "en": "Question"
+                }
               },
               {
                 "key": "rationale",
                 "rows": 2,
                 "type": "longtext",
-                "label": "Waarom relevant"
+                "label": {
+                  "nl": "Waarom relevant",
+                  "fr": "Pourquoi c'est pertinent",
+                  "en": "Why it's relevant"
+                }
               },
               {
                 "key": "approved",
                 "type": "boolean",
-                "label": "Opnemen in research?"
+                "label": {
+                  "nl": "Opnemen in research?",
+                  "fr": "Inclure dans la recherche ?",
+                  "en": "Include in research?"
+                }
               }
             ]
           },
           "type": "proposal_list",
-          "label": "Voorstellen van Nestor",
+          "label": {
+            "nl": "Voorstellen van Nestor",
+            "fr": "Propositions de Nestor",
+            "en": "Nestor's proposals"
+          },
           "required": false
         }
       ],
-      "description": "Vragen die wij voorstellen om mee te onderzoeken — naast jullie eigen vragen. Vink aan wat jullie relevant vinden, laat staan of weg wat niet."
+      "description": {
+        "nl": "Vragen die wij voorstellen om mee te onderzoeken — naast jullie eigen vragen. Vink aan wat jullie relevant vinden, laat staan of weg wat niet.",
+        "fr": "Des questions que nous proposons d'explorer — en plus des vôtres. Cochez celles que vous jugez pertinentes, laissez ou retirez le reste.",
+        "en": "Questions we propose to research — alongside your own. Tick the ones you find relevant, leave or remove the rest."
+      }
     },
     {
       "id": "audience",
-      "title": "Doelgroep / klanten",
+      "title": {
+        "nl": "Doelgroep / klanten",
+        "fr": "Public cible / clients",
+        "en": "Audience / customers"
+      },
       "fields": [
         {
           "key": "audience_description",
           "rows": 4,
           "type": "longtext",
-          "label": "Doelgroepbeschrijving",
+          "label": {
+            "nl": "Doelgroepbeschrijving",
+            "fr": "Description du public cible",
+            "en": "Audience description"
+          },
           "required": true
         }
       ],
-      "description": "Wie zijn jullie klanten? Welke segmenten, hoe groot, wie tekent de bestelbon?"
+      "description": {
+        "nl": "Wie zijn jullie klanten? Welke segmenten, hoe groot, wie tekent de bestelbon?",
+        "fr": "Qui sont vos clients ? Quels segments, quelle taille, qui signe le bon de commande ?",
+        "en": "Who are your customers? Which segments, how big, who signs the purchase order?"
+      }
     },
     {
       "id": "competitors",
-      "title": "Concurrenten / markt",
+      "title": {
+        "nl": "Concurrenten / markt",
+        "fr": "Concurrents / marché",
+        "en": "Competitors / market"
+      },
       "fields": [
         {
           "key": "competitors_list",
           "item": {
             "type": "text",
-            "placeholder": "Naam concurrent"
+            "placeholder": {
+              "nl": "Naam concurrent",
+              "fr": "Nom du concurrent",
+              "en": "Competitor name"
+            }
           },
           "type": "list",
-          "label": "Concurrenten",
+          "label": {
+            "nl": "Concurrenten",
+            "fr": "Concurrents",
+            "en": "Competitors"
+          },
           "required": false,
           "max_items": 10,
           "min_items": 0
         }
       ],
       "optional": true,
-      "description": "De 3 tot 7 spelers waar jullie het meest mee vergeleken worden. Plus eventuele nieuwkomers. Wij vullen zelf ook aan."
+      "description": {
+        "nl": "De 3 tot 7 spelers waar jullie het meest mee vergeleken worden. Plus eventuele nieuwkomers. Wij vullen zelf ook aan.",
+        "fr": "Les 3 à 7 acteurs auxquels vous êtes le plus souvent comparés. Plus d'éventuels nouveaux venus. Nous complétons également.",
+        "en": "The 3 to 7 players you're most often compared to. Plus any newcomers. We'll add our own too."
+      }
     },
     {
       "id": "stakeholders",
-      "title": "Stakeholders",
+      "title": {
+        "nl": "Stakeholders",
+        "fr": "Parties prenantes",
+        "en": "Stakeholders"
+      },
       "fields": [
         {
           "key": "stakeholders_list",
@@ -237,112 +421,220 @@
               {
                 "key": "name",
                 "type": "text",
-                "label": "Naam",
+                "label": {
+                  "nl": "Naam",
+                  "fr": "Nom",
+                  "en": "Name"
+                },
                 "required": true
               },
               {
                 "key": "role",
                 "type": "text",
-                "label": "Rol",
+                "label": {
+                  "nl": "Rol",
+                  "fr": "Rôle",
+                  "en": "Role"
+                },
                 "required": true
               },
               {
                 "key": "expectation",
                 "rows": 2,
                 "type": "longtext",
-                "label": "Wat verwacht hij/zij van deze research?",
+                "label": {
+                  "nl": "Wat verwacht hij/zij van deze research?",
+                  "fr": "Qu'attend-il/elle de cette recherche ?",
+                  "en": "What do they expect from this research?"
+                },
                 "required": false
               }
             ]
           },
           "type": "list",
-          "label": "Stakeholders",
+          "label": {
+            "nl": "Stakeholders",
+            "fr": "Parties prenantes",
+            "en": "Stakeholders"
+          },
           "required": true,
           "max_items": 10,
           "min_items": 1
         }
       ],
-      "description": "Wie leest het rapport? Wie beslist? Wie moet overtuigd worden?"
+      "description": {
+        "nl": "Wie leest het rapport? Wie beslist? Wie moet overtuigd worden?",
+        "fr": "Qui lit le rapport ? Qui décide ? Qui faut-il convaincre ?",
+        "en": "Who reads the report? Who decides? Who needs to be convinced?"
+      }
     },
     {
       "id": "sensitivities",
-      "title": "Politieke of interne gevoeligheden",
+      "title": {
+        "nl": "Politieke of interne gevoeligheden",
+        "fr": "Sensibilités politiques ou internes",
+        "en": "Political or internal sensitivities"
+      },
       "fields": [
         {
           "key": "sensitivities_text",
           "rows": 4,
           "type": "longtext",
-          "label": "Politieke / interne gevoeligheden",
+          "label": {
+            "nl": "Politieke / interne gevoeligheden",
+            "fr": "Sensibilités politiques / internes",
+            "en": "Political / internal sensitivities"
+          },
           "required": false
         }
       ],
       "optional": true,
-      "description": "Optioneel maar sterk aanbevolen. Is er een richting die intern al gefavoriseerd wordt? Een aanname die niemand durft te challengen? Vertrouwelijk."
+      "description": {
+        "nl": "Optioneel maar sterk aanbevolen. Is er een richting die intern al gefavoriseerd wordt? Een aanname die niemand durft te challengen? Vertrouwelijk.",
+        "fr": "Optionnel mais fortement recommandé. Une direction est-elle déjà favorisée en interne ? Une hypothèse que personne n'ose remettre en question ? Confidentiel.",
+        "en": "Optional but strongly recommended. Is there a direction already favoured internally? An assumption no one dares to challenge? Confidential."
+      }
     },
     {
       "id": "scope_constraints",
-      "title": "Scope & constraints",
+      "title": {
+        "nl": "Scope & constraints",
+        "fr": "Périmètre & contraintes",
+        "en": "Scope & constraints"
+      },
       "fields": [
         {
           "key": "deadline",
           "type": "date",
-          "label": "Deadline gewenste oplevering",
+          "label": {
+            "nl": "Deadline gewenste oplevering",
+            "fr": "Date limite de livraison souhaitée",
+            "en": "Desired delivery deadline"
+          },
           "required": true
         },
         {
           "key": "geo_scope",
           "type": "text",
-          "label": "Geografische scope",
+          "label": {
+            "nl": "Geografische scope",
+            "fr": "Portée géographique",
+            "en": "Geographic scope"
+          },
           "required": false,
-          "placeholder": "bv. België, BeNeLux, EU, globaal"
+          "placeholder": {
+            "nl": "bv. België, BeNeLux, EU, globaal",
+            "fr": "p.ex. Belgique, Benelux, UE, mondial",
+            "en": "e.g. Belgium, Benelux, EU, global"
+          }
         },
         {
           "key": "time_horizon",
           "type": "text",
-          "label": "Tijdshorizon",
+          "label": {
+            "nl": "Tijdshorizon",
+            "fr": "Horizon temporel",
+            "en": "Time horizon"
+          },
           "required": false,
-          "placeholder": "bv. vandaag, 12m, 24m"
+          "placeholder": {
+            "nl": "bv. vandaag, 12m, 24m",
+            "fr": "p.ex. aujourd'hui, 12 mois, 24 mois",
+            "en": "e.g. today, 12m, 24m"
+          }
         },
         {
           "key": "out_of_scope",
           "rows": 3,
           "type": "longtext",
-          "label": "Wat hoeft niet (out of scope)?",
+          "label": {
+            "nl": "Wat hoeft niet (out of scope)?",
+            "fr": "Qu'est-ce qui est hors périmètre ?",
+            "en": "What's out of scope?"
+          },
           "required": false
         }
       ],
-      "description": "Deadline is verplicht — scope-velden helpen ons mikken."
+      "description": {
+        "nl": "Deadline is verplicht — scope-velden helpen ons mikken.",
+        "fr": "La date limite est obligatoire — les champs de périmètre nous aident à viser juste.",
+        "en": "Deadline is required — scope fields help us aim."
+      }
     },
     {
       "id": "output_format",
-      "title": "Gewenste outputvorm & omvang",
+      "title": {
+        "nl": "Gewenste outputvorm & omvang",
+        "fr": "Format & volume de livrable souhaités",
+        "en": "Desired output form & size"
+      },
       "fields": [
         {
           "key": "output_size",
-          "help": "Dikker ≠ beter. Een scherp rapport van 10 pagina's dwingt ons tot keuzes; een rapport van 40 pagina's schuift die keuzes naar jullie door.",
+          "help": {
+            "nl": "Dikker ≠ beter. Een scherp rapport van 10 pagina's dwingt ons tot keuzes; een rapport van 40 pagina's schuift die keuzes naar jullie door.",
+            "fr": "Plus épais ≠ meilleur. Un rapport percutant de 10 pages nous oblige à faire des choix ; un rapport de 40 pages vous renvoie ces choix.",
+            "en": "Thicker ≠ better. A sharp 10-page report forces us to make choices; a 40-page report pushes those choices back onto you."
+          },
           "type": "radio",
-          "label": "Gewenste omvang van het rapport",
+          "label": {
+            "nl": "Gewenste omvang van het rapport",
+            "fr": "Volume souhaité du rapport",
+            "en": "Desired report size"
+          },
           "options": [
             {
-              "label": "Compact — ca. 2-5 pagina's",
+              "label": {
+                "nl": "Compact — ca. 2-5 pagina's",
+                "fr": "Compact — env. 2-5 pages",
+                "en": "Compact — approx. 2-5 pages"
+              },
               "value": "compact",
-              "description": "Alleen de beslissing, de opties, de trade-offs. Bronnen in appendix. Aanbevolen voor één heldere beslisvraag."
+              "description": {
+                "nl": "Alleen de beslissing, de opties, de trade-offs. Bronnen in appendix. Aanbevolen voor één heldere beslisvraag.",
+                "fr": "Uniquement la décision, les options, les arbitrages. Sources en annexe. Recommandé pour une seule question de décision claire.",
+                "en": "Just the decision, the options, the trade-offs. Sources in the appendix. Recommended for a single clear decision question."
+              }
             },
             {
-              "label": "Standaard — ca. 5-10 pagina's",
+              "label": {
+                "nl": "Standaard — ca. 5-10 pagina's",
+                "fr": "Standard — env. 5-10 pages",
+                "en": "Standard — approx. 5-10 pages"
+              },
               "value": "standard",
-              "description": "Beslissing + onderbouwing per optie + context. Aanbevolen voor 2-3 samenhangende onderzoeksvragen."
+              "description": {
+                "nl": "Beslissing + onderbouwing per optie + context. Aanbevolen voor 2-3 samenhangende onderzoeksvragen.",
+                "fr": "Décision + justification par option + contexte. Recommandé pour 2-3 questions de recherche liées.",
+                "en": "Decision + rationale per option + context. Recommended for 2-3 related research questions."
+              }
             },
             {
-              "label": "Uitgebreid — ca. 10-20 pagina's",
+              "label": {
+                "nl": "Uitgebreid — ca. 10-20 pagina's",
+                "fr": "Étendu — env. 10-20 pages",
+                "en": "Extended — approx. 10-20 pages"
+              },
               "value": "extended",
-              "description": "Volledige deep-dive per onderzoeksvraag. Alleen kiezen als meerdere stakeholders onafhankelijk willen kunnen lezen."
+              "description": {
+                "nl": "Volledige deep-dive per onderzoeksvraag. Alleen kiezen als meerdere stakeholders onafhankelijk willen kunnen lezen.",
+                "fr": "Analyse approfondie complète par question de recherche. À choisir uniquement si plusieurs parties prenantes veulent pouvoir lire indépendamment.",
+                "en": "Full deep-dive per research question. Only choose this if multiple stakeholders want to read independently."
+              }
             },
             {
-              "label": "Anders",
+              "label": {
+                "nl": "Anders",
+                "fr": "Autre",
+                "en": "Other"
+              },
               "value": "other",
               "allow_text": true,
-              "text_placeholder": "bv. max. 15 slides voor ExCo"
+              "text_placeholder": {
+                "nl": "bv. max. 15 slides voor ExCo",
+                "fr": "p.ex. max. 15 diapos pour le ComEx",
+                "en": "e.g. max. 15 slides for ExCo"
+              }
             }
           ],
           "required": true
@@ -350,18 +642,34 @@
         {
           "key": "output_form",
           "type": "radio",
-          "label": "Vorm van de oplevering",
+          "label": {
+            "nl": "Vorm van de oplevering",
+            "fr": "Forme du livrable",
+            "en": "Delivery form"
+          },
           "options": [
             {
-              "label": "Notion-pagina (standaard, best leesbaar, traceerbaar)",
+              "label": {
+                "nl": "Notion-pagina (standaard, best leesbaar, traceerbaar)",
+                "fr": "Page Notion (standard, la plus lisible, traçable)",
+                "en": "Notion page (standard, most readable, traceable)"
+              },
               "value": "notion"
             },
             {
-              "label": "PDF-rapport",
+              "label": {
+                "nl": "PDF-rapport",
+                "fr": "Rapport PDF",
+                "en": "PDF report"
+              },
               "value": "pdf"
             },
             {
-              "label": "Anders",
+              "label": {
+                "nl": "Anders",
+                "fr": "Autre",
+                "en": "Other"
+              },
               "value": "other",
               "allow_text": true
             }
@@ -369,32 +677,60 @@
           "required": true
         }
       ],
-      "description": "Standaard leveren we een beslisstructuur + 60-min sessie. Twee keuzes die we van jullie nodig hebben."
+      "description": {
+        "nl": "Standaard leveren we een beslisstructuur + 60-min sessie. Twee keuzes die we van jullie nodig hebben.",
+        "fr": "Par défaut, nous livrons une structure de décision + une session de 60 min. Deux choix dont nous avons besoin de votre part.",
+        "en": "By default we deliver a decision structure + 60-min session. Two choices we need from you."
+      }
     },
     {
       "id": "success_metrics",
-      "title": "Hoe meten jullie succes?",
+      "title": {
+        "nl": "Hoe meten jullie succes?",
+        "fr": "Comment mesurez-vous le succès ?",
+        "en": "How do you measure success?"
+      },
       "fields": [
         {
           "key": "success_definition",
           "rows": 3,
           "type": "longtext",
-          "label": "Hoe ziet succes eruit?",
+          "label": {
+            "nl": "Hoe ziet succes eruit?",
+            "fr": "À quoi ressemble le succès ?",
+            "en": "What does success look like?"
+          },
           "required": false
         }
       ],
       "optional": true,
-      "description": "Aan welk resultaat zien jullie achteraf dat deze research zijn werk heeft gedaan?"
+      "description": {
+        "nl": "Aan welk resultaat zien jullie achteraf dat deze research zijn werk heeft gedaan?",
+        "fr": "À quel résultat verrez-vous, a posteriori, que cette recherche a fait son travail ?",
+        "en": "By what outcome will you know, afterwards, that this research did its job?"
+      }
     },
     {
       "id": "materials",
-      "title": "Bestaand materiaal",
+      "title": {
+        "nl": "Bestaand materiaal",
+        "fr": "Matériel existant",
+        "en": "Existing material"
+      },
       "fields": [
         {
           "key": "materials_files",
-          "help": "Tot 5 PDF-bestanden, max 50 MB per stuk. Word/PowerPoint/Excel? Sla eerst op als PDF.",
+          "help": {
+            "nl": "Tot 5 PDF-bestanden, max 50 MB per stuk. Word/PowerPoint/Excel? Sla eerst op als PDF.",
+            "fr": "Jusqu'à 5 fichiers PDF, max 50 Mo chacun. Word/PowerPoint/Excel ? Enregistrez-les d'abord en PDF.",
+            "en": "Up to 5 PDF files, max 50 MB each. Word/PowerPoint/Excel? Save as PDF first."
+          },
           "type": "files",
-          "label": "Upload bestaand materiaal",
+          "label": {
+            "nl": "Upload bestaand materiaal",
+            "fr": "Téléversez le matériel existant",
+            "en": "Upload existing material"
+          },
           "accept": [
             ".pdf"
           ],
@@ -408,56 +744,112 @@
           "key": "materials_note",
           "rows": 3,
           "type": "longtext",
-          "label": "Toelichting bij de bestanden",
+          "label": {
+            "nl": "Toelichting bij de bestanden",
+            "fr": "Précisions sur les fichiers",
+            "en": "Notes on the files"
+          },
           "required": false,
-          "placeholder": "bv. 'STRATEGIE-2026 is concept, nog niet final' — alles wat helpt om de docs goed te lezen"
+          "placeholder": {
+            "nl": "bv. 'STRATEGIE-2026 is concept, nog niet final' — alles wat helpt om de docs goed te lezen",
+            "fr": "p.ex. « STRATEGIE-2026 est un brouillon, pas encore finalisé » — tout ce qui aide à bien lire les docs",
+            "en": "e.g. 'STRATEGY-2026 is a draft, not yet final' — anything that helps read the docs properly"
+          }
         }
       ],
       "optional": true,
-      "description": "Strategie-docs, klantinterviews, marktrapporten, persona's, pitch-decks, eerdere onderzoeken. Hoe meer relevant materiaal, hoe scherper onze research. Geef bestanden duidelijke namen (bv. 'STRATEGIE-2026.pdf'). Alleen PDF — converteer Word/PowerPoint/Excel zelf naar PDF voor je uploadt."
+      "description": {
+        "nl": "Strategie-docs, klantinterviews, marktrapporten, persona's, pitch-decks, eerdere onderzoeken. Hoe meer relevant materiaal, hoe scherper onze research. Geef bestanden duidelijke namen (bv. 'STRATEGIE-2026.pdf'). Alleen PDF — converteer Word/PowerPoint/Excel zelf naar PDF voor je uploadt.",
+        "fr": "Documents stratégiques, entretiens clients, rapports de marché, personas, pitch decks, études antérieures. Plus il y a de matériel pertinent, plus notre recherche est précise. Donnez des noms clairs aux fichiers (p.ex. « STRATEGIE-2026.pdf »). PDF uniquement — convertissez vous-même Word/PowerPoint/Excel en PDF avant de téléverser.",
+        "en": "Strategy docs, customer interviews, market reports, personas, pitch decks, prior research. The more relevant material, the sharper our research. Give files clear names (e.g. 'STRATEGY-2026.pdf'). PDF only — convert Word/PowerPoint/Excel to PDF yourself before uploading."
+      }
     },
     {
       "id": "strategic_perspective",
-      "title": "Strategische analyse (intern)",
+      "title": {
+        "nl": "Strategische analyse (intern)",
+        "fr": "Analyse stratégique (interne)",
+        "en": "Strategic analysis (internal)"
+      },
       "fields": [
         {
           "key": "bias_radar",
-          "help": "Voorkeursrichting in de intake + opposition-vraag",
+          "help": {
+            "nl": "Voorkeursrichting in de intake + opposition-vraag",
+            "fr": "Direction privilégiée dans l'intake + question d'opposition",
+            "en": "Preferred direction in the intake + opposition question"
+          },
           "rows": 5,
           "type": "longtext",
-          "label": "Bias-radar",
+          "label": {
+            "nl": "Bias-radar",
+            "fr": "Radar de biais",
+            "en": "Bias radar"
+          },
           "required": false
         },
         {
           "key": "blind_spots_upstream",
-          "help": "Oorzaken/inputs die de uitkomst bepalen maar niet bevraagd worden",
+          "help": {
+            "nl": "Oorzaken/inputs die de uitkomst bepalen maar niet bevraagd worden",
+            "fr": "Causes/intrants qui déterminent le résultat mais ne sont pas interrogés",
+            "en": "Causes/inputs that determine the outcome but are not questioned"
+          },
           "rows": 4,
           "type": "longtext",
-          "label": "Blinde vlekken — Upstream",
+          "label": {
+            "nl": "Blinde vlekken — Upstream",
+            "fr": "Angles morts — En amont",
+            "en": "Blind spots — Upstream"
+          },
           "required": false
         },
         {
           "key": "blind_spots_downstream",
-          "help": "Tweede-orde-effecten, onbedoelde consequenties",
+          "help": {
+            "nl": "Tweede-orde-effecten, onbedoelde consequenties",
+            "fr": "Effets de second ordre, conséquences involontaires",
+            "en": "Second-order effects, unintended consequences"
+          },
           "rows": 4,
           "type": "longtext",
-          "label": "Blinde vlekken — Downstream",
+          "label": {
+            "nl": "Blinde vlekken — Downstream",
+            "fr": "Angles morts — En aval",
+            "en": "Blind spots — Downstream"
+          },
           "required": false
         },
         {
           "key": "blind_spots_perspectief",
-          "help": "Stakeholders wiens blik niet in de vraag zit",
+          "help": {
+            "nl": "Stakeholders wiens blik niet in de vraag zit",
+            "fr": "Parties prenantes dont le regard n'est pas dans la question",
+            "en": "Stakeholders whose perspective isn't in the question"
+          },
           "rows": 4,
           "type": "longtext",
-          "label": "Blinde vlekken — Perspectief",
+          "label": {
+            "nl": "Blinde vlekken — Perspectief",
+            "fr": "Angles morts — Perspective",
+            "en": "Blind spots — Perspective"
+          },
           "required": false
         }
       ],
       "admin_only": true,
-      "description": "Bias-radar en blinde vlekken — door Nestor geïdentificeerd. Alleen zichtbaar voor admin, niet voor de klant en niet in de handoff-PDF. Gebruik om interne context te bewaren of aan te scherpen."
+      "description": {
+        "nl": "Bias-radar en blinde vlekken — door Nestor geïdentificeerd. Alleen zichtbaar voor admin, niet voor de klant en niet in de handoff-PDF. Gebruik om interne context te bewaren of aan te scherpen.",
+        "fr": "Radar de biais et angles morts — identifiés par Nestor. Visible uniquement par l'admin, pas par le client ni dans le PDF de transfert. À utiliser pour conserver ou affiner le contexte interne.",
+        "en": "Bias radar and blind spots — identified by Nestor. Visible only to admin, not to the client and not in the handoff PDF. Use it to preserve or sharpen internal context."
+      }
     }
   ],
-  "subtitle": "Welkom. Vul dit op jullie tempo. Richttijd 30 minuten. Hoe scherper jullie input, hoe scherper onze research.",
+  "subtitle": {
+    "nl": "Welkom. Vul dit op jullie tempo. Richttijd 30 minuten. Hoe scherper jullie input, hoe scherper onze research.",
+    "fr": "Bienvenue. Complétez à votre rythme. Temps indicatif 30 minutes. Plus votre contribution est précise, plus notre recherche l'est.",
+    "en": "Welcome. Fill this in at your own pace. Estimated time 30 minutes. The sharper your input, the sharper our research."
+  },
   "product_slug": "pulse",
   "save_as_you_go": true,
   "schema_version": "1.0",

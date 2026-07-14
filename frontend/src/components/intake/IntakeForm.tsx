@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { IntakeField, IntakePayload, IntakeSection } from "@/lib/intake-types";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import type {
+  IntakeField,
+  IntakePayload,
+  IntakeSection,
+  LocalizedIntakeSchema,
+} from "@/lib/intake-types";
+import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { FieldRenderer } from "./FieldRenderer";
 import { toast } from "sonner";
 import { saveAnswers, type AnswerInput } from "@/lib/api/answers";
@@ -20,26 +29,27 @@ function toAnswerInput(field_key: string, value: unknown): AnswerInput {
   return { field_key, value: null, value_json: value };
 }
 
-function validateField(field: IntakeField, value: any): string | null {
+// `t` is threaded in from the component (this pure helper cannot call hooks).
+function validateField(field: IntakeField, value: any, t: TFunction): string | null {
  const isEmpty =
  value === undefined ||
  value === null ||
  value === "" ||
  (Array.isArray(value) && value.length === 0);
 
- if (field.required && isEmpty) return "Verplicht veld";
+ if (field.required && isEmpty) return t("validation.required");
  if (isEmpty) return null;
 
  if (field.type === "email" && typeof value === "string") {
- if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return "Ongeldig e-mailadres";
+ if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return t("validation.invalidEmail");
  }
  if (field.type === "longtext" && field.validation?.min_length) {
  if (typeof value === "string" && value.length < field.validation.min_length)
- return `Minstens ${field.validation.min_length} tekens`;
+ return t("validation.minChars", { count: field.validation.min_length });
  }
  if (field.type === "list" && Array.isArray(value)) {
  if (field.min_items && value.length < field.min_items)
- return `Minstens ${field.min_items} items`;
+ return t("validation.minItems", { count: field.min_items });
  }
  return null;
 }
@@ -74,7 +84,18 @@ export function IntakeForm({
  payload: IntakePayload;
  token: string;
 }) {
- const schema = payload.template.schema;
+ const { t, i18n } = useTranslation("intake");
+ // The backend serves the ONE canonical schema in multi-locale (LocalizedString)
+ // shape; flatten it to the active locale at load, re-resolving when the language
+ // changes so the form re-renders in the new locale (nl fallback, D-05).
+ const schema = useMemo(
+ () =>
+ localizeSchema(
+ payload.template.schema as unknown as LocalizedIntakeSchema,
+ i18n.language,
+ ),
+ [payload.template.schema, i18n.language],
+ );
  const editable = payload.editable;
  const intakeId = payload.intake.id;
 
@@ -192,9 +213,7 @@ export function IntakeForm({
  const res = await saveAnswers(intakeId, batch);
  if (!res.success) {
  setSaveStatus("error");
- toast.error(
- "Opslaan mislukt — je wijzigingen in deze sectie zijn niet bewaard. Probeer opnieuw.",
- );
+ toast.error(t("save.sectionFailed"));
  return false;
  }
  setDirtyFields((prev) => {
@@ -204,7 +223,7 @@ export function IntakeForm({
  });
  setSaveStatus("saved");
  return true;
- }, [editable, section, dirtyFields, answers, intakeId]);
+ }, [editable, section, dirtyFields, answers, intakeId, t]);
 
  // clear localStorage when fully submitted
  useEffect(() => {
@@ -229,7 +248,7 @@ export function IntakeForm({
  const validateCurrent = (): boolean => {
  const newErrors: Record<string, string> = {};
  for (const f of section.fields) {
- const err = validateField(f, answers[f.key]);
+ const err = validateField(f, answers[f.key], t);
  if (err) newErrors[f.key] = err;
  }
  setErrors(newErrors);
@@ -251,7 +270,7 @@ export function IntakeForm({
  const allErrors: Record<string, string> = {};
  sections.forEach((s, idx) => {
  for (const f of s.fields) {
- const err = validateField(f, answers[f.key]);
+ const err = validateField(f, answers[f.key], t);
  if (err) {
  allErrors[f.key] = err;
  if (firstBadIdx === -1) firstBadIdx = idx;
@@ -261,7 +280,7 @@ export function IntakeForm({
  if (firstBadIdx !== -1) {
  setErrors(allErrors);
  setCurrentStep(firstBadIdx);
- toast.error("Vul de verplichte velden in.");
+ toast.error(t("validation.fillRequired"));
  return;
  }
  // soft check across all sections
@@ -287,7 +306,7 @@ export function IntakeForm({
  const res = await submitIntake(intakeId);
  setSubmitting(false);
  if (!res.success) {
- toast.error("Versturen mislukt: " + res.error);
+ toast.error(t("form.submitFailed", { error: res.error }));
  return;
  }
  setSubmitted(true);
@@ -299,10 +318,10 @@ export function IntakeForm({
  if (submitted) {
  const isValidation = payload.phase === "validation";
  const title = isValidation
- ? "Dank — je validatie is binnen."
+ ? t("validationPhase.doneTitle")
  : schema.submit.confirmation_title;
  const msg = isValidation
- ? "Nestor start nu met decompositie en research."
+ ? t("validationPhase.doneMessage")
  : (schema.submit.confirmation_message || "").replace(
  /\{\{contact_email\}\}/g,
  String(answers.contact_email ?? ""),
@@ -324,10 +343,10 @@ export function IntakeForm({
 
  const isValidation = payload.phase === "validation";
  const displayTitle = isValidation
- ? schema.title.replace(/\s*[—-]\s*Intake\s*$/i, "") + " — Validatie"
+ ? schema.title.replace(/\s*[—-]\s*Intake\s*$/i, "") + t("validationPhase.titleSuffix")
  : schema.title;
  const displaySubtitle = isValidation
- ? "Bekijk Nestor's aanscherpingen, vink extra vragen aan, en geef akkoord."
+ ? t("validationPhase.subtitle")
  : schema.subtitle;
 
  return (
@@ -335,9 +354,15 @@ export function IntakeForm({
  <div className="mx-auto max-w-6xl px-6 py-12 md:py-16">
         {/* Header */}
         <header className="mb-10">
-          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">
-            Agenic
-          </p>
+          <div className="flex items-start justify-between gap-4">
+            <p className="font-mono text-xs uppercase tracking-widest text-ink/60">
+              {t("form.brand")}
+            </p>
+            {/* Client form language switcher (D-08); persists post-login. */}
+            <div className="w-40 shrink-0">
+              <LanguageSwitcher persist />
+            </div>
+          </div>
           <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight md:text-4xl">
             {displayTitle}
           </h1>
@@ -345,15 +370,16 @@ export function IntakeForm({
             <p className="mt-3 max-w-2xl text-ink/60">{displaySubtitle}</p>
           )}
           <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 font-mono text-xs uppercase tracking-wider text-ink/60">
-            <span>Voor: {payload.client.name}</span>
-            {schema.estimated_minutes && !isValidation && <span>Richttijd: {schema.estimated_minutes} min</span>}
+            <span>{t("form.for", { name: payload.client.name })}</span>
+            {schema.estimated_minutes && !isValidation && (
+              <span>{t("form.estimatedTime", { minutes: schema.estimated_minutes })}</span>
+            )}
           </div>
  {isValidation && (
  <div className="mt-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4 text-ink">
- <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">VALIDATIE</div>
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">{t("validationPhase.banner")}</div>
  <p className="font-sans text-sm text-ink">
- Nestor heeft jullie intake aangescherpt. Loop hem éénmalig door,
- vink eventuele extra vragen aan, en klik "Akkoord — verstuur" wanneer je klaar bent.
+ {t("validationPhase.bannerBody")}
  </p>
  </div>
  )}
@@ -385,7 +411,7 @@ export function IntakeForm({
      <span className="break-words">{s.title}</span>
      {changed && (
        <span className="mt-0.5 inline-block self-start border border-agenic-yellow bg-paperLight px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink">
-         Aangepast
+         {t("form.changed")}
        </span>
      )}
    </span>
@@ -399,13 +425,13 @@ export function IntakeForm({
  <div>
  <div className="mb-4 flex items-center justify-between">
  <p className="text-sm text-ink/60">
- Stap {currentStep + 1} / {sections.length}
+ {t("form.step", { current: currentStep + 1, total: sections.length })}
  </p>
  <p className="text-xs text-ink/40 font-mono">
- {saveStatus === "dirty" && "Niet opgeslagen"}
- {saveStatus === "saving" && "Opslaan…"}
- {saveStatus === "saved" && "Alle wijzigingen opgeslagen"}
- {saveStatus === "error" && <span className="text-red-600">Opslaan mislukt</span>}
+ {saveStatus === "dirty" && t("save.unsaved")}
+ {saveStatus === "saving" && t("save.saving")}
+ {saveStatus === "saved" && t("save.saved")}
+ {saveStatus === "error" && <span className="text-red-600">{t("save.failed")}</span>}
  </p>
  </div>
 
@@ -415,7 +441,7 @@ export function IntakeForm({
   {section.title}
   {section.optional && (
   <span className="ml-2 font-mono text-xs uppercase tracking-wider text-ink/40">
-  Optioneel
+  {t("form.optional")}
   </span>
   )}
   </h2>
@@ -428,10 +454,10 @@ export function IntakeForm({
 
  {softWarning.length > 0 && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
- <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">LET OP</div>
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">{t("form.attention")}</div>
  <ul className="list-disc space-y-1 pl-5 text-ink font-sans">
  {softWarning.map((f) => (
- <li key={f.key}>{f.soft_required_message ?? `${f.label} is leeg`}</li>
+ <li key={f.key}>{f.soft_required_message ?? t("form.fieldEmpty", { label: f.label })}</li>
  ))}
  </ul>
  </div>
@@ -473,7 +499,7 @@ export function IntakeForm({
   disabled={currentStep === 0}
   className="btn-secondary disabled:opacity-40"
   >
-  Vorige
+  {t("form.previous")}
   </button>
 
   {isLast ? (
@@ -483,7 +509,11 @@ export function IntakeForm({
   disabled={submitting || (!editable && !isValidation)}
   className="btn-primary"
   >
-  {submitting ? "Versturen…" : isValidation ? "Akkoord — verstuur" : schema.submit.label}
+  {submitting
+  ? t("form.submitting")
+  : isValidation
+  ? t("validationPhase.approveSubmit")
+  : schema.submit.label}
   </button>
   ) : (
   <button
@@ -491,7 +521,7 @@ export function IntakeForm({
   onClick={handleNext}
   className="btn-primary"
   >
-  Volgende
+  {t("form.next")}
   </button>
   )}
   </div>
@@ -502,16 +532,16 @@ export function IntakeForm({
   {confirmDialog && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
   <div className="max-w-md border border-ink bg-paper p-6">
-  <h3 className="font-serif text-xl lowercase">Weet je het zeker?</h3>
+  <h3 className="font-serif text-xl lowercase">{t("confirm.title")}</h3>
   <p className="mt-2 text-sm text-ink/60">
-  Sommige aanbevolen velden zijn nog leeg. Wil je toch versturen?
+  {t("confirm.body")}
   </p>
   <div className="mt-6 flex justify-end gap-2">
   <button onClick={() => setConfirmDialog(false)} className="btn-secondary">
-  Annuleren
+  {t("confirm.cancel")}
   </button>
   <button onClick={doSubmit} className="btn-primary">
-  Toch versturen
+  {t("confirm.confirm")}
   </button>
   </div>
   </div>
