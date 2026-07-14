@@ -205,7 +205,11 @@ export function NestorBriefingPDF({
   const oos = asString(answers.out_of_scope);
   const outSize = asString(answers.output_size);
   const outForm = asString(answers.output_form);
+  // FieldRenderer.uploadOne writes { path, filename, size, uploaded_at } — `filename`
+  // is the human name; NEVER print the raw GCS object path (leaks internal key
+  // structure into a client-adjacent document, WR-08). `name` kept for legacy values.
   const materials = (answers.materials_files as Array<{
+    filename?: string;
     name?: string;
     size?: number;
     path?: string;
@@ -318,7 +322,7 @@ export function NestorBriefingPDF({
         ) : (
           materials.map((m, i) => (
             <View key={i} style={styles.tableRow}>
-              <Text style={styles.tableCell}>{m.name || m.path || labels.fileFallback}</Text>
+              <Text style={styles.tableCell}>{m.filename || m.name || labels.fileFallback}</Text>
               <Text style={styles.tableCell}>
                 {m.size ? `${(m.size / 1024).toFixed(0)} KB` : ""}
               </Text>
