@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ProductShell } from "@/components/admin/ProductShell";
 import { ADMIN_NAV } from "@/components/admin/adminNav";
@@ -38,6 +39,7 @@ export const Route = createFileRoute("/admin/users")({
 });
 
 function UsersPage() {
+  const { t } = useTranslation("admin");
   const { session } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -96,9 +98,9 @@ function UsersPage() {
 
   function guardrailFor(u: AdminUser): string | null {
     const isSelf = Boolean(session?.email && u.email && session.email === u.email);
-    if (isSelf) return "Je kunt je eigen account niet deactiveren.";
+    if (isSelf) return t("users.cannotDeactivateSelf");
     if (u.role === "superadmin" && u.status === "active" && activeSuperadminCount <= 1) {
-      return "De laatste superadmin kan niet gedeactiveerd worden.";
+      return t("users.cannotDeactivateLastSuperadmin");
     }
     return null;
   }
@@ -111,7 +113,7 @@ function UsersPage() {
       toast.error(res.error);
       return;
     }
-    toast.success("Opnieuw geactiveerd");
+    toast.success(t("users.reactivated"));
     void load();
   }
 
@@ -128,10 +130,10 @@ function UsersPage() {
     // WR-04 / D-16: HTTP 200 + `{ success: false }` on a Resend failure — check the
     // body-level flag, not just the transport-level `res.success`.
     if (!res.data.success) {
-      toast.error("Versturen mislukt — de uitnodigingsmail is niet verstuurd. Probeer opnieuw.");
+      toast.error(t("users.mailNotSent"));
       return;
     }
-    toast.success("Uitnodigingsmail verstuurd");
+    toast.success(t("users.mailSent"));
   }
 
   // Resolve a membership id from the (freshly reloaded) user list so the InviteUserDialog
@@ -155,7 +157,7 @@ function UsersPage() {
       toast.error(res.error);
       return;
     }
-    toast.success("Gebruiker gedeactiveerd");
+    toast.success(t("users.deactivated"));
     void load();
   }
 
@@ -164,13 +166,11 @@ function UsersPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-            gebruikers
+            {t("users.title")}
           </h1>
-          <p className="mt-1 font-sans text-sm italic text-ink/60">
-            Gebruikers per space — uitnodigen, deactiveren en heractiveren.
-          </p>
+          <p className="mt-1 font-sans text-sm italic text-ink/60">{t("users.subtitle")}</p>
         </div>
-        <Button onClick={() => setInviteOpen(true)}>+ Gebruiker uitnodigen</Button>
+        <Button onClick={() => setInviteOpen(true)}>{t("users.inviteUser")}</Button>
       </div>
 
       <div className="mt-6">
@@ -184,18 +184,18 @@ function UsersPage() {
           <div className="py-12 text-center text-sm text-red-600">{error}</div>
         ) : users.length === 0 ? (
           <div className="mt-6 border border-ink/20 bg-paper2/40 p-12 text-center">
-            <p className="mb-4 font-mono text-sm text-ink/60">⌀ Nog geen gebruikers in deze space</p>
-            <p className="mb-6 text-sm text-ink/50">Nodig de eerste gebruiker uit om te beginnen.</p>
-            <Button onClick={() => setInviteOpen(true)}>+ Gebruiker uitnodigen</Button>
+            <p className="mb-4 font-mono text-sm text-ink/60">{t("users.emptyTitle")}</p>
+            <p className="mb-6 text-sm text-ink/50">{t("users.emptyBody")}</p>
+            <Button onClick={() => setInviteOpen(true)}>{t("users.inviteUser")}</Button>
           </div>
         ) : (
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
-                <th className="px-4 py-2 text-left">E-mail</th>
-                <th className="px-4 py-2 text-left">Space</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-right">Acties</th>
+                <th className="px-4 py-2 text-left">{t("users.colEmail")}</th>
+                <th className="px-4 py-2 text-left">{t("users.colSpace")}</th>
+                <th className="px-4 py-2 text-left">{t("users.colStatus")}</th>
+                <th className="px-4 py-2 text-right">{t("users.colActions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -212,12 +212,12 @@ function UsersPage() {
                       {active ? (
                         <span className="badge-outline">
                           <span className="mark-green" />
-                          ACTIEF
+                          {t("users.statusActive")}
                         </span>
                       ) : (
                         <span className="badge-dashed text-ink/50">
                           <span className="mark-outline" />
-                          GEDEACTIVEERD
+                          {t("users.statusDeactivated")}
                         </span>
                       )}
                     </td>
@@ -231,7 +231,7 @@ function UsersPage() {
                               disabled={busyId === u.id || !u.email}
                               onClick={() => handleResendInvite(u)}
                             >
-                              Herstuur uitnodiging
+                              {t("users.resendInvite")}
                             </Button>
                             <Button
                               variant="ghost"
@@ -239,7 +239,7 @@ function UsersPage() {
                               disabled={Boolean(guardrail) || busyId === u.id}
                               onClick={() => setConfirmUser(u)}
                             >
-                              Deactiveren
+                              {t("users.deactivate")}
                             </Button>
                           </div>
                           {guardrail && (
@@ -255,7 +255,7 @@ function UsersPage() {
                           disabled={busyId === u.id}
                           onClick={() => handleReactivate(u)}
                         >
-                          Heractiveren
+                          {t("users.reactivate")}
                         </Button>
                       )}
                     </td>
@@ -281,19 +281,16 @@ function UsersPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Gebruiker deactiveren?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Deze gebruiker verliest direct toegang (sessie wordt ingetrokken). Je kunt de
-              gebruiker later heractiveren.
-            </AlertDialogDescription>
+            <AlertDialogTitle>{t("users.confirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("users.confirmBody")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuleren</AlertDialogCancel>
+            <AlertDialogCancel>{t("users.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDeactivate}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Deactiveren
+              {t("users.deactivate")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

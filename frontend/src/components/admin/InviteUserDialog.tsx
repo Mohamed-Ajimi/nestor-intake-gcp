@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Check, Copy } from "lucide-react";
 import { z } from "zod";
@@ -28,11 +29,6 @@ import { inviteUser, sendInviteMail, type Space } from "@/lib/api/admin";
 // mail" action (D-10) — the copy-link fallback stays (D-04); the link is never persisted
 // client-side (T-5-19).
 
-const inviteSchema = z.object({
-  email: z.string().email("Ongeldig e-mailadres"),
-  spaceId: z.string().min(1, "Kies een space"),
-});
-
 export function InviteUserDialog({
   open,
   onOpenChange,
@@ -48,6 +44,11 @@ export function InviteUserDialog({
   // Backed by the parent's freshly-reloaded user list; returns null until the row is visible.
   resolveMembershipId?: (email: string, spaceId: string) => string | null;
 }) {
+  const { t } = useTranslation("admin");
+  const inviteSchema = z.object({
+    email: z.string().email(t("invite.invalidEmail")),
+    spaceId: z.string().min(1, t("invite.chooseSpace")),
+  });
   const [email, setEmail] = useState("");
   const [spaceId, setSpaceId] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -79,7 +80,7 @@ export function InviteUserDialog({
 
     const parsed = inviteSchema.safeParse({ email: email.trim(), spaceId });
     if (!parsed.success) {
-      setFieldError(parsed.error.issues[0]?.message ?? "Ongeldige invoer");
+      setFieldError(parsed.error.issues[0]?.message ?? t("invite.invalidInput"));
       return;
     }
 
@@ -92,9 +93,9 @@ export function InviteUserDialog({
       // surface the backend detail in a toast + a generic inline message.
       const isDuplicate = /409|bestaat al|already exists/i.test(result.error);
       if (isDuplicate) {
-        setFieldError("Er bestaat al een account voor dit e-mailadres.");
+        setFieldError(t("invite.duplicateAccount"));
       } else {
-        setFieldError("Uitnodiging mislukt. Probeer opnieuw.");
+        setFieldError(t("invite.inviteFailed"));
         toast.error(result.error);
       }
       return;
@@ -109,10 +110,10 @@ export function InviteUserDialog({
     try {
       await navigator.clipboard.writeText(actionLink);
       setCopied(true);
-      toast.success("Link gekopieerd");
+      toast.success(t("invite.linkCopied"));
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      toast.error("Kopiëren mislukt");
+      toast.error(t("invite.copyFailed"));
     }
   }
 
@@ -122,9 +123,7 @@ export function InviteUserDialog({
   async function handleSendMail() {
     const membershipId = resolveMembershipId?.(email.trim(), spaceId) ?? null;
     if (!membershipId) {
-      toast.error(
-        "Kon de gebruiker niet terugvinden — stuur de uitnodiging opnieuw vanuit de gebruikerslijst.",
-      );
+      toast.error(t("invite.resolveFailed"));
       return;
     }
     setSendingMail(true);
@@ -138,11 +137,11 @@ export function InviteUserDialog({
     // transport failure (or missing RESEND_API_KEY). `res.success` is only the transport
     // flag — inspect the body-level flag so a failed send doesn't toast success.
     if (!res.data.success) {
-      toast.error("Versturen mislukt — de uitnodigingsmail is niet verstuurd. Probeer opnieuw.");
+      toast.error(t("invite.mailNotSent"));
       return;
     }
     setMailSent(true);
-    toast.success("Uitnodigingsmail verstuurd");
+    toast.success(t("invite.mailSent"));
   }
 
   return (
@@ -153,13 +152,11 @@ export function InviteUserDialog({
           <>
             <DialogHeader>
               <DialogTitle className="font-serif text-2xl font-normal lowercase">
-                Uitnodiging aangemaakt
+                {t("invite.createdTitle")}
               </DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-2">
-              <p className="text-sm text-ink/70">
-                Verstuur de uitnodigingsmail, of bezorg de link handmatig aan de gebruiker.
-              </p>
+              <p className="text-sm text-ink/70">{t("invite.createdBody")}</p>
               <div className="grid gap-2">
                 <input
                   readOnly
@@ -169,7 +166,7 @@ export function InviteUserDialog({
                 />
                 <div className="flex items-center justify-between gap-3">
                   <span className="badge-dashed">
-                    {mailSent ? "MAIL VERSTUURD" : "MAIL OF HANDMATIG BEZORGEN"}
+                    {mailSent ? t("invite.badgeMailSent") : t("invite.badgeDeliverManual")}
                   </span>
                   <div className="flex items-center gap-2">
                     <Button
@@ -180,21 +177,21 @@ export function InviteUserDialog({
                     >
                       <Mail />
                       {sendingMail
-                        ? "Versturen…"
+                        ? t("invite.sending")
                         : mailSent
-                          ? "Opnieuw versturen"
-                          : "Verstuur uitnodigingsmail"}
+                          ? t("invite.resend")
+                          : t("invite.sendMail")}
                     </Button>
                     <Button type="button" variant="outline" size="sm" onClick={handleCopy}>
                       {copied ? <Check /> : <Copy />}
-                      Kopieer link
+                      {t("invite.copyLink")}
                     </Button>
                   </div>
                 </div>
               </div>
             </div>
             <DialogFooter>
-              <Button onClick={() => onOpenChange(false)}>Sluiten</Button>
+              <Button onClick={() => onOpenChange(false)}>{t("invite.close")}</Button>
             </DialogFooter>
           </>
         ) : (
@@ -202,7 +199,7 @@ export function InviteUserDialog({
           <form onSubmit={handleSubmit}>
             <DialogHeader>
               <DialogTitle className="font-serif text-2xl font-normal lowercase">
-                gebruiker uitnodigen
+                {t("invite.formTitle")}
               </DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-2">
@@ -211,7 +208,7 @@ export function InviteUserDialog({
                   htmlFor="invite-email"
                   className="font-mono text-[11px] uppercase tracking-wider text-ink/70"
                 >
-                  E-mailadres
+                  {t("invite.emailLabel")}
                 </Label>
                 <Input
                   id="invite-email"
@@ -224,11 +221,11 @@ export function InviteUserDialog({
 
               <div className="grid gap-1.5">
                 <Label className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
-                  Space
+                  {t("invite.spaceLabel")}
                 </Label>
                 <Select value={spaceId} onValueChange={setSpaceId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Kies een space…" />
+                    <SelectValue placeholder={t("invite.spacePlaceholder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {activeSpaces.map((s) => (
@@ -242,7 +239,7 @@ export function InviteUserDialog({
 
               {/* Role is server-fixed to "user" and rendered read-only (D-01a) — NOT a control. */}
               <p className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
-                Rol: gebruiker
+                {t("invite.roleFixed")}
               </p>
 
               {fieldError && <p className="text-sm text-red-600">{fieldError}</p>}
@@ -254,10 +251,10 @@ export function InviteUserDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={submitting}
               >
-                Annuleren
+                {t("invite.cancel")}
               </Button>
               <Button type="submit" disabled={submitting}>
-                {submitting ? "Aanmaken…" : "Uitnodiging aanmaken"}
+                {submitting ? t("invite.creating") : t("invite.createInvite")}
               </Button>
             </DialogFooter>
           </form>

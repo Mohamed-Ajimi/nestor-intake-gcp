@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Inbox, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,18 +30,19 @@ type IntakeRow = {
  space_name: string;
 };
 
-const STATUS_FILTERS: { value: string; label: string }[] = [
-  { value: "all", label: "Alle" },
-  { value: "draft", label: "Concept" },
-  { value: "submitted", label: "Ingediend" },
-  { value: "reviewed", label: "Gereviewd" },
-  { value: "validated_by_client", label: "Gevalideerd" },
-  { value: "in_research", label: "In onderzoek" },
-  { value: "delivered", label: "Geleverd" },
-  { value: "archived", label: "Gearchiveerd" },
-];
+const STATUS_FILTER_VALUES = [
+  "all",
+  "draft",
+  "submitted",
+  "reviewed",
+  "validated_by_client",
+  "in_research",
+  "delivered",
+  "archived",
+] as const;
 
 function IntakesPage() {
+ const { t } = useTranslation("admin");
  const navigate = useNavigate();
  const [intakes, setIntakes] = useState<IntakeRow[]>([]);
  const [loading, setLoading] = useState(true);
@@ -110,32 +112,34 @@ function IntakesPage() {
  <div>
  <div className="flex flex-wrap items-start justify-between gap-4">
  <div>
-          <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">intakes</h1>
+          <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
+            {t("intakesList.title")}
+          </h1>
           <p className="mt-1 text-sm text-ink/60">
             {activeSpaceId
-              ? "Pulse intakes, gefilterd op de actieve klant."
-              : "Alle Pulse intakes."}
+              ? t("intakesList.subtitleFiltered")
+              : t("intakesList.subtitleAll")}
           </p>
         </div>
         <Button asChild>
-          <Link to="/admin/pulse/intakes/new">Nieuwe intake</Link>
+          <Link to="/admin/pulse/intakes/new">{t("intakesList.newIntake")}</Link>
         </Button>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-1 border border-ink p-1">
-          {STATUS_FILTERS.map((s) => (
+          {STATUS_FILTER_VALUES.map((value) => (
             <button
-              key={s.value}
-              onClick={() => setStatusFilter(s.value)}
+              key={value}
+              onClick={() => setStatusFilter(value)}
               className={cn(
                 "px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider transition-colors",
-                statusFilter === s.value
+                statusFilter === value
                   ? "bg-ink text-paper"
                   : "text-ink/60 hover:bg-ink/10",
               )}
             >
-              {s.label}
+              {t(`intakesList.filter.${value}`)}
             </button>
           ))}
         </div>
@@ -144,7 +148,7 @@ function IntakesPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Zoek klant of naam…"
+            placeholder={t("intakesList.searchPlaceholder")}
             className="h-9 pl-8"
           />
         </div>
@@ -154,10 +158,10 @@ function IntakesPage() {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent border-ink">
-              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">Klant</TableHead>
-              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">Naam</TableHead>
-              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">Status</TableHead>
-              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink text-right">Acties</TableHead>
+              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">{t("intakesList.colClient")}</TableHead>
+              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">{t("intakesList.colName")}</TableHead>
+              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink">{t("intakesList.colStatus")}</TableHead>
+              <TableHead className="px-4 font-mono text-xs uppercase tracking-wider text-ink text-right">{t("intakesList.colActions")}</TableHead>
             </TableRow>
           </TableHeader>
  <TableBody>
@@ -182,10 +186,8 @@ function IntakesPage() {
  <TableCell colSpan={4} className="px-4 py-16">
  <div className="flex flex-col items-center text-center">
  <Inbox className="h-8 w-8 text-ink/30" />
- <p className="mt-3 text-sm font-medium text-ink">Nog geen intakes</p>
- <p className="mt-1 text-sm text-ink/60">
- Klik 'Nieuwe intake' om er één aan te maken.
- </p>
+ <p className="mt-3 text-sm font-medium text-ink">{t("intakesList.emptyTitle")}</p>
+ <p className="mt-1 text-sm text-ink/60">{t("intakesList.emptyBody")}</p>
  </div>
  </TableCell>
  </TableRow>
@@ -212,7 +214,7 @@ function IntakesPage() {
   <div className="flex items-center justify-end gap-2">
  <Button asChild size="sm" variant="ghost">
  <Link to="/admin/pulse/intakes/$id" params={{ id: r.id }}>
- Open
+ {t("intakesList.open")}
  </Link>
  </Button>
  </div>
