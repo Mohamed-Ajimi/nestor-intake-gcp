@@ -1,1 +1,105 @@
-{}
+{
+  "validation": {
+    "required": "Required field",
+    "invalidEmail": "Invalid email address",
+    "minChars": "At least {{count}} characters",
+    "minItems": "At least {{count}} items",
+    "fillRequired": "Please fill in the required fields."
+  },
+  "save": {
+    "unsaved": "Not saved",
+    "saving": "Saving…",
+    "saved": "All changes saved",
+    "failed": "Saving failed",
+    "sectionFailed": "Saving failed — your changes in this section were not saved. Please try again."
+  },
+  "form": {
+    "brand": "Agenic",
+    "for": "For: {{name}}",
+    "estimatedTime": "Estimated time: {{minutes}} min",
+    "step": "Step {{current}} / {{total}}",
+    "optional": "Optional",
+    "attention": "NOTE",
+    "fieldEmpty": "{{label}} is empty",
+    "previous": "Previous",
+    "next": "Next",
+    "submit": "Submit",
+    "submitting": "Submitting…",
+    "submitFailed": "Submit failed: {{error}}",
+    "changed": "Changed"
+  },
+  "validationPhase": {
+    "titleSuffix": " — Validation",
+    "subtitle": "Review Nestor's refinements, tick any extra questions, and give your approval.",
+    "banner": "VALIDATION",
+    "bannerBody": "Nestor has refined your intake. Go through it once, tick any extra questions, and click \"Approve — submit\" when you're done.",
+    "approveSubmit": "Approve — submit",
+    "doneTitle": "Thanks — your validation is in.",
+    "doneMessage": "Nestor now starts decomposition and research."
+  },
+  "confirm": {
+    "title": "Are you sure?",
+    "body": "Some recommended fields are still empty. Do you still want to submit?",
+    "cancel": "Cancel",
+    "confirm": "Submit anyway"
+  },
+  "field": {
+    "examples": "Examples",
+    "unsupported": "Unsupported field type: {{type}}",
+    "noProposals": "No extra proposals.",
+    "includeInResearch": "Include in research?",
+    "choose": "— Choose —",
+    "specify": "Specify…",
+    "itemFallback": "Item",
+    "addItem": "+ Add",
+    "onlyPdf": "Only PDF files are allowed. Save your PowerPoint/Word/Excel as PDF first.",
+    "tooLarge": "{{name}} is too large (max {{max}}MB)",
+    "uploadFailed": "Upload failed: {{error}}",
+    "removeFailed": "Removing file failed: {{error}}",
+    "maxFiles": "Maximum {{max}} files.",
+    "slot": "Slot {{index}}",
+    "busy": "Busy…",
+    "replace": "Replace",
+    "remove": "Remove",
+    "uploading": "Uploading…",
+    "choosePdf": "+ Choose PDF",
+    "removeLong": "Remove",
+    "chooseFile": "Choose file",
+    "loading": "Loading…",
+    "download": "Download"
+  },
+  "display": {
+    "missing": "— missing",
+    "lastEditedByClient": "Last edited by client",
+    "other": "Other: {{text}}",
+    "type": "Type: {{kind}}",
+    "includedInResearch": "INCLUDED IN RESEARCH",
+    "notIncluded": "NOT INCLUDED",
+    "storageNotConfigured": "Storage not configured",
+    "downloadFailed": "Download failed",
+    "open": "Open"
+  },
+  "route": {
+    "loadFailed": "Could not load the intake(s). Please refresh the page.",
+    "noTemplate": "No intake template available for this space.",
+    "loading": "Loading…",
+    "backToOverview": "Back to overview",
+    "logout": "Log out"
+  },
+  "list": {
+    "brand": "Agenic",
+    "logout": "Log out",
+    "heading": "intakes",
+    "subtitleForSpace": "Your intakes for {{name}}.",
+    "subtitle": "Your intakes.",
+    "colTitle": "Title",
+    "colStatus": "Status",
+    "colLastEdited": "Last edited",
+    "empty": "No intake prepared yet",
+    "emptyBody": "As soon as your intake is ready, it will appear here. You'll be notified as soon as there's something for you.",
+    "dash": "—",
+    "ctaFill": "Fill in request",
+    "ctaView": "View answers",
+    "ctaResult": "View result"
+  }
+}

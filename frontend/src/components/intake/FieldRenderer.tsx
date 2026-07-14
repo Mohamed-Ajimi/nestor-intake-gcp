@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { IntakeField } from "@/lib/intake-types";
 import * as storage from "@/lib/api/storage";
 import { toast } from "sonner";
@@ -23,7 +24,8 @@ const inputCls =
  "w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60";
 
 export function FieldRenderer(props: Props) {
- const { field, value, onChange, error, disabled, onDeferRemove } = props;
+ const { field, error } = props;
+ const { t } = useTranslation("intake");
 
  return (
  <div className="space-y-2">
@@ -40,7 +42,7 @@ export function FieldRenderer(props: Props) {
  {field.examples && (field.examples.good || field.examples.bad) && (
  <details className="text-xs text-ink/60">
  <summary className="cursor-pointer select-none hover:text-ink/70">
- ▶ Voorbeelden
+ ▶ {t("field.examples")}
  </summary>
  <div className="mt-2 space-y-1">
  {field.examples.good?.map((g, i) => (
@@ -64,6 +66,7 @@ export function FieldRenderer(props: Props) {
 }
 
 function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove }: Props) {
+ const { t } = useTranslation("intake");
  switch (field.type) {
  case "text":
  return (
@@ -127,7 +130,7 @@ function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemov
  disabled={disabled}
  onChange={(e) => onChange(e.target.value)}
  >
- <option value="">— Kies —</option>
+ <option value="">{t("field.choose")}</option>
  {field.options?.map((o) => (
  <option key={o.value} value={o.value}>
  {o.label}
@@ -148,7 +151,7 @@ function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemov
  case "proposal_list":
  return <ProposalListControl value={value} onChange={onChange} disabled={disabled} />;
  default:
- return <p className="text-xs text-red-600">Unsupported field type: {field.type}</p>;
+ return <p className="text-xs text-red-600">{t("field.unsupported", { type: field.type })}</p>;
  }
 }
 
@@ -161,11 +164,12 @@ function ProposalListControl({
  onChange: (v: any) => void;
  disabled?: boolean;
 }) {
+ const { t } = useTranslation("intake");
  const items: Array<{ text: string; rationale?: string; approved?: boolean }> = Array.isArray(value)
  ? value
  : [];
  if (items.length === 0) {
- return <p className="text-sm text-ink/60">Geen extra voorstellen.</p>;
+ return <p className="text-sm text-ink/60">{t("field.noProposals")}</p>;
  }
  const toggle = (i: number) => {
  const next = items.map((it, idx) => (idx === i ? { ...it, approved: !it.approved } : it));
@@ -195,7 +199,7 @@ function ProposalListControl({
  {it.rationale && (
  <div className="mt-1 text-xs text-ink/60">{it.rationale}</div>
  )}
- <div className="mt-1 text-xs text-ink/60">Opnemen in research?</div>
+ <div className="mt-1 text-xs text-ink/60">{t("field.includeInResearch")}</div>
  </div>
  </label>
  ))}
@@ -214,6 +218,7 @@ function RadioControl({
  onChange: (v: any) => void;
  disabled?: boolean;
 }) {
+ const { t } = useTranslation("intake");
  const current =
  typeof value === "object" && value !== null ? value : { choice: value ?? "", text: "" };
 
@@ -254,7 +259,7 @@ function RadioControl({
  className={inputCls + " mt-2"}
  value={current.text ?? ""}
  disabled={disabled}
- placeholder="Specificeer…"
+ placeholder={t("field.specify")}
  onChange={(e) => onChange({ choice: opt.value, text: e.target.value })}
  />
  )}
@@ -279,6 +284,7 @@ function ListControl({
  intakeId: string;
  disabled?: boolean;
 }) {
+ const { t } = useTranslation("intake");
  const items: any[] = Array.isArray(value) ? value : [];
  const item = field.item;
  const min = field.min_items ?? 0;
@@ -340,7 +346,7 @@ function ListControl({
  </div>
  ) : (
  <FieldRenderer
- field={{ ...(item as IntakeField), label: (item as IntakeField).label || "Item" }}
+ field={{ ...(item as IntakeField), label: (item as IntakeField).label || t("field.itemFallback") }}
  value={it}
  onChange={(v) => update(i, v)}
  intakeId={intakeId}
@@ -355,7 +361,7 @@ function ListControl({
  onClick={add}
  className="border border-dashed border-ink/10 px-4 py-2 text-sm font-medium text-ink/60 hover:border-ink/30 hover:text-ink"
  >
- + Voeg toe
+ {t("field.addItem")}
  </button>
  )}
  </div>
@@ -379,6 +385,7 @@ function FileControl({
  disabled?: boolean;
  onDeferRemove?: (paths: string[]) => void;
 }) {
+ const { t } = useTranslation("intake");
  const [uploading, setUploading] = useState<number | null>(null);
  // The server authors the stored key (D-05); the browser only tags a category.
  // Audio-accept fields land under "audio" (they seed intake_sources), all other
@@ -415,19 +422,17 @@ function FileControl({
  }
  const res = await storage.removeFile({ intakeId, paths: [path] });
  if (!res.success) {
- toast.error(`Bestand verwijderen mislukt: ${res.error}`);
+ toast.error(t("field.removeFailed", { error: res.error }));
  }
  };
 
  const uploadOne = async (f: File): Promise<any | null> => {
  if (acceptOnlyPdf && !f.name.toLowerCase().endsWith(".pdf")) {
- toast.error(
- "Alleen PDF bestanden toegestaan. Sla je PowerPoint/Word/Excel eerst op als PDF.",
- );
+ toast.error(t("field.onlyPdf"));
  return null;
  }
  if (field.max_size_mb && f.size > field.max_size_mb * 1024 * 1024) {
- toast.error(`${f.name} is te groot (max ${field.max_size_mb}MB)`);
+ toast.error(t("field.tooLarge", { name: f.name, max: field.max_size_mb }));
  return null;
  }
  const res = await storage.uploadFile({
@@ -438,7 +443,7 @@ function FileControl({
  contentType: f.type || undefined,
  });
  if (!res.success) {
- toast.error(`Upload mislukt: ${res.error}`);
+ toast.error(t("field.uploadFailed", { error: res.error }));
  return null;
  }
  return {
@@ -470,7 +475,7 @@ function FileControl({
  if (!selected) return;
  const list = Array.from(selected);
  if (multi && field.max_files && files.length + list.length > field.max_files) {
- toast.error(`Maximum ${field.max_files} bestanden.`);
+ toast.error(t("field.maxFiles", { max: field.max_files }));
  return;
  }
  setUploading(-1);
@@ -524,7 +529,7 @@ function FileControl({
  }
  >
  <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-ink/60">
- Slot {i + 1}
+ {t("field.slot", { index: i + 1 })}
  </div>
  {f ? (
  <div>
@@ -532,7 +537,7 @@ function FileControl({
  <div className="text-xs text-ink/60">{fmtSize(f.size)}</div>
  <div className="mt-2 flex gap-2">
  <label className="inline-flex cursor-pointer items-center border border-ink/10 bg-paper px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/30">
- {busy ? "Bezig…" : "Vervang"}
+ {busy ? t("field.busy") : t("field.replace")}
  <input
  type="file"
  className="hidden"
@@ -546,13 +551,13 @@ function FileControl({
  onClick={() => removeFile(i)}
  className="border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:border-red-300 hover:text-red-600"
  >
- Verwijder
+ {t("field.remove")}
  </button>
  </div>
  </div>
  ) : (
  <label className="flex cursor-pointer items-center justify-center py-3 text-sm font-medium text-ink/60 hover:text-ink">
- {busy ? "Uploaden…" : "+ PDF kiezen"}
+ {busy ? t("field.uploading") : t("field.choosePdf")}
  <input
  type="file"
  className="hidden"
@@ -585,7 +590,7 @@ function FileControl({
  onClick={() => removeFile(i)}
  className="ml-3 text-xs text-ink/40 hover:text-red-600"
  >
- Verwijderen
+ {t("field.removeLong")}
  </button>
  )}
  </li>
@@ -595,7 +600,7 @@ function FileControl({
  {!disabled && (multi || files.length === 0) && (
  <div>
  <label className="inline-flex cursor-pointer items-center border border-ink/10 bg-paper px-4 py-2 text-sm font-medium text-ink/70 hover:border-ink/30">
- {uploading !== null ? "Uploaden…" : "Bestand kiezen"}
+ {uploading !== null ? t("field.uploading") : t("field.chooseFile")}
  <input
  type="file"
  className="hidden"
@@ -612,6 +617,7 @@ function FileControl({
 }
 
 function DownloadControl({ field, intakeId }: { field: IntakeField; intakeId: string }) {
+ const { t } = useTranslation("intake");
  const [loading, setLoading] = useState(false);
  const handleClick = async () => {
  if (!field.storage_path) return;
@@ -631,7 +637,7 @@ function DownloadControl({ field, intakeId }: { field: IntakeField; intakeId: st
  expiresIn: 300,
  });
  if (!res.success) {
- toast.error("Download mislukt");
+ toast.error(t("display.downloadFailed"));
  return;
  }
  window.open(res.data.url, "_blank");
@@ -646,7 +652,7 @@ function DownloadControl({ field, intakeId }: { field: IntakeField; intakeId: st
  disabled={loading}
  className="border border-ink/10 bg-paper px-4 py-2 text-sm font-medium text-ink/70 hover:border-ink/30"
  >
- {loading ? "Laden…" : "Download"}
+ {loading ? t("field.loading") : t("field.download")}
  </button>
  );
 }
