@@ -106,6 +106,12 @@ None - plan executed exactly as written. Both verification blocks passed on the 
 - `frontend_service_url` output is ready to feed the second-pass wiring once the frontend is deployed.
 - Blockers/concerns: none introduced by this plan. The pre-existing IaC-drift reconcile item (reconcile via `terraform import` or keep manual before cutover) now extends to the frontend service + invoker — logged in the runbook Summary checklist.
 
+## Self-Check: PASSED
+
+- All modified files present: `infra/main.tf`, `infra/variables.tf`, `infra/outputs.tf`, `infra/DEPLOY-RUNBOOK.md`, `12-04-SUMMARY.md`.
+- All task commits present in git history: `d6e6d50` (Task 1), `3af6e78` (Task 2), `97f183d` (SUMMARY).
+- Both plan verification blocks passed; working tree clean.
+
 ---
 *Phase: 12-frontend-deploy-cutover-supabase-retirement*
 *Completed: 2026-07-14*
