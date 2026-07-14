@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -7,7 +7,8 @@ import { useAuth } from "@/lib/auth-context";
 import { getIntake } from "@/lib/api/intakes";
 import { listAnswers } from "@/lib/api/answers";
 import { getTemplates } from "@/lib/api/templates";
-import type { IntakeSchema } from "@/lib/intake-types";
+import type { LocalizedIntakeSchema } from "@/lib/intake-types";
+import { localizeSchema } from "@/lib/i18n/localizeSchema";
 import { FieldDisplay } from "@/components/intake/FieldDisplay";
 import { StatusPill } from "@/components/intake/_status";
 
@@ -58,11 +59,14 @@ function isValidatedOrLater(status: string): boolean {
 }
 
 function UserIntakeResultsPage() {
-  const { t } = useTranslation("intake");
+  const { t, i18n } = useTranslation("intake");
   const { id } = Route.useParams();
   const { session } = useAuth();
   const navigate = useNavigate();
-  const [schema, setSchema] = useState<IntakeSchema | null>(null);
+  // The template serves the RAW multi-locale schema (LocalizedString objects, Phase 11);
+  // keep the raw source in state and flatten at render time so a language switch
+  // re-resolves without refetching (mirrors IntakeForm's useMemo pattern, CR-02).
+  const [rawSchema, setRawSchema] = useState<LocalizedIntakeSchema | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<string | null>(null);
   const [title, setTitle] = useState<string>("");
@@ -107,7 +111,7 @@ function UserIntakeResultsPage() {
         answersMap[a.field_key] = a.value_json ?? a.value;
       }
 
-      setSchema((template.schema ?? {}) as unknown as IntakeSchema);
+      setRawSchema((template.schema ?? null) as unknown as LocalizedIntakeSchema | null);
       setAnswers(answersMap);
       setStatus(intakeRes.data.status);
       setTitle(intakeRes.data.client_name ?? "");
@@ -118,6 +122,12 @@ function UserIntakeResultsPage() {
       cancelled = true;
     };
   }, [id, navigate, t]);
+
+  // Flatten the multi-locale source to the active locale (nl fallback, D-05).
+  const schema = useMemo(
+    () => (rawSchema?.sections ? localizeSchema(rawSchema, i18n.language) : null),
+    [rawSchema, i18n.language],
+  );
 
   const handleLogout = async () => {
     try {
