@@ -140,5 +140,55 @@
     "newProject": "+ Nouveau projet pour ce client",
     "nameRequired": "Le nom est obligatoire",
     "saved": "Client enregistré"
+  },
+  "spaces": {
+    "subtitle": "Gérer les espaces clients — créer, modifier nom/slug et désactiver.",
+    "new": "+ Nouvel espace",
+    "empty": {
+      "title": "Aucun espace pour l'instant",
+      "body": "Créez le premier espace pour gérer les utilisateurs et les templates."
+    },
+    "table": {
+      "name": "Nom",
+      "slug": "Slug",
+      "status": "Statut",
+      "actions": "Actions"
+    },
+    "status": {
+      "active": "ACTIF",
+      "deactivated": "DÉSACTIVÉ"
+    },
+    "action": {
+      "edit": "Modifier",
+      "deactivate": "Désactiver",
+      "reactivate": "Réactiver",
+      "cancel": "Annuler"
+    },
+    "confirm": {
+      "title": "Désactiver l'espace ?",
+      "body": "L'espace sera masqué pour les utilisateurs. Les données sont conservées et l'espace peut être réactivé ultérieurement."
+    },
+    "toast": {
+      "reactivated": "Réactivé",
+      "deactivated": "Espace désactivé"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "nouvel espace",
+    "editTitle": "modifier l'espace",
+    "name": "Nom",
+    "slug": "Slug",
+    "slugPlaceholder": "p. ex. acme-corp",
+    "defaultLocale": "Langue par défaut",
+    "locale": {
+      "nl": "Néerlandais",
+      "fr": "Français",
+      "en": "Anglais"
+    },
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "nameRequired": "Le nom est obligatoire",
+    "saved": "Enregistré"
   }
 }

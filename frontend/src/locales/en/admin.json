@@ -140,5 +140,55 @@
     "newProject": "+ New project for this client",
     "nameRequired": "Name is required",
     "saved": "Client saved"
+  },
+  "spaces": {
+    "subtitle": "Manage client spaces — create, edit name/slug and deactivate.",
+    "new": "+ New space",
+    "empty": {
+      "title": "No spaces yet",
+      "body": "Create the first space to manage users and templates."
+    },
+    "table": {
+      "name": "Name",
+      "slug": "Slug",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "status": {
+      "active": "ACTIVE",
+      "deactivated": "DEACTIVATED"
+    },
+    "action": {
+      "edit": "Edit",
+      "deactivate": "Deactivate",
+      "reactivate": "Reactivate",
+      "cancel": "Cancel"
+    },
+    "confirm": {
+      "title": "Deactivate space?",
+      "body": "The space will be hidden from users. Data is retained and the space can be reactivated later."
+    },
+    "toast": {
+      "reactivated": "Reactivated",
+      "deactivated": "Space deactivated"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "new space",
+    "editTitle": "edit space",
+    "name": "Name",
+    "slug": "Slug",
+    "slugPlaceholder": "e.g. acme-corp",
+    "defaultLocale": "Default language",
+    "locale": {
+      "nl": "Dutch",
+      "fr": "French",
+      "en": "English"
+    },
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving…",
+    "nameRequired": "Name is required",
+    "saved": "Saved"
   }
 }

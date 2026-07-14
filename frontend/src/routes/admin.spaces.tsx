@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { ProductShell } from "@/components/admin/ProductShell";
 import { ADMIN_NAV } from "@/components/admin/adminNav";
 import { SpaceFormModal } from "@/components/admin/SpaceFormModal";
@@ -32,6 +33,7 @@ export const Route = createFileRoute("/admin/spaces")({
 });
 
 function SpacesPage() {
+  const { t } = useTranslation("admin");
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +93,7 @@ function SpacesPage() {
       toast.error(res.error);
       return;
     }
-    toast.success("Opnieuw geactiveerd");
+    toast.success(t("spaces.toast.reactivated"));
     void load();
   }
 
@@ -106,7 +108,7 @@ function SpacesPage() {
       toast.error(res.error);
       return;
     }
-    toast.success("Space gedeactiveerd");
+    toast.success(t("spaces.toast.deactivated"));
     void load();
   }
 
@@ -118,10 +120,10 @@ function SpacesPage() {
             spaces
           </h1>
           <p className="mt-1 font-sans text-sm italic text-ink/60">
-            Beheer client-spaces — aanmaken, naam/slug bewerken en deactiveren.
+            {t("spaces.subtitle")}
           </p>
         </div>
-        <Button onClick={openCreate}>+ Nieuwe space</Button>
+        <Button onClick={openCreate}>{t("spaces.new")}</Button>
       </div>
 
       <div className="mt-6">
@@ -135,20 +137,20 @@ function SpacesPage() {
           <div className="py-12 text-center text-sm text-red-600">{error}</div>
         ) : spaces.length === 0 ? (
           <div className="mt-6 border border-ink/20 bg-paper2/40 p-12 text-center">
-            <p className="mb-4 font-mono text-sm text-ink/60">⌀ Nog geen spaces</p>
+            <p className="mb-4 font-mono text-sm text-ink/60">⌀ {t("spaces.empty.title")}</p>
             <p className="mb-6 text-sm text-ink/50">
-              Maak de eerste space aan om gebruikers en templates te beheren.
+              {t("spaces.empty.body")}
             </p>
-            <Button onClick={openCreate}>+ Nieuwe space</Button>
+            <Button onClick={openCreate}>{t("spaces.new")}</Button>
           </div>
         ) : (
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
-                <th className="px-4 py-2 text-left">Naam</th>
-                <th className="px-4 py-2 text-left">Slug</th>
-                <th className="px-4 py-2 text-left">Status</th>
-                <th className="px-4 py-2 text-right">Acties</th>
+                <th className="px-4 py-2 text-left">{t("spaces.table.name")}</th>
+                <th className="px-4 py-2 text-left">{t("spaces.table.slug")}</th>
+                <th className="px-4 py-2 text-left">{t("spaces.table.status")}</th>
+                <th className="px-4 py-2 text-right">{t("spaces.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -169,19 +171,19 @@ function SpacesPage() {
                       {active ? (
                         <span className="badge-outline">
                           <span className="mark-green" />
-                          ACTIEF
+                          {t("spaces.status.active")}
                         </span>
                       ) : (
                         <span className="badge-dashed text-ink/50">
                           <span className="mark-outline" />
-                          GEDEACTIVEERD
+                          {t("spaces.status.deactivated")}
                         </span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <Button variant="ghost" size="sm" onClick={() => openEdit(s)}>
-                          Bewerken
+                          {t("spaces.action.edit")}
                         </Button>
                         {active ? (
                           <Button
@@ -190,7 +192,7 @@ function SpacesPage() {
                             disabled={busyId === s.id}
                             onClick={() => setConfirmSpace(s)}
                           >
-                            Deactiveren
+                            {t("spaces.action.deactivate")}
                           </Button>
                         ) : (
                           <Button
@@ -199,7 +201,7 @@ function SpacesPage() {
                             disabled={busyId === s.id}
                             onClick={() => handleReactivate(s)}
                           >
-                            Heractiveren
+                            {t("spaces.action.reactivate")}
                           </Button>
                         )}
                       </div>
@@ -225,19 +227,18 @@ function SpacesPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Space deactiveren?</AlertDialogTitle>
+            <AlertDialogTitle>{t("spaces.confirm.title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              De space wordt verborgen voor gebruikers. Gegevens blijven bewaard en de space kan
-              later opnieuw geactiveerd worden.
+              {t("spaces.confirm.body")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Annuleren</AlertDialogCancel>
+            <AlertDialogCancel>{t("spaces.action.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDeactivate}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Deactiveren
+              {t("spaces.action.deactivate")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

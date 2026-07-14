@@ -140,5 +140,55 @@
     "newProject": "+ Nieuw project voor deze klant",
     "nameRequired": "Naam is verplicht",
     "saved": "Klant opgeslagen"
+  },
+  "spaces": {
+    "subtitle": "Beheer client-spaces — aanmaken, naam/slug bewerken en deactiveren.",
+    "new": "+ Nieuwe space",
+    "empty": {
+      "title": "Nog geen spaces",
+      "body": "Maak de eerste space aan om gebruikers en templates te beheren."
+    },
+    "table": {
+      "name": "Naam",
+      "slug": "Slug",
+      "status": "Status",
+      "actions": "Acties"
+    },
+    "status": {
+      "active": "ACTIEF",
+      "deactivated": "GEDEACTIVEERD"
+    },
+    "action": {
+      "edit": "Bewerken",
+      "deactivate": "Deactiveren",
+      "reactivate": "Heractiveren",
+      "cancel": "Annuleren"
+    },
+    "confirm": {
+      "title": "Space deactiveren?",
+      "body": "De space wordt verborgen voor gebruikers. Gegevens blijven bewaard en de space kan later opnieuw geactiveerd worden."
+    },
+    "toast": {
+      "reactivated": "Opnieuw geactiveerd",
+      "deactivated": "Space gedeactiveerd"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "nieuwe space",
+    "editTitle": "space bewerken",
+    "name": "Naam",
+    "slug": "Slug",
+    "slugPlaceholder": "bv. acme-corp",
+    "defaultLocale": "Standaardtaal",
+    "locale": {
+      "nl": "Nederlands",
+      "fr": "Frans",
+      "en": "Engels"
+    },
+    "cancel": "Annuleren",
+    "save": "Opslaan",
+    "saving": "Opslaan…",
+    "nameRequired": "Naam is verplicht",
+    "saved": "Opgeslagen"
   }
 }
