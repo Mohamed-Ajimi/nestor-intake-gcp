@@ -45,6 +45,14 @@ class OrganizationMembership(Base):
     status: Mapped[str] = mapped_column(
         String, nullable=False, server_default="active"
     )
+    # D-07 (i18n / 0010) per-user locale override. NULLABLE: null = "no override ->
+    # inherit the space default" (the resolution chain user override -> space default
+    # -> "nl"). A non-null value is the user's persisted choice ({"nl","fr","en"},
+    # enforced in code, NOT a PG enum). Also the superadmin's own locale home WHEN a
+    # membership row exists (Open Q1); a superadmin with no row persists nothing here.
+    # No new Index — a scalar column read via the existing PK/FK lookup (keeps the
+    # ORM<->migration index-name match clean for `alembic check`).
+    locale: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
