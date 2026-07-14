@@ -1,0 +1,17 @@
+# Controls what `gcloud builds submit frontend` uploads as build source.
+# Without this file gcloud derives ignores from frontend/.gitignore, which does
+# NOT cover plain `.env` — local env files (legacy Supabase URL/key) must never
+# reach the build-source bucket (D-08/D-11). The docker build additionally
+# excludes them via .dockerignore; this keeps them out of the upload entirely.
+.gcloudignore
+.git
+node_modules
+.output
+.nitro
+.tanstack
+.wrangler
+dist
+.env
+.env.*
+*.local
+*.log
