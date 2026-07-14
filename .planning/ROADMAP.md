@@ -221,14 +221,19 @@ Decimal phases appear between their surrounding integers in numeric order.
 **UI hint**: yes
 
 ### Phase 12: Frontend Deploy, Cutover & Supabase Retirement
-**Goal**: The TanStack Start SSR frontend is deployed on Cloud Run against the new backend, the full flow is validated end-to-end for both superadmin and user roles, and the legacy Supabase project is paused then retired.
+**Goal**: The TanStack Start SSR frontend is deployed on Cloud Run against the new backend, the full flow is validated end-to-end for both superadmin and user roles, and the GCP stack is completely independent of Supabase (no env vars/calls/keys in the deployed system).
 **Depends on**: Phase 7, Phase 8, Phase 9, Phase 10, Phase 11
 **Requirements**: INFRA-05, QA-05
 **Success Criteria** (what must be TRUE):
   1. The TanStack Start SSR frontend is deployed as a Cloud Run container pointed at the new backend, with no Supabase anon key remaining in the bundle
   2. A parity checklist is green: a full `draft → … → decomposed` run completes on GCP for both a superadmin and a user, exercising auth, isolation, AI ports, SSE, storage, and i18n
-  3. The legacy Supabase project is paused (recoverable) through the soak window, then decommissioned once parity is confirmed
-**Plans**: TBD
+  3. AMENDED (D-08): The legacy Supabase project is NOT touched (no pause, delete, or dashboard action). "Retirement" = independence: zero Supabase env vars, calls, or keys in the deployed system, proven by the D-11 bundle guard.
+**Plans**: 5 plans (3 waves)
+  - [ ] 12-01-PLAN.md -- Bundle guard (D-11) + consolidated 12-UAT parity checklist (Wave 1)
+  - [ ] 12-02-PLAN.md -- Frontend containerization: node-server preset + Dockerfile + cloudbuild + hide sales nav (Wave 2)
+  - [ ] 12-03-PLAN.md -- D-12 residual closure: sources-read endpoint + transcribe CTA wiring (Wave 1)
+  - [ ] 12-04-PLAN.md -- IaC frontend service by construction + Phase-12 DEPLOY-RUNBOOK (Wave 1)
+  - [ ] 12-05-PLAN.md -- Live deploy + two-role parity gate execution (checkpoint) (Wave 3)
 **UI hint**: yes
 
 ## Progress
