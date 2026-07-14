@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,13 +24,6 @@ import { listSpaceMembers, type IntakeMailType, type SpaceMember } from "@/lib/a
 //
 // Analog: InviteUserDialog.tsx (shadcn Dialog + reset-on-open + sonner toasts).
 
-// Dutch title/CTA copy keyed on the mail type so one picker serves all three send verbs.
-const TYPE_COPY: Record<IntakeMailType, { title: string; confirm: string }> = {
-  validation: { title: "validatie-link versturen", confirm: "Verstuur validatie-link" },
-  reminder: { title: "herinnering versturen", confirm: "Verstuur herinnering" },
-  results: { title: "resultaten-link versturen", confirm: "Verstuur resultaten-link" },
-};
-
 export function RecipientPicker({
   open,
   onOpenChange,
@@ -45,6 +39,22 @@ export function RecipientPicker({
   busy?: boolean;
   onConfirm: (membershipIds: string[]) => void;
 }) {
+  const { t } = useTranslation("intake");
+  // Title/CTA copy keyed on the mail type so one picker serves all three send verbs.
+  const TYPE_COPY: Record<IntakeMailType, { title: string; confirm: string }> = {
+    validation: {
+      title: t("recipients.titleValidation"),
+      confirm: t("recipients.confirmValidation"),
+    },
+    reminder: {
+      title: t("recipients.titleReminder"),
+      confirm: t("recipients.confirmReminder"),
+    },
+    results: {
+      title: t("recipients.titleResults"),
+      confirm: t("recipients.confirmResults"),
+    },
+  };
   const [loading, setLoading] = useState(false);
   const [members, setMembers] = useState<SpaceMember[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -63,7 +73,7 @@ export function RecipientPicker({
       if (cancelled) return;
       if (!res.success) {
         setLoadError(res.error);
-        toast.error(`Leden laden mislukt: ${res.error}`);
+        toast.error(t("recipients.loadFailed", { error: res.error }));
         setLoading(false);
         return;
       }
@@ -74,7 +84,7 @@ export function RecipientPicker({
     return () => {
       cancelled = true;
     };
-  }, [open, intakeId]);
+  }, [open, intakeId, t]);
 
   const isEmpty = !loading && !loadError && members.length === 0;
   const copy = TYPE_COPY[type];
@@ -103,7 +113,7 @@ export function RecipientPicker({
 
         <div className="grid gap-4 py-2">
           <p className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
-            Ontvangers
+            {t("recipients.recipientsLabel")}
           </p>
 
           {loading ? (
@@ -112,21 +122,21 @@ export function RecipientPicker({
               <Skeleton className="h-8 w-full" />
             </div>
           ) : loadError ? (
-            <p className="text-sm text-red-600">Leden konden niet geladen worden.</p>
+            <p className="text-sm text-red-600">{t("recipients.loadError")}</p>
           ) : isEmpty ? (
             // D-07 empty guard — no active members, so nothing to send to.
             <div className="border border-dashed border-ink/30 bg-paper2/40 p-4 text-center">
               <p className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
-                ⌀ Geen actieve leden in deze space
+                {t("recipients.noMembers")}
               </p>
-              <p className="mt-1 text-sm text-ink/60">Nodig eerst iemand uit.</p>
+              <p className="mt-1 text-sm text-ink/60">{t("recipients.inviteFirst")}</p>
             </div>
           ) : (
             <div className="grid gap-2">
               {members.map((m) => {
                 // Backend filters email-less members out of the read (WR-02), so `email` is
-                // always present here; the `?? "(geen naam)"` is a defensive last resort.
-                const label = m.name ?? m.email ?? "(geen naam)";
+                // always present here; the no-name fallback is a defensive last resort.
+                const label = m.name ?? m.email ?? t("recipients.noName");
                 return (
                   <label
                     key={m.id}
@@ -151,7 +161,7 @@ export function RecipientPicker({
             onClick={() => onOpenChange(false)}
             disabled={busy}
           >
-            Annuleren
+            {t("recipients.cancel")}
           </Button>
           <div className="flex flex-col items-end gap-1">
             <Button
@@ -159,11 +169,11 @@ export function RecipientPicker({
               onClick={handleConfirm}
               disabled={busy || loading || isEmpty || selected.size === 0}
             >
-              {busy ? "Versturen…" : copy.confirm}
+              {busy ? t("recipients.sending") : copy.confirm}
             </Button>
             {isEmpty && (
               <span className="font-mono text-[10px] normal-case tracking-normal text-ink/50">
-                Nodig eerst iemand uit om te kunnen versturen.
+                {t("recipients.inviteToSend")}
               </span>
             )}
           </div>

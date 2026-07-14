@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Clock, Loader2 } from "lucide-react";
 import { format } from "date-fns";
-import { nl } from "date-fns/locale";
+import i18n from "@/lib/i18n";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import type { Phase } from "@/lib/intake-phase";
 import type { ActiveSkillRun } from "./SkillRunProgress";
 
@@ -38,10 +40,12 @@ export type BusyKey =
   | "sendResults"
   | "archive";
 
-function fmtDate(d: string | null): string {
-  if (!d) return "—";
+function fmtDate(d: string | null, at: string, fallback: string): string {
+  if (!d) return fallback;
   try {
-    return format(new Date(d), "d MMM yyyy 'om' HH:mm", { locale: nl });
+    return format(new Date(d), `d MMM yyyy '${at}' HH:mm`, {
+      locale: getDateLocale(i18n.language),
+    });
   } catch {
     return d;
   }
@@ -99,6 +103,7 @@ function Tooltip({ text }: { text: string }) {
 }
 
 function RunningClock({ triggeredAt }: { triggeredAt: string }) {
+  const { t } = useTranslation("intake");
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const start = new Date(triggeredAt).getTime();
@@ -118,12 +123,13 @@ function RunningClock({ triggeredAt }: { triggeredAt: string }) {
     >
       <Clock className="h-4 w-4 animate-pulse" />
       <span className="tabular-nums">{mm}:{ss}</span>
-      <span>— Nestor analyseert…</span>
+      <span>{t("nextStep.analyzing")}</span>
     </button>
   );
 }
 
 export function NextStepBanner(props: Props) {
+  const { t } = useTranslation("intake");
   const {
     phase,
     validationLinkSentAt,
@@ -133,94 +139,97 @@ export function NextStepBanner(props: Props) {
     busy,
   } = props;
 
+  const at = t("nextStep.at");
+  const dateFallback = t("nextStep.dateFallback");
+
   const isArchived = phase === "archived";
   const isWaiting = phase === "awaiting_client_validation" || phase === "completed";
   const accentColor = isArchived ? "#9CA3AF" : isWaiting ? "#DFF940" : "#FF2D87";
 
-  let title = "Volgende stap";
+  let title = t("nextStep.defaultTitle");
   let body: React.ReactNode = null;
   let actions: React.ReactNode = null;
 
   switch (phase) {
     case "awaiting_client_submission":
-      body = "Klant moet de intake invullen. Stuur de intake-link.";
+      body = t("nextStep.awaitingSubmissionBody");
       actions = (
-        <SecondaryBtn onClick={props.onCopyIntakeLink}>Kopieer intake-link</SecondaryBtn>
+        <SecondaryBtn onClick={props.onCopyIntakeLink}>
+          {t("nextStep.copyIntakeLink")}
+        </SecondaryBtn>
       );
       break;
 
     case "awaiting_skill_run":
       if (activeRun?.status === "running") {
-        body =
-          "Nestor analyseert je intake. Dit duurt gemiddeld 90–120 seconden. Je mag deze tab open laten.";
+        body = t("nextStep.analyzingBody");
         actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
       } else {
-        body =
-          "De klant heeft de intake ingediend. Run de intake-skill om Nestor's analyse en suggesties te krijgen.";
+        body = t("nextStep.runSkillBody");
         actions = (
           <PrimaryBtn onClick={props.onRunSkill} busy={busy.runSkill}>
-            Run intake-skill
+            {t("nextStep.runSkill")}
           </PrimaryBtn>
         );
       }
       break;
 
     case "awaiting_review":
-      body =
-        "Nestor's analyse is klaar. Review hieronder en stuur ter validatie naar de klant.";
+      body = t("nextStep.reviewBody");
       actions = (
         <PrimaryBtn onClick={props.onOpenAIReview}>
-          Open AI review hieronder
+          {t("nextStep.openAIReview")}
         </PrimaryBtn>
       );
       break;
 
     case "awaiting_validation_send":
-      body =
-        "Suggesties toegepast. Stuur de validatie-link naar de klant via mail.";
+      body = t("nextStep.validationSendBody");
       actions = (
         <>
           <PrimaryBtn onClick={props.onSendValidationMail} busy={busy.sendValidation}>
-            Verstuur validatie-link via mail
+            {t("nextStep.sendValidationMail")}
           </PrimaryBtn>
           <SecondaryBtn onClick={props.onCopyValidationLink}>
-            Kopieer validatie-link
+            {t("nextStep.copyValidationLink")}
           </SecondaryBtn>
         </>
       );
       break;
 
     case "awaiting_client_validation":
-      title = "Wachten op klant";
+      title = t("nextStep.waitingClientTitle");
       body = (
-        <>
-          Validatie-link verstuurd op <strong>{fmtDate(validationLinkSentAt)}</strong>.
-          Wachten op klant-bevestiging.
-        </>
+        <Trans
+          i18nKey="nextStep.waitingClientBody"
+          ns="intake"
+          values={{ date: fmtDate(validationLinkSentAt, at, dateFallback) }}
+          components={[<strong />]}
+        />
       );
       actions = (
         <SecondaryBtn onClick={props.onSendValidationReminder} busy={busy.sendReminder}>
-          Stuur herinnering
+          {t("nextStep.sendReminder")}
         </SecondaryBtn>
       );
       break;
 
     case "awaiting_context_pack":
       if (activeRun?.status === "running") {
-        body =
-          "Context Pack wordt gegenereerd — Nestor bundelt de gevalideerde intake tot de briefing. Dit duurt ± 60–120 seconden. Je mag deze tab open laten.";
+        body = t("nextStep.contextPackRunningBody");
         actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
       } else {
         body = (
           <>
-            Klant heeft gevalideerd. Genereer de Context Pack — de briefing-PDF voor Nestor's
-            onderzoeker.
-            <Tooltip text="Bundelt de gevalideerde intake, gevoeligheden, blinde vlekken en onderzoeksvragen in één PDF die de research-fase voedt." />
+            {t("nextStep.contextPackBody")}
+            <Tooltip text={t("nextStep.contextPackTooltip")} />
           </>
         );
         actions = (
           <PrimaryBtn onClick={props.onGenerateContextPack} busy={busy.generateContextPack}>
-            {busy.generateContextPack ? "Bezig met genereren… (60–120s)" : "Genereer Context Pack"}
+            {busy.generateContextPack
+              ? t("nextStep.generatingContextPack")
+              : t("nextStep.generateContextPack")}
           </PrimaryBtn>
         );
       }
@@ -229,74 +238,77 @@ export function NextStepBanner(props: Props) {
     case "awaiting_research_start":
       body = (
         <>
-          <div className="mb-3 font-semibold">
-            Context Pack klaar. Start de research voor deze intake.
-          </div>
+          <div className="mb-3 font-semibold">{t("nextStep.researchStartTitle")}</div>
           <p className="max-w-[640px] text-[14px] font-normal leading-[1.5] text-ink/60">
-            Dit lanceert <strong>SerpAPI + SearchAPI + Apify</strong> (rag-web-browser
-            + website-content-crawler) voor élke onderzoeksvraag. Levert 2–5 artifacts
-            per vraag, klaar binnen 2–5 minuten. Daarna kan je per vraag manueel extra
-            artifacts toevoegen.
+            <Trans
+              i18nKey="nextStep.researchStartBody"
+              ns="intake"
+              components={[<strong />]}
+            />
           </p>
         </>
       );
       actions = (
         <PrimaryBtn onClick={props.onStartAutoResearch} busy={busy.startResearch}>
-          {busy.startResearch ? "Research loopt…" : "Start automatische research"}
+          {busy.startResearch
+            ? t("nextStep.researchRunning")
+            : t("nextStep.startAutoResearch")}
         </PrimaryBtn>
       );
       break;
 
     case "in_research":
-      title = "Werkfase";
-      body =
-        "Research loopt. Upload artifacts per onderzoeksvraag of laat run-research lopen.";
+      title = t("nextStep.workPhaseTitle");
+      body = t("nextStep.inResearchBody");
       break;
 
     case "awaiting_report_upload":
-      body =
-        "Research klaar. Upload het volledige klant-rapport (DOCX of PDF).";
+      body = t("nextStep.reportUploadBody");
       actions = (
         <PrimaryBtn onClick={props.onUploadFinalReport} busy={busy.uploadReport}>
-          Upload rapport
+          {t("nextStep.uploadReport")}
         </PrimaryBtn>
       );
       break;
 
     case "awaiting_results_send":
-      body = "Rapport geladen. Stuur de resultaten-link naar de klant.";
+      body = t("nextStep.resultsSendBody");
       actions = (
         <>
           <PrimaryBtn onClick={props.onSendResultsMail} busy={busy.sendResults}>
-            Verstuur resultaten-link via mail
+            {t("nextStep.sendResultsMail")}
           </PrimaryBtn>
           <SecondaryBtn onClick={props.onCopyResultsLink}>
-            Kopieer resultaten-link
+            {t("nextStep.copyResultsLink")}
           </SecondaryBtn>
         </>
       );
       break;
 
     case "completed":
-      title = "Voltooid";
+      title = t("nextStep.completedTitle");
       body = (
-        <>
-          Resultaten-link verstuurd op <strong>{fmtDate(resultsLinkSentAt)}</strong>.
-          Klant kan downloaden via de portal.
-        </>
+        <Trans
+          i18nKey="nextStep.completedBody"
+          ns="intake"
+          values={{ date: fmtDate(resultsLinkSentAt, at, dateFallback) }}
+          components={[<strong />]}
+        />
       );
       actions = (
         <SecondaryBtn onClick={props.onArchive} busy={busy.archive}>
-          Archiveer project
+          {t("nextStep.archiveProject")}
         </SecondaryBtn>
       );
       break;
 
     case "archived":
-      title = "Gearchiveerd";
-      body = (
-        <>Project gearchiveerd{deliveredAt ? ` op ${fmtDate(deliveredAt)}` : ""}.</>
-      );
+      title = t("nextStep.archivedTitle");
+      body = t("nextStep.archivedBody", {
+        suffix: deliveredAt
+          ? t("nextStep.archivedOn", { date: fmtDate(deliveredAt, at, dateFallback) })
+          : "",
+      });
       break;
 
     default:

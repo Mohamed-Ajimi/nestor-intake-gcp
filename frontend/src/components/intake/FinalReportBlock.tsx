@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2, Upload, Download } from "lucide-react";
 import * as storage from "@/lib/api/storage";
@@ -44,6 +45,7 @@ export function FinalReportBlock({
   hasResultsToken: boolean;
   onChange: (artifactId: string | null) => void | Promise<void>;
 }) {
+  const { t } = useTranslation("intake");
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -80,11 +82,11 @@ export function FinalReportBlock({
       // Linking the uploaded report to the intake (set_final_report) and the
       // research-artifact record are research-backend operations (Phase 7+),
       // not wired this milestone.
-      toast.success("Rapport geüpload");
+      toast.success(t("finalReport.reportUploaded"));
       await maybeAutoDeliver();
       await onChange(null);
     } catch (e) {
-      toast.error(`Upload mislukt: ${(e as Error).message}`);
+      toast.error(t("finalReport.uploadFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
       if (inputRef.current) inputRef.current.value = "";
@@ -92,16 +94,16 @@ export function FinalReportBlock({
   };
 
   const onRemove = async () => {
-    if (!confirm("Verwijder het volledig rapport voor deze klant?")) return;
+    if (!confirm(t("finalReport.removeConfirm"))) return;
     setBusy(true);
     try {
       // Unlinking the final report (set_final_report) is a research-backend
       // operation (Phase 7+); here we only clear local UI state.
       setArtifact(null);
-      toast.success("Rapport ontkoppeld");
+      toast.success(t("finalReport.reportUnlinked"));
       await onChange(null);
     } catch (e) {
-      toast.error(`Mislukt: ${(e as Error).message}`);
+      toast.error(t("finalReport.removeFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -115,12 +117,12 @@ export function FinalReportBlock({
       expiresIn: 300,
     });
     if (!signed.success) {
-      toast.error("Kon link niet maken");
+      toast.error(t("finalReport.linkCreateFailed"));
       return;
     }
     try {
       const response = await fetch(signed.data.url);
-      if (!response.ok) throw new Error("Download faalde");
+      if (!response.ok) throw new Error(t("finalReport.downloadFailed"));
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -131,7 +133,7 @@ export function FinalReportBlock({
       document.body.removeChild(a);
       URL.revokeObjectURL(blobUrl);
     } catch (e) {
-      toast.error(`Download faalde: ${(e as Error).message}`);
+      toast.error(t("finalReport.downloadFailedError", { error: (e as Error).message }));
     }
   };
 
@@ -174,18 +176,17 @@ export function FinalReportBlock({
         style={isMissing ? { color: "#FF2D3A" } : undefined}
       >
         <span className={isMissing ? "" : "text-ink/60"}>
-          Volledig klant-rapport{isMissing ? " — ontbreekt" : ""}
+          {isMissing ? t("finalReport.labelMissing") : t("finalReport.label")}
         </span>
       </div>
 
       <p className="mb-3 font-sans text-[15px] leading-relaxed text-ink">
-        Eén samengevat rapport dat de klant downloadt via de portal. Upload de
-        finale PDF (alle vragen in één document).
+        {t("finalReport.intro")}
       </p>
 
       {artifact && (
         <div className="mb-3 font-sans text-sm text-ink">
-          Huidig rapport: <strong>{artifact.filename}</strong>
+          {t("finalReport.current")} <strong>{artifact.filename}</strong>
           {artifact.byte_size != null && (
             <span className="text-ink/60"> · {bytesLabel(artifact.byte_size)}</span>
           )}
@@ -216,7 +217,7 @@ export function FinalReportBlock({
         />
         {dragActive ? (
           <div className="py-2 font-mono text-xs uppercase tracking-wider" style={{ color: "#FF2D87" }}>
-            Laat los om te uploaden
+            {t("finalReport.dropToUpload")}
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
@@ -234,7 +235,7 @@ export function FinalReportBlock({
               ) : (
                 <Upload className="h-3.5 w-3.5" />
               )}
-              {artifact ? "Vervang rapport" : "Upload rapport"}
+              {artifact ? t("finalReport.replaceReport") : t("finalReport.uploadReport")}
             </button>
 
             {artifact && (
@@ -244,7 +245,7 @@ export function FinalReportBlock({
                   onClick={(e) => { e.stopPropagation(); onDownload(); }}
                   className="inline-flex items-center gap-1.5 border border-ink bg-paperLight px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
                 >
-                  <Download className="h-3.5 w-3.5" /> Bekijk
+                  <Download className="h-3.5 w-3.5" /> {t("finalReport.view")}
                 </button>
                 <button
                   type="button"
@@ -252,13 +253,13 @@ export function FinalReportBlock({
                   onClick={(e) => { e.stopPropagation(); onRemove(); }}
                   className="inline-flex items-center gap-1.5 border border-ink bg-paperLight px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-50"
                 >
-                  Verwijder
+                  {t("finalReport.remove")}
                 </button>
               </>
             )}
 
             <span className="ml-1 font-mono text-xs uppercase tracking-wider text-ink/40">
-              of sleep &amp; drop hier
+              {t("finalReport.dragDrop")}
             </span>
           </div>
         )}
@@ -266,7 +267,7 @@ export function FinalReportBlock({
 
       {!artifact && (
         <div className="mt-2 font-mono text-xs uppercase tracking-wider text-ink/40">
-          Nog geen rapport geüpload
+          {t("finalReport.noReport")}
         </div>
       )}
     </section>

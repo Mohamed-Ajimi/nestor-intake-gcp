@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Clipboard, Download, Check, Sparkles, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import i18n from "@/lib/i18n";
 import { derivePhase, phaseShowsResearch } from "@/lib/intake-phase";
 import { generateContextPackBlob } from "./ContextPackPDF";
 
@@ -42,6 +44,7 @@ export function HandoffBlock({
   answers,
   onStatusChange,
 }: Props) {
+  const { t } = useTranslation("intake");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -69,7 +72,7 @@ export function HandoffBlock({
   const handleGenerate = async () => {
     // Context-pack synthesis runs through the backend skill seam (Phase 6/7),
     // not invoked from this gated-off block.
-    toast.error("Context Pack-synthese is niet beschikbaar in deze fase.");
+    toast.error(t("handoff.packUnavailable"));
   };
 
   const handleCopy = async () => {
@@ -77,7 +80,9 @@ export function HandoffBlock({
       (typeof answers.project_name === "string" && answers.project_name.trim()) ||
       intakeTitle;
     const lines: string[] = [];
-    lines.push(`# Research-vragen — ${clientName} — ${projectName}`);
+    lines.push(
+      t("handoff.researchQuestionsHeader", { client: clientName, project: projectName }),
+    );
     lines.push("");
 
     // Main research questions
@@ -85,16 +90,16 @@ export function HandoffBlock({
       ? (answers.questions as Array<{ text: string; kind?: string }>)
       : [];
     if (mainQuestions.length > 0) {
-      lines.push("## Onderzoeksvragen");
+      lines.push(t("handoff.questionsSection"));
       lines.push("");
       mainQuestions.forEach((q, idx) => {
         lines.push(`### V${idx + 1}. ${q.text}`);
         if (q.kind) {
           const kindLabel =
             q.kind === "decision"
-              ? "Beslissing"
+              ? t("handoff.kindDecision")
               : q.kind === "exploration"
-                ? "Verkenning"
+                ? t("handoff.kindExploration")
                 : q.kind;
           lines.push(`Type: ${kindLabel}`);
         }
@@ -111,20 +116,20 @@ export function HandoffBlock({
         }>).filter((e) => e.approved === true)
       : [];
     if (extras.length > 0) {
-      lines.push("## Extra vragen (klant-goedgekeurd)");
+      lines.push(t("handoff.extraSection"));
       lines.push("");
       extras.forEach((e, idx) => {
         lines.push(`### E${idx + 1}. ${e.text}`);
-        if (e.rationale) lines.push(`*Waarom relevant:* ${e.rationale}`);
+        if (e.rationale) lines.push(`${t("handoff.whyRelevant")} ${e.rationale}`);
         lines.push("");
       });
     }
 
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
-      toast.success("Vragen gekopieerd — plak in Nestor");
+      toast.success(t("handoff.questionsCopied"));
     } catch {
-      toast.error("Kopiëren mislukt");
+      toast.error(t("handoff.copyFailed"));
     }
   };
 
@@ -149,7 +154,7 @@ export function HandoffBlock({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (e) {
-      toast.error(`PDF mislukt: ${(e as Error).message}`);
+      toast.error(t("handoff.pdfFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -160,13 +165,13 @@ export function HandoffBlock({
     // not wired from this gated-off block.
     void onStatusChange;
     setConfirming(false);
-    toast.error("Statuswijziging verloopt via de backend.");
+    toast.error(t("handoff.statusBackend"));
   };
 
   const fmtDate = (d: string | null) => {
-    if (!d) return "—";
+    if (!d) return t("handoff.dateFallback");
     try {
-      return new Date(d).toLocaleDateString("nl-NL", {
+      return new Date(d).toLocaleDateString(i18n.language, {
         day: "numeric",
         month: "long",
         year: "numeric",
@@ -177,7 +182,7 @@ export function HandoffBlock({
   };
 
   const fmtEur = (usd: number | null) =>
-    usd == null ? "—" : `€${(usd * 0.92).toFixed(2)}`;
+    usd == null ? t("handoff.dateFallback") : `€${(usd * 0.92).toFixed(2)}`;
 
   // Phase-gate: this handoff block is post-decomposed dead UI this milestone.
   // The re-platform scope ceiling stops at `decomposed`, so phaseShowsResearch()
@@ -198,10 +203,10 @@ export function HandoffBlock({
   return (
     <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-6">
       <div className="mb-3 font-mono text-xs uppercase tracking-wider text-ink">
-        HANDOFF VOOR NESTOR
+        {t("handoff.title")}
       </div>
       <p className="mb-5 text-ink font-sans text-sm">
-        Intake gevalideerd. Genereer eerst het Context Pack (AI synthese), dan kan je downloaden.
+        {t("handoff.intro")}
       </p>
       <div className="flex flex-wrap items-center gap-3">
         {!pack && !loadingPack && (
@@ -216,7 +221,7 @@ export function HandoffBlock({
             ) : (
               <Sparkles className="h-3.5 w-3.5" />
             )}
-            {generating ? "Bezig met synthese..." : "Genereer Context Pack"}
+            {generating ? t("handoff.synthesizing") : t("handoff.generateContextPack")}
           </button>
         )}
         <button
@@ -225,7 +230,7 @@ export function HandoffBlock({
           className="inline-flex items-center gap-2 border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
         >
           <Clipboard className="h-3.5 w-3.5" />
-          Kopieer alle vragen
+          {t("handoff.copyAllQuestions")}
         </button>
         {pack && (
           <button
@@ -235,7 +240,7 @@ export function HandoffBlock({
             className="inline-flex items-center gap-2 border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-50"
           >
             <Download className="h-3.5 w-3.5" />
-            Download Context Pack PDF
+            {t("handoff.downloadPdf")}
           </button>
         )}
         {pack && (
@@ -250,7 +255,7 @@ export function HandoffBlock({
             ) : (
               <Sparkles className="h-3.5 w-3.5" />
             )}
-            Regenereer
+            {t("handoff.regenerate")}
           </button>
         )}
         <button
@@ -260,15 +265,18 @@ export function HandoffBlock({
           className="inline-flex items-center gap-2 border border-ink bg-agenic-green px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink disabled:opacity-60"
         >
           <Check className="h-3.5 w-3.5" />
-          {delivered ? "Afgeleverd" : "Markeer als afgeleverd"}
+          {delivered ? t("handoff.delivered") : t("handoff.markDelivered")}
         </button>
       </div>
 
       {pack && (
         <div className="mt-6 border border-ink bg-paper p-5">
           <div className="mb-3 font-mono text-xs uppercase tracking-wider text-ink/70">
-            CONTEXT PACK — gegenereerd {fmtDate(pack.completed_at)} · cost{" "}
-            {fmtEur(pack.cost_estimate_usd)} · model {pack.model ?? "—"}
+            {t("handoff.packGenerated", {
+              date: fmtDate(pack.completed_at),
+              cost: fmtEur(pack.cost_estimate_usd),
+              model: pack.model ?? t("handoff.modelFallback"),
+            })}
           </div>
           <div className="prose prose-sm max-w-none text-ink prose-headings:font-serif prose-headings:text-ink prose-strong:text-ink prose-strong:font-semibold prose-a:text-ink">
             <ReactMarkdown>{pack.output}</ReactMarkdown>
@@ -280,24 +288,24 @@ export function HandoffBlock({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
           <div className="max-w-md border border-ink bg-paper p-6">
             <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
-              BEVESTIG
+              {t("handoff.confirm")}
             </div>
             <p className="font-sans text-sm text-ink">
-              Heb je de PDF + vragen naar Nestor doorgegeven?
+              {t("handoff.confirmBody")}
             </p>
             <div className="mt-6 flex justify-end gap-2">
               <button
                 onClick={() => setConfirming(false)}
                 className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
               >
-                Annuleren
+                {t("handoff.cancel")}
               </button>
               <button
                 onClick={handleMarkDelivered}
                 disabled={busy}
                 className="border border-ink bg-agenic-green px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink disabled:opacity-60"
               >
-                Bevestig
+                {t("handoff.confirmBtn")}
               </button>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Sparkles, Check, X, Pencil, Loader2, AlertTriangle, Info, Copy, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
@@ -113,6 +114,7 @@ function getSuggestedFor(fieldKey: string, parsed: ParsedSkillOutput): string | 
 /** Inline card for a simple field key (decision_or_goal, audience_description, company_intro)
  *  plus replacement-shape fields (bias_radar, gaps_flagged, blind_spots_*). */
 export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: string; currentValue?: unknown }) {
+ const { t } = useTranslation("intake");
  const ctx = useReview();
  if (!ctx) return null;
 
@@ -121,13 +123,13 @@ export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: st
   try {
    if (d.state === "approved") {
     await persistApprovedField(ctx.intakeId, ctx.runId, key, valueWhenApproved);
-    toast.success("Toegepast");
+    toast.success(t("aiReview.applied"));
    } else if (d.state === "manual") {
     await persistApprovedField(ctx.intakeId, ctx.runId, key, d.value);
-    toast.success("Opgeslagen");
+    toast.success(t("aiReview.saved"));
    }
   } catch (err: any) {
-   toast.error("Opslaan mislukt: " + (err?.message ?? "onbekend"));
+   toast.error(t("aiReview.saveFailed", { error: err?.message ?? t("aiReview.unknownError") }));
    ctx.state.setDecision(key, { state: "pending" });
   }
  };
@@ -366,13 +368,14 @@ export function AIReviewTopBanner({
  onSubmit: () => void;
  submitting: boolean;
 }) {
+ const { t } = useTranslation("intake");
  return (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
- <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">AI REVIEW MODE</div>
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">{t("aiReview.mode")}</div>
  <div className="flex flex-wrap items-center justify-between gap-3 text-ink font-sans">
  <div className="text-sm text-ink">
- Review elke suggestie en klik "Verstuur voor klant-validatie" wanneer klaar.
- {costEur != null && <span className="ml-1 font-mono text-xs uppercase tracking-wider text-ink/60">Cost: €{costEur.toFixed(2)}</span>}
+ {t("aiReview.reviewIntro")}
+ {costEur != null && <span className="ml-1 font-mono text-xs uppercase tracking-wider text-ink/60">{t("aiReview.cost", { amount: costEur.toFixed(2) })}</span>}
  </div>
  <div className="flex flex-wrap items-center gap-2">
  <button
@@ -380,7 +383,7 @@ export function AIReviewTopBanner({
  onClick={onCancel}
  className="border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
  >
- Annuleer review mode
+ {t("aiReview.cancelMode")}
  </button>
  <button
  type="button"
@@ -389,7 +392,7 @@ export function AIReviewTopBanner({
  className="inline-flex items-center gap-1.5 border border-ink bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90 disabled:opacity-50"
  >
  {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
- Verstuur voor klant-validatie
+ {t("aiReview.sendForValidation")}
  </button>
  </div>
  </div>
@@ -398,12 +401,13 @@ export function AIReviewTopBanner({
 }
 
 export function AIReviewInfoBanners({ parsed }: { parsed: ParsedSkillOutput }) {
+ const { t } = useTranslation("intake");
  return (
     <>
  {(parsed.dropped_questions ?? []).length > 0 && (
  <div className="mb-4 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
- NESTOR SCHRAPTE DEZE VRAGEN
+ {t("aiReview.droppedTitle")}
  </div>
  <ul className="list-disc space-y-1 pl-5 text-ink font-sans">
  {parsed.dropped_questions!.map((d, i) => (
@@ -418,7 +422,7 @@ export function AIReviewInfoBanners({ parsed }: { parsed: ParsedSkillOutput }) {
  {parsed.gaps_flagged && (
  <div className="mb-4 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
- NESTOR FLAGTE DEZE GAPS
+ {t("aiReview.gapsTitle")}
  </div>
  <Markdown>{parsed.gaps_flagged}</Markdown>
  </div>
@@ -442,6 +446,7 @@ function ApprovedRow({
   rationale?: string;
   onEdit: () => void;
 }) {
+  const { t } = useTranslation("intake");
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-2 border border-ink bg-paper2 text-sm">
@@ -452,7 +457,7 @@ function ApprovedRow({
         className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-ink/5"
       >
         <div className="font-sans text-sm text-ink/60">
-          {title ? `${title} · ` : ""}Aangescherpt door Nestor
+          {title ? `${title} · ` : ""}{t("aiReview.refinedByNestor")}
         </div>
         <div className="flex items-center gap-3">
           <span
@@ -471,7 +476,7 @@ function ApprovedRow({
             }}
             className="text-xs font-medium text-emerald-800 hover:underline"
           >
-            Wijzig
+            {t("aiReview.edit")}
           </span>
           <ChevronDown
             className={cn(
@@ -486,21 +491,21 @@ function ApprovedRow({
           {current && (
             <div>
               <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-                Origineel
+                {t("aiReview.original")}
               </div>
               <div className="whitespace-pre-wrap text-sm text-ink/70">{current}</div>
             </div>
           )}
           <div>
             <div className="mb-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-              Voorstel Nestor (huidig)
+              {t("aiReview.nestorProposalCurrent")}
             </div>
             <div className="whitespace-pre-wrap text-sm text-ink">{suggested}</div>
           </div>
           {rationale && (
             <p className="text-sm">
               <span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-                Waarom
+                {t("aiReview.why")}
               </span>
               <span className="font-sans italic text-ink/70">{rationale}</span>
             </p>
@@ -528,6 +533,7 @@ export function InlineSuggestionCard({
  decision: Decision;
  onDecide: (d: Decision) => void;
 }) {
+  const { t } = useTranslation("intake");
   if (decision.state === "approved") {
     return (
       <ApprovedRow
@@ -543,14 +549,14 @@ export function InlineSuggestionCard({
  return (
  <div className="mt-2 flex items-center justify-between border border-ink/10 bg-paper2 px-3 py-2 text-sm">
  <div className="text-ink/70">
- {title && <span className="font-medium">{title} — </span>}✗ Origineel blijft
+ {title && <span className="font-medium">{title} — </span>}{t("aiReview.keptOriginal")}
  </div>
  <button
  type="button"
  onClick={() => onDecide({ state: "pending" })}
  className="text-xs font-medium text-ink/70 hover:underline"
  >
- Wijzig
+ {t("aiReview.edit")}
  </button>
  </div>
  );
@@ -559,13 +565,13 @@ export function InlineSuggestionCard({
  return (
       <div className="mt-2 border border-ink bg-paper2 p-3 text-sm">
         <div className="flex items-center justify-between">
-          <div className="font-sans text-sm text-ink/60">{title ? `${title} · ` : ""}Manueel aangepast door admin</div>
+          <div className="font-sans text-sm text-ink/60">{title ? `${title} · ` : ""}{t("aiReview.manualByAdmin")}</div>
  <button
  type="button"
  onClick={() => onDecide({ state: "pending" })}
  className="font-mono text-xs uppercase tracking-wider text-ink hover:underline"
  >
- Wijzig
+ {t("aiReview.edit")}
  </button>
  </div>
  <p className="mt-2 whitespace-pre-wrap text-sm text-ink/80">{decision.value}</p>
@@ -576,14 +582,14 @@ export function InlineSuggestionCard({
  return (
  <div className="mt-2 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4 text-ink">
  <div className="mb-3 font-mono text-xs uppercase tracking-wider text-ink">
- NESTOR VOORSTEL{title ? ` · ${title}` : ""}
+ {t("aiReview.nestorProposal")}{title ? ` · ${title}` : ""}
  </div>
  <div className="border border-ink bg-paper p-4 font-mono text-base text-ink whitespace-pre-wrap">
  {suggested}
  </div>
  {rationale && (
  <p className="mt-3 text-sm">
- <span className="mr-3 font-mono text-xs uppercase tracking-wider text-ink/60">Waarom</span>
+ <span className="mr-3 font-mono text-xs uppercase tracking-wider text-ink/60">{t("aiReview.why")}</span>
  <span className="font-sans italic text-ink/70">{rationale}</span>
  </p>
  )}
@@ -611,6 +617,7 @@ function ManualOrChoice({
  onKeep: () => void;
  onManual: (value: string) => void;
 }) {
+ const { t } = useTranslation("intake");
  const [editing, setEditing] = useState(false);
  const [draft, setDraft] = useState(current || suggested);
 
@@ -628,7 +635,7 @@ function ManualOrChoice({
  type="button"
  onClick={() => {
  if (!draft.trim()) {
- toast("Kan niet leeg zijn");
+ toast(t("aiReview.cannotBeEmpty"));
  return;
  }
  onManual(draft);
@@ -636,14 +643,14 @@ function ManualOrChoice({
  }}
  className="bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80"
  >
- Opslaan
+ {t("aiReview.save")}
  </button>
  <button
  type="button"
  onClick={() => setEditing(false)}
  className="border border-ink/10 bg-paper px-3 py-1.5 text-xs font-medium text-ink/70 hover:bg-ink/5"
  >
- Annuleren
+ {t("aiReview.cancel")}
  </button>
  </div>
  </div>
@@ -658,7 +665,7 @@ function ManualOrChoice({
  disabled={!suggested || suggested.trim() === (current ?? "").trim()}
  className="inline-flex items-center gap-1 border border-ink bg-agenic-green px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:brightness-95 disabled:opacity-40 disabled:cursor-not-allowed"
  >
- <Check className="h-3.5 w-3.5" /> Toepassen
+ <Check className="h-3.5 w-3.5" /> {t("aiReview.apply")}
  </button>
 
  <button
@@ -666,7 +673,7 @@ function ManualOrChoice({
  onClick={onKeep}
  className="inline-flex items-center gap-1 border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
  >
- <X className="h-3.5 w-3.5" /> Houden
+ <X className="h-3.5 w-3.5" /> {t("aiReview.keep")}
  </button>
  <button
  type="button"
@@ -676,7 +683,7 @@ function ManualOrChoice({
  }}
  className="inline-flex items-center gap-1 border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
  >
- <Pencil className="h-3.5 w-3.5" /> Manueel aanpassen
+ <Pencil className="h-3.5 w-3.5" /> {t("aiReview.manualAdjust")}
  </button>
  </div>
  );
@@ -695,6 +702,7 @@ export function ResearchQuestionsSuggestions({
  intakeId?: string;
  runId?: string;
 }) {
+ const { t } = useTranslation("intake");
  const rqs = parsed.research_questions_refined ?? [];
  if (rqs.length === 0) return null;
 
@@ -718,9 +726,9 @@ export function ResearchQuestionsSuggestions({
   try {
    const refined = buildRefined(i, d);
    await persistApprovedField(intakeId, runId, "research_questions_refined", refined);
-   toast.success("Toegepast");
+   toast.success(t("aiReview.applied"));
   } catch (err: any) {
-   toast.error("Opslaan mislukt: " + (err?.message ?? "onbekend"));
+   toast.error(t("aiReview.saveFailed", { error: err?.message ?? t("aiReview.unknownError") }));
    state.setDecision(k, { state: "pending" });
   }
  };
@@ -728,12 +736,14 @@ export function ResearchQuestionsSuggestions({
  return (
  <div className="mt-4 space-y-3">
  <p className="font-mono text-xs uppercase tracking-wider text-ink">
- NESTOR VOORSTELLEN VOOR RESEARCH-VRAGEN
+ {t("aiReview.researchQuestionsTitle")}
  </p>
  {rqs.map((q, i) => {
  const k = `rq_${i}`;
  const idxLabel =
- q.original_index != null ? `Vraag ${q.original_index + 1}` : `Vraag ${i + 1}`;
+ q.original_index != null
+ ? t("aiReview.questionN", { n: q.original_index + 1 })
+ : t("aiReview.questionN", { n: i + 1 });
  const meta = [q.type, q.domain].filter(Boolean).join(" · ");
  return (
  <div key={k} className="border border-ink/10 bg-paper p-3">
@@ -743,7 +753,7 @@ export function ResearchQuestionsSuggestions({
  </div>
  {q.current && (
  <p className="text-sm text-ink/70">
- <span className="text-xs uppercase text-ink/40">Origineel: </span>
+ <span className="text-xs uppercase text-ink/40">{t("aiReview.originalPrefix")}</span>
  {q.current}
  </p>
  )}
@@ -765,16 +775,17 @@ export function ResearchQuestionsSuggestions({
 // ============== Extra questions section ==============
 
 export function ExtraQuestionsSection({ state, inline }: { state: AIReviewState; inline?: boolean }) {
+ const { t } = useTranslation("intake");
  if (state.extraQuestions.length === 0) {
  if (inline) {
- return <p className="mt-3 text-sm text-ink/60">Geen extra voorstellen.</p>;
+ return <p className="mt-3 text-sm text-ink/60">{t("aiReview.noExtraProposals")}</p>;
  }
  return null;
  }
  const body = (
  <>
  <p className="mt-2 text-xs text-ink/60">
- Vink aan welke voorstellen de klant te zien krijgt in zijn validatie-link.
+ {t("aiReview.extraIntro")}
  </p>
  <ul className="mt-4 space-y-3">
  {state.extraQuestions.map((q, i) => (
@@ -799,7 +810,7 @@ export function ExtraQuestionsSection({ state, inline }: { state: AIReviewState;
  <div className="flex-1">
  <div className="text-sm font-medium text-ink">{q.text}</div>
  {q.rationale && <div className="mt-1 text-xs text-ink/60">{q.rationale}</div>}
- <div className="mt-1 text-xs text-ink/60">Klant kan opnemen?</div>
+ <div className="mt-1 text-xs text-ink/60">{t("aiReview.clientCanInclude")}</div>
  </div>
  </label>
  </li>
@@ -811,7 +822,7 @@ export function ExtraQuestionsSection({ state, inline }: { state: AIReviewState;
  return (
  <section className="border border-ink/10 bg-paper p-6">
  <h2 className="border-b border-ink/10 pb-2 text-lg font-semibold text-ink">
- Extra vragen — voorstel Nestor
+ {t("aiReview.extraSectionTitle")}
  </h2>
  {body}
  </section>
@@ -828,21 +839,21 @@ export function ReviewSuccessModal({
  url: string;
  onClose: () => void;
 }) {
+ const { t } = useTranslation("intake");
  const copy = async () => {
  try {
  await navigator.clipboard.writeText(url);
- toast.success("Link gekopieerd");
+ toast.success(t("aiReview.linkCopied"));
  } catch {
- toast.error("Kopiëren mislukt");
+ toast.error(t("aiReview.copyFailed"));
  }
  };
  return (
  <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
  <div className="w-full max-w-lg bg-paper p-6 shadow-xl">
- <h3 className="text-base font-semibold text-emerald-900">Verstuurd voor klant-validatie</h3>
+ <h3 className="text-base font-semibold text-emerald-900">{t("aiReview.sentForValidation")}</h3>
  <p className="mt-2 text-sm text-ink/60">
- De klant kan via onderstaande link de refinements bekijken en de extra Nestor-voorstellen
- aanvinken.
+ {t("aiReview.successBody")}
  </p>
  <div className="mt-4 flex flex-wrap items-center gap-2">
  <code className="break-all rounded bg-paper2 px-2.5 py-1.5 text-xs text-ink/80 ring-1 ring-ink/10">
@@ -854,7 +865,7 @@ export function ReviewSuccessModal({
  className="inline-flex items-center gap-1 border border-ink/10 bg-paper px-2.5 py-1 text-xs font-medium text-ink/80 hover:bg-ink/5"
  >
  <Copy className="h-3.5 w-3.5" />
- Kopieer link
+ {t("aiReview.copyLink")}
  </button>
  </div>
  <div className="mt-5 flex justify-end">
@@ -863,7 +874,7 @@ export function ReviewSuccessModal({
  onClick={onClose}
  className="bg-ink px-3 py-1.5 text-sm font-medium text-paper hover:bg-ink/80"
  >
- Sluiten
+ {t("aiReview.close")}
  </button>
  </div>
  </div>

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2, ChevronDown, ChevronRight, X, Copy } from "lucide-react";
 import { jsPDF } from "jspdf";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { format } from "date-fns";
-import { nl } from "date-fns/locale";
+import i18n from "@/lib/i18n";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 import * as skills from "@/lib/api/skills";
 import { getContextPack, type ContextPackView } from "@/lib/api/contextPack";
@@ -49,16 +51,31 @@ const VISIBLE_STATUSES = new Set([
   "delivered",
 ]);
 
-function fmtDate(d: string | null) {
-  if (!d) return "—";
+function fmtDate(d: string | null, at: string, fallback: string) {
+  if (!d) return fallback;
   try {
-    return format(new Date(d), "d MMM yyyy 'om' HH:mm", { locale: nl });
+    return format(new Date(d), `d MMM yyyy '${at}' HH:mm`, {
+      locale: getDateLocale(i18n.language),
+    });
   } catch {
     return d;
   }
 }
 
-function downloadContextPackPDF(markdown: string, clientName: string, intakeTitle: string) {
+type PdfLabels = {
+  internalDoc: string;
+  title: string;
+  generatedOn: string;
+  pageOf: (page: number, total: number) => string;
+  footer: string;
+};
+
+function downloadContextPackPDF(
+  markdown: string,
+  clientName: string,
+  intakeTitle: string,
+  labels: PdfLabels,
+) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const margin = 20;
   const pageW = doc.internal.pageSize.getWidth();
@@ -77,13 +94,13 @@ function downloadContextPackPDF(markdown: string, clientName: string, intakeTitl
   doc.setFontSize(8);
   doc.setTextColor(120);
   doc.text("AGENIC × NESTOR", margin, 12);
-  doc.text("Context Pack — Intern werkdocument", pageW - margin, 12, { align: "right" });
+  doc.text(labels.internalDoc, pageW - margin, 12, { align: "right" });
   y = 24;
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(22);
   doc.setTextColor(0);
-  doc.text(`Context Pack — ${clientName}`, margin, y);
+  doc.text(`${labels.title} — ${clientName}`, margin, y);
   y += 10;
 
   doc.setFont("helvetica", "normal");
@@ -93,11 +110,7 @@ function downloadContextPackPDF(markdown: string, clientName: string, intakeTitl
   y += 6;
   doc.setFontSize(9);
   doc.setTextColor(140);
-  doc.text(
-    `Gegenereerd op ${new Date().toLocaleDateString("nl-BE", { day: "numeric", month: "long", year: "numeric" })}`,
-    margin,
-    y,
-  );
+  doc.text(labels.generatedOn, margin, y);
   y += 10;
 
   doc.setDrawColor(0);
@@ -189,8 +202,8 @@ function downloadContextPackPDF(markdown: string, clientName: string, intakeTitl
     doc.setPage(i);
     doc.setFontSize(7);
     doc.setTextColor(150);
-    doc.text(`pagina ${i} / ${pageCount}`, pageW - margin, pageH - 8, { align: "right" });
-    doc.text("AGENIC × NESTOR — Context Pack — confidentieel", margin, pageH - 8);
+    doc.text(labels.pageOf(i, pageCount), pageW - margin, pageH - 8, { align: "right" });
+    doc.text(labels.footer, margin, pageH - 8);
   }
 
   const slug = `context-pack-${clientName}-${new Date().toISOString().slice(0, 10)}`
@@ -207,6 +220,24 @@ export function ContextPackBlock({
   clientName,
   reloadSignal,
 }: Props) {
+  const { t } = useTranslation("intake");
+  const at = t("contextPack.at");
+  const dateFallback = t("contextPack.dateFallback");
+  // Pre-resolve the jsPDF label strings inside the provider so the imperatively
+  // generated PDF renders in the active locale (mirrors the Task-3 react-pdf pattern).
+  const buildPdfLabels = (): PdfLabels => ({
+    internalDoc: t("contextPack.internalDoc"),
+    title: t("contextPack.label"),
+    generatedOn: t("contextPack.generatedOn", {
+      date: new Date().toLocaleDateString(i18n.language, {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }),
+    }),
+    pageOf: (page: number, total: number) => t("contextPack.pageOf", { page, total }),
+    footer: t("contextPack.footer"),
+  });
   const [latestPack, setLatestPack] = useState<Pack | null>(null);
   const [loadingPack, setLoadingPack] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -274,10 +305,10 @@ export function ContextPackBlock({
     try {
       const res = await skills.generateContextPack(intakeId);
       if (!res.success) {
-        toast.error(`Context Pack starten mislukt: ${res.error}`);
+        toast.error(t("contextPack.generateFailed", { error: res.error }));
         return;
       }
-      toast.success("Context Pack-generatie gestart — dit duurt ± 1–2 minuten.");
+      toast.success(t("contextPack.generationStarted"));
     } finally {
       setGenerating(false);
     }
@@ -303,12 +334,11 @@ export function ContextPackBlock({
           className={`mb-2 font-mono text-[11px] uppercase tracking-wider ${isDone ? "text-ink/60" : ""}`}
           style={labelColor ? { color: labelColor } : undefined}
         >
-          Context Pack
+          {t("contextPack.label")}
         </div>
 
         <div className="mb-4 font-sans text-[15px] leading-relaxed text-ink">
-          Briefingdocument voor Nestor — destillaat van de gevalideerde intake in 11 secties
-          (klant, beslissing, ankers, scope, concurrenten, hypotheses, …).
+          {t("contextPack.intro")}
         </div>
         <div className="flex flex-wrap gap-2">
           {latestPack ? (
@@ -319,45 +349,52 @@ export function ContextPackBlock({
                 onClick={() => setViewingPack(latestPack)}
                 disabled={generating}
               >
-                Bekijk laatste
+                {t("contextPack.viewLatest")}
               </button>
               <button
                 type="button"
                 className={secondaryBtnCls}
                 onClick={() =>
                   latestPack.output &&
-                  downloadContextPackPDF(latestPack.output, clientName, intakeTitle)
+                  downloadContextPackPDF(
+                    latestPack.output,
+                    clientName,
+                    intakeTitle,
+                    buildPdfLabels(),
+                  )
                 }
                 disabled={generating || !latestPack.output}
               >
-                Download PDF
+                {t("contextPack.downloadPdf")}
               </button>
               <button
                 type="button"
                 className={secondaryBtnCls}
                 onClick={generateContextPack}
                 disabled={generating || loadingPack}
-                title="Pack opnieuw genereren — admin escape-hatch"
+                title={t("contextPack.regenerateTitle")}
               >
                 {generating ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Bezig…
+                    {t("contextPack.busy")}
                   </>
                 ) : (
-                  "↻ Genereer opnieuw"
+                  t("contextPack.regenerate")
                 )}
               </button>
             </>
           ) : (
             <p className="font-sans text-xs italic text-ink/50">
-              Nog geen Context Pack — gebruik de actie in het Volgende-stap-blok hierboven.
+              {t("contextPack.noPack")}
             </p>
           )}
         </div>
         {latestPack && (
           <div className="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink/40">
-            Laatst gegenereerd: {fmtDate(latestPack.completed_at)}
+            {t("contextPack.lastGenerated", {
+              date: fmtDate(latestPack.completed_at, at, dateFallback),
+            })}
             {latestPack.cost_estimate_usd != null && ` · €${latestPack.cost_estimate_usd}`}
             {latestPack.model && ` · ${latestPack.model}`}
           </div>
@@ -377,26 +414,28 @@ export function ContextPackBlock({
                 ) : (
                   <ChevronRight className="h-3.5 w-3.5" />
                 )}
-                Onderzoeksvragen ({questions.length})
+                {t("contextPack.questionsToggle", { count: questions.length })}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  const header = `Onderzoeksvragen — ${intakeTitle}`;
+                  const header = t("contextPack.questionsCopyHeader", { title: intakeTitle });
                   const body = questions
                     .map((q, i) => `V${i + 1} — ${displayQuestionText(q)}`)
                     .join("\n\n");
                   navigator.clipboard
                     .writeText(`${header}\n\n${body}`)
                     .then(() =>
-                      toast.success(`${questions.length} vragen gekopieerd naar klembord`),
+                      toast.success(
+                        t("contextPack.questionsCopied", { count: questions.length }),
+                      ),
                     )
-                    .catch(() => toast.error("Kopiëren mislukt"));
+                    .catch(() => toast.error(t("contextPack.copyFailed")));
                 }}
                 className={secondaryBtnCls}
               >
                 <Copy className="h-3.5 w-3.5" />
-                Kopieer alle
+                {t("contextPack.copyAll")}
               </button>
             </div>
 
@@ -412,7 +451,7 @@ export function ContextPackBlock({
                         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
                           {anchor && (
                             <span className="inline-flex items-center border border-ink bg-agenic-yellow px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink">
-                              Ankervraag
+                              {t("contextPack.anchorBadge")}
                             </span>
                           )}
                           <span>
@@ -427,12 +466,14 @@ export function ContextPackBlock({
                         onClick={() => {
                           navigator.clipboard
                             .writeText(`${label} — ${text}`)
-                            .then(() => toast.success(`Vraag ${label} gekopieerd`))
-                            .catch(() => toast.error("Kopiëren mislukt"));
+                            .then(() =>
+                              toast.success(t("contextPack.questionCopied", { label })),
+                            )
+                            .catch(() => toast.error(t("contextPack.copyFailed")));
                         }}
                         className="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink"
-                        title={`Kopieer ${label}`}
-                        aria-label={`Kopieer ${label}`}
+                        title={t("contextPack.copyQuestion", { label })}
+                        aria-label={t("contextPack.copyQuestion", { label })}
                       >
                         <Copy className="h-3.5 w-3.5" />
                       </button>
@@ -458,16 +499,16 @@ export function ContextPackBlock({
               ) : (
                 <ChevronRight className="h-4 w-4" />
               )}
-              Eerdere context pack runs
+              {t("contextPack.historyToggle")}
               {history && <span className="text-xs text-ink/60">({history.length})</span>}
             </span>
           </button>
           {historyOpen && (
             <div className="border-t border-ink/5 px-6 py-3">
               {history === null ? (
-                <p className="text-sm text-ink/60">Laden…</p>
+                <p className="text-sm text-ink/60">{t("contextPack.loading")}</p>
               ) : history.length === 0 ? (
-                <p className="text-sm text-ink/60">Geen runs.</p>
+                <p className="text-sm text-ink/60">{t("contextPack.noRuns")}</p>
               ) : (
                 <ul className="divide-y divide-ink/5">
                   {history.map((r) => (
@@ -476,7 +517,9 @@ export function ContextPackBlock({
                       className="flex flex-wrap items-center gap-2 py-2 text-sm"
                     >
                       <span>✓</span>
-                      <span className="text-ink/70">{fmtDate(r.completed_at)}</span>
+                      <span className="text-ink/70">
+                        {fmtDate(r.completed_at, at, dateFallback)}
+                      </span>
                       {r.cost_estimate_usd != null && (
                         <span className="text-ink/60">· €{r.cost_estimate_usd}</span>
                       )}
@@ -487,17 +530,23 @@ export function ContextPackBlock({
                           onClick={() => setViewingPack(r)}
                           className="border border-ink/20 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5"
                         >
-                          Bekijk
+                          {t("contextPack.view")}
                         </button>
                         <button
                           type="button"
                           onClick={() =>
-                            r.output && downloadContextPackPDF(r.output, clientName, intakeTitle)
+                            r.output &&
+                            downloadContextPackPDF(
+                              r.output,
+                              clientName,
+                              intakeTitle,
+                              buildPdfLabels(),
+                            )
                           }
                           disabled={!r.output}
                           className="border border-ink/20 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-40"
                         >
-                          Download PDF
+                          {t("contextPack.downloadPdf")}
                         </button>
                       </span>
                     </li>
@@ -524,11 +573,13 @@ export function ContextPackBlock({
                   className="font-mono text-[11px] uppercase tracking-wider"
                   style={{ color: "#FF2D87" }}
                 >
-                  Context Pack
+                  {t("contextPack.label")}
                 </div>
-                <h2 className="mt-1 font-serif text-2xl text-ink">Briefing voor Nestor</h2>
+                <h2 className="mt-1 font-serif text-2xl text-ink">
+                  {t("contextPack.modalTitle")}
+                </h2>
                 <p className="mt-1 font-mono text-[11px] uppercase tracking-wide text-ink/40">
-                  {fmtDate(viewingPack.completed_at)}
+                  {fmtDate(viewingPack.completed_at, at, dateFallback)}
                   {viewingPack.cost_estimate_usd != null &&
                     ` · €${viewingPack.cost_estimate_usd}`}
                   {viewingPack.model && ` · ${viewingPack.model}`}
@@ -538,7 +589,7 @@ export function ContextPackBlock({
                 type="button"
                 onClick={() => setViewingPack(null)}
                 className="p-1 text-ink/60 hover:text-ink"
-                aria-label="Sluiten"
+                aria-label={t("contextPack.close")}
               >
                 <X className="h-5 w-5" />
               </button>
@@ -557,22 +608,27 @@ export function ContextPackBlock({
                   if (!viewingPack.output) return;
                   navigator.clipboard
                     .writeText(viewingPack.output)
-                    .then(() => toast.success("Markdown gekopieerd"))
-                    .catch(() => toast.error("Kopiëren mislukt"));
+                    .then(() => toast.success(t("contextPack.markdownCopied")))
+                    .catch(() => toast.error(t("contextPack.copyFailed")));
                 }}
                 className={secondaryBtnCls}
               >
-                Kopieer markdown
+                {t("contextPack.copyMarkdown")}
               </button>
               <button
                 type="button"
                 onClick={() =>
                   viewingPack.output &&
-                  downloadContextPackPDF(viewingPack.output, clientName, intakeTitle)
+                  downloadContextPackPDF(
+                    viewingPack.output,
+                    clientName,
+                    intakeTitle,
+                    buildPdfLabels(),
+                  )
                 }
                 className={primaryBtnCls}
               >
-                Download PDF
+                {t("contextPack.downloadPdf")}
               </button>
             </div>
           </div>
