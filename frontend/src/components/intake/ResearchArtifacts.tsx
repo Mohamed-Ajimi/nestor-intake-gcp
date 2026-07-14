@@ -1,32 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { format } from "date-fns";
-import { nl } from "date-fns/locale";
+import i18n from "@/lib/i18n";
+import { getDateLocale } from "@/lib/i18n/date-locale";
 import { toast } from "sonner";
 import { Loader2, Upload, FileText, Download, X, StickyNote } from "lucide-react";
 import * as storage from "@/lib/api/storage";
 import { derivePhase, phaseShowsResearch } from "@/lib/intake-phase";
 import { displayQuestionText, isAnchorQuestion } from "@/lib/research-question";
 
-const SOURCES = [
+// Source/type option values are stable API discriminants; labels are resolved at render
+// via t() (only the two Dutch labels — Manueel/Andere — and the type labels are localized).
+const SOURCE_VALUES = [
   { value: "claude", label: "Claude" },
   { value: "gemini", label: "Gemini" },
   { value: "openai", label: "OpenAI" },
   { value: "serp_api", label: "SerpAPI" },
   { value: "search_api", label: "SearchAPI" },
-  { value: "manual", label: "Manueel" },
-  { value: "other", label: "Andere" },
-];
+  { value: "manual", labelKey: "artifacts.sourceManual" },
+  { value: "other", labelKey: "artifacts.sourceOther" },
+] as const;
 
-const TYPES = [
-  { value: "deliverable", label: "KLANT-RAPPORT (deliverable)" },
-  { value: "deep_research", label: "Deep research" },
-  { value: "search_result", label: "Search result" },
-  { value: "synthesis", label: "Synthese" },
-  { value: "note", label: "Notitie" },
-  { value: "transcript", label: "Transcript" },
-  { value: "data", label: "Data" },
-  { value: "other", label: "Andere" },
-];
+const TYPE_VALUES = [
+  { value: "deliverable", labelKey: "artifacts.typeDeliverable" },
+  { value: "deep_research", labelKey: "artifacts.typeDeepResearch" },
+  { value: "search_result", labelKey: "artifacts.typeSearchResult" },
+  { value: "synthesis", labelKey: "artifacts.typeSynthesis" },
+  { value: "note", labelKey: "artifacts.typeNote" },
+  { value: "transcript", labelKey: "artifacts.typeTranscript" },
+  { value: "data", labelKey: "artifacts.typeData" },
+  { value: "other", labelKey: "artifacts.typeOther" },
+] as const;
 
 type ResearchQuestion = {
   id: string;
@@ -94,6 +98,7 @@ function ResearchArtifactsInner({
   intakeId: string;
   intakeStatus: string;
 }) {
+  const { t } = useTranslation("intake");
   const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,14 +144,16 @@ function ResearchArtifactsInner({
 
       <section className="border border-ink bg-paperLight p-6">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-mono text-xs uppercase tracking-wider text-ink">Research artifacts</h2>
+          <h2 className="font-mono text-xs uppercase tracking-wider text-ink">
+            {t("artifacts.heading")}
+          </h2>
           {loading && <Loader2 className="h-4 w-4 animate-spin text-ink/40" />}
         </div>
 
         <div className="space-y-6">
           {visibleQuestions.length === 0 && !loading && (
             <p className="border border-ink/30 bg-paper p-3 font-sans text-sm text-ink/60">
-              Nog geen onderzoeksvragen — die verschijnen zodra de intake is gedecomposeerd.
+              {t("artifacts.noQuestions")}
             </p>
           )}
 
@@ -166,12 +173,10 @@ function ResearchArtifactsInner({
             <div className="mt-6 border-t-2 border-ink/20 pt-6">
               <div className="mb-2">
                 <span className="font-mono text-xs uppercase tracking-wider text-ink/60">
-                  Algemeen
+                  {t("artifacts.general")}
                 </span>
                 <p className="mt-1 max-w-3xl text-sm text-ink/60">
-                  Research die niet aan één specifieke vraag hoort — API-zoekresultaten,
-                  brede marktrapporten, geo-data, bronnen die over meerdere vragen heen
-                  relevant zijn.
+                  {t("artifacts.generalBody")}
                 </p>
               </div>
               <QuestionBlock
@@ -201,15 +206,13 @@ function QuestionBlock({
   artifacts: Artifact[];
   onChanged: () => void | Promise<void>;
 }) {
+  const { t } = useTranslation("intake");
   const [noteOpen, setNoteOpen] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const displayText = question ? displayQuestionText(question) : "";
   const anchor = question ? isAnchorQuestion(question) : false;
-  const label = question
-    ? `V${index}. ${displayText}`
-    : "Algemeen (niet per vraag)";
 
   const onPick = (files: FileList | null) => {
     if (!files || !files.length) return;
@@ -222,13 +225,13 @@ function QuestionBlock({
         <span className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">
           {anchor && (
             <span className="inline-flex items-center border border-ink bg-agenic-yellow px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink">
-              Ankervraag
+              {t("artifacts.anchorBadge")}
             </span>
           )}
-          {question ? `V${index}` : "Algemeen"}
+          {question ? `V${index}` : t("artifacts.generalShort")}
         </span>
         {question && <p className="mt-1 font-sans text-ink">{displayText}</p>}
-        {!question && <p className="mt-1 text-ink/60">Voor intake-brede uploads.</p>}
+        {!question && <p className="mt-1 text-ink/60">{t("artifacts.generalUploads")}</p>}
       </div>
 
       {question && (
@@ -259,17 +262,17 @@ function QuestionBlock({
             onClick={() => inputRef.current?.click()}
             className="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
           >
-            <Upload className="h-3.5 w-3.5" /> Upload bestanden
+            <Upload className="h-3.5 w-3.5" /> {t("artifacts.uploadFiles")}
           </button>
           <button
             type="button"
             onClick={() => setNoteOpen(true)}
             className="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
           >
-            <StickyNote className="h-3.5 w-3.5" /> Manuele notitie
+            <StickyNote className="h-3.5 w-3.5" /> {t("artifacts.manualNote")}
           </button>
           <span className="font-mono text-[10px] uppercase tracking-wider text-ink/40">
-            of sleep & drop hier
+            {t("artifacts.dragDrop")}
           </span>
         </div>
         <input
@@ -345,6 +348,7 @@ function PendingUploadForm({
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("intake");
   const [source, setSource] = useState("manual");
   const [otherSource, setOtherSource] = useState("");
   const [type, setType] = useState("deep_research");
@@ -368,11 +372,11 @@ function PendingUploadForm({
           contentType: file.type || undefined,
         });
         if (!res.success) throw new Error(res.error);
-        toast.success(`${file.name} geüpload.`);
+        toast.success(t("artifacts.fileUploaded", { name: file.name }));
       }
       await onDone();
     } catch (e) {
-      toast.error(`Upload mislukt: ${(e as Error).message}`);
+      toast.error(t("artifacts.uploadFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -381,7 +385,7 @@ function PendingUploadForm({
   return (
     <div className="mt-2 border border-ink bg-paper p-3">
       <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
-        {files.length} bestand{files.length > 1 ? "en" : ""} klaar
+        {t("artifacts.filesReady", { count: files.length })}
       </div>
       <ul className="mb-3 space-y-0.5 font-sans text-sm text-ink/70">
         {files.map((f) => (
@@ -390,20 +394,24 @@ function PendingUploadForm({
       </ul>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="block">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">Bron</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
+            {t("artifacts.source")}
+          </span>
           <select
             value={source}
             onChange={(e) => setSource(e.target.value)}
             className="mt-1 block w-full border border-ink bg-paper px-2 py-1 text-sm text-ink"
           >
-            {SOURCES.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
+            {SOURCE_VALUES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {"labelKey" in s ? t(s.labelKey) : s.label}
+              </option>
             ))}
           </select>
           {source === "other" && (
             <input
               type="text"
-              placeholder="Bron (vrije tekst)"
+              placeholder={t("artifacts.sourceFreeText")}
               value={otherSource}
               onChange={(e) => setOtherSource(e.target.value)}
               className="mt-1 block w-full border border-ink bg-paper px-2 py-1 text-sm text-ink"
@@ -411,14 +419,16 @@ function PendingUploadForm({
           )}
         </label>
         <label className="block">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">Type</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
+            {t("artifacts.type")}
+          </span>
           <select
             value={type}
             onChange={(e) => setType(e.target.value)}
             className="mt-1 block w-full border border-ink bg-paper px-2 py-1 text-sm text-ink"
           >
-            {TYPES.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
+            {TYPE_VALUES.map((ty) => (
+              <option key={ty.value} value={ty.value}>{t(ty.labelKey)}</option>
             ))}
           </select>
         </label>
@@ -430,7 +440,7 @@ function PendingUploadForm({
           disabled={busy}
           className="border border-ink bg-paper px-3 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
         >
-          Annuleren
+          {t("artifacts.cancel")}
         </button>
         <button
           type="button"
@@ -439,7 +449,7 @@ function PendingUploadForm({
           className="inline-flex items-center gap-1.5 bg-ink px-3 py-1 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Uploaden
+          {t("artifacts.uploading")}
         </button>
       </div>
     </div>
@@ -457,13 +467,14 @@ function NoteModal({
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
+  const { t } = useTranslation("intake");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
     if (!text.trim()) {
-      toast.error("Schrijf een notitie");
+      toast.error(t("artifacts.writeNote"));
       return;
     }
     setBusy(true);
@@ -481,10 +492,10 @@ function NoteModal({
         contentType: "text/plain",
       });
       if (!res.success) throw new Error(res.error);
-      toast.success("Notitie opgeslagen");
+      toast.success(t("artifacts.noteSaved"));
       await onDone();
     } catch (e) {
-      toast.error(`Opslaan mislukt: ${(e as Error).message}`);
+      toast.error(t("artifacts.saveFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -493,19 +504,23 @@ function NoteModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
       <div className="w-full max-w-xl border border-ink bg-paper p-6">
-        <h3 className="font-serif text-xl lowercase">Manuele notitie</h3>
+        <h3 className="font-serif text-xl lowercase">{t("artifacts.manualNoteTitle")}</h3>
         <label className="mt-4 block">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">Titel</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
+            {t("artifacts.titleLabel")}
+          </span>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Optioneel"
+            placeholder={t("artifacts.optional")}
             className="mt-1 block w-full border border-ink bg-paper px-2 py-1 text-sm text-ink"
           />
         </label>
         <label className="mt-3 block">
-          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">Tekst</span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
+            {t("artifacts.textLabel")}
+          </span>
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
@@ -520,7 +535,7 @@ function NoteModal({
             disabled={busy}
             className="border border-ink bg-paper px-3 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
           >
-            Annuleren
+            {t("artifacts.cancel")}
           </button>
           <button
             type="button"
@@ -529,7 +544,7 @@ function NoteModal({
             className="inline-flex items-center gap-1.5 bg-ink px-3 py-1 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Opslaan
+            {t("artifacts.save")}
           </button>
         </div>
       </div>
@@ -538,6 +553,7 @@ function NoteModal({
 }
 
 function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intakeId: string; artifact: Artifact; isClientChoice?: boolean; onDeleted: () => void | Promise<void> }) {
+  const { t } = useTranslation("intake");
   const [busy, setBusy] = useState(false);
 
   const open = async () => {
@@ -548,14 +564,14 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
       expiresIn: 300,
     });
     if (!res.success) {
-      toast.error("Kon link niet maken");
+      toast.error(t("artifacts.linkCreateFailed"));
       return;
     }
     window.open(res.data.url, "_blank");
   };
 
   const remove = async () => {
-    if (!confirm(`Verwijder ${artifact.filename}?`)) return;
+    if (!confirm(t("artifacts.removeConfirm", { filename: artifact.filename }))) return;
     setBusy(true);
     try {
       // The research-artifact DB record is owned by the research backend
@@ -564,10 +580,10 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
         const res = await storage.removeFile({ intakeId, paths: [artifact.storage_path] });
         if (!res.success) throw new Error(res.error);
       }
-      toast.success("Verwijderd");
+      toast.success(t("artifacts.removed"));
       await onDeleted();
     } catch (e) {
-      toast.error(`Verwijderen mislukt: ${(e as Error).message}`);
+      toast.error(t("artifacts.removeFailed", { error: (e as Error).message }));
     } finally {
       setBusy(false);
     }
@@ -581,7 +597,9 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
 
   const date = (() => {
     try {
-      return format(new Date(artifact.created_at), "d MMM HH:mm", { locale: nl });
+      return format(new Date(artifact.created_at), "d MMM HH:mm", {
+        locale: getDateLocale(i18n.language),
+      });
     } catch {
       return artifact.created_at;
     }
@@ -606,19 +624,23 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
           className="inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider"
           style={{ color: "#FF2D87", borderColor: "#FF2D87" }}
         >
-          ✓ Klant-versie
+          {t("artifacts.clientVersion")}
         </span>
       )}
       {status === "pending" && (
         <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-          <Loader2 className="h-3 w-3 animate-spin" /> Indexeren…
+          <Loader2 className="h-3 w-3 animate-spin" /> {t("artifacts.indexing")}
         </span>
       )}
       {status === "embedded" && (
-        <span className="font-mono text-[10px] uppercase tracking-wider text-ink">Geïndexeerd</span>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink">
+          {t("artifacts.indexed")}
+        </span>
       )}
       {status === "failed" && (
-        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/40">Indexering mislukt</span>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/40">
+          {t("artifacts.indexFailed")}
+        </span>
       )}
       <span className="ml-auto flex items-center gap-1">
         {artifact.storage_path && (
@@ -627,7 +649,7 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
             onClick={open}
             className="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5"
           >
-            <Download className="h-3 w-3" /> Open
+            <Download className="h-3 w-3" /> {t("artifacts.open")}
           </button>
         )}
         <button
@@ -636,7 +658,7 @@ function ArtifactRow({ intakeId, artifact, isClientChoice, onDeleted }: { intake
           disabled={busy}
           className="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-50"
         >
-          <X className="h-3 w-3" /> Verwijder
+          <X className="h-3 w-3" /> {t("artifacts.remove")}
         </button>
       </span>
     </li>
@@ -666,6 +688,7 @@ function ResearchArtifactsPerSource({
   questionPriority: number;
   artifacts: Artifact[];
 }) {
+  const { t } = useTranslation("intake");
   const autoArtifacts = useMemo(
     () =>
       [...artifacts]
@@ -678,10 +701,10 @@ function ResearchArtifactsPerSource({
     return (
       <div className="mt-4 mb-4">
         <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-          Research artifacts
+          {t("artifacts.researchArtifacts")}
         </div>
         <p className="mb-3 text-xs italic text-ink/40">
-          Nog geen automatische artifacts. Start de research via de knop bovenaan.
+          {t("artifacts.noAutoArtifacts")}
         </p>
       </div>
     );
@@ -690,7 +713,7 @@ function ResearchArtifactsPerSource({
   return (
     <div className="mt-4 mb-4">
       <div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-        Research artifacts ({autoArtifacts.length})
+        {t("artifacts.researchArtifactsCount", { count: autoArtifacts.length })}
       </div>
       <div className="space-y-2">
         {autoArtifacts.map((a) => (
@@ -715,6 +738,7 @@ function PerSourceRow({
   intakeId: string;
   questionPriority: number;
 }) {
+  const { t } = useTranslation("intake");
   const [text, setText] = useState<string | null>(null);
   const [loadingText, setLoadingText] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -742,7 +766,7 @@ function PerSourceRow({
   const queryText = queryMatch ? queryMatch[1].slice(0, 80) : "";
 
   const downloadAsMarkdown = async () => {
-    const content = (await ensureText()) || "(geen content)";
+    const content = (await ensureText()) || t("artifacts.noContent");
     const blob = new Blob([content], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -792,7 +816,7 @@ function PerSourceRow({
           </div>
           {queryText && (
             <div className="mt-1 truncate text-xs text-ink/55">
-              Query: <span className="font-mono">{queryText}</span>
+              {t("artifacts.query")} <span className="font-mono">{queryText}</span>
             </div>
           )}
         </div>
@@ -818,11 +842,9 @@ function PerSourceRow({
       {showPreview && (
         <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap border border-ink/15 bg-paper p-3 font-mono text-xs">
           {text === null
-            ? "Laden…"
+            ? t("artifacts.loading")
             : text.slice(0, 6000) +
-              (text.length > 6000
-                ? "\n\n[...truncated, klik download voor volledige inhoud]"
-                : "")}
+              (text.length > 6000 ? t("artifacts.truncated") : "")}
         </pre>
       )}
     </div>

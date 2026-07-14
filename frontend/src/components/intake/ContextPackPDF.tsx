@@ -92,23 +92,21 @@ const styles = StyleSheet.create({
   },
 });
 
-function fmtDate(d: string | null | undefined) {
-  if (!d) return "—";
-  try {
-    return new Date(d).toLocaleDateString("nl-NL", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
-  } catch {
-    return d;
-  }
-}
+// Pitfall 3: this component renders via pdf(<.../>).toBlob() OUTSIDE the I18nextProvider,
+// so the react-i18next translation hook has no context here. All display strings —
+// including the two pre-formatted date lines and the locale-aware date fallback — arrive
+// as pre-resolved props built by the CALLING component (which IS inside the provider).
+// See generateContextPackBlob.
+export type ContextPackPDFLabels = {
+  footer: string;
+  validated: string;
+  generated: string;
+};
 
-function Footer() {
+function Footer({ footer }: { footer: string }) {
   return (
     <View style={styles.footer} fixed>
-      <Text>AGENIC × NESTOR — CONTEXT PACK — CONFIDENTIEEL</Text>
+      <Text>{footer}</Text>
       <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
     </View>
   );
@@ -266,17 +264,16 @@ function MarkdownBlocks({ md }: { md: string }) {
 type Props = {
   clientName: string;
   intakeTitle: string;
-  validatedAt: string | null;
-  generatedAt: string | null;
   contextPackMarkdown: string;
+  /** Pre-resolved display strings from the calling component (Pitfall 3). */
+  labels: ContextPackPDFLabels;
 };
 
 export function ContextPackPDF({
   clientName,
   intakeTitle,
-  validatedAt,
-  generatedAt,
   contextPackMarkdown,
+  labels,
 }: Props) {
   return (
     <Document>
@@ -285,17 +282,15 @@ export function ContextPackPDF({
           <Text style={styles.topLabel}>AGENIC × NESTOR</Text>
           <Text style={styles.coverClient}>{clientName.toLowerCase()}</Text>
           <Text style={styles.coverTitle}>{intakeTitle}</Text>
-          <Text style={styles.coverMeta}>Gevalideerd: {fmtDate(validatedAt)}</Text>
-          <Text style={styles.coverMeta}>
-            Context Pack — gegenereerd {fmtDate(generatedAt)}
-          </Text>
+          <Text style={styles.coverMeta}>{labels.validated}</Text>
+          <Text style={styles.coverMeta}>{labels.generated}</Text>
         </View>
-        <Footer />
+        <Footer footer={labels.footer} />
       </Page>
 
       <Page size="A4" style={styles.page}>
         <MarkdownBlocks md={contextPackMarkdown} />
-        <Footer />
+        <Footer footer={labels.footer} />
       </Page>
     </Document>
   );

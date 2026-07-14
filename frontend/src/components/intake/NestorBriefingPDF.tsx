@@ -114,10 +114,40 @@ const styles = StyleSheet.create({
   tableCell: { flex: 1, fontSize: 9, color: "#1A1A1A", paddingRight: 6 },
 });
 
-function Footer() {
+// Pitfall 3: this component renders via pdf(<.../>).toBlob() OUTSIDE the I18nextProvider,
+// so the react-i18next translation hook has no context here. All display strings arrive
+// as pre-resolved props built by the CALLING component (which IS inside the provider).
+// See generateBriefingBlob.
+export type NestorBriefingPDFLabels = {
+  footer: string;
+  validatedOn: string;
+  nestorProduct: string;
+  decisionGoal: string;
+  researchQuestions: string;
+  extraQuestions: string;
+  clientContext: string;
+  company: string;
+  audience: string;
+  competitors: string;
+  stakeholders: string;
+  scopeConstraints: string;
+  deadline: string;
+  geoScope: string;
+  timeHorizon: string;
+  outOfScope: string;
+  outputSize: string;
+  outputForm: string;
+  attachments: string;
+  noFiles: string;
+  fileFallback: string;
+  note: string;
+  dash: string;
+};
+
+function Footer({ footer }: { footer: string }) {
   return (
     <View style={styles.footer} fixed>
-      <Text>AGENIC × NESTOR — CONFIDENTIEEL</Text>
+      <Text>{footer}</Text>
       <Text render={({ pageNumber, totalPages }) => `${pageNumber} / ${totalPages}`} />
     </View>
   );
@@ -137,32 +167,22 @@ function asString(v: unknown): string {
   return String(v);
 }
 
-function fmtDate(d: string | null | undefined) {
-  if (!d) return "—";
-  try {
-    return new Date(d).toLocaleDateString("nl-NL", { day: "numeric", month: "long", year: "numeric" });
-  } catch {
-    return d;
-  }
-}
-
 type Question = { text: string; type?: string; domain?: string; kind?: string };
 
 type Props = {
   clientName: string;
   intakeTitle: string;
-  productName: string;
-  validatedAt: string | null;
   answers: Record<string, unknown>;
   schema?: IntakeSchema;
+  /** Pre-resolved display strings from the calling component (Pitfall 3). */
+  labels: NestorBriefingPDFLabels;
 };
 
 export function NestorBriefingPDF({
   clientName,
   intakeTitle,
-  productName,
-  validatedAt,
   answers,
+  labels,
 }: Props) {
   const decision = asString(answers.decision_or_goal);
   const refined = (answers.research_questions_refined as Question[] | undefined) ?? [];
@@ -199,21 +219,21 @@ export function NestorBriefingPDF({
           <Text style={styles.topLabel}>AGENIC × NESTOR</Text>
           <Text style={styles.coverClient}>{clientName.toLowerCase()}</Text>
           <Text style={styles.coverTitle}>{intakeTitle}</Text>
-          <Text style={styles.coverMeta}>Gevalideerd op {fmtDate(validatedAt)}</Text>
-          <Text style={styles.coverMeta}>Nestor {productName}</Text>
+          <Text style={styles.coverMeta}>{labels.validatedOn}</Text>
+          <Text style={styles.coverMeta}>{labels.nestorProduct}</Text>
         </View>
-        <Footer />
+        <Footer footer={labels.footer} />
       </Page>
 
       <Page size="A4" style={styles.page}>
-        <Text style={styles.sectionHeading}>beslissing & doel</Text>
+        <Text style={styles.sectionHeading}>{labels.decisionGoal}</Text>
         <View style={styles.hairline} />
-        <Text style={styles.body}>{decision || "—"}</Text>
+        <Text style={styles.body}>{decision || labels.dash}</Text>
 
-        <Text style={styles.sectionHeading}>onderzoeksvragen</Text>
+        <Text style={styles.sectionHeading}>{labels.researchQuestions}</Text>
         <View style={styles.hairline} />
         {questions.length === 0 ? (
-          <Text style={styles.body}>—</Text>
+          <Text style={styles.body}>{labels.dash}</Text>
         ) : (
           questions.map((q, i) => (
             <View key={i} style={styles.qBlock} wrap={false}>
@@ -230,7 +250,7 @@ export function NestorBriefingPDF({
 
         {extra.length > 0 && (
           <>
-            <Text style={styles.sectionHeading}>extra vragen (klant-goedgekeurd)</Text>
+            <Text style={styles.sectionHeading}>{labels.extraQuestions}</Text>
             <View style={styles.hairline} />
             {extra.map((q, i) => (
               <View key={i} style={styles.qBlock} wrap={false}>
@@ -241,64 +261,64 @@ export function NestorBriefingPDF({
             ))}
           </>
         )}
-        <Footer />
+        <Footer footer={labels.footer} />
       </Page>
 
       <Page size="A4" style={styles.page}>
-        <Text style={styles.sectionHeading}>klantcontext</Text>
+        <Text style={styles.sectionHeading}>{labels.clientContext}</Text>
         <View style={styles.hairline} />
 
-        <Text style={styles.label}>BEDRIJF</Text>
-        <Text style={styles.body}>{company || "—"}</Text>
+        <Text style={styles.label}>{labels.company}</Text>
+        <Text style={styles.body}>{company || labels.dash}</Text>
 
-        <Text style={styles.label}>DOELGROEP</Text>
-        <Text style={styles.body}>{audience || "—"}</Text>
+        <Text style={styles.label}>{labels.audience}</Text>
+        <Text style={styles.body}>{audience || labels.dash}</Text>
 
-        <Text style={styles.label}>CONCURRENTEN</Text>
-        <Text style={styles.body}>{asString(competitors) || "—"}</Text>
+        <Text style={styles.label}>{labels.competitors}</Text>
+        <Text style={styles.body}>{asString(competitors) || labels.dash}</Text>
 
-        <Text style={styles.label}>STAKEHOLDERS</Text>
+        <Text style={styles.label}>{labels.stakeholders}</Text>
         {Array.isArray(stakeholders) && stakeholders.length > 0 ? (
           stakeholders.map((s, i) => {
             const o = (s ?? {}) as Record<string, unknown>;
             return (
               <View key={i} style={styles.tableRow}>
-                <Text style={styles.tableCell}>{asString(o.name) || "—"}</Text>
+                <Text style={styles.tableCell}>{asString(o.name) || labels.dash}</Text>
                 <Text style={styles.tableCell}>{asString(o.role) || ""}</Text>
                 <Text style={styles.tableCell}>{asString(o.email) || ""}</Text>
               </View>
             );
           })
         ) : (
-          <Text style={styles.body}>—</Text>
+          <Text style={styles.body}>{labels.dash}</Text>
         )}
 
-        <Text style={styles.sectionHeading}>scope & constraints</Text>
+        <Text style={styles.sectionHeading}>{labels.scopeConstraints}</Text>
         <View style={styles.hairline} />
-        <Text style={styles.label}>DEADLINE</Text>
-        <Text style={styles.body}>{deadline || "—"}</Text>
-        <Text style={styles.label}>GEO SCOPE</Text>
-        <Text style={styles.body}>{geo || "—"}</Text>
-        <Text style={styles.label}>TIME HORIZON</Text>
-        <Text style={styles.body}>{horizon || "—"}</Text>
-        <Text style={styles.label}>OUT OF SCOPE</Text>
-        <Text style={styles.body}>{oos || "—"}</Text>
-        <Text style={styles.label}>OUTPUT SIZE</Text>
-        <Text style={styles.body}>{outSize || "—"}</Text>
-        <Text style={styles.label}>OUTPUT FORM</Text>
-        <Text style={styles.body}>{outForm || "—"}</Text>
-        <Footer />
+        <Text style={styles.label}>{labels.deadline}</Text>
+        <Text style={styles.body}>{deadline || labels.dash}</Text>
+        <Text style={styles.label}>{labels.geoScope}</Text>
+        <Text style={styles.body}>{geo || labels.dash}</Text>
+        <Text style={styles.label}>{labels.timeHorizon}</Text>
+        <Text style={styles.body}>{horizon || labels.dash}</Text>
+        <Text style={styles.label}>{labels.outOfScope}</Text>
+        <Text style={styles.body}>{oos || labels.dash}</Text>
+        <Text style={styles.label}>{labels.outputSize}</Text>
+        <Text style={styles.body}>{outSize || labels.dash}</Text>
+        <Text style={styles.label}>{labels.outputForm}</Text>
+        <Text style={styles.body}>{outForm || labels.dash}</Text>
+        <Footer footer={labels.footer} />
       </Page>
 
       <Page size="A4" style={styles.page}>
-        <Text style={styles.sectionHeading}>bijlagen — door klant geüpload</Text>
+        <Text style={styles.sectionHeading}>{labels.attachments}</Text>
         <View style={styles.hairline} />
         {materials.length === 0 ? (
-          <Text style={styles.body}>Geen bestanden geüpload.</Text>
+          <Text style={styles.body}>{labels.noFiles}</Text>
         ) : (
           materials.map((m, i) => (
             <View key={i} style={styles.tableRow}>
-              <Text style={styles.tableCell}>{m.name || m.path || "bestand"}</Text>
+              <Text style={styles.tableCell}>{m.name || m.path || labels.fileFallback}</Text>
               <Text style={styles.tableCell}>
                 {m.size ? `${(m.size / 1024).toFixed(0)} KB` : ""}
               </Text>
@@ -307,11 +327,11 @@ export function NestorBriefingPDF({
         )}
         {materialsNote && (
           <>
-            <Text style={styles.label}>NOTITIE</Text>
+            <Text style={styles.label}>{labels.note}</Text>
             <Text style={styles.body}>{materialsNote}</Text>
           </>
         )}
-        <Footer />
+        <Footer footer={labels.footer} />
       </Page>
     </Document>
   );
@@ -321,10 +341,18 @@ export async function generateBriefingBlob(props: Props): Promise<Blob> {
   return await pdf(<NestorBriefingPDF {...props} />).toBlob();
 }
 
+// Pre-resolved markdown labels (Pitfall 3 — this pure builder has no provider access;
+// the caller resolves the two localized headers via t() and passes them in).
+export type ResearchMarkdownLabels = {
+  header: string;
+  extraSection: string;
+};
+
 export function buildResearchMarkdown(
   clientName: string,
   intakeTitle: string,
   answers: Record<string, unknown>,
+  labels: ResearchMarkdownLabels,
 ): string {
   const refined = (answers.research_questions_refined as Question[] | undefined) ?? [];
   const original = (answers.research_questions as Question[] | undefined) ?? [];
@@ -335,8 +363,10 @@ export function buildResearchMarkdown(
     approved?: boolean;
   }>) ?? []).filter((q) => q.approved === true);
 
+  void clientName;
+  void intakeTitle;
   const lines: string[] = [];
-  lines.push(`# Research-vragen — ${clientName} — ${intakeTitle}`, "");
+  lines.push(labels.header, "");
   questions.forEach((q, i) => {
     lines.push(`## V${i + 1}. ${q.text}`);
     const meta = [q.type || q.kind, q.domain].filter(Boolean).join(" · ");
@@ -344,7 +374,7 @@ export function buildResearchMarkdown(
     lines.push("");
   });
   if (extra.length > 0) {
-    lines.push("## Extra vragen (klant-goedgekeurd)", "");
+    lines.push(labels.extraSection, "");
     extra.forEach((q, i) => {
       lines.push(`### E${i + 1}. ${q.text}`);
       if (q.rationale) lines.push(`- ${q.rationale}`);

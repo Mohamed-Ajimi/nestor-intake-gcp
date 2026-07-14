@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { jsPDF } from "jspdf";
 import {
@@ -107,6 +108,7 @@ export function ResearchResultsPanel({
   searchAvailable,
   onTokenChange,
 }: Props) {
+  const { t } = useTranslation("intake");
 
   const visibleQuestions = useMemo(
     () =>
@@ -155,12 +157,12 @@ export function ResearchResultsPanel({
     async (a: RRPArtifact) => {
       const url = await getSignedUrl(a.id, a.storage_path);
       if (!url) {
-        toast.error("Kon link niet maken");
+        toast.error(t("results.linkCreateFailed"));
         return;
       }
       window.open(url, "_blank", "noopener,noreferrer");
     },
-    [getSignedUrl],
+    [getSignedUrl, t],
   );
 
   // Fetch text content of an artifact (for PDF)
@@ -185,7 +187,7 @@ export function ResearchResultsPanel({
   return (
     <section className="border border-ink bg-paperLight p-6">
       <h2 className="mb-4 font-mono text-xs uppercase tracking-wider text-ink">
-        Research resultaten
+        {t("results.heading")}
       </h2>
 
       {mode === "admin" && onTokenChange && (
@@ -197,7 +199,7 @@ export function ResearchResultsPanel({
 
       {mode === "klant" && visibleQuestions.length === 0 && (
         <p className="border border-ink/30 bg-paper p-3 font-sans text-sm text-ink/60">
-          Nog geen onderzoeksvragen beschikbaar.
+          {t("results.noQuestions")}
         </p>
       )}
 
@@ -230,10 +232,10 @@ export function ResearchResultsPanel({
           return (
             <div className="mt-8 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style={{ borderLeftColor: "#FF2D87" }}>
               <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider" style={{ color: "#FF2D87" }}>
-                <SearchIcon className="h-4 w-4" /> AI-zoek in alle research
+                <SearchIcon className="h-4 w-4" /> {t("results.aiSearchTitle")}
               </div>
               <p className="mt-1 font-sans text-sm text-ink/60">
-                Beschikbaar zodra de research-antwoorden zijn geüpload.
+                {t("results.aiSearchUnavailable")}
               </p>
             </div>
           );
@@ -264,6 +266,7 @@ function KlantToegangBlock({
   intake: RRPIntake;
   onTokenChange: (t: string) => void;
 }) {
+  const { t } = useTranslation("intake");
   const [busy, setBusy] = useState(false);
   const token = intake.client_results_token ?? null;
   const url =
@@ -272,22 +275,22 @@ function KlantToegangBlock({
       : null;
 
   const generate = async (regen: boolean) => {
-    if (regen && !confirm("De oude link wordt ongeldig — doorgaan?")) return;
+    if (regen && !confirm(t("results.clientAccess.regenConfirm"))) return;
     // Klant-link generation (and the auto-deliver status bump) is mediated by
     // the backend (Phase 7+); not wired from this gated-off panel.
     void intake.final_report_artifact_id;
     void onTokenChange;
     void setBusy;
-    toast.error("Klant-link genereren verloopt via de backend.");
+    toast.error(t("results.clientAccess.backendOnly"));
   };
 
   const copy = async () => {
     if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
-      toast.success("Link gekopieerd");
+      toast.success(t("results.clientAccess.linkCopied"));
     } catch {
-      toast.error("Kopiëren mislukt");
+      toast.error(t("results.clientAccess.copyFailed"));
     }
   };
 
@@ -300,10 +303,10 @@ function KlantToegangBlock({
         className="font-mono text-[11px] uppercase tracking-wider"
         style={{ color: "#FF2D87" }}
       >
-        Klant-toegang
+        {t("results.clientAccess.title")}
       </div>
       <p className="mt-1 font-sans text-sm text-ink/70">
-        Klant kan deze resultaten zelf bekijken via een unieke link.
+        {t("results.clientAccess.body")}
       </p>
       {url ? (
         <div className="mt-3 space-y-2">
@@ -319,7 +322,7 @@ function KlantToegangBlock({
               onClick={copy}
               className="inline-flex items-center gap-1 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
             >
-              <Copy className="h-3.5 w-3.5" /> Kopieer link
+              <Copy className="h-3.5 w-3.5" /> {t("results.clientAccess.copyLink")}
             </button>
             <button
               type="button"
@@ -327,12 +330,11 @@ function KlantToegangBlock({
               disabled={busy}
               className="inline-flex items-center gap-1 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-50"
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Genereer nieuwe link
+              <RefreshCw className="h-3.5 w-3.5" /> {t("results.clientAccess.regenLink")}
             </button>
           </div>
           <p className="font-mono text-[10px] uppercase tracking-wider text-ink/50">
-            ℹ️ Wat de klant ziet: één samengevat rapport (download) + vragen-overzicht + AI-zoek.
-            GEEN toegang tot raw research files of filenames.
+            {t("results.clientAccess.note")}
           </p>
         </div>
       ) : (
@@ -343,7 +345,7 @@ function KlantToegangBlock({
           className="mt-3 inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
         >
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Genereer klant-link
+          {t("results.clientAccess.generateLink")}
         </button>
       )}
     </div>
@@ -371,6 +373,7 @@ function QuestionResultBlock({
   openArtifact: (a: RRPArtifact) => Promise<void>;
   getArtifactText: (a: RRPArtifact) => Promise<string | null>;
 }) {
+  const { t } = useTranslation("intake");
   const [showSources, setShowSources] = useState(false);
   const [generating, setGenerating] = useState(false);
 
@@ -472,7 +475,7 @@ function QuestionResultBlock({
         // Klant synthesis text is served by the research backend (Phase 7+);
         // not available this milestone.
         void token;
-        toast.error("Antwoord niet beschikbaar in deze fase.");
+        toast.error(t("results.question.answerNotInPhase"));
         return;
       } else {
         if (!answerArtifact) return;
@@ -480,13 +483,13 @@ function QuestionResultBlock({
       }
 
       if (!text || !text.trim()) {
-        toast.error("Geen tekst beschikbaar voor deze vraag");
+        toast.error(t("results.question.noText"));
         return;
       }
       buildPdf(text, clientName);
-      toast.success("PDF gedownload.");
+      toast.success(t("results.question.pdfDownloaded"));
     } catch (e) {
-      toast.error(`PDF mislukt: ${(e as Error).message}`);
+      toast.error(t("results.question.pdfFailed", { error: (e as Error).message }));
     } finally {
       setGenerating(false);
     }
@@ -501,14 +504,19 @@ function QuestionResultBlock({
         <div className="flex flex-wrap items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">
           {anchor && (
             <span className="inline-flex items-center border border-ink bg-agenic-yellow px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink">
-              Ankervraag
+              {t("results.question.anchorBadge")}
             </span>
           )}
-          <span>V{index}</span>
+          <span>{t("results.question.number", { index })}</span>
         </div>
         <p className="mt-1 font-sans text-base text-ink">{displayQuestionText(question)}</p>
         <p className="mt-1 font-mono text-[10px] uppercase tracking-wider text-ink/50">
-          Type: {question.question_type ?? "—"} · Prioriteit: {isMain ? "hoofd" : "extra"}
+          {t("results.question.typeAndPriority", {
+            type: question.question_type ?? t("results.question.typeFallback"),
+            priority: isMain
+              ? t("results.question.priorityMain")
+              : t("results.question.priorityExtra"),
+          })}
         </p>
 
       </div>
@@ -526,7 +534,9 @@ function QuestionResultBlock({
             ) : (
               <Download className="h-3.5 w-3.5" />
             )}
-            {hasAnswer ? "Download antwoord (PDF)" : "Antwoord nog niet beschikbaar"}
+            {hasAnswer
+              ? t("results.question.downloadAnswer")
+              : t("results.question.answerNotAvailable")}
           </button>
           {artifacts.length > 0 && (
             <button
@@ -539,7 +549,7 @@ function QuestionResultBlock({
               ) : (
                 <Eye className="h-3.5 w-3.5" />
               )}
-              Bekijk bronnen ({artifacts.length})
+              {t("results.question.viewSources", { count: artifacts.length })}
             </button>
           )}
         </div>
@@ -548,7 +558,7 @@ function QuestionResultBlock({
       {mode === "admin" && showSources && artifacts.length > 0 && (
         <div className="mt-3 border border-ink/20 bg-paper">
           <div className="px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-            Bronnen ({artifacts.length})
+            {t("results.question.sources", { count: artifacts.length })}
           </div>
           <ul className="divide-y divide-ink/10">
             {artifacts.map((a) => (
@@ -569,7 +579,7 @@ function QuestionResultBlock({
                   onClick={() => openArtifact(a)}
                   className="ml-auto inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5"
                 >
-                  <ExternalLink className="h-3 w-3" /> Open
+                  <ExternalLink className="h-3 w-3" /> {t("results.question.open")}
                 </button>
               </li>
             ))}
@@ -597,6 +607,7 @@ function AISearchPanel({
   openArtifact: (a: RRPArtifact) => Promise<void>;
   artifacts: RRPArtifact[];
 }) {
+  const { t } = useTranslation("intake");
   const recentKey = `nestor:recent-queries:${intakeId}`;
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
@@ -634,11 +645,11 @@ function AISearchPanel({
       void mode;
       void token;
       void setSourcesUsed;
-      toast.error("AI-zoek is nog niet beschikbaar in deze fase.");
+      toast.error(t("results.search.unavailableInPhase"));
       setAnswer("");
       setSearching(false);
     },
-    [intakeId, mode, token],
+    [intakeId, mode, token, t],
   );
 
   const onSubmit = (e: React.FormEvent) => {
@@ -657,9 +668,9 @@ function AISearchPanel({
     if (!answer) return;
     try {
       await navigator.clipboard.writeText(answer);
-      toast.success("Antwoord gekopieerd");
+      toast.success(t("results.search.answerCopied"));
     } catch {
-      toast.error("Kopiëren mislukt");
+      toast.error(t("results.search.copyFailed"));
     }
   };
 
@@ -689,11 +700,10 @@ function AISearchPanel({
         className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider"
         style={{ color: "#FF2D87" }}
       >
-        <SearchIcon className="h-4 w-4" /> AI-zoek in alle research
+        <SearchIcon className="h-4 w-4" /> {t("results.aiSearchTitle")}
       </div>
       <p className="mt-1 font-sans text-sm text-ink/70">
-        Stel vragen in natuurlijke taal — Nestor schrijft een coherent antwoord op basis van
-        het onderzoeksdossier.
+        {t("results.search.intro")}
       </p>
 
       <form onSubmit={onSubmit} className="mt-3 flex flex-wrap gap-2">
@@ -702,7 +712,7 @@ function AISearchPanel({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="stel je vraag hier…"
+          placeholder={t("results.search.placeholder")}
           className="min-w-[260px] flex-1 border border-ink bg-paper px-3 py-2 font-sans text-sm text-ink focus:outline-none"
         />
         <button
@@ -711,14 +721,14 @@ function AISearchPanel({
           className="inline-flex items-center gap-1.5 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50"
         >
           {searching && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Zoek →
+          {t("results.search.submit")}
         </button>
       </form>
 
 
       {searching && (
         <div className="mt-5 flex items-center gap-2 border border-ink/20 bg-paperLight p-4 font-mono text-xs uppercase tracking-wider text-ink/70">
-          <Loader2 className="h-4 w-4 animate-spin" /> Bezig met antwoord schrijven…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t("results.search.writing")}
         </div>
       )}
 
@@ -731,19 +741,19 @@ function AISearchPanel({
             className="font-mono text-[11px] uppercase tracking-wider"
             style={{ color: "#FF2D87" }}
           >
-            Antwoord op: "{submittedQuery}"
+            {t("results.search.answerFor", { query: submittedQuery })}
           </div>
           <p className="mt-1 font-sans text-sm text-ink/60">
             {sourcesUsed > 0
-              ? `Gebaseerd op ${sourcesUsed} fragment${sourcesUsed === 1 ? "" : "en"} uit het onderzoeksdossier.`
-              : "Geen fragmenten gebruikt."}
+              ? t("results.search.basedOn", { count: sourcesUsed })
+              : t("results.search.noFragments")}
           </p>
 
           <div className="mt-4 max-w-[72ch] space-y-3 font-serif text-[15px] leading-[1.6] text-ink">
             {paragraphs.length > 0 ? (
               paragraphs.map((p, i) => <p key={i}>{p}</p>)
             ) : (
-              <p className="italic text-ink/60">Geen antwoord ontvangen.</p>
+              <p className="italic text-ink/60">{t("results.search.noAnswer")}</p>
             )}
           </div>
 
@@ -753,14 +763,14 @@ function AISearchPanel({
               onClick={copyAnswer}
               className="inline-flex items-center gap-1.5 border border-ink bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5"
             >
-              <Copy className="h-3.5 w-3.5" /> Kopieer antwoord
+              <Copy className="h-3.5 w-3.5" /> {t("results.search.copyAnswer")}
             </button>
             <button
               type="button"
               onClick={close}
               className="inline-flex items-center gap-1.5 border border-ink/30 bg-paper px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink/70 hover:bg-ink/5"
             >
-              <X className="h-3.5 w-3.5" /> Sluiten
+              <X className="h-3.5 w-3.5" /> {t("results.search.close")}
             </button>
           </div>
 
@@ -776,8 +786,7 @@ function AISearchPanel({
                 ) : (
                   <ChevronRight className="h-3.5 w-3.5" />
                 )}
-                Bekijk de {fragments.length} bron-fragment
-                {fragments.length === 1 ? "" : "en"} waarop dit antwoord is gebaseerd
+                {t("results.search.viewFragments", { count: fragments.length })}
               </button>
 
               {showFragments && (
@@ -801,17 +810,25 @@ function AISearchPanel({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="font-mono text-[10px] uppercase tracking-wider text-ink/70">
-                            Fragment {i + 1} ·{" "}
-                            {q
-                              ? `V${q.index}. ${q.text.slice(0, 60)}${q.text.length > 60 ? "…" : ""}`
-                              : "ALGEMEEN"}
+                            {t("results.search.fragmentLabel", {
+                              index: i + 1,
+                              question: q
+                                ? t("results.search.fragmentQuestion", {
+                                    index: q.index,
+                                    text: `${q.text.slice(0, 60)}${q.text.length > 60 ? "…" : ""}`,
+                                  })
+                                : t("results.search.fragmentGeneral"),
+                            })}
                           </div>
                           <div className={cn("font-mono text-xs font-bold", pctColor)}>
                             {pct}%
                           </div>
                         </div>
                         <div className="mt-1 font-mono text-[10px] uppercase tracking-wider text-ink/50">
-                          Bron: {r.filename} · {r.source}
+                          {t("results.search.fragmentSource", {
+                            filename: r.filename,
+                            source: r.source,
+                          })}
                         </div>
                         <div className="mt-2 max-h-[200px] overflow-y-auto whitespace-pre-wrap border border-ink/10 bg-paperLight p-2 font-sans text-sm text-ink">
                           {r.chunk_text}
@@ -823,7 +840,7 @@ function AISearchPanel({
                               onClick={() => openArtifact(ar)}
                               className="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5"
                             >
-                              <ExternalLink className="h-3 w-3" /> Open bron
+                              <ExternalLink className="h-3 w-3" /> {t("results.search.openSource")}
                             </button>
                           </div>
                         )}

@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
@@ -57,6 +58,7 @@ function isValidatedOrLater(status: string): boolean {
 }
 
 function UserIntakeResultsPage() {
+  const { t } = useTranslation("intake");
   const { id } = Route.useParams();
   const { session } = useAuth();
   const navigate = useNavigate();
@@ -74,7 +76,7 @@ function UserIntakeResultsPage() {
       const intakeRes = await getIntake(id);
       if (cancelled) return;
       if (!intakeRes.success) {
-        setError("Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.");
+        setError(t("resultsRoute.loadFailed"));
         setLoading(false);
         return;
       }
@@ -88,14 +90,14 @@ function UserIntakeResultsPage() {
       const [answersRes, templatesRes] = await Promise.all([listAnswers(id), getTemplates()]);
       if (cancelled) return;
       if (!answersRes.success || !templatesRes.success) {
-        setError("Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.");
+        setError(t("resultsRoute.loadFailed"));
         setLoading(false);
         return;
       }
 
       const template = templatesRes.data[0];
       if (!template) {
-        setError("Geen intakesjabloon beschikbaar voor deze ruimte.");
+        setError(t("resultsRoute.noTemplate"));
         setLoading(false);
         return;
       }
@@ -115,7 +117,7 @@ function UserIntakeResultsPage() {
     return () => {
       cancelled = true;
     };
-  }, [id, navigate]);
+  }, [id, navigate, t]);
 
   const handleLogout = async () => {
     try {
@@ -128,7 +130,9 @@ function UserIntakeResultsPage() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-paper px-6">
-        <p className="font-mono text-xs uppercase tracking-wider text-ink/40">Laden…</p>
+        <p className="font-mono text-xs uppercase tracking-wider text-ink/40">
+          {t("resultsRoute.loading")}
+        </p>
       </div>
     );
   }
@@ -137,14 +141,14 @@ function UserIntakeResultsPage() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-paper px-6 text-center">
         <p className="max-w-md text-sm text-red-600">
-          {error ?? "Kon de intake(s) niet laden. Probeer de pagina te vernieuwen."}
+          {error ?? t("resultsRoute.loadFailed")}
         </p>
         <button
           type="button"
           onClick={() => navigate({ to: "/intake" })}
           className="font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline"
         >
-          Terug naar overzicht
+          {t("resultsRoute.backToOverview")}
         </button>
       </div>
     );
@@ -158,7 +162,9 @@ function UserIntakeResultsPage() {
       <div className="mx-auto max-w-4xl px-6 py-12">
         {/* Minimal authenticated chrome — no admin nav, no space switcher */}
         <div className="mb-10 flex items-center justify-between">
-          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">Agenic</p>
+          <p className="font-mono text-xs uppercase tracking-widest text-ink/60">
+            {t("resultsRoute.brand")}
+          </p>
           <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-ink/60">
             {session?.email && <span className="font-medium text-ink/70">{session.email}</span>}
             <button
@@ -166,7 +172,7 @@ function UserIntakeResultsPage() {
               onClick={handleLogout}
               className="underline-offset-2 hover:text-ink hover:underline"
             >
-              Uitloggen
+              {t("resultsRoute.logout")}
             </button>
           </div>
         </div>
@@ -178,10 +184,10 @@ function UserIntakeResultsPage() {
               onClick={() => navigate({ to: "/intake" })}
               className="font-mono text-xs uppercase tracking-wider text-ink/40 underline-offset-2 hover:text-ink hover:underline"
             >
-              ← Overzicht
+              {t("resultsRoute.overview")}
             </button>
             <h1 className="mt-2 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-              {title || "resultaat"}
+              {title || t("resultsRoute.titleFallback")}
             </h1>
           </div>
           <StatusPill status={status} />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2, Sparkles } from "lucide-react";
 import * as skills from "@/lib/api/skills";
@@ -21,6 +22,7 @@ const btnCls =
 type SkillKey = "structure" | "extract" | "embeddings" | "transcribe";
 
 export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
+  const { t } = useTranslation("intake");
   const [busy, setBusy] = useState<SkillKey | null>(null);
 
   if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return null;
@@ -35,7 +37,7 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
       // ApiResult return-no-throw: never throw on an API error, surface via sonner.
       const res = await trigger();
       if (!res.success) {
-        toast.error(res.error || "Actie starten mislukt");
+        toast.error(res.error || t("aiSkills.actionFailed"));
         return;
       }
       toast.success(startedMsg);
@@ -48,11 +50,10 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
     <div className={panelCls} style={{ borderLeftColor: "#DFF940" }}>
       <div className="mb-2 flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
         <Sparkles className="h-3.5 w-3.5" />
-        AI-verrijking
+        {t("aiSkills.title")}
       </div>
       <div className="mb-4 font-sans text-[15px] leading-relaxed text-ink">
-        Draai de losse AI-skills over deze intake — structureren, inzichten extraheren en
-        embeddings genereren voor semantisch zoeken. Elke run draait op de achtergrond.
+        {t("aiSkills.intro")}
       </div>
       <div className="flex flex-wrap gap-2">
         <button
@@ -62,13 +63,13 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           onClick={() =>
             run(
               "structure",
-              "Structureren gestart — dit duurt even.",
+              t("aiSkills.structureStarted"),
               () => skills.structureAnswers(intakeId),
             )
           }
         >
           {busy === "structure" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Structureer antwoorden
+          {t("aiSkills.structureBtn")}
         </button>
         <button
           type="button"
@@ -77,13 +78,13 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           onClick={() =>
             run(
               "extract",
-              "Inzichten extraheren gestart — dit duurt even.",
+              t("aiSkills.extractStarted"),
               () => skills.extractInsights(intakeId),
             )
           }
         >
           {busy === "extract" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Extraheer inzichten
+          {t("aiSkills.extractBtn")}
         </button>
         <button
           type="button"
@@ -92,13 +93,13 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           onClick={() =>
             run(
               "embeddings",
-              "Embeddings genereren gestart — dit duurt even.",
+              t("aiSkills.embeddingsStarted"),
               () => skills.generateEmbeddings(intakeId),
             )
           }
         >
           {busy === "embeddings" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          Genereer embeddings
+          {t("aiSkills.embeddingsBtn")}
         </button>
         {/* No sources-read surface exists yet (only the transcribe dispatch), so the
             transcribe CTA is gated with an explanatory disabled state rather than a
@@ -109,22 +110,22 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           type="button"
           className={btnCls}
           disabled
-          title="Transcriptie start vanaf een geüploade audiobron (nog geen bronnen-overzicht beschikbaar)."
+          title={t("aiSkills.transcribeDisabledTitle")}
           onClick={() =>
             run(
               "transcribe",
-              "Transcriptie gestart — dit duurt even.",
+              t("aiSkills.transcribeStarted"),
               // Disabled until a sources-read surface supplies source.id; the dispatch
               // itself is ready. Passing an empty id here is unreachable (button disabled).
               () => skills.transcribeSource(intakeId, ""),
             )
           }
         >
-          Transcribeer audio
+          {t("aiSkills.transcribeBtn")}
         </button>
       </div>
       <p className="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink/40">
-        Voortgang verschijnt in het skill-run-overzicht.
+        {t("aiSkills.progressNote")}
       </p>
     </div>
   );
