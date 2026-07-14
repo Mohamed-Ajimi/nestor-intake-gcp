@@ -53,17 +53,17 @@ created: 2026-07-14
 | 04-T1 | 11-04 | 2 | I18N-01 | T-11-01/05 | 56-string admin detail | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
 | 04-T2 | 11-04 | 2 | I18N-01/02 | T-11-01 | Chrome switcher + drawer | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
 | 04-T3 | 11-04 | 2 | I18N-02 | T-11-04 | default_locale validated + audited | typecheck + pytest | `npx tsc --noEmit` + Cloud Build (admin-routes test) | ❌ W0 | ⬜ pending |
-| 05-T1 | 11-05 | 2 | I18N-01 | T-11-01/05 | Results panel + route | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
-| 05-T2 | 11-05 | 2 | I18N-01 | T-11-01 | AI/artifact + date-locale | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
-| 05-T3 | 11-05 | 2 | I18N-01 | T-11-01 | PDF pre-resolved props | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
+| 05-T1 | 11-05 | 3 | I18N-01 | T-11-01/05 | Results panel + route | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
+| 05-T2 | 11-05 | 3 | I18N-01 | T-11-01 | AI/artifact + date-locale | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
+| 05-T3 | 11-05 | 3 | I18N-01 | T-11-01 | PDF pre-resolved props | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
 | 06-T1 | 11-06 | 2 | I18N-01/02 | T-11-03 | Pre-login switcher | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
 | 06-T2 | 11-06 | 2 | I18N-01 | T-11-01 | Action page externalize | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
 | 06-T3 | 11-06 | 2 | I18N-02 | T-11-09/10 | SSR-safe boot changeLanguage | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
-| 07-T1 | 11-07 | 2 | I18N-01 | T-11-01/05 | Invite/user management | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
-| 07-T2 | 11-07 | 2 | I18N-01 | T-11-01 | Dialogs + pulse routes | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
-| 07-T3 | 11-07 | 2 | I18N-01 | T-11-01 | Long-tail + FULL CI guard | unit (bash) | `bash frontend/scripts/ci_no_hardcoded_dutch.sh` + `npx tsc --noEmit` | ❌ W0 | ⬜ pending |
-| 08-T1 | 11-08 | 3 | I18N-01/02 | T-11-01 | Locale variants; autoescape ON | pytest | Cloud Build (test_mail_locale.py) | ❌ W0 | ⬜ pending |
+| 07-T1 | 11-07 | 3 | I18N-01 | T-11-01/05 | Invite/user management | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
+| 07-T2 | 11-07 | 3 | I18N-01 | T-11-01 | Dialogs + pulse routes | typecheck | `npx tsc --noEmit` | manual/UAT | ⬜ pending |
+| 08-T1 | 11-08 | 3 | I18N-01/02 | T-11-01 | Locale variants; autoescape ON; render-level tests authored | pytest | Cloud Build (test_mail_locale.py) | ❌ W0 | ⬜ pending |
 | 08-T2 | 11-08 | 3 | I18N-02 | T-11-11/12 | Per-recipient locale; D-16 intact | pytest | Cloud Build (test_mail_locale.py) | ❌ W0 | ⬜ pending |
+| 09-T1 | 11-09 | 4 | I18N-01 | T-11-01 | Long-tail sweep + FULL CI guard gate | unit (bash) | `bash frontend/scripts/ci_no_hardcoded_dutch.sh` + `npx tsc --noEmit` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

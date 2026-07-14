@@ -208,15 +208,16 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Success Criteria** (what must be TRUE):
   1. The UI renders fully in NL, FR, and EN — all labels, banners, toasts, error messages, and date locale are externalized to i18n keys (no hardcoded Dutch strings remain)
   2. A user can switch language and a default locale applies per user/space
-**Plans**: 8 plans (3 waves)
+**Plans**: 9 plans (4 waves)
   - [ ] 11-01-PLAN.md — Frontend i18n foundation: i18next init + provider + LanguageSwitcher + detect/date-locale/error-codes helpers + /me seam + catalog skeleton + CI guard (Wave 1)
   - [ ] 11-02-PLAN.md — Backend foundation: 0010 locale columns + /me GET/PATCH resolution chain + CodedError contract (Wave 1)
   - [ ] 11-03-PLAN.md — Intake schema multi-locale + localizeSchema + form chrome externalize + client switcher mount (Wave 2)
   - [ ] 11-04-PLAN.md — Admin detail (56 strings) + ProductShell switcher + space default_locale field + admin date-locale (Wave 2)
-  - [ ] 11-05-PLAN.md — Intake results/AI/artifact components + PDF pre-resolved labels + date-locale sites (Wave 2)
+  - [ ] 11-05-PLAN.md — Intake results/AI/artifact components + PDF pre-resolved labels + date-locale sites (Wave 3)
   - [ ] 11-06-PLAN.md — Auth pages externalize + pre-login switcher + SSR-safe boot-locale reconciliation (Wave 2)
-  - [ ] 11-07-PLAN.md — Remaining admin/common sweep + FULL CI Dutch-string guard green (Wave 2)
+  - [ ] 11-07-PLAN.md — Remaining admin dialogs + pulse routes externalize (Wave 3)
   - [ ] 11-08-PLAN.md — Mail locale variants (nl/fr/en) + recipient-locale resolution in send path (Wave 3)
+  - [ ] 11-09-PLAN.md — Long-tail common sweep + FULL CI Dutch-string guard gate (Wave 4)
 **UI hint**: yes
 
 ### Phase 12: Frontend Deploy, Cutover & Supabase Retirement
