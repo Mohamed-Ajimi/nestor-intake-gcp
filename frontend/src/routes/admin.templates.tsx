@@ -34,8 +34,8 @@ import {
 
 // Screen 4 — Template management (USER-03 / D-11). Per-space template list, clone a
 // template into a space, and a monospace JSON editor for the schema with LIVE validation:
-// invalid JSON disables "Schema opslaan" with an inline red message; valid JSON shows
-// "GELDIGE JSON". There is NO drag-drop builder and NO delete affordance.
+// invalid JSON disables the schema-save button with an inline red message; valid JSON
+// shows a valid-JSON badge. There is NO drag-drop builder and NO delete affordance.
 
 export const Route = createFileRoute("/admin/templates")({
   component: TemplatesPage,

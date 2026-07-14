@@ -1,5 +1,5 @@
-// Fase-machine voor de intake-detail-pagina.
-// Pure helper — geen React, geen Supabase.
+// Phase-machine for the intake detail page.
+// Pure helper — no React, no Supabase.
 
 export type Phase =
   | "awaiting_client_submission"
@@ -42,7 +42,7 @@ export function derivePhase(
       return "awaiting_skill_run";
     }
     if (!latestIntakeSkillRun.applied_at) return "awaiting_review";
-    // skill applied but status nog niet gebumpt — behandel als validation_send
+    // skill applied but status not yet bumped — treat as validation_send
     return "awaiting_validation_send";
   }
 

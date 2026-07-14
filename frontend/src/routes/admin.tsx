@@ -1,5 +1,6 @@
 import { createFileRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { useTranslation } from "react-i18next";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 
@@ -38,6 +39,7 @@ export const Route = createFileRoute("/admin")({
 function AdminLayout() {
   const { loading, isSuperadmin } = useAuth();
   const navigate = useNavigate();
+  const { t } = useTranslation("common");
 
   // Avoid a denial flash before the auth/claim state resolves.
   if (loading) return null;
@@ -54,17 +56,18 @@ function AdminLayout() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-paper2 px-6">
         <div className="w-full max-w-md border border-ink bg-paper px-8 py-10">
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink/50">Agenic ›</p>
-          <h1 className="mt-2 font-serif text-2xl lowercase text-ink">geen toegang</h1>
-          <p className="mt-4 text-sm text-ink/70">
-            Dit account heeft geen toegang tot het beheergedeelte. Neem contact op met een beheerder
-            als je denkt dat dit een vergissing is.
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-ink/50">
+            {t("accessDenied.brand")}
           </p>
+          <h1 className="mt-2 font-serif text-2xl lowercase text-ink">
+            {t("accessDenied.title")}
+          </h1>
+          <p className="mt-4 text-sm text-ink/70">{t("accessDenied.body")}</p>
           <button
             onClick={handleLogout}
             className="mt-8 font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline"
           >
-            Uitloggen
+            {t("accessDenied.logout")}
           </button>
         </div>
       </div>

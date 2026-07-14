@@ -54,7 +54,14 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<Api
     const token = await currentIdToken();
     if (!token) {
       // WR-02 parity: never send "Bearer null" — surface a signed-out state as an error.
-      return { success: false, error: "Niet ingelogd. Log opnieuw in." };
+      // Emit a stable machine code (D-11) so toast call sites translate via
+      // resolveErrorKey(code) → common:errors.notLoggedIn; the raw `error` is the
+      // English fallback shown only if a caller does not map the code.
+      return {
+        success: false,
+        error: "Not logged in. Please log in again.",
+        code: "NOT_LOGGED_IN",
+      };
     }
 
     const headers = new Headers(init?.headers);

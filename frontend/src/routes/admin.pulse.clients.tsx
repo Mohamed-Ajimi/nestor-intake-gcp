@@ -23,7 +23,7 @@ type Project = {
   status: string | null;
 };
 
-// In the GCP model there is no `public.clients` — the org IS the space. A "klant" row
+// In the GCP model there is no `public.clients` — the org IS the space. A client row
 // is therefore a space with at least one Pulse intake, enriched from the seam.
 type SpaceRow = {
   id: string;

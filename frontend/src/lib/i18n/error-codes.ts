@@ -13,6 +13,7 @@ export const ERROR_CODES: Record<string, string> = {
   INVALID_LOCALE: "common:errors.invalidLocale",
   MAIL_SEND_FAILED: "common:errors.mailSendFailed",
   RECIPIENT_INVALID: "common:errors.recipientInvalid",
+  NOT_LOGGED_IN: "common:errors.notLoggedIn",
 };
 
 /**

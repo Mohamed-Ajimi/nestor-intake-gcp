@@ -29,7 +29,7 @@ export type RRPQuestion = {
   priority: number | null;
   rationale?: string | null;
   status?: string | null;
-  /** klant-mode: from get_results_by_token */
+  /** client-mode: from get_results_by_token */
   has_answer?: boolean;
   source_count?: number;
 };
@@ -70,14 +70,14 @@ type SearchResult = {
 };
 
 type Props = {
-  mode: "admin" | "klant";
+  mode: "admin" | "client";
   intake: RRPIntake;
   client: RRPClient;
   questions: RRPQuestion[];
   artifacts: RRPArtifact[];
-  /** klant-token, only required in mode="klant" */
+  /** client-token, only required in mode="client" */
   token?: string;
-  /** klant-mode: whether AI-zoek is available (>=1 embedded artifact) */
+  /** client-mode: whether AI-search is available (>=1 embedded artifact) */
   searchAvailable?: boolean;
   /** notify parent that token changed (admin only) */
   onTokenChange?: (token: string) => void;
@@ -137,7 +137,7 @@ export function ResearchResultsPanel({
   // Get signed URL — mode-aware
   const getSignedUrl = useCallback(
     async (artifactId: string, storagePath: string | null): Promise<string | null> => {
-      // Admin downloads route through the backend storage seam. The klant
+      // Admin downloads route through the backend storage seam. The client
       // token-scoped path resolution is a research-backend op (Phase 7+) and is
       // inert this milestone.
       void artifactId;
@@ -197,13 +197,13 @@ export function ResearchResultsPanel({
         />
       )}
 
-      {mode === "klant" && visibleQuestions.length === 0 && (
+      {mode === "client" && visibleQuestions.length === 0 && (
         <p className="border border-ink/30 bg-paper p-3 font-sans text-sm text-ink/60">
           {t("results.noQuestions")}
         </p>
       )}
 
-      {mode === "klant" && (
+      {mode === "client" && (
         <div className="space-y-6">
           {visibleQuestions.map((q, i) => (
             <QuestionResultBlock
@@ -223,7 +223,7 @@ export function ResearchResultsPanel({
 
       {(() => {
         const hasAnswers =
-          mode === "klant"
+          mode === "client"
             ? searchAvailable === true
             : artifacts.length > 0;
         if (!hasAnswers) {
@@ -257,7 +257,7 @@ export function ResearchResultsPanel({
   );
 }
 
-/* -------------------- Klant-toegang (admin only) -------------------- */
+/* -------------------- Client access (admin only) -------------------- */
 
 function KlantToegangBlock({
   intake,
@@ -276,7 +276,7 @@ function KlantToegangBlock({
 
   const generate = async (regen: boolean) => {
     if (regen && !confirm(t("results.clientAccess.regenConfirm"))) return;
-    // Klant-link generation (and the auto-deliver status bump) is mediated by
+    // Client-link generation (and the auto-deliver status bump) is mediated by
     // the backend (Phase 7+); not wired from this gated-off panel.
     void intake.final_report_artifact_id;
     void onTokenChange;
@@ -364,7 +364,7 @@ function QuestionResultBlock({
   openArtifact,
   getArtifactText,
 }: {
-  mode: "admin" | "klant";
+  mode: "admin" | "client";
   token?: string;
   index: number;
   question: RRPQuestion;
@@ -389,11 +389,11 @@ function QuestionResultBlock({
     return sorted[0] ?? null;
   }, [artifacts]);
 
-  // klant-mode: rely on question.has_answer / source_count from RPC
+  // client-mode: rely on question.has_answer / source_count from RPC
   const hasAnswer =
-    mode === "klant" ? question.has_answer === true : answerArtifact !== null;
+    mode === "client" ? question.has_answer === true : answerArtifact !== null;
   const sourceCount =
-    mode === "klant" ? (question.source_count ?? 0) : artifacts.length;
+    mode === "client" ? (question.source_count ?? 0) : artifacts.length;
 
   const buildPdf = (text: string, clientName: string) => {
     const doc = new jsPDF({ unit: "mm", format: "a4" });
@@ -471,8 +471,8 @@ function QuestionResultBlock({
       let text: string | null = null;
       let clientName = client.name;
 
-      if (mode === "klant") {
-        // Klant synthesis text is served by the research backend (Phase 7+);
+      if (mode === "client") {
+        // Client synthesis text is served by the research backend (Phase 7+);
         // not available this milestone.
         void token;
         toast.error(t("results.question.answerNotInPhase"));
@@ -600,7 +600,7 @@ function AISearchPanel({
   openArtifact,
   artifacts,
 }: {
-  mode: "admin" | "klant";
+  mode: "admin" | "client";
   intakeId: string;
   token?: string;
   visibleQuestions: RRPQuestion[];

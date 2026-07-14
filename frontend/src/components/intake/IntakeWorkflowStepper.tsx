@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -8,12 +10,12 @@ type Props = {
 };
 
 const STEPS = [
- { key: "submitted", label: "Klant ingediend" },
- { key: "reviewed", label: "Door jou gereviewd" },
- { key: "validated_by_client", label: "Klant gevalideerd" },
- { key: "decomposed", label: "Decompositie" },
- { key: "in_research", label: "In onderzoek" },
- { key: "delivered", label: "Geleverd" },
+ { key: "submitted", labelKey: "workflow.steps.submitted" },
+ { key: "reviewed", labelKey: "workflow.steps.reviewed" },
+ { key: "validated_by_client", labelKey: "workflow.steps.validatedByClient" },
+ { key: "decomposed", labelKey: "workflow.steps.decomposed" },
+ { key: "in_research", labelKey: "workflow.steps.inResearch" },
+ { key: "delivered", labelKey: "workflow.steps.delivered" },
 ] as const;
 
 const ORDER = ["submitted", "reviewed", "validated_by_client", "decomposed", "in_research", "delivered"];
@@ -34,6 +36,7 @@ function fmtShort(d: string | null | undefined) {
 }
 
 export function IntakeWorkflowStepper({ status, clientValidatedAt, submittedAt, className }: Props) {
+ const { t } = useTranslation("common");
  const cur = currentIndex(status);
  const isDelivered = status === "delivered";
  const isArchived = status === "archived";
@@ -48,7 +51,7 @@ export function IntakeWorkflowStepper({ status, clientValidatedAt, submittedAt, 
  <div className={cn("w-full", className)}>
  {isArchived && (
  <div className="mb-3 border border-ink/10 bg-paper2 px-3 py-2 text-xs text-ink/60">
- Deze intake is gearchiveerd.
+ {t("workflow.archivedNotice")}
  </div>
  )}
 
@@ -111,7 +114,7 @@ export function IntakeWorkflowStepper({ status, clientValidatedAt, submittedAt, 
                     isFuture && "text-ink/40",
                   )}
                 >
-                  {step.label}
+                  {t(step.labelKey)}
                 </p>
                 {stamp && (isPast || isCurrent) && (
                   <p className="mt-0.5 font-mono text-[10px] text-ink/40">{stamp}</p>
@@ -123,7 +126,7 @@ export function IntakeWorkflowStepper({ status, clientValidatedAt, submittedAt, 
  </ol>
 
  {isDraft && (
- <p className="mt-3 text-xs text-ink/60">Klant is nog aan het invullen.</p>
+ <p className="mt-3 text-xs text-ink/60">{t("workflow.draftNotice")}</p>
  )}
  </div>
  );

@@ -1,4 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import agenicLogo from "@/assets/agenic-logo.png";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
@@ -69,6 +70,7 @@ const PRODUCTS: Product[] = [
 function AdminHomePage() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { t } = useTranslation("common");
 
   async function handleLogout() {
     if (!supabase) return;
@@ -108,7 +110,7 @@ function AdminHomePage() {
                 <p className="mt-3 text-sm text-ink/70">{p.description}</p>
                 {!p.enabled && (
                   <p className="mt-4 font-mono text-[10px] uppercase tracking-wider text-ink/50">
-                    ⌀ Binnenkort beschikbaar
+                    {t("comingSoon.badge")}
                   </p>
                 )}
               </>

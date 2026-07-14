@@ -39,7 +39,20 @@ set -euo pipefail
 PATTERN='\b(niet|geen|wordt|klant|ingelogd|opnieuw|versturen|opslaan|verwijderen|annuleren|beschikbaar|vernieuwen|ruimte|gebruiker|verplicht|mislukt)\b'
 
 # Surfaces where Dutch is deliberate, generated, or out of scope (see header).
-EXEMPT='(/locales/|\.gen\.ts|/ui/|admin\.sales\.|coming-soon|\.test\.)'
+#
+# Path-based exemptions ONLY (never weaken the stopword PATTERN above). Every entry
+# here is a surface D-01 declares out of Phase 11 scope (stays Dutch) or a
+# generated/never-hand-edited file:
+#   /locales/                 - the catalogs themselves (nl catalog IS Dutch)
+#   \.gen\.ts                 - generated route tree
+#   /ui/                      - shadcn primitives (generated)
+#   admin\.sales\.            - sales ROUTE files (out of scope, D-01)
+#   /components/sales/        - sales COMPONENT tree (out of scope, D-01 — e.g. BattlecardBlocks, SalesContextFields, BattlecardMarkdown)
+#   salesLabels\.            - sales label map (out of scope, D-01)
+#   generateBattlecardPdf\.  - sales PDF exporter (out of scope, D-01)
+#   [Cc]oming-?[Ss]oon        - coming-soon placeholder surfaces (out of scope, D-01 — ComingSoonPage + kebab coming-soon)
+#   \.test\.                  - test fixtures may cite Dutch literals
+EXEMPT='(/locales/|\.gen\.ts|/ui/|admin\.sales\.|/components/sales/|salesLabels\.|generateBattlecardPdf\.|[Cc]oming-?[Ss]oon|\.test\.)'
 
 run_scan() {
   local scan_dir="$1"

@@ -25,8 +25,8 @@ import {
 } from "@/lib/api/admin";
 
 // Screen 3 — Space management (USER-03 / D-10). Create/edit name+slug, deactivate (with
-// confirm) / reactivate. There is NO Verwijderen/delete affordance anywhere — the only
-// destructive-styled control is the reversible Deactiveren.
+// confirm) / reactivate. There is NO delete affordance anywhere — the only
+// destructive-styled control is the reversible deactivate action.
 
 export const Route = createFileRoute("/admin/spaces")({
   component: SpacesPage,

@@ -514,9 +514,9 @@ function IntakeDetailPage() {
  if (next && skillRuns === null) loadSkillRuns();
  };
 
-  // History accordion-only: skill runs zijn niet automatisch geladen op page-load.
-  // De ['active-skill-run'] hook geeft al de laatste run-status — meer is niet nodig
-  // tenzij de gebruiker de history-accordion opent.
+  // History accordion-only: skill runs are not auto-loaded on page-load.
+  // The ['active-skill-run'] hook already surfaces the latest run status — nothing
+  // more is needed unless the user opens the history accordion.
 
   const runSkill = async () => {
     // Dispatch the Phase-7 apply-intake-skill run (202 + run id). The optimistic
@@ -1446,7 +1446,7 @@ function DeliveredAtEditor({
             className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80 disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            Opslaan
+            {t("common:actions.save")}
           </button>
         )}
       </div>

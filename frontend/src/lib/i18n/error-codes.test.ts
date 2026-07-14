@@ -13,6 +13,10 @@ describe("ERROR_CODES map — curated user-visible backend codes", () => {
     expect(ERROR_CODES.RECIPIENT_INVALID).toBe("common:errors.recipientInvalid");
   });
 
+  it("maps NOT_LOGGED_IN (client-side signed-out) to common:errors.notLoggedIn", () => {
+    expect(ERROR_CODES.NOT_LOGGED_IN).toBe("common:errors.notLoggedIn");
+  });
+
   it("every value is a namespaced common:errors.* key", () => {
     for (const key of Object.values(ERROR_CODES)) {
       expect(key).toMatch(/^common:errors\./);

@@ -40,7 +40,7 @@ export type Role = "superadmin" | "user" | null;
  * authority on every route). Superadmins land in the admin area; everyone else
  * (regular `user`, plus the not-yet-resolved / no-claim case) lands on the
  * authenticated user intake list. Routing a non-superadmin to `/admin` would hit
- * the superadmin guard's "geen toegang" wall, so users MUST go to `/intake`.
+ * the superadmin guard's "no access" wall, so users MUST go to `/intake`.
  */
 export function landingPathForRole(role: Role): "/admin" | "/intake" {
   return role === "superadmin" ? "/admin" : "/intake";

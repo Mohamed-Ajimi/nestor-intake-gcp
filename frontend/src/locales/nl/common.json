@@ -9,6 +9,31 @@
     "intakeNotFound": "Intake niet gevonden.",
     "invalidLocale": "Ongeldige taalkeuze.",
     "mailSendFailed": "E-mail versturen mislukt.",
-    "recipientInvalid": "Ongeldige ontvanger."
+    "recipientInvalid": "Ongeldige ontvanger.",
+    "notLoggedIn": "Niet ingelogd. Log opnieuw in."
+  },
+  "actions": {
+    "save": "Opslaan"
+  },
+  "workflow": {
+    "steps": {
+      "submitted": "Klant ingediend",
+      "reviewed": "Door jou gereviewd",
+      "validatedByClient": "Klant gevalideerd",
+      "decomposed": "Decompositie",
+      "inResearch": "In onderzoek",
+      "delivered": "Geleverd"
+    },
+    "archivedNotice": "Deze intake is gearchiveerd.",
+    "draftNotice": "Klant is nog aan het invullen."
+  },
+  "accessDenied": {
+    "brand": "Agenic ›",
+    "title": "geen toegang",
+    "body": "Dit account heeft geen toegang tot het beheergedeelte. Neem contact op met een beheerder als je denkt dat dit een vergissing is.",
+    "logout": "Uitloggen"
+  },
+  "comingSoon": {
+    "badge": "⌀ Binnenkort beschikbaar"
   }
 }

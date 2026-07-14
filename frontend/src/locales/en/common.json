@@ -9,6 +9,31 @@
     "intakeNotFound": "Intake not found.",
     "invalidLocale": "Invalid language selection.",
     "mailSendFailed": "Failed to send the email.",
-    "recipientInvalid": "Invalid recipient."
+    "recipientInvalid": "Invalid recipient.",
+    "notLoggedIn": "Not logged in. Please log in again."
+  },
+  "actions": {
+    "save": "Save"
+  },
+  "workflow": {
+    "steps": {
+      "submitted": "Client submitted",
+      "reviewed": "Reviewed by you",
+      "validatedByClient": "Client validated",
+      "decomposed": "Decomposition",
+      "inResearch": "In research",
+      "delivered": "Delivered"
+    },
+    "archivedNotice": "This intake has been archived.",
+    "draftNotice": "The client is still filling this in."
+  },
+  "accessDenied": {
+    "brand": "Agenic ›",
+    "title": "no access",
+    "body": "This account does not have access to the admin area. Contact an administrator if you think this is a mistake.",
+    "logout": "Log out"
+  },
+  "comingSoon": {
+    "badge": "⌀ Coming soon"
   }
 }
