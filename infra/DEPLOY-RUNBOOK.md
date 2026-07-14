@@ -476,6 +476,199 @@ image rebuild did not ship `jinja2` (**Pitfall 2**). A **broken logo / dead CTA*
 
 ---
 
+## Phase 12 — Frontend deploy, backend catch-up & URL wiring
+
+Phase 12 is the **cutover**: deploy the pending Phase-10/11 backend state (the D-04
+catch-up), then containerize + deploy the TanStack Start (Nitro node-server) frontend on
+Cloud Run (D-01 — the auto-generated run.app URL is v1's origin; no custom domain), then
+wire that frontend URL back into the four live surfaces it must reach (CORS, APP_BASE_URL,
+uploads-bucket CORS, Firebase authorized domains). The sequence is **strictly ordered**:
+backend catch-up FIRST, then frontend build+deploy, then a **two-pass** URL wiring —
+because the run.app URL is not known until the first frontend deploy.
+
+> **⚠️ IaC-DRIFT (same reality as the Phase 5/7/8/9/10 notes above).** The `infra/main.tf`
+> `google_cloud_run_v2_service.frontend` block + its `allUsers` invoker, the
+> `frontend_service_name` / `frontend_image_tag` / `vite_*` vars, and the
+> `frontend_service_url` output are the INTENDED end-state only — Terraform state was never
+> adopted, so **nothing is live until you run the gcloud steps below by hand**. The frontend
+> image must be built via **Cloud Build** (the dev box has no Docker; downloads are blocked).
+
+> **🚫 D-08 — NO Supabase-side actions anywhere in this phase.** "Retirement" is redefined
+> as **independence, not teardown**: do NOT pause, delete, or log into the legacy Supabase
+> project, and do NOT touch the old Lovable/Cloudflare deploy (D-10). Independence is proven
+> **code-side** — the frontend build never sets `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`
+> (so the env-guarded `supabase.ts` client stays `null`, D-09), and the `.output/` bundle
+> guard (`frontend/scripts/ci_no_supabase_in_bundle.sh`, run in the image build) fails the
+> build if any Supabase URL/anon-key signature leaks in (D-11). No Supabase step exists here
+> by design.
+
+Preamble — export the env once (mirrors Step 3 / Step 8.1 / Step 9 preamble):
+
+```bash
+export GOOGLE_PROJECT="<your-project-id>"
+export REGION="europe-west1"
+export RUNTIME_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export BUCKET="${GOOGLE_PROJECT}-nestor-uploads"
+```
+
+### Step 12.1 — Backend catch-up deploy (D-04) — THIS IS STEP ONE
+
+The frontend deploy and the parity gate must start from a **fully-deployed** backend that
+carries the Phase-10/11 code. The live backend (rev 00018) predates the Phase-10/11 Python
+deps (`jinja2` / `httpx`) and the alembic `0010` migration, so a **Cloud Build image REBUILD
+is mandatory** — a config-only env/secret flip ships a stale image and produces a live
+`ModuleNotFoundError` in UAT while CI is green (**Pitfall 3 / the recurring project lesson**;
+see Step 10.4). Perform, IN ORDER, reusing the already-documented steps above (do NOT
+duplicate their commands — cross-reference):
+
+1. **Resend secret exists** — ensure the `nestor-resend-api-key` secret + its resource-scoped
+   `secretAccessor` grant + a key VALUE version exist (**Step 10.1**). Skip creation if already
+   done in a prior Phase-10 session; just confirm a version is present.
+2. **Mail envs set** — `NESTOR_ADMIN_EMAIL` + `APP_BASE_URL` on the live service (**Step 10.2**).
+   > NOTE: `APP_BASE_URL` set here is **provisional** — it is FINALIZED in **Step 12.4** once the
+   > real frontend run.app URL is known. If this is a fresh cutover, you may set a placeholder now
+   > and overwrite it in Step 12.4; do not treat the Step-12.1 value as final.
+3. **RESEND_API_KEY mapped** to the service env (**Step 10.3**).
+4. **REBUILD the backend image via Cloud Build** with `jinja2` / `httpx` and repoint the
+   service (**Step 10.4** — image rebuild is MANDATORY, Pitfall 3; never a config-only deploy).
+5. **Run the alembic `0010` migration Job** against the live DB (the `nestor-migrate` Cloud Run
+   Job runs `alembic upgrade head`; execute it after the image rebuild so the container image
+   carries the 0010 revision):
+   ```bash
+   gcloud run jobs execute nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+   ```
+   Confirm the DB reaches `0010` (the Job logs the applied head).
+6. **Run the full backend suite in Cloud Build** (the 150+-test pytest suite — the mechanism
+   documented for this project; run it against the freshly-built image before proceeding to the
+   frontend). This closes 11-UAT #6 (full backend suite green at catch-up).
+
+Failure triage: a mail endpoint **500** with `ModuleNotFoundError: jinja2` → the Step-10.4
+image rebuild was skipped (Pitfall 3). Alembic below `0010` → the Job in sub-step 5 did not run.
+
+### Step 12.2 — Drop the NDA template asset (D-12 item 5 residual) BEFORE building the frontend
+
+The intake form's template-download field resolves a `templates/`-prefixed static path via
+`frontend/public/templates/` (the `DownloadControl` opens the static URL directly, bypassing
+the space-scoped signed-URL seam). The scheme is already implemented, but the actual PDF
+binary is NOT committed to the repo — it lived in the legacy Supabase bucket and must be
+provided **out-of-band** by the operator. Place the file at exactly:
+
+```
+frontend/public/templates/NDA/Agenic-Nestor-Overeenkomst.pdf
+```
+
+This is a **static asset drop, no code change**. It must be present in the build context
+**before** the Step-12.3 image build so it is baked into `.output/public/`. (Analog: the
+Phase-10 `frontend/public/agenic-logo.png` static asset.) If the file is absent the build
+still succeeds, but the NDA download link 404s in UAT.
+
+### Step 12.3 — Build + deploy the FRONTEND (pass 1): capture the run.app URL
+
+Build the frontend image via **Cloud Build** (the dev box has no Docker) using a
+`cloudbuild.yaml` that passes the `VITE_*` public config as Docker `--build-arg`s — a plain
+`gcloud builds submit --tag` CANNOT inject build-args, so the bundle would build with empty
+config (Firebase init fails, API base URL wrong). The `VITE_*` values are inlined into the
+bundle at build time (they are NOT runtime envs). **DELIBERATELY do NOT pass any
+`VITE_SUPABASE_*`** — withholding them keeps `supabase.ts` `null` (D-09/D-11); the in-image
+bundle guard (`frontend/scripts/ci_no_supabase_in_bundle.sh .output`) fails the build if a
+Supabase signature leaks in.
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:$(date +%Y%m%d-%H%M%S)"
+
+# Build via Cloud Build with the frontend cloudbuild.yaml (a docker build step that passes
+# --build-arg VITE_* from --substitutions). The frontend image shares the `nestor` repo.
+# _API_BASE_URL = the LIVE nestor-api origin the browser calls directly; the VITE_FIREBASE_*
+# values are PUBLIC (the web apiKey is a public project identifier, not a secret).
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<hash>-ew.a.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+# Deploy the built image to the frontend service (public web app — allUsers invoker, A6).
+# --port 8080: the Nitro node-server binds $PORT (Cloud Run injects PORT=8080).
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" \
+  --region "$REGION" \
+  --allow-unauthenticated \
+  --port 8080 \
+  --project="$GOOGLE_PROJECT"
+```
+
+**Capture the printed `Service URL`** from the deploy output as `FRONTEND_URL` — you need it
+for pass 2. This is a Cloud Build image REBUILD, never a config-only deploy (the frontend has
+no prior live revision to config-flip anyway).
+
+```bash
+# Read it back deterministically (do not guess the run.app hash):
+export FRONTEND_URL=$(gcloud run services describe nestor-frontend \
+  --region "$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')
+echo "FRONTEND_URL=$FRONTEND_URL"
+```
+
+### Step 12.4 — Wire the FRONTEND_URL (pass 2): CORS + APP_BASE_URL + bucket CORS + Firebase
+
+Now that the real run.app URL is known, wire it into the four surfaces. **NEVER wire a guessed
+run.app URL** — the project+region+hash is only assigned at the first deploy (**Pitfall 4**).
+Use exactly the captured `FRONTEND_URL` origin (no `*` wildcard, T-12-10):
+
+```bash
+# (a) backend CORS allowlist + APP_BASE_URL (mail CTA links) — set both to the captured URL.
+#     This FINALIZES the provisional APP_BASE_URL from Step 12.1.
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --update-env-vars="CORS_ALLOWED_ORIGINS=${FRONTEND_URL},APP_BASE_URL=${FRONTEND_URL}"
+
+# (b) ADD the frontend origin to the uploads-bucket CORS (Step 9.1b pattern; was localhost:8081
+#     only). Regenerate the cors-file with the run.app origin, then apply. GET-only — uploads /
+#     deletes go THROUGH the backend, never browser->bucket (T-12-10).
+cat > /tmp/uploads-cors.json <<JSON
+[
+  {
+    "origin": ["${FRONTEND_URL}"],
+    "method": ["GET"],
+    "responseHeader": ["Content-Disposition", "Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]
+JSON
+gcloud storage buckets update "gs://${BUCKET}" \
+  --cors-file=/tmp/uploads-cors.json \
+  --project="$GOOGLE_PROJECT"
+```
+
+**(c) Firebase authorized domains (Console — manual, A5).** There is no clean gcloud/Terraform
+surface for Identity Platform authorized domains, so this is a documented manual step:
+
+- Firebase Console → **Authentication → Settings → Authorized domains → Add domain**
+- Add the run.app **host only** (the `FRONTEND_URL` without the `https://` scheme, e.g.
+  `nestor-frontend-<hash>-ew.a.run.app`). Add ONLY that host — no wildcard domain (T-12-11).
+- Without this, Firebase auth redirects/popups are rejected with `auth/unauthorized-domain`.
+
+### Step 12.5 — Verify + consolidated parity gate (QA-05 / D-05)
+
+```bash
+# The deployed frontend serves SSR HTML at its root (Nitro node-server serves .output/server
+# + .output/public from one process). Confirm a 200 with HTML, not a 404/500.
+curl -sS -o /dev/null -w '%{http_code}\n' "$FRONTEND_URL"   # expect: 200
+curl -sS "$FRONTEND_URL" | head -c 400                        # expect: <!DOCTYPE html> … SSR markup
+```
+
+Then run the **consolidated 12-UAT** — the single parity checklist that folds in EVERY
+outstanding HUMAN-UAT item from Phases 7–11 PLUS the two-role `draft → decomposed` E2E (D-05).
+See `.planning/phases/12-frontend-deploy-cutover-supabase-retirement/12-UAT.md`. The whole gate
+is green only when every inherited item AND the two-role E2E pass.
+
+> **Scope ceiling (INTAKE-05).** The validated flow stops at `decomposed`. `run-research` /
+> Tribunal is **never** invoked from the new frontend/backend credentials — the scope-guard
+> tests + `scripts/ci_no_run_research.sh` keep the ceiling. Do not exercise any research path
+> in the parity gate.
+
+Failure triage: CORS preflight failures in the browser → the Step-12.4(a) `CORS_ALLOWED_ORIGINS`
+or the (b) bucket CORS did not include the exact `FRONTEND_URL`. Firebase
+`auth/unauthorized-domain` → the Step-12.4(c) authorized-domains add was skipped. Mail CTA links
+pointing at the wrong host → `APP_BASE_URL` still holds the Step-12.1 placeholder (re-run 12.4a).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -498,3 +691,9 @@ image rebuild did not ship `jinja2` (**Pitfall 2**). A **broken logo / dead CTA*
 - [ ] Step 10.4 — backend image rebuilt via Cloud Build with `jinja2`, service repointed (Pitfall 2 — green CI but a 500 `ModuleNotFoundError: jinja2` in UAT if skipped)
 - [ ] Step 10.5 — live mail UAT: trigger invite, validation, results, reminder, admin_validated against the deployed rev and inspect the inbox (visual parity + tokenless CTA)
 - [ ] Drift logged: reconcile via `terraform import` (or keep manual) BEFORE Phase 12 cutover (now extended with the Phase-9 storage + Phase-10 Resend resources)
+- [ ] Step 12.1 — backend catch-up FIRST: Resend secret (10.1) + mail envs (10.2, APP_BASE_URL provisional) + RESEND_API_KEY mapped (10.3) + `jinja2`/`httpx` image REBUILD (10.4, mandatory — Pitfall 3) + alembic `0010` Job run + full backend suite green in Cloud Build (closes 11-UAT #6)
+- [ ] Step 12.2 — NDA PDF asset dropped at `frontend/public/templates/NDA/Agenic-Nestor-Overeenkomst.pdf` (out-of-band, no code change) BEFORE the frontend build (D-12 item 5)
+- [ ] Step 12.3 — frontend image built via Cloud Build (`frontend/cloudbuild.yaml`, `--build-arg VITE_*` from substitutions; NO `VITE_SUPABASE_*`; in-image bundle guard passes) + deployed (`gcloud run deploy nestor-frontend --allow-unauthenticated --port 8080`) + `FRONTEND_URL` captured from the deploy output (never guessed — Pitfall 4)
+- [ ] Step 12.4 — two-pass URL wiring off the CAPTURED `FRONTEND_URL`: (a) backend `CORS_ALLOWED_ORIGINS`+`APP_BASE_URL` = URL, (b) uploads-bucket CORS += URL (GET-only, Step 9.1b pattern), (c) Firebase Console authorized domains += run.app host (manual, A5) — never a `*` wildcard, never a guessed URL (T-12-10/T-12-11)
+- [ ] Step 12.5 — verify `curl $FRONTEND_URL` → 200 SSR HTML, then run the consolidated 12-UAT (all inherited 07–11 items + two-role `draft → decomposed` E2E, D-05) fully green; scope ceiling `decomposed` respected (run-research never invoked)
+- [ ] D-08 guard confirmed: NO Supabase-side actions taken anywhere in the phase (independence proven code-side — no `VITE_SUPABASE_*` in the build + bundle guard green, D-09/D-11)
