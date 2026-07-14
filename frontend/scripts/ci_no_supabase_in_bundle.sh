@@ -34,12 +34,23 @@
 
 set -euo pipefail
 
-# Supabase signatures that must never survive into the shipped bundle:
-#   supabase\.co   -> a Supabase project URL (e.g. https://xyz.supabase.co)
-#   VITE_SUPABASE  -> a leaked VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY build-arg name
-#   "role":"anon"  -> the anon-key JWT claim payload marker
-#   eyJhbGciOi     -> a JWT header prefix (base64 of {"alg":...) — anon/service key
-PATTERN='supabase\.co|VITE_SUPABASE|"role":"anon"|eyJhbGciOi'
+# Supabase signatures that must never survive into the shipped bundle.
+#
+# D-11 scopes this guard to LEAKED CONFIG/CREDENTIALS, not to supabase-js itself:
+# D-09 deliberately keeps the sales track (and therefore the supabase-js library)
+# in the dependency tree, and the library's own code contains benign strings like
+# the `https://project-id.supabase.co/...` docs URL (auth-js) and the
+# `"*.supabase.co"` wildcard suffix list (supabase-js), plus the env-guarded
+# client retains the literal accessor name `VITE_SUPABASE_URL`. A clean build —
+# no VITE_SUPABASE_* values injected — must pass this gate.
+#
+#   [a-z0-9]{20}\.supabase\.co -> a REAL project URL (project refs are exactly 20
+#                                 lowercase alphanumerics; docs placeholders and
+#                                 `*.supabase.co` wildcards do not match)
+#   "role":"anon"              -> the anon-key JWT claim payload marker
+#   eyJhbGciOi                 -> a JWT header prefix (base64 of {"alg":...) — legacy anon/service key
+#   sb_publishable_/sb_secret_ -> new-style Supabase API keys
+PATTERN='[a-z0-9]{20}\.supabase\.co|"role":"anon"|eyJhbGciOi|sb_publishable_|sb_secret_'
 
 run_scan() {
   local scan_dir="$1"
@@ -72,7 +83,9 @@ if [ "${1:-}" = "--self-test" ]; then
   trap 'rm -rf "$TMP_DIR"' EXIT
 
   mkdir -p "$TMP_DIR/server"
-  printf 'const x = "https://xyz.supabase.co";\n' > "$TMP_DIR/server/offender.js"
+  # Plant one offender per detected credential class: a real-shaped 20-char
+  # project-ref URL and a new-style publishable key.
+  printf 'const x = "https://abcdefghijklmnopqrst.supabase.co";\nconst k = "sb_publishable_selftest";\n' > "$TMP_DIR/server/offender.js"
 
   # Re-invoke THIS script against the planted offender; capture the exit code.
   # `|| rc=$?` keeps set -e from aborting on the expected non-zero exit.
