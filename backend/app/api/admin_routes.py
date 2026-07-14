@@ -36,6 +36,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from app.api.errors import INVALID_LOCALE, CodedError
 from app.auth import admin_users
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
@@ -49,6 +50,11 @@ _log = logging.getLogger(__name__)
 
 # Dutch subject for the set-password invite mail (the ONLY link-carrying mail, D-09).
 _INVITE_SUBJECT = "Welkom bij Nestor Pulse — stel je wachtwoord in"
+
+# The app-level allowed space-locale set (D-07 / V5 input validation). Enforced IN CODE,
+# NOT a PG enum (mirrors the organizations.default_locale / status column rationale, 0010).
+# MUST match me_routes._ALLOWED and the frontend switcher's fixed nl/fr/en options.
+_ALLOWED_LOCALES = {"nl", "fr", "en"}
 
 # The admin feature router. NO auth dependency of its own — mounted UNDER
 # protected_router in app/main.py, and each handler additionally Depends(get_admin_session)
@@ -342,21 +348,30 @@ def send_invite_mail(
 
 
 class SpaceCreateBody(BaseModel):
-    """Create-space request — ``name`` + an optional ``slug``."""
+    """Create-space request — ``name`` + an optional ``slug`` + an optional ``default_locale``.
+
+    ``default_locale`` (D-07 / D-10) is the space's base display language. When omitted the
+    ``organizations.default_locale`` column ``server_default`` ("nl") applies. A supplied
+    value is validated against {nl,fr,en} in the handler (``CodedError`` INVALID_LOCALE).
+    """
 
     name: str
     slug: str | None = None
+    default_locale: str | None = None
 
 
 class SpacePatchBody(BaseModel):
-    """Edit-space request — name/slug ONLY.
+    """Edit-space request — name/slug/default_locale ONLY.
 
     There is deliberately NO ``status`` field here: deactivate/reactivate go through the
     dedicated POST routes, so a benign PATCH can never soft-delete a space (USER-03).
+    ``default_locale`` (D-07) — when present — is validated against {nl,fr,en} in the
+    handler before the write.
     """
 
     name: str | None = None
     slug: str | None = None
+    default_locale: str | None = None
 
 
 class SpaceView(BaseModel):
@@ -366,6 +381,7 @@ class SpaceView(BaseModel):
     name: str
     slug: str | None = None
     status: str
+    default_locale: str
 
 
 def _space_view(space) -> SpaceView:
@@ -375,7 +391,19 @@ def _space_view(space) -> SpaceView:
         name=space.name,
         slug=space.slug,
         status=space.status,
+        default_locale=space.default_locale,
     )
+
+
+def _validate_locale(value: str) -> None:
+    """Reject a ``default_locale`` outside {nl,fr,en} with ``CodedError`` INVALID_LOCALE.
+
+    Reuses the 11-02 additive error-code contract (T-11-04 Input Validation): a bad locale
+    is a curated, user-visible 422 the frontend maps to a translated message, and the write
+    NEVER runs on a rejected value. Mirrors ``me_routes.patch_locale``'s guard.
+    """
+    if value not in _ALLOWED_LOCALES:
+        raise CodedError(422, INVALID_LOCALE, "Invalid locale")
 
 
 @admin_router.get("/spaces")
@@ -390,15 +418,29 @@ def create_space(
     repo: AdminRepo = Depends(get_admin_session),
     identity: Identity = Depends(get_current_identity),
 ) -> SpaceView:
-    """Create a space (status defaults to ``active``) + ``space.created`` audit (USER-03)."""
-    space = repo.create_space(name=body.name, slug=body.slug)
+    """Create a space (status defaults to ``active``) + ``space.created`` audit (USER-03).
+
+    ``default_locale`` (D-07) — when supplied — is validated against {nl,fr,en} BEFORE any
+    write (``CodedError`` INVALID_LOCALE) and recorded in the audit metadata. When omitted the
+    column ``server_default`` ("nl") applies.
+    """
+    if body.default_locale is not None:
+        _validate_locale(body.default_locale)
+
+    space = repo.create_space(
+        name=body.name, slug=body.slug, default_locale=body.default_locale
+    )
     audit.log(
         repo.session,
         actor_uid=identity.uid,
         event_type="space.created",
         target=str(space.id),
         space_id=space.id,
-        metadata={"name": body.name, "slug": body.slug},
+        metadata={
+            "name": body.name,
+            "slug": body.slug,
+            "default_locale": space.default_locale,
+        },
     )
     return _space_view(space)
 
@@ -410,14 +452,18 @@ def update_space(
     repo: AdminRepo = Depends(get_admin_session),
     identity: Identity = Depends(get_current_identity),
 ) -> SpaceView:
-    """Edit a space's name/slug (never status) + ``space.updated`` audit.
+    """Edit a space's name/slug/default_locale (never status) + ``space.updated`` audit.
 
-    Empty patch -> 400; missing space -> 404 (the rowcount-0 outcome). The audit
-    ``metadata`` records only the changed fields.
+    Empty patch -> 400; missing space -> 404 (the rowcount-0 outcome). A supplied
+    ``default_locale`` is validated against {nl,fr,en} BEFORE the write (``CodedError``
+    INVALID_LOCALE — T-11-04). The audit ``metadata`` records only the changed fields.
     """
     values = body.model_dump(exclude_unset=True)
     if not values:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No fields to update")
+
+    if "default_locale" in values and values["default_locale"] is not None:
+        _validate_locale(values["default_locale"])
 
     rowcount = repo.update_space(space_id, **values)
     if rowcount == 0:

@@ -222,12 +222,26 @@ def _count_audit(engine, *, actor_uid: str, event_type: str) -> int:
 
 def _build_app():
     """Mount the REAL ``admin_router`` under the default-deny ``protected_router`` (mirrors
-    app/main.py wiring + test_cross_tenant_denial.py:218-233)."""
+    app/main.py wiring + test_cross_tenant_denial.py:218-233).
+
+    Also registers the production ``CodedError`` handler (mirrors app/main.py) so a
+    ``CodedError(422, INVALID_LOCALE, ...)`` raised by the space create/update handlers
+    renders as a 422 ``{"detail","code"}`` body here — not an unhandled 500 (Phase 11)."""
     from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from app.api.errors import CodedError
 
     protected_router.include_router(admin_router)
     app = FastAPI()
     app.include_router(protected_router)
+
+    @app.exception_handler(CodedError)
+    def _coded_error_handler(_request, exc: CodedError) -> JSONResponse:
+        return JSONResponse(
+            {"detail": exc.detail, "code": exc.code}, status_code=exc.status_code
+        )
+
     return app
 
 
@@ -602,6 +616,218 @@ def test_self_deactivation_returns_409(engine, monkeypatch, superadmin_engine):
         assert resp.status_code == 409, (
             f"self-deactivation must be 409 Conflict, got {resp.status_code} ({resp.text!r})"
         )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+# ===========================================================================
+# (g) space default_locale — create/update persist + return; invalid-locale -> 422 (Phase 11)
+# ===========================================================================
+
+
+def test_space_create_persists_and_returns_default_locale(
+    engine, monkeypatch, superadmin_engine
+):
+    """POST /admin/spaces {name, default_locale:"fr"} -> 200 with default_locale="fr" in the
+    body; the organizations row persists default_locale="fr" and the space.created audit
+    metadata records it (D-07 / D-10 / QA-04)."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    created_id = None
+    try:
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            create = client.post(
+                "/admin/spaces",
+                json={
+                    "name": "FR Space",
+                    "slug": f"fr-space-{uuid.uuid4()}",
+                    "default_locale": "fr",
+                },
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            assert create.status_code in (200, 201), (
+                f"space create should be 200/201, got {create.status_code} ({create.text!r})"
+            )
+            body = create.json()
+            created_id = body["id"]
+            assert body["default_locale"] == "fr", (
+                "the SpaceView must return the persisted default_locale (D-07)"
+            )
+
+            with engine.connect() as conn:
+                loc = conn.execute(
+                    text(
+                        f"SELECT default_locale FROM {SCHEMA}.organizations WHERE id = :id"
+                    ),
+                    {"id": created_id},
+                ).scalar_one()
+            assert loc == "fr", "create must persist organizations.default_locale='fr'"
+    finally:
+        app.dependency_overrides.clear()
+        if created_id is not None:
+            _cleanup_space(engine, uuid.UUID(created_id))
+
+
+def test_space_create_omitted_default_locale_falls_back_to_nl(
+    engine, monkeypatch, superadmin_engine
+):
+    """POST /admin/spaces with NO default_locale -> the column server_default ("nl") applies,
+    and the SpaceView returns default_locale="nl" (D-07 non-null base)."""
+    from fastapi.testclient import TestClient
+
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    created_id = None
+    try:
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            create = client.post(
+                "/admin/spaces",
+                json={"name": "Default Locale Space", "slug": f"dl-{uuid.uuid4()}"},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            assert create.status_code in (200, 201), (
+                f"space create should be 200/201, got {create.status_code} ({create.text!r})"
+            )
+            body = create.json()
+            created_id = body["id"]
+            assert body["default_locale"] == "nl", (
+                "omitting default_locale must fall back to the 'nl' column server_default"
+            )
+    finally:
+        app.dependency_overrides.clear()
+        if created_id is not None:
+            _cleanup_space(engine, uuid.UUID(created_id))
+
+
+def test_space_update_persists_default_locale(engine, monkeypatch, superadmin_engine):
+    """PATCH /admin/spaces/{id} {default_locale:"en"} -> 200 with default_locale="en"; the
+    organizations row is updated and the SpaceView reflects it (D-07)."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Update Locale Space")
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            patch_resp = client.patch(
+                f"/admin/spaces/{space_id}",
+                json={"default_locale": "en"},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            assert patch_resp.status_code == 200, (
+                f"space locale patch should be 200, got {patch_resp.status_code} "
+                f"({patch_resp.text!r})"
+            )
+            assert patch_resp.json()["default_locale"] == "en", (
+                "PATCH must return the updated default_locale in the SpaceView"
+            )
+
+            with engine.connect() as conn:
+                loc = conn.execute(
+                    text(
+                        f"SELECT default_locale FROM {SCHEMA}.organizations WHERE id = :id"
+                    ),
+                    {"id": space_id},
+                ).scalar_one()
+            assert loc == "en", "PATCH must persist organizations.default_locale='en'"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_space_create_invalid_locale_returns_422_coded(
+    engine, monkeypatch, superadmin_engine
+):
+    """POST /admin/spaces {default_locale:"de"} -> 422 with code=INVALID_LOCALE; NO row is
+    written (the validation runs BEFORE the create — T-11-04 Input Validation)."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    slug = f"invalid-locale-{uuid.uuid4()}"
+    try:
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.post(
+                "/admin/spaces",
+                json={"name": "Bad Locale Space", "slug": slug, "default_locale": "de"},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+        assert resp.status_code == 422, (
+            f"an invalid default_locale must be 422, got {resp.status_code} ({resp.text!r})"
+        )
+        assert resp.json().get("code") == "INVALID_LOCALE", (
+            "the 422 body must carry the machine code INVALID_LOCALE (D-11)"
+        )
+
+        # No organizations row was written (validation ran before the create).
+        with engine.connect() as conn:
+            count = conn.execute(
+                text(f"SELECT count(*) FROM {SCHEMA}.organizations WHERE slug = :slug"),
+                {"slug": slug},
+            ).scalar_one()
+        assert count == 0, "a rejected invalid-locale create must NOT write a row"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_space_update_invalid_locale_returns_422_coded(
+    engine, monkeypatch, superadmin_engine
+):
+    """PATCH /admin/spaces/{id} {default_locale:"xx"} -> 422 code=INVALID_LOCALE; the existing
+    row's default_locale is UNCHANGED (validation runs before the write — T-11-04)."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Update Bad Locale Space")
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.patch(
+                f"/admin/spaces/{space_id}",
+                json={"default_locale": "xx"},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+        assert resp.status_code == 422, (
+            f"an invalid default_locale patch must be 422, got {resp.status_code} "
+            f"({resp.text!r})"
+        )
+        assert resp.json().get("code") == "INVALID_LOCALE", (
+            "the 422 body must carry the machine code INVALID_LOCALE (D-11)"
+        )
+
+        with engine.connect() as conn:
+            loc = conn.execute(
+                text(
+                    f"SELECT default_locale FROM {SCHEMA}.organizations WHERE id = :id"
+                ),
+                {"id": space_id},
+            ).scalar_one()
+        assert loc == "nl", "a rejected patch must leave default_locale unchanged (still 'nl')"
     finally:
         app.dependency_overrides.clear()
         _cleanup_space(engine, space_id)

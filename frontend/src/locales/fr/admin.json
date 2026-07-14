@@ -1,1 +1,194 @@
-{}
+{
+  "intakeDetail": {
+    "unknownClient": "Client inconnu",
+    "status": {
+      "draft": "Brouillon",
+      "submitted": "Soumis",
+      "reviewed": "Révisé",
+      "validated_by_client": "Validé",
+      "decomposed": "Décomposé",
+      "in_research": "En recherche",
+      "delivered": "Livré",
+      "archived": "Archivé"
+    },
+    "statusBanner": {
+      "draft": "Le client remplit encore le formulaire. Lien partagé mais pas encore soumis.",
+      "submitted": "Le client a soumis. Prêt pour votre révision.",
+      "reviewed": "Révisé par vous. En attente de la validation du client.",
+      "validated_by_client": "Le client a validé. Prêt pour la décomposition.",
+      "decomposed": "Décomposition effectuée. Prêt pour la recherche.",
+      "in_research": "Nestor effectue la recherche.",
+      "delivered": "Livré au client.",
+      "archived": "Archivé."
+    },
+    "statusHint": {
+      "reviewed": "Le client ne voit les modifications qu'après un clic sur « Envoyer pour validation » (à venir dans une prochaine mise à jour).",
+      "validated_by_client": "Prêt pour la décomposition."
+    },
+    "header": {
+      "intakes": "Intakes",
+      "lastEdited": "Dernière modification",
+      "deliveredOn": "Livré le"
+    },
+    "action": {
+      "edit": "Modifier",
+      "cancel": "Annuler",
+      "save": "Enregistrer",
+      "copy": "Copier"
+    },
+    "editBanner": {
+      "title": "MODIFICATION",
+      "body": "Les modifications ne sont pas enregistrées tant que vous ne cliquez pas sur Enregistrer."
+    },
+    "sections": {
+      "nav": "Sections"
+    },
+    "field": {
+      "changed": "Modifié"
+    },
+    "info": {
+      "title": "Infos intake",
+      "client": "Client",
+      "product": "Produit",
+      "status": "Statut",
+      "createdAt": "Créé le",
+      "lastEdited": "Dernière modification",
+      "deliveredOn": "Livré le",
+      "initialIntakeLink": "Lien intake initial",
+      "initialIntakeLinkSubtitle": "Fonctionne tant que le statut = Brouillon",
+      "validationLink": "Lien de validation",
+      "validationLinkSubtitle": "Même page en mode validation (statut = Révisé)",
+      "validation": "Validation",
+      "validatedOn": "Le client a validé le {{date}}",
+      "notYetValidated": "Pas encore validé",
+      "resultsLink": "Lien résultats client",
+      "resultsLinkTooltip": "Ce que le client voit : un rapport de synthèse (téléchargement) + aperçu des questions + recherche IA. Aucun accès aux fichiers de recherche bruts ni aux noms de fichiers.",
+      "resultsLinkHint": "Fonctionne dès que le statut = Livré"
+    },
+    "history": {
+      "title": "Exécutions de skills précédentes",
+      "loading": "Chargement…",
+      "error": "erreur",
+      "running": "en cours…"
+    },
+    "search": {
+      "title": "Rechercher dans les données de recherche (sémantique)",
+      "placeholder": "p. ex. « les clients se plaignent du code d'accès » ou « transparence des prix des concurrents »",
+      "button": "Rechercher",
+      "results": "{{count}} résultats — les plus pertinents d'abord"
+    },
+    "deliveredAt": {
+      "laterPhase": "L'enregistrement de la date de livraison arrivera dans une phase ultérieure.",
+      "hint": "La date que le client voit sur la page des résultats."
+    },
+    "confirm": {
+      "archive": "Archiver le projet ?",
+      "discardChanges": "Les modifications non enregistrées seront supprimées. Continuer ?"
+    },
+    "error": {
+      "notFound": "Intake introuvable.",
+      "notFoundOrDeleted": "Cet intake n'existe pas ou a été supprimé.",
+      "backToList": "Retour à la liste"
+    },
+    "toast": {
+      "linkCopied": "Lien copié",
+      "copyFailed": "Échec de la copie",
+      "intakeNotLoaded": "Intake pas encore chargé",
+      "aiReviewNotLoaded": "La révision IA n'est pas encore chargée — patientez.",
+      "sendFailed": "Échec de l'envoi",
+      "statusUnavailable": "Changement de statut non disponible via l'API (s'arrête à decomposed).",
+      "statusNotUpdated": "Statut non mis à jour",
+      "statusUpdated": "Statut mis à jour",
+      "aiStartFailed": "Échec du démarrage de l'analyse IA",
+      "mailNotSent": "Échec de l'envoi — l'e-mail n'a pas été envoyé. Réessayez.",
+      "mailSent": "E-mail envoyé.",
+      "contextPackStartFailed": "Échec du démarrage du Context Pack",
+      "contextPackStarted": "Génération du Context Pack lancée — cela prend environ 1 à 2 minutes.",
+      "autoResearchOutOfScope": "La recherche automatique est hors de cette phase (s'arrête à decomposed).",
+      "researchOutOfScope": "La recherche est hors de cette phase (s'arrête à decomposed).",
+      "scrollToContextPack": "Faites défiler vers le Context Pack ci-dessous.",
+      "scrollToFinalReport": "Faites défiler vers le bloc rapport client ci-dessous.",
+      "searchFailed": "Échec de la recherche",
+      "noChanges": "Aucune modification",
+      "saveFailed": "Échec de l'enregistrement",
+      "cleanupFailed": "Échec du nettoyage des anciens fichiers",
+      "changesSaved": "Modifications enregistrées"
+    }
+  },
+  "clientDrawer": {
+    "title": "modifier le client",
+    "clientData": "Données client",
+    "primaryContact": "Contact principal",
+    "name": "Nom",
+    "industry": "Secteur",
+    "country": "Pays",
+    "website": "Site web",
+    "role": "Rôle",
+    "rolePlaceholder": "p. ex. CEO",
+    "email": "E-mail",
+    "phone": "Téléphone",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "cancel": "Annuler",
+    "projectsTitle": "Projets de ce client",
+    "loading": "Chargement…",
+    "noProjects": "Aucun projet pour l'instant.",
+    "createdAt": "Créé le",
+    "deliveredAt": "Livré",
+    "lastEdited": "Dernière modification",
+    "openIntake": "Ouvrir l'intake →",
+    "newProject": "+ Nouveau projet pour ce client",
+    "nameRequired": "Le nom est obligatoire",
+    "saved": "Client enregistré"
+  },
+  "spaces": {
+    "subtitle": "Gérer les espaces clients — créer, modifier nom/slug et désactiver.",
+    "new": "+ Nouvel espace",
+    "empty": {
+      "title": "Aucun espace pour l'instant",
+      "body": "Créez le premier espace pour gérer les utilisateurs et les templates."
+    },
+    "table": {
+      "name": "Nom",
+      "slug": "Slug",
+      "status": "Statut",
+      "actions": "Actions"
+    },
+    "status": {
+      "active": "ACTIF",
+      "deactivated": "DÉSACTIVÉ"
+    },
+    "action": {
+      "edit": "Modifier",
+      "deactivate": "Désactiver",
+      "reactivate": "Réactiver",
+      "cancel": "Annuler"
+    },
+    "confirm": {
+      "title": "Désactiver l'espace ?",
+      "body": "L'espace sera masqué pour les utilisateurs. Les données sont conservées et l'espace peut être réactivé ultérieurement."
+    },
+    "toast": {
+      "reactivated": "Réactivé",
+      "deactivated": "Espace désactivé"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "nouvel espace",
+    "editTitle": "modifier l'espace",
+    "name": "Nom",
+    "slug": "Slug",
+    "slugPlaceholder": "p. ex. acme-corp",
+    "defaultLocale": "Langue par défaut",
+    "locale": {
+      "nl": "Néerlandais",
+      "fr": "Français",
+      "en": "Anglais"
+    },
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "saving": "Enregistrement…",
+    "nameRequired": "Le nom est obligatoire",
+    "saved": "Enregistré"
+  }
+}

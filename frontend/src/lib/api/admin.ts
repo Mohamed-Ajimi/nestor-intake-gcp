@@ -26,11 +26,17 @@ export type InviteResult = {
   action_link: string;
 };
 
+/** The three supported space/display locales (D-07) — mirrors the backend {nl,fr,en} set. */
+export type SpaceLocale = "nl" | "fr" | "en";
+
 export type Space = {
   id: string;
   name: string;
   slug: string | null;
   status: "active" | "deactivated" | string;
+  // D-07 / D-10: the space's base display language, returned by _space_view (admin_routes).
+  // Always non-null server-side (column server_default "nl").
+  default_locale: SpaceLocale;
 };
 
 export type Template = {
@@ -89,16 +95,26 @@ export function listSpaces(): Promise<ApiResult<Space[]>> {
   return apiFetch<Space[]>("/admin/spaces", { method: "GET" });
 }
 
-export function createSpace(input: { name: string; slug?: string }): Promise<ApiResult<Space>> {
+export function createSpace(input: {
+  name: string;
+  slug?: string;
+  default_locale?: SpaceLocale;
+}): Promise<ApiResult<Space>> {
   return apiFetch<Space>("/admin/spaces", {
     method: "POST",
-    body: JSON.stringify({ name: input.name, slug: input.slug ?? null }),
+    body: JSON.stringify({
+      name: input.name,
+      slug: input.slug ?? null,
+      // Only send default_locale when the caller chose one — omission lets the backend
+      // column server_default ("nl") apply (D-07).
+      ...(input.default_locale ? { default_locale: input.default_locale } : {}),
+    }),
   });
 }
 
 export function updateSpace(
   id: string,
-  input: { name?: string; slug?: string },
+  input: { name?: string; slug?: string; default_locale?: SpaceLocale },
 ): Promise<ApiResult<Space>> {
   return apiFetch<Space>(`/admin/spaces/${id}`, {
     method: "PATCH",

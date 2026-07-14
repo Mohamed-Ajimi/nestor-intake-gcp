@@ -1,1 +1,194 @@
-{}
+{
+  "intakeDetail": {
+    "unknownClient": "Unknown client",
+    "status": {
+      "draft": "Draft",
+      "submitted": "Submitted",
+      "reviewed": "Reviewed",
+      "validated_by_client": "Validated",
+      "decomposed": "Decomposed",
+      "in_research": "In research",
+      "delivered": "Delivered",
+      "archived": "Archived"
+    },
+    "statusBanner": {
+      "draft": "Client is still filling in the form. Link shared but not yet submitted.",
+      "submitted": "Client has submitted. Ready for your review.",
+      "reviewed": "Reviewed by you. Awaiting client validation.",
+      "validated_by_client": "Client has validated. Ready for decomposition.",
+      "decomposed": "Decomposition done. Ready for research.",
+      "in_research": "Nestor is researching.",
+      "delivered": "Delivered to client.",
+      "archived": "Archived."
+    },
+    "statusHint": {
+      "reviewed": "The client only sees the changes once you click 'Send for validation' (coming in a future update).",
+      "validated_by_client": "Ready for decomposition."
+    },
+    "header": {
+      "intakes": "Intakes",
+      "lastEdited": "Last edited",
+      "deliveredOn": "Delivered on"
+    },
+    "action": {
+      "edit": "Edit",
+      "cancel": "Cancel",
+      "save": "Save",
+      "copy": "Copy"
+    },
+    "editBanner": {
+      "title": "EDITING",
+      "body": "Changes are not saved until you click Save."
+    },
+    "sections": {
+      "nav": "Sections"
+    },
+    "field": {
+      "changed": "Changed"
+    },
+    "info": {
+      "title": "Intake info",
+      "client": "Client",
+      "product": "Product",
+      "status": "Status",
+      "createdAt": "Created",
+      "lastEdited": "Last edited",
+      "deliveredOn": "Delivered on",
+      "initialIntakeLink": "Initial intake link",
+      "initialIntakeLinkSubtitle": "Works while status = Draft",
+      "validationLink": "Validation link",
+      "validationLinkSubtitle": "Same page in validation mode (status = Reviewed)",
+      "validation": "Validation",
+      "validatedOn": "Client validated on {{date}}",
+      "notYetValidated": "Not yet validated",
+      "resultsLink": "Client results link",
+      "resultsLinkTooltip": "What the client sees: one summarized report (download) + questions overview + AI search. No access to raw research files or filenames.",
+      "resultsLinkHint": "Works once status = Delivered"
+    },
+    "history": {
+      "title": "Previous skill runs",
+      "loading": "Loading…",
+      "error": "error",
+      "running": "running…"
+    },
+    "search": {
+      "title": "Search research data (semantic)",
+      "placeholder": "e.g. 'customers complain about the access code' or 'pricing transparency competitors'",
+      "button": "Search",
+      "results": "{{count}} results — most relevant first"
+    },
+    "deliveredAt": {
+      "laterPhase": "Saving the delivery date will come in a later phase.",
+      "hint": "The date the client sees on the results page."
+    },
+    "confirm": {
+      "archive": "Archive project?",
+      "discardChanges": "Unsaved changes will be discarded. Continue?"
+    },
+    "error": {
+      "notFound": "Intake not found.",
+      "notFoundOrDeleted": "This intake does not exist or was deleted.",
+      "backToList": "Back to list"
+    },
+    "toast": {
+      "linkCopied": "Link copied",
+      "copyFailed": "Copy failed",
+      "intakeNotLoaded": "Intake not loaded yet",
+      "aiReviewNotLoaded": "AI review is not loaded yet — please wait.",
+      "sendFailed": "Send failed",
+      "statusUnavailable": "Status change not available via the API (stops at decomposed).",
+      "statusNotUpdated": "Status not updated",
+      "statusUpdated": "Status updated",
+      "aiStartFailed": "Failed to start AI analysis",
+      "mailNotSent": "Send failed — the email was not sent. Please try again.",
+      "mailSent": "Email sent.",
+      "contextPackStartFailed": "Failed to start Context Pack",
+      "contextPackStarted": "Context Pack generation started — this takes about 1–2 minutes.",
+      "autoResearchOutOfScope": "Automatic research is out of scope for this phase (stops at decomposed).",
+      "researchOutOfScope": "Research is out of scope for this phase (stops at decomposed).",
+      "scrollToContextPack": "Scroll to Context Pack below.",
+      "scrollToFinalReport": "Scroll to the client report block below.",
+      "searchFailed": "Search failed",
+      "noChanges": "No changes",
+      "saveFailed": "Save failed",
+      "cleanupFailed": "Failed to clean up old files",
+      "changesSaved": "Changes saved"
+    }
+  },
+  "clientDrawer": {
+    "title": "edit client",
+    "clientData": "Client data",
+    "primaryContact": "Primary contact",
+    "name": "Name",
+    "industry": "Industry",
+    "country": "Country",
+    "website": "Website",
+    "role": "Role",
+    "rolePlaceholder": "e.g. CEO",
+    "email": "Email",
+    "phone": "Phone",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "projectsTitle": "Projects for this client",
+    "loading": "Loading…",
+    "noProjects": "No projects yet.",
+    "createdAt": "Created",
+    "deliveredAt": "Delivered",
+    "lastEdited": "Last edited",
+    "openIntake": "Open intake →",
+    "newProject": "+ New project for this client",
+    "nameRequired": "Name is required",
+    "saved": "Client saved"
+  },
+  "spaces": {
+    "subtitle": "Manage client spaces — create, edit name/slug and deactivate.",
+    "new": "+ New space",
+    "empty": {
+      "title": "No spaces yet",
+      "body": "Create the first space to manage users and templates."
+    },
+    "table": {
+      "name": "Name",
+      "slug": "Slug",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "status": {
+      "active": "ACTIVE",
+      "deactivated": "DEACTIVATED"
+    },
+    "action": {
+      "edit": "Edit",
+      "deactivate": "Deactivate",
+      "reactivate": "Reactivate",
+      "cancel": "Cancel"
+    },
+    "confirm": {
+      "title": "Deactivate space?",
+      "body": "The space will be hidden from users. Data is retained and the space can be reactivated later."
+    },
+    "toast": {
+      "reactivated": "Reactivated",
+      "deactivated": "Space deactivated"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "new space",
+    "editTitle": "edit space",
+    "name": "Name",
+    "slug": "Slug",
+    "slugPlaceholder": "e.g. acme-corp",
+    "defaultLocale": "Default language",
+    "locale": {
+      "nl": "Dutch",
+      "fr": "French",
+      "en": "English"
+    },
+    "cancel": "Cancel",
+    "save": "Save",
+    "saving": "Saving…",
+    "nameRequired": "Name is required",
+    "saved": "Saved"
+  }
+}

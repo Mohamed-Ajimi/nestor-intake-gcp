@@ -1,1 +1,194 @@
-{}
+{
+  "intakeDetail": {
+    "unknownClient": "Onbekende klant",
+    "status": {
+      "draft": "Concept",
+      "submitted": "Ingediend",
+      "reviewed": "Gereviewd",
+      "validated_by_client": "Gevalideerd",
+      "decomposed": "Gedecomposeerd",
+      "in_research": "In onderzoek",
+      "delivered": "Geleverd",
+      "archived": "Gearchiveerd"
+    },
+    "statusBanner": {
+      "draft": "Klant is nog aan het invullen. Link gedeeld maar nog niet ingediend.",
+      "submitted": "Klant heeft ingediend. Klaar voor jouw review.",
+      "reviewed": "Door jou gereviewd. Wacht op klant-validatie.",
+      "validated_by_client": "Klant heeft gevalideerd. Klaar voor decompositie.",
+      "decomposed": "Decompositie gedaan. Klaar voor onderzoek.",
+      "in_research": "Nestor onderzoekt.",
+      "delivered": "Geleverd aan klant.",
+      "archived": "Gearchiveerd."
+    },
+    "statusHint": {
+      "reviewed": "Klant ziet de wijzigingen pas wanneer je 'Stuur voor validatie' klikt (komt in volgende update).",
+      "validated_by_client": "Klaar voor decompositie."
+    },
+    "header": {
+      "intakes": "Intakes",
+      "lastEdited": "Laatst bewerkt",
+      "deliveredOn": "Geleverd op"
+    },
+    "action": {
+      "edit": "Bewerken",
+      "cancel": "Annuleren",
+      "save": "Opslaan",
+      "copy": "Kopieer"
+    },
+    "editBanner": {
+      "title": "BEWERKEN",
+      "body": "Wijzigingen zijn niet opgeslagen tot je op Opslaan klikt."
+    },
+    "sections": {
+      "nav": "Secties"
+    },
+    "field": {
+      "changed": "Gewijzigd"
+    },
+    "info": {
+      "title": "Intake-info",
+      "client": "Klant",
+      "product": "Product",
+      "status": "Status",
+      "createdAt": "Aangemaakt",
+      "lastEdited": "Laatst bewerkt",
+      "deliveredOn": "Geleverd op",
+      "initialIntakeLink": "Initiële intake-link",
+      "initialIntakeLinkSubtitle": "Werkt zolang status = Concept",
+      "validationLink": "Validatie-link",
+      "validationLinkSubtitle": "Zelfde pagina in validatie-modus (status = Beoordeeld)",
+      "validation": "Validatie",
+      "validatedOn": "Klant heeft gevalideerd op {{date}}",
+      "notYetValidated": "Nog niet gevalideerd",
+      "resultsLink": "Klant-resultaten-link",
+      "resultsLinkTooltip": "Wat de klant ziet: één samengevat rapport (download) + vragen-overzicht + AI-zoek. Geen toegang tot raw research files of filenames.",
+      "resultsLinkHint": "Werkt zodra status = Geleverd"
+    },
+    "history": {
+      "title": "Eerdere skill-runs",
+      "loading": "Laden…",
+      "error": "fout",
+      "running": "bezig…"
+    },
+    "search": {
+      "title": "Zoek in research data (semantic)",
+      "placeholder": "bv. 'klanten klagen over toegangscode' of 'pricing transparantie concurrenten'",
+      "button": "Zoek",
+      "results": "{{count}} resultaten — meest relevante eerst"
+    },
+    "deliveredAt": {
+      "laterPhase": "Leverdatum bewaren komt in een latere fase.",
+      "hint": "De datum die de klant ziet op de resultaten-pagina."
+    },
+    "confirm": {
+      "archive": "Project archiveren?",
+      "discardChanges": "Niet-opgeslagen wijzigingen worden verwijderd. Doorgaan?"
+    },
+    "error": {
+      "notFound": "Intake niet gevonden.",
+      "notFoundOrDeleted": "Deze intake bestaat niet of werd verwijderd.",
+      "backToList": "Terug naar lijst"
+    },
+    "toast": {
+      "linkCopied": "Link gekopieerd",
+      "copyFailed": "Kopiëren mislukt",
+      "intakeNotLoaded": "Intake nog niet geladen",
+      "aiReviewNotLoaded": "AI-review is nog niet geladen — wacht even.",
+      "sendFailed": "Versturen mislukt",
+      "statusUnavailable": "Statuswijziging niet beschikbaar via de API (stopt bij decomposed).",
+      "statusNotUpdated": "Status niet bijgewerkt",
+      "statusUpdated": "Status bijgewerkt",
+      "aiStartFailed": "AI-analyse starten mislukt",
+      "mailNotSent": "Versturen mislukt — de mail is niet verstuurd. Probeer opnieuw.",
+      "mailSent": "E-mail verstuurd.",
+      "contextPackStartFailed": "Context Pack starten mislukt",
+      "contextPackStarted": "Context Pack-generatie gestart — dit duurt ± 1–2 minuten.",
+      "autoResearchOutOfScope": "Automatische research valt buiten deze fase (stopt bij decomposed).",
+      "researchOutOfScope": "Onderzoek valt buiten deze fase (stopt bij decomposed).",
+      "scrollToContextPack": "Scroll naar Context Pack hieronder.",
+      "scrollToFinalReport": "Scroll naar het klant-rapport blok hieronder.",
+      "searchFailed": "Zoeken mislukt",
+      "noChanges": "Geen wijzigingen",
+      "saveFailed": "Opslaan mislukt",
+      "cleanupFailed": "Oude bestanden opruimen mislukt",
+      "changesSaved": "Wijzigingen opgeslagen"
+    }
+  },
+  "clientDrawer": {
+    "title": "klant bewerken",
+    "clientData": "Klantgegevens",
+    "primaryContact": "Hoofdcontact",
+    "name": "Naam",
+    "industry": "Industrie",
+    "country": "Land",
+    "website": "Website",
+    "role": "Rol",
+    "rolePlaceholder": "bv. CEO",
+    "email": "Email",
+    "phone": "Telefoon",
+    "save": "Opslaan",
+    "saving": "Opslaan…",
+    "cancel": "Annuleren",
+    "projectsTitle": "Projecten bij deze klant",
+    "loading": "Laden…",
+    "noProjects": "Nog geen projecten.",
+    "createdAt": "Aangemaakt",
+    "deliveredAt": "Geleverd",
+    "lastEdited": "Laatst bewerkt",
+    "openIntake": "Open intake →",
+    "newProject": "+ Nieuw project voor deze klant",
+    "nameRequired": "Naam is verplicht",
+    "saved": "Klant opgeslagen"
+  },
+  "spaces": {
+    "subtitle": "Beheer client-spaces — aanmaken, naam/slug bewerken en deactiveren.",
+    "new": "+ Nieuwe space",
+    "empty": {
+      "title": "Nog geen spaces",
+      "body": "Maak de eerste space aan om gebruikers en templates te beheren."
+    },
+    "table": {
+      "name": "Naam",
+      "slug": "Slug",
+      "status": "Status",
+      "actions": "Acties"
+    },
+    "status": {
+      "active": "ACTIEF",
+      "deactivated": "GEDEACTIVEERD"
+    },
+    "action": {
+      "edit": "Bewerken",
+      "deactivate": "Deactiveren",
+      "reactivate": "Heractiveren",
+      "cancel": "Annuleren"
+    },
+    "confirm": {
+      "title": "Space deactiveren?",
+      "body": "De space wordt verborgen voor gebruikers. Gegevens blijven bewaard en de space kan later opnieuw geactiveerd worden."
+    },
+    "toast": {
+      "reactivated": "Opnieuw geactiveerd",
+      "deactivated": "Space gedeactiveerd"
+    }
+  },
+  "spaceForm": {
+    "createTitle": "nieuwe space",
+    "editTitle": "space bewerken",
+    "name": "Naam",
+    "slug": "Slug",
+    "slugPlaceholder": "bv. acme-corp",
+    "defaultLocale": "Standaardtaal",
+    "locale": {
+      "nl": "Nederlands",
+      "fr": "Frans",
+      "en": "Engels"
+    },
+    "cancel": "Annuleren",
+    "save": "Opslaan",
+    "saving": "Opslaan…",
+    "nameRequired": "Naam is verplicht",
+    "saved": "Opgeslagen"
+  }
+}

@@ -179,18 +179,31 @@ class AdminRepo:
             select(Organization).where(Organization.id == _as_uuid(space_id))
         ).scalar_one_or_none()
 
-    def create_space(self, name: str, slug: str | None = None):
-        """Insert one organization (status defaults to ``active``); return it."""
-        space = Organization(name=name, slug=slug)
+    def create_space(
+        self, name: str, slug: str | None = None, default_locale: str | None = None
+    ):
+        """Insert one organization (status defaults to ``active``); return it.
+
+        ``default_locale`` (D-07 / D-10) is optional: when omitted, the
+        ``organizations.default_locale`` column ``server_default`` ("nl") applies, so a
+        create that never mentions a locale still lands a non-null "nl" base. The route
+        layer validates the value against {nl,fr,en} BEFORE calling here.
+        """
+        kwargs: dict[str, Any] = {"name": name, "slug": slug}
+        if default_locale is not None:
+            kwargs["default_locale"] = default_locale
+        space = Organization(**kwargs)
         self._s.add(space)
         self._s.flush()
         return space
 
     def update_space(self, space_id, **values):
-        """Patch non-status fields (name/slug) on a space; return rowcount.
+        """Patch non-status fields (name/slug/default_locale) on a space; return rowcount.
 
         ``status`` is NEVER routed through here — deactivate/reactivate use
         :meth:`set_space_status` so a benign PATCH can never soft-delete a space.
+        ``default_locale`` (D-07 / D-10) is validated against {nl,fr,en} at the route
+        layer before it reaches this generic value setter.
         """
         result = self._s.execute(
             update(Organization)
