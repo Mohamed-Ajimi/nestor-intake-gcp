@@ -43,7 +43,9 @@ from sqlalchemy import text
 from app.api.admin_routes import admin_router
 from app.api.ai_routes import ai_router
 from app.api.auth_routes import auth_router, protected_router
+from app.api.errors import CodedError
 from app.api.intake_routes import intake_router
+from app.api.me_routes import me_router
 from app.api.storage_routes import storage_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
@@ -153,8 +155,31 @@ protected_router.include_router(ai_router)
 #   app.storage.gcs seam. No second app.include_router for it — it rides the single
 #   protected_router include below.
 protected_router.include_router(storage_router)
+# - me_router: the Phase-11 i18n locale surface (GET /me + PATCH /me/locale — I18N-01/02).
+#   Mounted UNDER protected_router so it inherits get_current_identity; each handler
+#   additionally Depends(get_me_session) for its both-roles membership+org read. The
+#   resolution + persist derive identity from the verified token only (T-11-03). No second
+#   app.include_router for it — it rides the single protected_router include below.
+protected_router.include_router(me_router)
 app.include_router(auth_router)
 app.include_router(protected_router)
+
+
+@app.exception_handler(CodedError)
+def _coded_error_handler(_request, exc: CodedError) -> JSONResponse:
+    """Render a :class:`app.api.errors.CodedError` as ``{"detail", "code"}`` (Phase 11 / D-11).
+
+    ADDITIVE: ``detail`` stays a plain string so the frontend transport's existing
+    string-``detail`` raw-fallback path is untouched; ``code`` is the new machine-readable
+    field the i18n error-codes map (11-01) reads. Existing ``HTTPException`` raises are
+    unaffected — they never reach this handler and keep emitting a string ``detail`` with no
+    ``code`` (backward-compat). SECURITY (T-11-05): only curated user-facing codes flow here;
+    internal errors keep generic HTTPException messages, never a code or a leaked stack.
+    """
+    return JSONResponse(
+        {"detail": exc.detail, "code": exc.code},
+        status_code=exc.status_code,
+    )
 
 
 @app.get("/healthz")
