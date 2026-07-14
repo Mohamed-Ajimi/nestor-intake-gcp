@@ -33,6 +33,12 @@ locals {
   runtime_db_user = trimsuffix(google_service_account.runtime.email, ".gserviceaccount.com")
 
   image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/backend:${var.image_tag}"
+
+  # Phase 12 (INFRA-05 / D-07): the frontend image lives in the SAME `nestor`
+  # Artifact Registry repo as the backend (path `.../nestor/frontend:<tag>`); no new
+  # repo is provisioned. Mirrors `local.image` above, pathed to the frontend image
+  # and driven by its own `var.frontend_image_tag` (passed on apply, two-step deploy).
+  frontend_image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/frontend:${var.frontend_image_tag}"
 }
 
 # --------------------------------------------------------------- Cloud SQL (D-01/D-03)
@@ -630,6 +636,81 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
   count    = var.allow_unauthenticated ? 1 : 0
   name     = google_cloud_run_v2_service.api.name
   location = google_cloud_run_v2_service.api.location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# -------------------------------------------- Cloud Run FRONTEND service (INFRA-05 / Phase 12)
+# The TanStack Start (Nitro node-server) SSR app, containerized and served from Cloud Run
+# instead of Cloudflare Workers (D-01 — the auto-generated run.app URL is v1's frontend
+# origin; no custom domain). This block MIRRORS google_cloud_run_v2_service.api above with
+# the frontend deltas (12-RESEARCH Pattern 4):
+#   - scale to ZERO (min_instance_count = 0, D-02 — cold starts accepted, matches the API),
+#     max capped at 4.
+#   - container_port 8080 with an explicit PORT=8080 env (Nitro node-server reads $PORT).
+#   - NO `timeout = "900s"` and NO `resources.cpu_idle = false`: the frontend tier does NO
+#     long-lived SSE and NO 90–120s background LLM/Whisper work (those are API concerns),
+#     so it keeps the Cloud Run defaults (300s timeout, CPU throttled between requests).
+#   - image = local.frontend_image (the `.../nestor/frontend:<tag>` path — SAME Artifact
+#     Registry repo as the backend, no new repo). No runtime SA / secrets / DB env: the SSR
+#     server serves static + SSR HTML only; every data call goes from the BROWSER directly to
+#     nestor-api with a Firebase ID token (the frontend service is NOT an API proxy). All
+#     public build-time config (VITE_FIREBASE_*, VITE_API_BASE_URL) is INLINED into the bundle
+#     at image-build time via Docker build-args (12-RESEARCH Pattern 2) — never a runtime env
+#     here — and NO VITE_SUPABASE_* is ever baked (D-09/D-11 independence).
+#
+# IaC-DRIFT: Terraform state was never adopted for this project (see the Phase 5/7/8/9/10
+# drift notes in DEPLOY-RUNBOOK.md and .planning/STATE.md). This resource — and the allUsers
+# invoker binding below — are the INTENDED end-state only; they are INERT until the frontend
+# image is built + deployed out-of-band via the Phase-12 gcloud steps in
+# infra/DEPLOY-RUNBOOK.md (§ Phase 12). Reconcile via `terraform import` (or keep manual).
+resource "google_cloud_run_v2_service" "frontend" {
+  name     = var.frontend_service_name
+  location = var.region
+
+  template {
+    # D-02: scale to ZERO when idle (min_instance_count = 0 — warm-pool knob OFF, no idle
+    # cost); max capped at 4. Cold starts are accepted for the SSR tier (matches the API's
+    # scale-to-zero posture). No cpu_idle override: the frontend does no request-spawned
+    # background work, so the Cloud Run default (CPU throttled between requests) is correct.
+    scaling {
+      min_instance_count = 0 # scale to zero (D-02)
+      max_instance_count = 4
+    }
+
+    containers {
+      image = local.frontend_image
+
+      # Cloud Run injects PORT (default 8080); the Nitro node-server entry
+      # (`node .output/server/index.mjs`) binds $PORT. Declare it explicitly so the
+      # container_port and the server bind agree.
+      ports {
+        container_port = 8080
+      }
+
+      # Nitro node-server reads PORT/NITRO_PORT. Set PORT=8080 explicitly to match the
+      # container_port above (belt-and-suspenders — Cloud Run also injects PORT at runtime).
+      env {
+        name  = "PORT"
+        value = "8080"
+      }
+    }
+    # Deliberately NO service_account, NO secret env, NO DB/connector env, NO 900s timeout,
+    # and NO cpu_idle=false here (see the block header): the SSR frontend is a stateless
+    # public web tier that never touches the DB, Secret Manager, or long background work.
+  }
+}
+
+# Public invoker for the frontend service (A6 / T-12-12 disposition=accept). Unlike the
+# API's opt-in `var.allow_unauthenticated` binding above, the frontend is a PUBLIC web app
+# and MUST be publicly reachable so a browser can load the SSR HTML + static assets — so it
+# gets an UNCONDITIONAL allUsers run.invoker. This does NOT weaken tenant isolation: the
+# frontend is SSR-only and does NOT proxy the API; the browser calls nestor-api directly
+# with its own Firebase ID token, and the API verifies every token independently (app-level
+# auth gates all data). Documented in DEPLOY-RUNBOOK.md § Phase 12.
+resource "google_cloud_run_v2_service_iam_member" "frontend_invoker" {
+  name     = google_cloud_run_v2_service.frontend.name
+  location = google_cloud_run_v2_service.frontend.location
   role     = "roles/run.invoker"
   member   = "allUsers"
 }

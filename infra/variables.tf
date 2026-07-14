@@ -81,6 +81,58 @@ variable "allow_unauthenticated" {
   default     = false
 }
 
+# ------------------------------------------------ Frontend Cloud Run service (INFRA-05 / Phase 12)
+# The new TanStack Start (Nitro node-server) SSR service that replaces the Cloudflare Workers
+# deploy (D-01). Mirrors `service_name` / `image_tag` above. The frontend image shares the
+# `nestor` Artifact Registry repo (var.repo) — path `.../nestor/frontend:<tag>` — so no new
+# repo variable is needed. Unlike the backend, this tier gets an UNCONDITIONAL allUsers
+# invoker (public web app, A6) — there is no allow_unauthenticated toggle for it.
+
+variable "frontend_service_name" {
+  description = "Cloud Run service name for the frontend SSR container (INFRA-05 / D-01). The frontend image lives in the same `nestor` Artifact Registry repo as the backend (path `.../nestor/frontend:<tag>`)."
+  type        = string
+  default     = "nestor-frontend"
+}
+
+variable "frontend_image_tag" {
+  description = "Frontend image tag in Artifact Registry (path `.../nestor/frontend:<tag>`), passed on apply exactly like `image_tag` — the deploy is a two-step (build/push via Cloud Build -> deploy). No default: the user supplies the real tag per infra/DEPLOY-RUNBOOK.md § Phase 12."
+  type        = string
+}
+
+# ------------------------------------------ Frontend build-time public config (INFRA-05 / Phase 12)
+# The `VITE_*` values baked into the frontend bundle at IMAGE-BUILD time via Docker build-args
+# (12-RESEARCH Pattern 2 — `VITE_*` vars are inlined by `vite build`, NOT read at runtime). They
+# are DELIBERATELY not runtime Cloud Run envs: the frontend service reads none of them at boot.
+# These variables exist to DOCUMENT the build-arg surface by construction (D-07); they are
+# IaC-drift-inert until the runbook Cloud Build step (§ Phase 12, Step 12.3) supplies them as
+# `--substitutions`. All are PUBLIC by design (the Firebase web apiKey is a public project
+# identifier, NOT a secret). VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are INTENTIONALLY ABSENT
+# — never set at build so the env-guarded supabase.ts client stays null (D-09/D-11 independence).
+
+variable "vite_api_base_url" {
+  description = "Frontend build-arg VITE_API_BASE_URL — the live nestor-api origin the browser calls directly with a Firebase ID token. Public, non-secret. IaC-drift-inert until the Cloud Build `--substitutions` step (§ Phase 12, Step 12.3) supplies it; default \"\"."
+  type        = string
+  default     = ""
+}
+
+variable "vite_firebase_api_key" {
+  description = "Frontend build-arg VITE_FIREBASE_API_KEY — the Firebase web apiKey, a PUBLIC project identifier (NOT a secret/credential). IaC-drift-inert until the Cloud Build `--substitutions` step supplies it; default \"\"."
+  type        = string
+  default     = ""
+}
+
+variable "vite_firebase_auth_domain" {
+  description = "Frontend build-arg VITE_FIREBASE_AUTH_DOMAIN — the Firebase auth domain (public). IaC-drift-inert until the Cloud Build `--substitutions` step supplies it; default \"\"."
+  type        = string
+  default     = ""
+}
+
+variable "vite_firebase_project_id" {
+  description = "Frontend build-arg VITE_FIREBASE_PROJECT_ID — the Firebase/GCP project id (public). IaC-drift-inert until the Cloud Build `--substitutions` step supplies it; default \"\"."
+  type        = string
+  default     = ""
+}
+
 # ---------------------------------------------------- Frontend origins (WR-02 / Phase 9)
 # The browser origin allowlist for the app frontend (Cloudflare Workers / localhost). Used
 # BOTH by the Cloud Run CORS middleware (CORS_ALLOWED_ORIGINS env, set out-of-band per the
