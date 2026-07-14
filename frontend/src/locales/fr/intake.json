@@ -427,5 +427,37 @@
     "close": "Fermer",
     "markdownCopied": "Markdown copié",
     "copyMarkdown": "Copier le markdown"
+  },
+  "pdf": {
+    "dateFallback": "—",
+    "contextPack": {
+      "footer": "AGENIC × NESTOR — CONTEXT PACK — CONFIDENTIEL",
+      "validated": "Validé : {{date}}",
+      "generated": "Context Pack — généré {{date}}"
+    },
+    "briefing": {
+      "footer": "AGENIC × NESTOR — CONFIDENTIEL",
+      "validatedOn": "Validé le {{date}}",
+      "nestorProduct": "Nestor {{product}}",
+      "decisionGoal": "décision & objectif",
+      "researchQuestions": "questions de recherche",
+      "extraQuestions": "questions supplémentaires (approuvées par le client)",
+      "clientContext": "contexte client",
+      "company": "ENTREPRISE",
+      "audience": "PUBLIC CIBLE",
+      "competitors": "CONCURRENTS",
+      "stakeholders": "PARTIES PRENANTES",
+      "scopeConstraints": "périmètre & contraintes",
+      "deadline": "ÉCHÉANCE",
+      "geoScope": "PÉRIMÈTRE GÉO",
+      "timeHorizon": "HORIZON TEMPOREL",
+      "outOfScope": "HORS PÉRIMÈTRE",
+      "outputSize": "TAILLE DE SORTIE",
+      "outputForm": "FORME DE SORTIE",
+      "attachments": "pièces jointes — téléversées par le client",
+      "noFiles": "Aucun fichier téléversé.",
+      "fileFallback": "fichier",
+      "note": "NOTE"
+    }
   }
 }

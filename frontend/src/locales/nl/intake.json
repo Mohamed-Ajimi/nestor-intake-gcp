@@ -427,5 +427,37 @@
     "close": "Sluiten",
     "markdownCopied": "Markdown gekopieerd",
     "copyMarkdown": "Kopieer markdown"
+  },
+  "pdf": {
+    "dateFallback": "—",
+    "contextPack": {
+      "footer": "AGENIC × NESTOR — CONTEXT PACK — CONFIDENTIEEL",
+      "validated": "Gevalideerd: {{date}}",
+      "generated": "Context Pack — gegenereerd {{date}}"
+    },
+    "briefing": {
+      "footer": "AGENIC × NESTOR — CONFIDENTIEEL",
+      "validatedOn": "Gevalideerd op {{date}}",
+      "nestorProduct": "Nestor {{product}}",
+      "decisionGoal": "beslissing & doel",
+      "researchQuestions": "onderzoeksvragen",
+      "extraQuestions": "extra vragen (klant-goedgekeurd)",
+      "clientContext": "klantcontext",
+      "company": "BEDRIJF",
+      "audience": "DOELGROEP",
+      "competitors": "CONCURRENTEN",
+      "stakeholders": "STAKEHOLDERS",
+      "scopeConstraints": "scope & constraints",
+      "deadline": "DEADLINE",
+      "geoScope": "GEO SCOPE",
+      "timeHorizon": "TIME HORIZON",
+      "outOfScope": "OUT OF SCOPE",
+      "outputSize": "OUTPUT SIZE",
+      "outputForm": "OUTPUT FORM",
+      "attachments": "bijlagen — door klant geüpload",
+      "noFiles": "Geen bestanden geüpload.",
+      "fileFallback": "bestand",
+      "note": "NOTITIE"
+    }
   }
 }

@@ -137,12 +137,17 @@ export function HandoffBlock({
     if (!pack) return;
     setBusy(true);
     try {
+      // Pitfall 3: resolve the PDF's display strings HERE (inside the provider) and
+      // pass them as a `labels` object — the PDF renders outside the I18nextProvider.
       const blob = await generateContextPackBlob({
         clientName,
         intakeTitle,
-        validatedAt,
-        generatedAt: pack.completed_at,
         contextPackMarkdown: pack.output,
+        labels: {
+          footer: t("pdf.contextPack.footer"),
+          validated: t("pdf.contextPack.validated", { date: fmtDate(validatedAt) }),
+          generated: t("pdf.contextPack.generated", { date: fmtDate(pack.completed_at) }),
+        },
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
