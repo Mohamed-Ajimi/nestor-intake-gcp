@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ProductShell } from "@/components/admin/ProductShell";
 import { ADMIN_NAV } from "@/components/admin/adminNav";
@@ -41,6 +42,7 @@ export const Route = createFileRoute("/admin/templates")({
 });
 
 function TemplatesPage() {
+  const { t } = useTranslation("admin");
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [selectedSpaceId, setSelectedSpaceId] = useState<string>("");
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -108,23 +110,23 @@ function TemplatesPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-            templates
+            {t("templates.title")}
           </h1>
-          <p className="mt-1 font-sans text-sm italic text-ink/60">
-            Kloon een standaard-template in een space en bewerk het schema (JSON).
-          </p>
+          <p className="mt-1 font-sans text-sm italic text-ink/60">{t("templates.subtitle")}</p>
         </div>
         <Button onClick={() => setCloneOpen(true)} disabled={!selectedSpaceId}>
-          + Template klonen
+          {t("templates.cloneCta")}
         </Button>
       </div>
 
       <div className="mt-6 max-w-sm">
-        <Label className="font-mono text-[11px] uppercase tracking-wider text-ink/70">Space</Label>
+        <Label className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
+          {t("templates.spaceLabel")}
+        </Label>
         <div className="mt-1.5">
           <Select value={selectedSpaceId} onValueChange={setSelectedSpaceId} disabled={loadingSpaces}>
             <SelectTrigger>
-              <SelectValue placeholder="Kies een space…" />
+              <SelectValue placeholder={t("templates.spacePlaceholder")} />
             </SelectTrigger>
             <SelectContent>
               {spaces.map((s) => (
@@ -147,23 +149,23 @@ function TemplatesPage() {
           <div className="py-12 text-center text-sm text-red-600">{error}</div>
         ) : templates.length === 0 ? (
           <div className="mt-6 border border-ink/20 bg-paper2/40 p-12 text-center">
-            <p className="mb-4 font-mono text-sm text-ink/60">⌀ Nog geen templates in deze space</p>
-            <p className="mb-6 text-sm text-ink/50">Kloon een standaard-template om te beginnen.</p>
+            <p className="mb-4 font-mono text-sm text-ink/60">{t("templates.emptyTitle")}</p>
+            <p className="mb-6 text-sm text-ink/50">{t("templates.emptyBody")}</p>
             <Button onClick={() => setCloneOpen(true)} disabled={!selectedSpaceId}>
-              + Template klonen
+              {t("templates.cloneCta")}
             </Button>
           </div>
         ) : (
           <div className="space-y-2">
-            {templates.map((t) => (
+            {templates.map((tpl) => (
               <button
-                key={t.id}
-                onClick={() => setEditing(t)}
+                key={tpl.id}
+                onClick={() => setEditing(tpl)}
                 className="flex w-full items-center justify-between gap-4 border border-ink/15 bg-paper px-4 py-3 text-left hover:bg-ink/5"
               >
-                <span className="font-sans font-medium text-ink">{t.name}</span>
+                <span className="font-sans font-medium text-ink">{tpl.name}</span>
                 <span className="font-mono text-[10px] uppercase tracking-wider text-ink/50">
-                  schema bewerken →
+                  {t("templates.editSchema")}
                 </span>
               </button>
             ))}
@@ -209,6 +211,7 @@ function CloneTemplateDialog({
   defaultSpaceId: string;
   onCloned: (spaceId: string) => void;
 }) {
+  const { t } = useTranslation("admin");
   const [targetSpaceId, setTargetSpaceId] = useState(defaultSpaceId);
   const [sourceTemplateId, setSourceTemplateId] = useState<string>("");
   const [name, setName] = useState("");
@@ -247,11 +250,11 @@ function CloneTemplateDialog({
     e.preventDefault();
     setError(null);
     if (!targetSpaceId) {
-      setError("Kies een space.");
+      setError(t("templates.chooseSpace"));
       return;
     }
     if (!name.trim()) {
-      setError("Naam is verplicht.");
+      setError(t("templates.nameRequired"));
       return;
     }
     setSaving(true);
@@ -265,7 +268,7 @@ function CloneTemplateDialog({
       toast.error(res.error);
       return;
     }
-    toast.success("Template gekloond");
+    toast.success(t("templates.cloned"));
     onCloned(targetSpaceId);
     onOpenChange(false);
   }
@@ -276,17 +279,17 @@ function CloneTemplateDialog({
         <form onSubmit={handleClone}>
           <DialogHeader>
             <DialogTitle className="font-serif text-2xl font-normal lowercase">
-              template klonen
+              {t("templates.cloneTitle")}
             </DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-2">
             <div className="grid gap-1.5">
               <Label className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
-                Space
+                {t("templates.spaceLabel")}
               </Label>
               <Select value={targetSpaceId} onValueChange={setTargetSpaceId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Kies een space…" />
+                  <SelectValue placeholder={t("templates.spacePlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
                   {spaces.map((s) => (
@@ -300,16 +303,16 @@ function CloneTemplateDialog({
 
             <div className="grid gap-1.5">
               <Label className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
-                Bron-template
+                {t("templates.sourceTemplate")}
               </Label>
               <Select value={sourceTemplateId} onValueChange={setSourceTemplateId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Optioneel — kies een bron…" />
+                  <SelectValue placeholder={t("templates.sourcePlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {sources.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.name}
+                  {sources.map((src) => (
+                    <SelectItem key={src.id} value={src.id}>
+                      {src.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -321,13 +324,13 @@ function CloneTemplateDialog({
                 htmlFor="clone-name"
                 className="font-mono text-[11px] uppercase tracking-wider text-ink/70"
               >
-                Naam
+                {t("templates.nameLabel")}
               </Label>
               <Input
                 id="clone-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="bv. intake v2"
+                placeholder={t("templates.namePlaceholder")}
               />
             </div>
 
@@ -340,10 +343,10 @@ function CloneTemplateDialog({
               onClick={() => onOpenChange(false)}
               disabled={saving}
             >
-              Annuleren
+              {t("templates.cancel")}
             </Button>
             <Button type="submit" disabled={saving}>
-              {saving ? "Klonen…" : "Template klonen"}
+              {saving ? t("templates.cloning") : t("templates.cloneButton")}
             </Button>
           </DialogFooter>
         </form>
@@ -367,6 +370,7 @@ function SchemaEditorDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation("admin");
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -384,13 +388,13 @@ function SchemaEditorDialog({
     try {
       const parsed = JSON.parse(text);
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { ok: false, message: "schema moet een JSON-object zijn" };
+        return { ok: false, message: t("templates.schemaMustBeObject") };
       }
       return { ok: true, value: parsed as Record<string, unknown> };
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : "parse error" };
+      return { ok: false, message: err instanceof Error ? err.message : t("templates.parseError") };
     }
-  }, [text]);
+  }, [text, t]);
 
   async function handleSave() {
     if (!template || !validation.ok) return;
@@ -401,7 +405,7 @@ function SchemaEditorDialog({
       toast.error(res.error);
       return;
     }
-    toast.success("Opgeslagen");
+    toast.success(t("templates.saved"));
     onSaved();
     onClose();
   }
@@ -411,7 +415,7 @@ function SchemaEditorDialog({
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle className="font-serif text-2xl font-normal lowercase">
-            schema bewerken
+            {t("templates.editSchemaTitle")}
           </DialogTitle>
         </DialogHeader>
         <div className="grid gap-2 py-2">
@@ -423,17 +427,21 @@ function SchemaEditorDialog({
             className="min-h-[320px] border border-ink bg-paperLight font-mono text-sm text-ink"
           />
           {validation.ok ? (
-            <p className="font-mono text-[11px] uppercase tracking-wider text-ink/60">GELDIGE JSON</p>
+            <p className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
+              {t("templates.validJson")}
+            </p>
           ) : (
-            <p className="text-sm text-red-600">Ongeldige JSON: {validation.message}</p>
+            <p className="text-sm text-red-600">
+              {t("templates.invalidJson", { message: validation.message })}
+            </p>
           )}
         </div>
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
-            Annuleren
+            {t("templates.cancel")}
           </Button>
           <Button type="button" onClick={handleSave} disabled={!validation.ok || saving}>
-            {saving ? "Opslaan…" : "Schema opslaan"}
+            {saving ? t("templates.saving") : t("templates.saveSchema")}
           </Button>
         </DialogFooter>
       </DialogContent>

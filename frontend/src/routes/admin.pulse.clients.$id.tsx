@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProductBadge, type ProductKey } from "@/components/admin/ProductBadge";
@@ -42,6 +43,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 function ClientDetailPage() {
+  const { t } = useTranslation("admin");
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const [client, setClient] = useState<SpaceDetail | null>(null);
@@ -65,7 +67,7 @@ function ClientDetailPage() {
       }
       const space = spacesRes.data.find((s) => s.id === id);
       if (!space) {
-        setError("Klant niet gevonden");
+        setError(t("clientDetail.notFound"));
         setLoading(false);
         return;
       }
@@ -100,7 +102,7 @@ function ClientDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, t]);
 
   const meta = useMemo(() => {
     if (!client) return "";
@@ -108,7 +110,7 @@ function ClientDetailPage() {
   }, [client]);
 
   if (loading) {
-    return <div className="py-12 text-sm text-ink/60">Laden…</div>;
+    return <div className="py-12 text-sm text-ink/60">{t("clientDetail.loading")}</div>;
   }
   if (error || !client) {
     return (
@@ -118,9 +120,9 @@ function ClientDetailPage() {
           className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
         >
           <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
-          Klanten
+          {t("clientDetail.backToClients")}
         </Link>
-        <p className="mt-6 text-sm text-red-600">{error ?? "Niet gevonden"}</p>
+        <p className="mt-6 text-sm text-red-600">{error ?? t("clientDetail.notFoundGeneric")}</p>
       </div>
     );
   }
@@ -132,7 +134,7 @@ function ClientDetailPage() {
         className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
       >
         <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
-        Klanten
+        {t("clientDetail.backToClients")}
       </Link>
       <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
         {client.name}
@@ -142,7 +144,7 @@ function ClientDetailPage() {
       )}
       <section className="mt-8 border border-ink/15 p-5">
         <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-ink/60">
-          Producten gebruikt
+          {t("clientDetail.productsUsed")}
         </h2>
         <div className="mt-4 flex flex-col gap-3">
           {(() => {
@@ -158,13 +160,16 @@ function ClientDetailPage() {
                 text:
                   pulseCount === 0
                     ? "—"
-                    : `${pulseCount} intake${pulseCount === 1 ? "" : "s"}${pulseActive > 0 ? " — in onderzoek" : ""}`,
+                    : `${t("clientDetail.intakeCount", { count: pulseCount })}${pulseActive > 0 ? t("clientDetail.inResearch") : ""}`,
               },
               {
                 p: "sales",
                 active: salesActive,
                 text: users
-                  ? `${users.invite_count} user${users.invite_count === 1 ? "" : "s"} uitgenodigd · ${users.member_count} geactiveerd`
+                  ? t("clientDetail.salesSummary", {
+                      invites: users.invite_count,
+                      members: users.member_count,
+                    })
                   : "—",
               },
               { p: "echo", active: false, text: "—" },
@@ -190,34 +195,32 @@ function ClientDetailPage() {
         <aside className="lg:sticky lg:top-8 lg:self-start">
           <div className="border border-ink/10 p-4">
             <h2 className="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink">
-              Klant-info
+              {t("clientDetail.clientInfo")}
             </h2>
-            <Row label="Naam">{client.name}</Row>
-            <Row label="Slug">{client.slug || "—"}</Row>
-            <Row label="Status">{client.status}</Row>
-            <Row label="Aantal intakes">{intakes.length}</Row>
+            <Row label={t("clientDetail.name")}>{client.name}</Row>
+            <Row label={t("clientDetail.slug")}>{client.slug || "—"}</Row>
+            <Row label={t("clientDetail.status")}>{client.status}</Row>
+            <Row label={t("clientDetail.intakesTotal")}>{intakes.length}</Row>
           </div>
         </aside>
 
         <main>
           <div className="flex items-baseline justify-between border-b border-ink/30 pb-2">
             <h2 className="font-serif text-2xl font-normal lowercase text-ink">
-              intakes voor {client.name}
+              {t("clientDetail.intakesFor", { name: client.name })}
             </h2>
             <span className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
-              {intakes.length} totaal
+              {t("clientDetail.total", { count: intakes.length })}
             </span>
           </div>
 
           {intakes.length === 0 ? (
-            <p className="py-8 text-sm italic text-ink/60">
-              Nog geen intakes voor deze klant.
-            </p>
+            <p className="py-8 text-sm italic text-ink/60">{t("clientDetail.noIntakes")}</p>
           ) : (
             <div>
               <div className="grid grid-cols-[1fr_160px] gap-x-4 border-b border-ink/30 py-2 font-mono text-[11px] uppercase tracking-wider text-ink/70">
-                <div>Naam</div>
-                <div>Status</div>
+                <div>{t("clientDetail.colName")}</div>
+                <div>{t("clientDetail.colStatus")}</div>
               </div>
               {intakes.map((i) => (
                 <div
@@ -228,7 +231,7 @@ function ClientDetailPage() {
                   }
                 >
                   <div className="font-sans text-sm text-ink">
-                    {i.client_name || "Zonder naam"}
+                    {i.client_name || t("clientDetail.unnamed")}
                   </div>
                   <div>
                     <StatusPill status={i.status} />
@@ -244,7 +247,7 @@ function ClientDetailPage() {
                 to="/admin/pulse/intakes/new"
                 search={{ client_id: client.id } as never}
               >
-                + Nieuwe intake voor {client.name}
+                {t("clientDetail.newIntakeFor", { name: client.name })}
               </Link>
             </Button>
           </div>

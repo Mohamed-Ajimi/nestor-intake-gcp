@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import React, { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Search, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { StatusPill, STATUS_LABEL } from "@/components/intake/_status";
@@ -39,6 +40,7 @@ function statusSummary(counts: Record<string, number>) {
 }
 
 function ClientsPage() {
+  const { t } = useTranslation("admin");
   const navigate = useNavigate();
   const [clients, setClients] = useState<SpaceRow[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -123,11 +125,9 @@ function ClientsPage() {
     <div>
       <div>
         <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
-          klanten
+          {t("clients.title")}
         </h1>
-        <p className="mt-1 font-sans text-sm italic text-ink/60">
-          Alleen klanten met minstens één Pulse-project.
-        </p>
+        <p className="mt-1 font-sans text-sm italic text-ink/60">{t("clients.subtitle")}</p>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -136,7 +136,7 @@ function ClientsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="zoek op klant of naam…"
+            placeholder={t("clients.searchPlaceholder")}
             className="h-9 pl-8"
           />
         </div>
@@ -144,29 +144,25 @@ function ClientsPage() {
 
       <div className="mt-6">
         {loading ? (
-          <div className="py-12 text-center text-sm text-ink/60">Laden…</div>
+          <div className="py-12 text-center text-sm text-ink/60">{t("clients.loading")}</div>
         ) : error ? (
           <div className="py-12 text-center text-sm text-red-600">{error}</div>
         ) : filtered.length === 0 ? (
           clients.length === 0 ? (
             <div className="mt-6 border border-ink/20 bg-paper2/40 p-12 text-center">
-              <p className="mb-4 font-mono text-sm text-ink/60">
-                ⌀ Nog geen klanten met Pulse-projecten
-              </p>
-              <p className="mb-6 text-sm text-ink/50">
-                Klanten verschijnen hier zodra je hun eerste intake aanmaakt.
-              </p>
+              <p className="mb-4 font-mono text-sm text-ink/60">{t("clients.emptyTitle")}</p>
+              <p className="mb-6 text-sm text-ink/50">{t("clients.emptyBody")}</p>
               <button
                 onClick={() => navigate({ to: "/admin/pulse/intakes/new" })}
                 className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper"
               >
-                + Nieuwe intake aanmaken
+                {t("clients.newIntake")}
               </button>
             </div>
           ) : (
             <div className="flex flex-col items-center py-16 text-center">
               <Users className="h-8 w-8 text-ink/30" />
-              <p className="mt-3 text-sm text-ink/70">Geen klanten gevonden.</p>
+              <p className="mt-3 text-sm text-ink/70">{t("clients.noneFound")}</p>
             </div>
           )
         ) : (
@@ -174,8 +170,8 @@ function ClientsPage() {
             <thead>
               <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
                 <th className="w-6 px-4 py-2 text-left"></th>
-                <th className="px-4 py-2 text-left">Klant</th>
-                <th className="px-4 py-2 text-left">Projecten</th>
+                <th className="px-4 py-2 text-left">{t("clients.colClient")}</th>
+                <th className="px-4 py-2 text-left">{t("clients.colProjects")}</th>
               </tr>
             </thead>
             <tbody>
@@ -212,10 +208,7 @@ function ClientsPage() {
                         </button>
                       </td>
                       <td className="px-4 py-3 text-sm text-ink">
-                        <div>
-                          {c.project_count}{" "}
-                          {c.project_count === 1 ? "project" : "projecten"}
-                        </div>
+                        <div>{t("clients.projectCount", { count: c.project_count })}</div>
                         {c.project_count > 0 && (
                           <div className="text-xs text-ink/50">
                             {statusSummary(c.status_counts)}
@@ -227,7 +220,7 @@ function ClientsPage() {
                       <tr className="border-b border-ink/10 bg-paper2/40">
                         <td colSpan={3} className="px-12 py-4">
                           <div className="mb-3 font-mono text-[10px] uppercase tracking-wider text-ink/60">
-                            Projecten ({c.project_count})
+                            {t("clients.projectsHeading", { count: c.project_count })}
                           </div>
                           <div className="space-y-2">
                             {c.projects.map((p) => (
@@ -243,7 +236,7 @@ function ClientsPage() {
                               >
                                 <div className="flex-1">
                                   <div className="font-medium text-ink">
-                                    {p.client_name || "Zonder naam"}
+                                    {p.client_name || t("clients.unnamed")}
                                   </div>
                                 </div>
                                 <StatusPill status={p.status} />
@@ -260,7 +253,7 @@ function ClientsPage() {
                             }
                             className="mt-3 font-mono text-[10px] uppercase tracking-wider text-ink/60 hover:text-ink"
                           >
-                            + Nieuwe intake voor {c.name}
+                            {t("clients.newIntakeFor", { name: c.name })}
                           </button>
                         </td>
                       </tr>

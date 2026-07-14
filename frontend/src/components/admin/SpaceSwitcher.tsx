@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { toast } from "sonner";
@@ -31,6 +32,7 @@ const TRIGGER_CLASS =
   "font-mono text-xs uppercase tracking-wider text-ink";
 
 export function SpaceSwitcher() {
+  const { t } = useTranslation("admin");
   const [open, setOpen] = useState(false);
   const { activeSpaceId, setActiveSpace } = useActiveSpace();
   const queryClient = useQueryClient();
@@ -47,8 +49,8 @@ export function SpaceSwitcher() {
   // Surface a single toast when the spaces list fails to load (matches the
   // return-no-throw toast convention used across the admin routes).
   useEffect(() => {
-    if (isError) toast.error("Klanten niet geladen");
-  }, [isError]);
+    if (isError) toast.error(t("spaceSwitcher.loadFailed"));
+  }, [isError, t]);
 
   // Apply a selection: UX state only — persist + sync accessor (via the provider) and
   // invalidate every query so lists re-read with the new `?space_id`. Never navigate.
@@ -60,7 +62,7 @@ export function SpaceSwitcher() {
 
   // ----- Eyebrow + non-interactive states ---------------------------------
   const eyebrow = (
-    <p className="label-mono text-ink/40">KLANT</p>
+    <p className="label-mono text-ink/40">{t("spaceSwitcher.eyebrow")}</p>
   );
 
   if (isLoading) {
@@ -77,7 +79,7 @@ export function SpaceSwitcher() {
       <div className="flex flex-col gap-1">
         {eyebrow}
         <button type="button" disabled className={cn(TRIGGER_CLASS, "cursor-not-allowed opacity-60")}>
-          <span className="truncate">Klanten niet geladen</span>
+          <span className="truncate">{t("spaceSwitcher.loadFailed")}</span>
           <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
         </button>
       </div>
@@ -91,7 +93,7 @@ export function SpaceSwitcher() {
       <div className="flex flex-col gap-1">
         {eyebrow}
         <button type="button" disabled className={cn(TRIGGER_CLASS, "cursor-not-allowed opacity-60")}>
-          <span className="truncate">Geen klanten</span>
+          <span className="truncate">{t("spaceSwitcher.empty")}</span>
           <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
         </button>
       </div>
@@ -99,7 +101,7 @@ export function SpaceSwitcher() {
   }
 
   const selected = activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) : null;
-  const label = selected ? selected.name : "Alle klanten";
+  const label = selected ? selected.name : t("spaceSwitcher.allClients");
 
   return (
     <div className="flex flex-col gap-1">
@@ -118,15 +120,15 @@ export function SpaceSwitcher() {
         </PopoverTrigger>
         <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
           <Command>
-            <CommandInput placeholder="Zoek klant…" />
+            <CommandInput placeholder={t("spaceSwitcher.searchPlaceholder")} />
             <CommandList>
-              <CommandEmpty>Geen klanten gevonden</CommandEmpty>
+              <CommandEmpty>{t("spaceSwitcher.noneFound")}</CommandEmpty>
               <CommandGroup>
                 <CommandItem value="__all__" onSelect={() => handleSelect(null)}>
                   <Check
                     className={cn("h-4 w-4", activeSpaceId === null ? "opacity-100" : "opacity-0")}
                   />
-                  Alle klanten
+                  {t("spaceSwitcher.allClients")}
                 </CommandItem>
                 {spaces.map((space) => (
                   <CommandItem

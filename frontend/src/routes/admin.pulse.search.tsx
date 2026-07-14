@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { search as runSearch, refreshSearch, type SearchHit } from "@/lib/api/search";
@@ -25,6 +26,7 @@ function simColor(s: number) {
 }
 
 function SearchPage() {
+  const { t } = useTranslation("admin");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchHit[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,7 +63,7 @@ function SearchPage() {
   }
 
   async function reindex() {
-    if (!confirm("Reindex alle klanten/vragen? Duurt ~30 sec.")) return;
+    if (!confirm(t("search.reindexConfirm"))) return;
     setReindexing(true);
     const res = await refreshSearch();
     setReindexing(false);
@@ -69,15 +71,15 @@ function SearchPage() {
       toast.error(res.error);
       return;
     }
-    toast.success("Reindex gestart");
+    toast.success(t("search.reindexStarted"));
   }
 
   return (
     <div className="max-w-4xl">
-      <p className="font-mono text-xs uppercase tracking-wider text-ink/60">AI-zoek alles</p>
-      <p className="mt-3 font-sans text-base text-ink/70">
-        Doorzoek alle klanten, projecten en research-vragen op betekenis.
+      <p className="font-mono text-xs uppercase tracking-wider text-ink/60">
+        {t("search.eyebrow")}
       </p>
+      <p className="mt-3 font-sans text-base text-ink/70">{t("search.subtitle")}</p>
 
       <div className="mt-6 flex border border-ink/30 border-l-4 border-l-pink-500 bg-paperLight">
         <input
@@ -90,7 +92,7 @@ function SearchPage() {
               handleSearch();
             }
           }}
-          placeholder="stel je vraag in natuurlijke taal..."
+          placeholder={t("search.inputPlaceholder")}
           className="flex-1 min-w-0 bg-transparent px-5 py-4 text-base text-ink placeholder:text-ink/40 placeholder:font-mono placeholder:text-sm focus:outline-none"
           autoFocus
         />
@@ -100,12 +102,14 @@ function SearchPage() {
           disabled={loading || !query.trim()}
           className="bg-ink text-paper font-mono text-sm uppercase tracking-wider px-5 disabled:opacity-40"
         >
-          {loading ? "Bezig…" : "Zoek →"}
+          {loading ? t("search.searching") : t("search.searchButton")}
         </button>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[11px] uppercase tracking-wider text-ink/60">Voorbeelden:</span>
+        <span className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
+          {t("search.examples")}
+        </span>
         {SUGGESTIONS.map((s) => (
           <button
             key={s}
@@ -128,21 +132,19 @@ function SearchPage() {
           disabled={reindexing}
           className="font-mono text-[11px] uppercase tracking-wider text-ink underline-offset-4 hover:underline disabled:opacity-40"
         >
-          {reindexing ? "reindexeren…" : "Reindex"}
+          {reindexing ? t("search.reindexing") : t("search.reindex")}
         </button>
       </div>
 
       {results !== null && (
         <div className="mt-8">
           <p className="font-mono text-[11px] uppercase tracking-wider text-ink/60">
-            "{lastQuery}" — {results.length} resultaten
+            {t("search.resultsSummary", { query: lastQuery, count: results.length })}
             {latency !== null ? ` · ${latency}ms` : ""}
           </p>
 
           {results.length === 0 && !loading && (
-            <p className="mt-4 font-sans text-sm text-ink/60">
-              Geen resultaten. Probeer een andere formulering of klik Reindex.
-            </p>
+            <p className="mt-4 font-sans text-sm text-ink/60">{t("search.noResults")}</p>
           )}
 
           <div className="mt-4 space-y-3">
