@@ -131,6 +131,10 @@ No new security surface beyond the plan's `<threat_model>`.
 - Backend pytest run + frontend `npm run lint` remain to be executed in Cloud Build / CI (deferred, dev-box constraint).
 - Deployment (image rebuild + revision) is plan 12-05, not this plan.
 
+## Self-Check: PASSED
+
+All created/modified files present on disk; all three task commits (`e7871df`, `663a4d3`, `c564806`) present in git history.
+
 ---
 *Phase: 12-frontend-deploy-cutover-supabase-retirement*
 *Completed: 2026-07-14*
