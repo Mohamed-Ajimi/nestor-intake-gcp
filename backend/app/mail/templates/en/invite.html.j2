@@ -1,0 +1,15 @@
+{#
+  Set-password invite mail (EN) — the ONLY mail that carries an action link (D-09).
+  D-12 translation of the NL canonical (nl/invite.html.j2), same recognizable layout.
+  cta_url is the Firebase action link. autoescape stays ON (T-11-01); no `| safe`.
+  Tone reviewed by the user in UAT (D-12).
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Choose your password</h1>
+<p>Welcome to Nestor Pulse. An account has been created for you — set your password below to gain access to your portal.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Set your password →</a></p>
+<p style="margin-top: 24px;">Once you have set your password, you can log in to view your intake, research questions and results.</p>
+<p style="margin-top: 24px;">If you have any questions — just reply to this email.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">This link is personal and expires after some time. Do not share it with third parties.</div>
+{% endblock %}

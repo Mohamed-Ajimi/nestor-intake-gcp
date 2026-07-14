@@ -22,15 +22,38 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, TemplateNotFound, select_autoescape
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-#: Module-level Jinja2 environment. autoescape ON for html/j2 (T-10-01).
+#: The guaranteed-present fallback locale (D-07 chain base). Every client-facing mail
+#: type ships an ``nl/`` variant, so a missing/unknown requested locale always resolves
+#: to a real template rather than raising.
+_FALLBACK_LOCALE = "nl"
+
+#: Module-level Jinja2 environment. autoescape ON for html/j2 (T-10-01 / T-11-01) — every
+#: ``{{ var }}`` is HTML-escaped in EVERY locale variant; no variant marks prose ``| safe``.
 _env = Environment(
     loader=FileSystemLoader(str(_TEMPLATES_DIR)),
     autoescape=select_autoescape(["html", "j2"]),
 )
+
+
+def _localized_template(name: str, locale: str):
+    """Return the ``{locale}/{name}.html.j2`` template, falling back to ``nl/`` (D-07).
+
+    The Phase-11 email-i18n selector: client-facing mail types (validation/results/invite)
+    live under per-locale dirs ``templates/{nl,fr,en}/``. A requested locale whose variant
+    is missing (an unknown code, or a locale that never shipped a given template) resolves
+    to the guaranteed ``nl/`` variant rather than raising — ``nl`` is the resolution-chain
+    base (user override -> space default -> "nl"). Locale is resolved SERVER-SIDE by the
+    caller (never from the sending admin's UI); this layer only maps a resolved code to a
+    template path. autoescape stays ON regardless of variant (T-11-01).
+    """
+    try:
+        return _env.get_template(f"{locale}/{name}.html.j2")
+    except TemplateNotFound:
+        return _env.get_template(f"{_FALLBACK_LOCALE}/{name}.html.j2")
 
 
 def render_validation(
@@ -40,14 +63,17 @@ def render_validation(
     cta_url: str,
     is_reminder: bool,
     app_base_url: str | None = None,
+    locale: str = "nl",
 ) -> str:
-    """Render the validation-request / reminder mail body.
+    """Render the validation-request / reminder mail body in ``locale`` (nl fallback).
 
     ``cta_url`` is an intake-id app route (``{app_base_url}/intake/{intake_id}``),
     NEVER a ``client_validation_token`` (NOTIF-01). ``is_reminder`` selects the
     reminder greeting/intro branch (legacy ``buildValidationHtml`` isReminder).
+    ``locale`` (D-07, resolved server-side by the caller) selects the per-locale variant
+    ``templates/{locale}/validation.html.j2`` — an unknown locale falls back to ``nl``.
     """
-    return _env.get_template("validation.html.j2").render(
+    return _localized_template("validation", locale).render(
         first_name=first_name,
         project_title=project_title,
         cta_url=cta_url,
@@ -62,14 +88,17 @@ def render_results(
     project_title: str,
     cta_url: str,
     app_base_url: str | None = None,
+    locale: str = "nl",
 ) -> str:
-    """Render the results-ready mail body.
+    """Render the results-ready mail body in ``locale`` (nl fallback).
 
     ``cta_url`` is an intake-id app route
     (``{app_base_url}/intake/{intake_id}/results``), NEVER a
-    ``client_results_token`` (NOTIF-01).
+    ``client_results_token`` (NOTIF-01). ``locale`` (D-07, resolved server-side by the
+    caller) selects ``templates/{locale}/results.html.j2`` — unknown locale falls back to
+    ``nl``.
     """
-    return _env.get_template("results.html.j2").render(
+    return _localized_template("results", locale).render(
         first_name=first_name,
         project_title=project_title,
         cta_url=cta_url,
@@ -101,13 +130,17 @@ def render_invite(
     *,
     cta_url: str,
     app_base_url: str | None = None,
+    locale: str = "nl",
 ) -> str:
-    """Render the set-password invite mail body.
+    """Render the set-password invite mail body in ``locale`` (nl fallback).
 
     This is the ONLY mail that carries an action link (D-09): ``cta_url`` is the
-    Firebase action link. Every other mail's CTA is a plain app route.
+    Firebase action link. Every other mail's CTA is a plain app route. ``locale`` (D-07;
+    at invite time the invitee has no membership locale yet, so the caller resolves it to
+    the target space's ``default_locale`` -> "nl") selects
+    ``templates/{locale}/invite.html.j2`` — unknown locale falls back to ``nl``.
     """
-    return _env.get_template("invite.html.j2").render(
+    return _localized_template("invite", locale).render(
         cta_url=cta_url,
         app_base_url=app_base_url,
     )

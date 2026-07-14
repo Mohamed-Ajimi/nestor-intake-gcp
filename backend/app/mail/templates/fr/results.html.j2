@@ -1,0 +1,21 @@
+{#
+  Results-ready mail (FR) — D-12 translation of the NL canonical (nl/results.html.j2),
+  same recognizable layout (heading, bullet list, CTA, footer). NOTIF-01: cta_url is
+  {app_base_url}/intake/{intake_id}/results, NEVER a bearer token. autoescape stays ON
+  (T-11-01); no `| safe`. Tone reviewed by the user in UAT (D-12).
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Les résultats de la recherche sont prêts</h1>
+<p>Bonjour {{ first_name or "équipe" }},</p>
+<p>La recherche pour <strong>{{ project_title }}</strong> est terminée. Le rapport complet ainsi que les artefacts de recherche sous-jacents vous attendent dans votre portail.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Ouvrir les résultats →</a></p>
+<p style="margin-top: 24px;">Dans le portail, vous trouverez :</p>
+<ul>
+  <li>Le rapport stratégique (à télécharger en PDF ou DOCX)</li>
+  <li>Les sources sous-jacentes par question de recherche</li>
+  <li>Une recherche sémantique pour parcourir l'ensemble de la recherche</li>
+</ul>
+<p>En cas de questions ou si vous souhaitez une séance de travail pour parcourir les résultats ensemble — répondez simplement à cet e-mail.</p>
+<p style="margin-top: 24px;">— L'équipe Agenic</p>
+<div class="footer">Connectez-vous à votre portail pour consulter les résultats.</div>
+{% endblock %}

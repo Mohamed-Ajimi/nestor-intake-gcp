@@ -1,7 +1,9 @@
 {#
-  Results-ready mail — ported from buildResultsHtml (send-pulse-mail.ts:151-170).
+  Results-ready mail (NL) — ported from buildResultsHtml (send-pulse-mail.ts:151-170).
   NOTIF-01: cta_url is {app_base_url}/intake/{intake_id}/results — an intake-id app
   route, NEVER a bearer results token.
+  D-02 (Phase 11): NL is the canonical variant — prose preserved VERBATIM from the
+  original top-level results.html.j2. autoescape stays ON (T-11-01); no `| safe`.
 #}{% extends "_base.html.j2" %}
 {% block content %}
 <h1>De onderzoeksresultaten staan klaar</h1>

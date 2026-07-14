@@ -1,0 +1,20 @@
+{#
+  Validation-request / reminder mail (EN) — D-12 translation of the NL canonical
+  (nl/validation.html.j2), same recognizable layout (headings, CTA, reminder branch,
+  footer). NOTIF-01: cta_url is {app_base_url}/intake/{intake_id}, NEVER a bearer token.
+  autoescape stays ON (T-11-01); no `| safe`. Tone reviewed by the user in UAT (D-12).
+#}{% extends "_base.html.j2" %}
+{% block content %}
+{% if is_reminder %}
+<h1>A quick reminder</h1>
+<p>We sent you the validated research questions earlier — do you have a moment to read through them and approve them?</p>
+{% else %}
+<h1>Hi {{ first_name or "team" }}</h1>
+<p>We have reviewed your intake and refined the research questions. We also proposed a few extra strategic questions that can sharpen your context. Ready to review and confirm?</p>
+{% endif %}
+<p>It takes about 10 minutes. For each question you see our refined version, plus any extra questions we propose. For each question you choose: <strong>approve</strong>, <strong>edit</strong> or <strong>reject</strong>.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open the validation page →</a></p>
+<p style="margin-top: 24px;">No rush, but without validation we cannot start the research. If you have any questions or anything is unclear — just reply to this email.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">This page is unique to your project ({{ project_title }}). Log in to validate.</div>
+{% endblock %}

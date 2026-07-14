@@ -60,6 +60,7 @@ from app.intake_canonical import (
 )
 from app.db import audit
 from app.db.models.membership import OrganizationMembership
+from app.db.models.organization import Organization
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
@@ -571,6 +572,35 @@ _SUBJECT_REMINDER = "Herinnering — onderzoeksvragen wachten op validatie ({cli
 _SUBJECT_RESULTS = "Onderzoeksresultaten klaar — {client}"
 _SUBJECT_ADMIN_VALIDATED = "[Nestor Pulse] Klant heeft gevalideerd — {client}"
 
+# Per-locale subject lines (D-12) so the subject matches the recipient's resolved body
+# variant. The NL rows are the parity source above; FR/EN are authored to preserve the
+# recognizable shape. Keyed by (locale, mail_type). An unknown locale falls back to "nl"
+# (the render layer's fallback base) so the subject never desyncs from the body.
+_SUBJECTS: dict[str, dict[str, str]] = {
+    "nl": {
+        "validation": _SUBJECT_VALIDATION,
+        "reminder": _SUBJECT_REMINDER,
+        "results": _SUBJECT_RESULTS,
+    },
+    "fr": {
+        "validation": "À valider — questions de recherche pour {client}",
+        "reminder": "Rappel — les questions de recherche attendent votre validation ({client})",
+        "results": "Résultats de la recherche prêts — {client}",
+    },
+    "en": {
+        "validation": "To validate — research questions for {client}",
+        "reminder": "Reminder — research questions awaiting validation ({client})",
+        "results": "Research results ready — {client}",
+    },
+}
+
+
+def _subject_for(locale: str, mail_type: str, client: str) -> str:
+    """Return the ``mail_type`` subject in ``locale`` (nl fallback), formatted with ``client``."""
+    row = _SUBJECTS.get(locale) or _SUBJECTS["nl"]
+    template = row.get(mail_type) or _SUBJECTS["nl"][mail_type]
+    return template.format(client=client)
+
 
 def _active_members_stmt(space_id):
     """Return the base SELECT for ACTIVE ``organization_memberships`` rows in ``space_id``.
@@ -623,6 +653,66 @@ def _resolve_active_member_emails(session, space_id, recipient_ids: list[str]) -
     # Reject any requested id that is not an active member with a usable email — do NOT
     # silently send to fewer than requested (the picker must not think a deactivated /
     # unknown id was mailed).
+    missing = wanted - set(resolved)
+    if missing:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "One or more recipients are not active members of this space",
+        )
+    return list(resolved.values())
+
+
+def _resolve_recipient_locales(
+    session, space_id, recipient_ids: list[str]
+) -> list[tuple[str, str]]:
+    """Resolve ``recipient_ids`` to ``(email, locale)`` pairs in ``space_id`` (D-06 / D-07).
+
+    A sibling to :func:`_resolve_active_member_emails` that ALSO carries each recipient's
+    SERVER-SIDE resolved locale via the D-07 chain: ``membership.locale`` (the user's own
+    override) -> ``organization.default_locale`` (the intake's space) -> ``"nl"``. Locale is
+    NEVER taken from the sending admin's request/UI — only from the recipient's OWN
+    membership row and the intake's OWN space (the ``space_id`` isolation wall the caller
+    already proved, T-11-11). The SAME validation as :func:`_resolve_active_member_emails`
+    applies: every requested id MUST be an ACTIVE member with a usable email, else the whole
+    batch is 422-rejected (never silently dropped-and-sent-to-fewer); an empty resolved set
+    also raises. Email-less active members are rejected (a mail with no ``to`` is never sent).
+    """
+    try:
+        wanted = {uuid.UUID(str(rid)) for rid in recipient_ids}
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid recipient id"
+        )
+    if not wanted:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "No recipients supplied"
+        )
+
+    # The space default_locale is the chain's middle rung (org, from 11-02) — one read for
+    # the whole batch. A missing org row (should not happen for an owned intake) -> "nl".
+    space_default = (
+        session.execute(
+            select(Organization.default_locale).where(Organization.id == space_id)
+        ).scalar_one_or_none()
+        or "nl"
+    )
+
+    rows = (
+        session.execute(
+            _active_members_stmt(space_id).where(
+                OrganizationMembership.id.in_(wanted)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # membership.locale (user override) -> space_default -> "nl" (the D-07 resolution chain).
+    resolved = {
+        row.id: (row.email, row.locale or space_default or "nl")
+        for row in rows
+        if row.email
+    }
+
     missing = wanted - set(resolved)
     if missing:
         raise HTTPException(
@@ -750,7 +840,17 @@ def _run_intake_send(
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
-    emails = _resolve_active_member_emails(repo.session, intake.space_id, body.recipients)
+    # (email, locale) per active recipient — locale resolved SERVER-SIDE per recipient
+    # (membership.locale -> space default_locale -> "nl"), NEVER from the sending admin's UI
+    # (D-07 / T-11-11). Same 422 rejection of foreign/deactivated/email-less ids as before.
+    recipients = _resolve_recipient_locales(
+        repo.session, intake.space_id, body.recipients
+    )
+    # Group emails by their resolved locale so we render+send once per distinct locale.
+    emails_by_locale: dict[str, list[str]] = {}
+    for email, locale in recipients:
+        emails_by_locale.setdefault(locale, []).append(email)
+    total_recipients = len(recipients)
 
     settings = get_settings()
     # WR-01 / D-16: every client-facing CTA is `{app_base_url}/intake/...`. With
@@ -766,42 +866,50 @@ def _run_intake_send(
     base = settings.app_base_url.rstrip("/")
     client = intake.client_name or "team"
 
+    # cta_url + mail_type + timestamp_field are locale-INDEPENDENT; only the rendered body
+    # and the subject line vary per recipient locale (below).
     if is_results:
         cta_url = f"{base}/intake/{intake.id}/results"
-        subject = _SUBJECT_RESULTS.format(client=client)
-        html = mail_render.render_results(
-            first_name=client,
-            project_title=client,
-            cta_url=cta_url,
-            app_base_url=settings.app_base_url,
-        )
         mail_type = "results"
         timestamp_field: str | None = "results_link_sent_at"
     else:
         cta_url = f"{base}/intake/{intake.id}"
-        subject = (
-            _SUBJECT_REMINDER.format(client=client)
-            if is_reminder
-            else _SUBJECT_VALIDATION.format(client=client)
-        )
-        html = mail_render.render_validation(
-            first_name=client,
-            project_title=client,
-            cta_url=cta_url,
-            is_reminder=is_reminder,
-            app_base_url=settings.app_base_url,
-        )
         mail_type = "reminder" if is_reminder else "validation"
         timestamp_field = None if is_reminder else "validation_link_sent_at"
 
-    # SEND FIRST (D-16 / Pitfall 1): a non-2xx raises here → NO timestamp, NO audit row.
+    # SEND FIRST (D-16 / Pitfall 1): render + send ONCE PER DISTINCT LOCALE GROUP so each
+    # recipient gets the variant for their OWN resolved locale (never the sending admin's).
+    # A non-2xx on ANY group raises → NO timestamp, NO audit row (the whole send is a
+    # non-send; the failure path is preserved exactly). Deterministic locale order for a
+    # stable, testable send sequence.
     try:
-        mail_resend.send(to=emails, subject=subject, html=html)
+        for locale in sorted(emails_by_locale):
+            group_emails = emails_by_locale[locale]
+            subject = _subject_for(locale, mail_type, client)
+            if is_results:
+                html = mail_render.render_results(
+                    first_name=client,
+                    project_title=client,
+                    cta_url=cta_url,
+                    app_base_url=settings.app_base_url,
+                    locale=locale,
+                )
+            else:
+                html = mail_render.render_validation(
+                    first_name=client,
+                    project_title=client,
+                    cta_url=cta_url,
+                    is_reminder=is_reminder,
+                    app_base_url=settings.app_base_url,
+                    locale=locale,
+                )
+            mail_resend.send(to=group_emails, subject=subject, html=html)
     except Exception:  # noqa: BLE001 -- any transport failure is a non-send.
         _log.warning("mail send failed for intake %s (type=%s)", intake.id, mail_type)
         return {"success": False}
 
-    # 2xx only: stamp the sent-at column (if this type has one) then audit on the SAME tx.
+    # 2xx only: stamp the sent-at column ONCE (not per locale group) then audit on the SAME
+    # tx. recipient_count is the TOTAL across all locale groups (D-16 audit contract).
     if timestamp_field is not None:
         repo.patch(intake_id, **{timestamp_field: datetime.now(timezone.utc)})
     audit.log(
@@ -810,9 +918,9 @@ def _run_intake_send(
         event_type="mail.sent",
         target=str(intake_id),
         space_id=intake.space_id,
-        metadata={"type": mail_type, "recipient_count": len(emails)},
+        metadata={"type": mail_type, "recipient_count": total_recipients},
     )
-    return {"success": True, "recipient_count": len(emails), "type": mail_type}
+    return {"success": True, "recipient_count": total_recipients, "type": mail_type}
 
 
 # ---------------------------------------------------------------------------
