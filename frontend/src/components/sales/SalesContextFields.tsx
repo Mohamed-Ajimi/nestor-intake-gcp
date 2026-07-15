@@ -21,7 +21,7 @@ export const EMPTY_SALES_CONTEXT: SalesContextValues = {
 };
 
 const selectCls =
-  "w-full border border-ink/30 px-3 py-2 font-mono text-sm bg-paperLight focus:outline-none focus:border-ink";
+  "w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink";
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (

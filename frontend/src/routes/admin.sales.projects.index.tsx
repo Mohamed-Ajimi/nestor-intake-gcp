@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/admin/sales/projects/")({
@@ -30,14 +31,17 @@ type ProjectRow = {
   updated_at: string;
 };
 
-const STATUS_STYLES: Record<string, string> = {
-  concept: "bg-ink/10 text-ink/70",
-  ingediend: "bg-blue-500/10 text-blue-700",
-  gereviewd: "bg-purple-500/10 text-purple-700",
-  gevalideerd: "bg-green-500/10 text-green-700",
-  in_onderzoek: "bg-amber-500/10 text-amber-700",
-  geleverd: "bg-ink text-paper",
-  gearchiveerd: "bg-ink/5 text-ink/40",
+// House badge variants — aligned with the Pulse StatusPill system (badge-* + mark-*).
+type SalesStatusVariant = { cls: string; mark?: "green" | null };
+
+const STATUS_STYLES: Record<string, SalesStatusVariant> = {
+  concept: { cls: "badge-dashed" },
+  ingediend: { cls: "badge-ink" },
+  gereviewd: { cls: "badge-outline", mark: "green" },
+  gevalideerd: { cls: "badge-ink", mark: "green" },
+  in_onderzoek: { cls: "badge-outline", mark: "green" },
+  geleverd: { cls: "badge-ink" },
+  gearchiveerd: { cls: "badge-outline text-ink/40 border-ink/40" },
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -51,15 +55,11 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function SalesStatusBadge({ status }: { status: string }) {
-  const cls = STATUS_STYLES[status] ?? STATUS_STYLES.concept;
+  const v = STATUS_STYLES[status] ?? STATUS_STYLES.concept;
   const label = STATUS_LABEL[status] ?? status.toUpperCase();
   return (
-    <span
-      className={cn(
-        "inline-flex items-center px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider",
-        cls,
-      )}
-    >
+    <span className={cn(v.cls)}>
+      {v.mark === "green" && <span className="mark-green" />}
       {label}
     </span>
   );
@@ -103,12 +103,9 @@ function SalesProjectsListPage() {
             Alle Nestor Sales projecten, gesorteerd op laatste activiteit.
           </p>
         </div>
-        <Link
-          to="/admin/sales/projects/new"
-          className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90"
-        >
-          + Nieuw project
-        </Link>
+        <Button asChild>
+          <Link to="/admin/sales/projects/new">+ Nieuw project</Link>
+        </Button>
       </div>
 
       {!loading && !error && projects.length === 0 ? (
@@ -182,7 +179,7 @@ function SalesProjectsListPage() {
                       })}
                     </TableCell>
                     <TableCell className="px-4 py-3 text-right">
-                      <span className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink">
+                      <span className="font-mono text-[11px] uppercase tracking-wider text-ink hover:underline">
                         Open →
                       </span>
                     </TableCell>

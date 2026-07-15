@@ -89,10 +89,10 @@ function NewSalesProjectPage() {
         ← Terug naar projecten
       </Link>
 
-      <h1 className="mt-6 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
+      <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
         nieuw project
       </h1>
-      <p className="mt-2 max-w-xl text-sm text-ink/60">
+      <p className="mt-1 max-w-xl text-sm text-ink/60">
         Vul de basisinfo in van de klant. Die krijgt straks een mail met een
         intake-link om de meeting-prep details door te geven.
       </p>
@@ -109,7 +109,7 @@ function NewSalesProjectPage() {
                 value={klantName}
                 onChange={(e) => setKlantName(e.target.value)}
                 placeholder="bv. Sven Luyten"
-                className="w-full border border-ink/30 bg-paper px-3 py-2 font-mono text-sm"
+                className="w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink"
                 required
               />
             </Field>
@@ -120,7 +120,7 @@ function NewSalesProjectPage() {
                 value={klantEmail}
                 onChange={(e) => setKlantEmail(e.target.value)}
                 placeholder="bv. sven@cronos.be"
-                className="w-full border border-ink/30 bg-paper px-3 py-2 font-mono text-sm"
+                className="w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink"
                 required
               />
               <p className="mt-1 text-xs text-ink/50">
@@ -134,7 +134,7 @@ function NewSalesProjectPage() {
                 value={klantCompany}
                 onChange={(e) => setKlantCompany(e.target.value)}
                 placeholder="bv. Cronos"
-                className="w-full border border-ink/30 bg-paper px-3 py-2 font-mono text-sm"
+                className="w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink"
                 required
               />
             </Field>
@@ -145,7 +145,7 @@ function NewSalesProjectPage() {
                 value={klantRole}
                 onChange={(e) => setKlantRole(e.target.value)}
                 placeholder="bv. Investment Lead, CCO, Sales Director"
-                className="w-full border border-ink/30 bg-paper px-3 py-2 font-mono text-sm"
+                className="w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink"
               />
             </Field>
           </div>
@@ -162,7 +162,7 @@ function NewSalesProjectPage() {
                 value={projectTitle}
                 onChange={(e) => setProjectTitle(e.target.value)}
                 placeholder="bv. Sven Luyten — Cronos Q2 funding"
-                className="w-full border border-ink/30 bg-paper px-3 py-2 font-mono text-sm"
+                className="w-full border border-ink bg-paper2 px-3 py-2 text-sm focus:outline-none focus:border-ink"
               />
               <p className="mt-1 text-xs text-ink/50">
                 Eigen label om dit project te herkennen. Klant ziet dit niet.

@@ -166,7 +166,7 @@ function SalesProjectDetailPage() {
     <div>
       <Link
         to="/admin/sales/projects"
-        className="mb-4 block font-mono text-[10px] uppercase tracking-wider text-ink/60 hover:text-ink"
+        className="mb-3 block font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
       >
         ← Terug naar projecten
       </Link>
@@ -177,7 +177,7 @@ function SalesProjectDetailPage() {
             {prep.klant_name} — {prep.klant_company}
           </h1>
           {prep.project_title && (
-            <p className="mt-1 text-sm italic text-ink/60">{prep.project_title}</p>
+            <p className="mt-1 text-sm text-ink/60">{prep.project_title}</p>
           )}
         </div>
         {battlecard && ["in_onderzoek", "geleverd"].includes(prep.status) && (
@@ -243,7 +243,7 @@ function SalesStatusTracker({ prep }: { prep: Prep }) {
                 className={
                   "mb-3 h-4 w-4 " +
                   (isCurrent
-                    ? "bg-fluoGreen"
+                    ? "bg-agenic-green"
                     : isDone
                     ? "bg-ink"
                     : "border border-ink/30 bg-transparent")
