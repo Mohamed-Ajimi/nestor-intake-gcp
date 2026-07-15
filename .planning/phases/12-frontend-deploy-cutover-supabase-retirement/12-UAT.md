@@ -18,6 +18,23 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
 > (D-11 guard: `frontend/scripts/ci_no_supabase_in_bundle.sh`) — NOT by pausing/deleting the
 > legacy project.
 
+## Live environment (cutover executed 2026-07-14 — run this UAT against it)
+
+- **Frontend (test here):** https://nestor-frontend-1055853212188.europe-west1.run.app
+  (`nestor-frontend` rev 00001, image `frontend:20260714-180644`, D-11 guard green in build)
+- **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev 00023,
+  alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live, `/readyz` 200)
+- **Firebase authorized domain:** added by operator (login works). Bucket CORS: wired.
+- **Wiring pre-verified:** SSR 200 at `/auth/login`; CORS preflight from the frontend origin OK.
+- **Expected failures (recorded in Known gaps below):** NDA download 404s (PDF not in image).
+  Mail is LIVE (key seeded same session) — mail items ARE testable.
+- **Resume:** plans 12-01..12-04 complete; 12-05 Task 1 (deploy) done. This checklist is 12-05
+  Task 2 — the only open work in the phase. After ticking boxes, resume with
+  `/gsd-execute-phase 12` (or tell the orchestrating session "parity green" / list failures)
+  to write the 12-05 SUMMARY, run phase verification, and close the phase + milestone.
+- **Post-UAT chore:** rotate the Resend API key (it transited assistant chat) and add the new
+  value as version 2 of `nestor-resend-api-key`.
+
 ---
 
 ## Phase 7 (inherited) — AI function ports
