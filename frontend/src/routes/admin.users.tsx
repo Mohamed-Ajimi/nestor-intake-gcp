@@ -163,12 +163,12 @@ function UsersPage() {
 
   return (
     <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
             {t("users.title")}
           </h1>
-          <p className="mt-1 font-sans text-sm italic text-ink/60">{t("users.subtitle")}</p>
+          <p className="mt-1 font-sans text-sm text-ink/60">{t("users.subtitle")}</p>
         </div>
         <Button onClick={() => setInviteOpen(true)}>{t("users.inviteUser")}</Button>
       </div>
@@ -189,9 +189,10 @@ function UsersPage() {
             <Button onClick={() => setInviteOpen(true)}>{t("users.inviteUser")}</Button>
           </div>
         ) : (
+          <div className="border border-ink bg-paper">
           <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
+              <tr className="border-b border-ink font-mono text-xs uppercase tracking-wider text-ink">
                 <th className="px-4 py-2 text-left">{t("users.colEmail")}</th>
                 <th className="px-4 py-2 text-left">{t("users.colSpace")}</th>
                 <th className="px-4 py-2 text-left">{t("users.colStatus")}</th>
@@ -264,6 +265,7 @@ function UsersPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

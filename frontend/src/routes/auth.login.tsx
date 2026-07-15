@@ -118,7 +118,7 @@ function LoginPage() {
             Agenic × Nestor
           </p>
           {/* D-08: pre-login switcher — persist=false writes localStorage only (no session yet). */}
-          <div className="w-36 shrink-0">
+          <div className="w-40 shrink-0">
             <LanguageSwitcher persist={false} />
           </div>
         </div>

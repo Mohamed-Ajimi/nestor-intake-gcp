@@ -107,12 +107,12 @@ function TemplatesPage() {
 
   return (
     <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
             {t("templates.title")}
           </h1>
-          <p className="mt-1 font-sans text-sm italic text-ink/60">{t("templates.subtitle")}</p>
+          <p className="mt-1 font-sans text-sm text-ink/60">{t("templates.subtitle")}</p>
         </div>
         <Button onClick={() => setCloneOpen(true)} disabled={!selectedSpaceId}>
           {t("templates.cloneCta")}
@@ -125,7 +125,7 @@ function TemplatesPage() {
         </Label>
         <div className="mt-1.5">
           <Select value={selectedSpaceId} onValueChange={setSelectedSpaceId} disabled={loadingSpaces}>
-            <SelectTrigger>
+            <SelectTrigger className="h-10 border-ink bg-paper2 shadow-none focus:border-ink focus:ring-0">
               <SelectValue placeholder={t("templates.spacePlaceholder")} />
             </SelectTrigger>
             <SelectContent>

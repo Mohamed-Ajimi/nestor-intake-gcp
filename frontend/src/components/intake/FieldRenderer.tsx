@@ -32,7 +32,7 @@ export function FieldRenderer(props: Props) {
  <div>
  <label className="block font-mono text-xs uppercase tracking-wider text-ink">
  {field.label}
- {field.required && <span className="ml-1 text-red-500">*</span>}
+ {field.required && <span className="ml-1 text-red-600">*</span>}
  </label>
  {field.help && (
  <p className="mt-1 text-xs text-ink/60">{field.help}</p>

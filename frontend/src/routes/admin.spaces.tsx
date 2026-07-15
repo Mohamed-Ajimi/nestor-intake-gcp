@@ -114,12 +114,12 @@ function SpacesPage() {
 
   return (
     <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
             {t("spaces.title")}
           </h1>
-          <p className="mt-1 font-sans text-sm italic text-ink/60">
+          <p className="mt-1 font-sans text-sm text-ink/60">
             {t("spaces.subtitle")}
           </p>
         </div>
@@ -144,9 +144,10 @@ function SpacesPage() {
             <Button onClick={openCreate}>{t("spaces.new")}</Button>
           </div>
         ) : (
+          <div className="border border-ink bg-paper">
           <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
+              <tr className="border-b border-ink font-mono text-xs uppercase tracking-wider text-ink">
                 <th className="px-4 py-2 text-left">{t("spaces.table.name")}</th>
                 <th className="px-4 py-2 text-left">{t("spaces.table.slug")}</th>
                 <th className="px-4 py-2 text-left">{t("spaces.table.status")}</th>
@@ -211,6 +212,7 @@ function SpacesPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
