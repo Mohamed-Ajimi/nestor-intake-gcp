@@ -21,7 +21,8 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
 ## Live environment (cutover executed 2026-07-14 — run this UAT against it)
 
 - **Frontend (test here):** https://nestor-frontend-1055853212188.europe-west1.run.app
-  (`nestor-frontend` rev 00001, image `frontend:20260714-180644`, D-11 guard green in build)
+  (`nestor-frontend` rev **00003-dw8**, image `frontend:20260715-135954`, D-11 guard green in build;
+  supersedes rev 00001/00002 — rollback chain intact)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev 00023,
   alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live, `/readyz` 200)
 - **Firebase authorized domain:** added by operator (login works). Bucket CORS: wired.
@@ -34,6 +35,31 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   to write the 12-05 SUMMARY, run phase verification, and close the phase + milestone.
 - **Post-UAT chore:** rotate the Resend API key (it transited assistant chat) and add the new
   value as version 2 of `nestor-resend-api-key`.
+
+### Pre-UAT UI consistency pass (2026-07-15 — done BEFORE running this checklist)
+
+The operator ran a Claude Design canvas round-trip over all 17 app pages to fix UI
+inconsistencies before parity UAT, so screenshots/expectations in this checklist should be
+judged against the NEW chrome, not the cutover-day UI:
+
+- **Quick task 260715-fts** (commits `eca918d`/`8a0c373`/`8907172`, 15 files): serif-lowercase
+  h1s + mono-uppercase chrome on the intake detail sticky header; duplicate "Beheer" sidebar nav
+  removed (ProductShell `items !== ADMIN_NAV` guard); boxed tables + `border-ink text-xs` theads
+  on clients/users/spaces; house input/select style (`border-ink bg-paper2` sans) on sales
+  new-project, templates select, pulse new-intake; Sales status badges → Pulse
+  `badge-ink/outline/dashed` pill system; italic subtitles dropped; asterisks `text-red-600`.
+- **Quick task 260715-j7f** (commits `b7fa30b`/`5b5259b`): client intake form redesign — numbered
+  stepper sidebar with "Voortgang" header + progress bar (three-state rows driven by the
+  existing `done` flag), header hairline, 300px sidebar grid, `resize-y` longtext textareas,
+  submit label + " →" (label stays schema-sourced); new i18n key `form.progress` (nl/fr/en).
+- **Deploys:** rev 00002-9q2 (`frontend:20260715-115515`, fts only) → rev 00003-dw8
+  (`frontend:20260715-135954`, fts+j7f). Smoke after each: `/auth/login` 200, no Supabase
+  signature in SSR output.
+- **Canvas project (for future UI rounds):** claude.ai/design → "Nestor Pulse — Pages"
+  (projectId `7d71cbcf-0b88-4864-bea0-0d79d56bba1a`), 17 page snapshots. Workflow: edit on
+  canvas → main session pulls via DesignSync (`get_file`, main-session-only tool) → diff vs
+  `pages/` originals → fuse via `/gsd-quick`. Fuse worklists preserved in
+  `.planning/quick/260715-fts-*/DIFF-NOTES.md` and `.planning/quick/260715-j7f-*/DIFF-NOTES-2.md`.
 
 ---
 
