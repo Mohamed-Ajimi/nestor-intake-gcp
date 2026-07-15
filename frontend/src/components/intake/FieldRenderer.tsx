@@ -83,7 +83,7 @@ function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemov
  return (
  <textarea
  rows={field.rows ?? 3}
- className={inputCls}
+ className={inputCls + " resize-y"}
  value={value ?? ""}
  placeholder={field.placeholder}
  disabled={disabled}
