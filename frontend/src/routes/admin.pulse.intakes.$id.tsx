@@ -891,14 +891,14 @@ function IntakeDetailPage() {
  >
  <Link
  to="/admin/pulse/intakes"
- className="inline-flex items-center gap-1 text-xs font-medium text-ink/60 hover:text-ink"
+ className="inline-flex items-center gap-1 font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
  >
  <ArrowLeft className="h-3.5 w-3.5" />
  {t("intakeDetail.header.intakes")}
  </Link>
  <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
  <div>
- <h1 className="text-xl font-semibold tracking-tight text-ink">{headerTitle}</h1>
+ <h1 className="font-serif text-2xl font-normal lowercase tracking-tight text-ink">{headerTitle}</h1>
               <p className="mt-0.5 text-xs text-ink/60">
                 {t("intakeDetail.header.lastEdited")}{" "}
                 {formatDistanceToNow(new Date(intake.updated_at), {
@@ -922,7 +922,7 @@ function IntakeDetailPage() {
  value={intake.status ?? ""}
  disabled={updatingStatus}
  onChange={(e) => handleStatusChange(e.target.value)}
- className="border border-ink/10 bg-paper px-2.5 py-1.5 text-xs font-medium text-ink/80 focus:border-ink focus:outline-none"
+ className="border border-ink/30 bg-paper px-2.5 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:border-ink focus:outline-none"
  >
  {STATUS_VALUES.map((value) => (
  <option key={value} value={value}>
@@ -937,7 +937,7 @@ function IntakeDetailPage() {
  <button
  type="button"
  onClick={() => setEditMode(true)}
- className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80"
+ className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90"
  >
  <Pencil className="h-3.5 w-3.5" />
  {t("intakeDetail.action.edit")}
@@ -1333,7 +1333,7 @@ function IntakeDetailPage() {
  {section.title}
  </h2>
  {section.description && (
- <p className="mb-4 font-sans text-sm italic text-ink/60">{section.description}</p>
+ <p className="mb-4 font-sans text-sm text-ink/60">{section.description}</p>
  )}
  {reviewMode && reviewData && hasProposalList ? (
  <div className="mt-4">

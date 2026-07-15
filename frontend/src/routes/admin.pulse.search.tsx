@@ -76,10 +76,10 @@ function SearchPage() {
 
   return (
     <div className="max-w-4xl">
-      <p className="font-mono text-xs uppercase tracking-wider text-ink/60">
+      <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
         {t("search.eyebrow")}
-      </p>
-      <p className="mt-3 font-sans text-base text-ink/70">{t("search.subtitle")}</p>
+      </h1>
+      <p className="mt-1 text-sm text-ink/60">{t("search.subtitle")}</p>
 
       <div className="mt-6 flex border border-ink/30 border-l-4 border-l-pink-500 bg-paperLight">
         <input

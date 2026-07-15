@@ -92,16 +92,16 @@ function NewIntakePage() {
  }
 
  return (
- <div className="mx-auto max-w-2xl py-8">
+ <div className="max-w-2xl">
  <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
  {t("intakesNew.title")}
  </h1>
  <p className="mt-1 text-sm text-ink/60">{t("intakesNew.subtitle")}</p>
 
- <div className="mt-6 space-y-8 border border-ink/10 bg-paper p-6 shadow-sm">
+ <div className="mt-6 space-y-8 border border-ink bg-paper p-6">
  <section>
- <Label htmlFor="client_name" className="text-sm font-semibold text-ink">
- {t("intakesNew.clientNameLabel")} <span className="font-normal text-ink/60">*</span>
+ <Label htmlFor="client_name" className="block font-mono text-[11px] uppercase tracking-wider text-ink/70">
+ {t("intakesNew.clientNameLabel")}<span className="ml-1 text-red-600">*</span>
  </Label>
  <Input
  id="client_name"
@@ -122,8 +122,8 @@ function NewIntakePage() {
  </div>
  )}
 
- <div className="flex items-center justify-between">
- <Link to="/admin/pulse/intakes" className="text-sm text-ink/60 hover:text-ink hover:underline">
+ <div className="flex items-center justify-between border-t border-ink/15 pt-6">
+ <Link to="/admin/pulse/intakes" className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink">
  {t("intakesNew.cancel")}
  </Link>
  <Button onClick={submit} disabled={submitting}>

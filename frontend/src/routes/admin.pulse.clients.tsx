@@ -129,7 +129,7 @@ function ClientsPage() {
         <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">
           {t("clients.title")}
         </h1>
-        <p className="mt-1 font-sans text-sm italic text-ink/60">{t("clients.subtitle")}</p>
+        <p className="mt-1 font-sans text-sm text-ink/60">{t("clients.subtitle")}</p>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -168,9 +168,10 @@ function ClientsPage() {
             </div>
           )
         ) : (
+          <div className="border border-ink bg-paper">
           <table className="w-full border-collapse">
             <thead>
-              <tr className="border-b border-ink/30 font-mono text-[10px] uppercase tracking-wider text-ink/70">
+              <tr className="border-b border-ink font-mono text-xs uppercase tracking-wider text-ink">
                 <th className="w-6 px-4 py-2 text-left"></th>
                 <th className="px-4 py-2 text-left">{t("clients.colClient")}</th>
                 <th className="px-4 py-2 text-left">{t("clients.colProjects")}</th>
@@ -265,6 +266,7 @@ function ClientsPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

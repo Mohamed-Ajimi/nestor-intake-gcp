@@ -1,7 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProductBadge, type ProductKey } from "@/components/admin/ProductBadge";
 import { StatusPill } from "@/components/intake/_status";
@@ -119,8 +118,7 @@ function ClientDetailPage() {
           to="/admin/pulse/clients"
           className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
         >
-          <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
-          {t("clientDetail.backToClients")}
+          ← {t("clientDetail.backToClients")}
         </Link>
         <p className="mt-6 text-sm text-red-600">{error ?? t("clientDetail.notFoundGeneric")}</p>
       </div>
@@ -133,8 +131,7 @@ function ClientDetailPage() {
         to="/admin/pulse/clients"
         className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink"
       >
-        <ArrowLeft className="mr-1 inline h-3.5 w-3.5" />
-        {t("clientDetail.backToClients")}
+        ← {t("clientDetail.backToClients")}
       </Link>
       <h1 className="mt-3 font-serif text-3xl font-normal lowercase tracking-tight text-ink">
         {client.name}
