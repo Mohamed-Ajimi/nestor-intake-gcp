@@ -18,6 +18,7 @@
     "for": "Pour : {{name}}",
     "estimatedTime": "Temps indicatif : {{minutes}} min",
     "step": "Étape {{current}} / {{total}}",
+    "progress": "Progression",
     "optional": "Facultatif",
     "attention": "ATTENTION",
     "fieldEmpty": "{{label}} est vide",

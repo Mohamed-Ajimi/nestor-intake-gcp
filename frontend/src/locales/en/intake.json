@@ -18,6 +18,7 @@
     "for": "For: {{name}}",
     "estimatedTime": "Estimated time: {{minutes}} min",
     "step": "Step {{current}} / {{total}}",
+    "progress": "Progress",
     "optional": "Optional",
     "attention": "NOTE",
     "fieldEmpty": "{{label}} is empty",

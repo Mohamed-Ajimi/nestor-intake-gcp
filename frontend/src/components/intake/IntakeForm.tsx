@@ -357,7 +357,7 @@ export function IntakeForm({
  <div className="min-h-screen bg-paper text-ink">
  <div className="mx-auto max-w-6xl px-6 py-12 md:py-16">
         {/* Header */}
-        <header className="mb-10">
+        <header className="mb-12 border-b border-ink/15 pb-10">
           <div className="flex items-start justify-between gap-4">
             <p className="font-mono text-xs uppercase tracking-widest text-ink/60">
               {t("form.brand")}
@@ -389,10 +389,18 @@ export function IntakeForm({
  )}
  </header>
 
- <div className="grid gap-8 md:grid-cols-[320px_1fr]">
+ <div className="grid gap-8 md:grid-cols-[300px_minmax(0,1fr)]">
  {/* Sidebar */}
  <aside className="hidden md:block">
- <nav className="sticky top-8 space-y-1">
+ <div className="sticky top-8">
+ <div className="flex items-baseline justify-between gap-3 px-3">
+ <span className="font-mono text-[11px] uppercase tracking-wider text-ink/60">{t("form.progress")}</span>
+ <span className="font-mono text-[11px] tabular-nums text-ink/60">{currentStep + 1} / {sections.length}</span>
+ </div>
+ <div className="mx-3 mt-2 h-1 bg-ink/10">
+ <div className="h-1 bg-ink" style={{ width: `${((currentStep + 1) / sections.length) * 100}%` }} />
+ </div>
+ <nav className="mt-5 space-y-1 overflow-y-auto max-h-[calc(100vh-12rem)]">
  {sections.map((s, idx) => {
  const active = idx === currentStep;
  const done = completedSections[idx];
@@ -407,10 +415,13 @@ export function IntakeForm({
    "flex w-full items-start gap-2 px-3 py-2 text-left font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors " +
    (active
    ? "bg-paper2 text-ink"
+   : done
+   ? "text-ink hover:bg-ink/5"
    : "text-ink/60 hover:bg-ink/5 hover:text-ink")
    }
    >
-   <span className={"nav-mark " + (sectionDirty ? "" : active ? "nav-mark-green" : "nav-mark-ink")} />
+   <span className={"nav-mark " + (sectionDirty ? "" : active ? "nav-mark-green" : done ? "nav-mark-ink" : "")} />
+   <span className={"w-6 shrink-0 tabular-nums " + (active || done ? "text-ink" : "text-ink/40")}>{String(idx + 1).padStart(2, "0")}</span>
    <span className="flex flex-1 flex-col gap-0.5">
      <span className="break-words">{s.title}</span>
      {changed && (
@@ -423,10 +434,11 @@ export function IntakeForm({
  );
  })}
  </nav>
+ </div>
  </aside>
 
  {/* Form area */}
- <div>
+ <div className="min-w-0">
  <div className="mb-4 flex items-center justify-between">
  <p className="text-sm text-ink/60">
  {t("form.step", { current: currentStep + 1, total: sections.length })}
@@ -517,7 +529,7 @@ export function IntakeForm({
   ? t("form.submitting")
   : isValidation
   ? t("validationPhase.approveSubmit")
-  : schema.submit.label}
+  : schema.submit.label + " →"}
   </button>
   ) : (
   <button

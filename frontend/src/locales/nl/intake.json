@@ -18,6 +18,7 @@
     "for": "Voor: {{name}}",
     "estimatedTime": "Richttijd: {{minutes}} min",
     "step": "Stap {{current}} / {{total}}",
+    "progress": "Voortgang",
     "optional": "Optioneel",
     "attention": "LET OP",
     "fieldEmpty": "{{label}} is leeg",
