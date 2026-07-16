@@ -34,10 +34,15 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   Rev **00007-8f2** (image `frontend:20260716-142224`, quick 260716-ji9) adds: draft-phase
   primary CTA "Verstuur intake-link via mail" (copy demoted to secondary), Intake-info moved
   from first page section to a header-button modal, section headings render authored-case.
-  Rev **00008-x4h** (image `frontend:20260716-151546`, fix `d2f335b`) fixes a phase-machine
+  Rev **00008-x4h** (`frontend:20260716-151546`, fix `d2f335b`) fixed a phase-machine
   bug found live: a succeeded enrichment run (structure-answers etc.) faked "analysis ready"
   and hid the Run-intake-skill CTA — derivePhase now only consumes apply-intake-skill runs.
-  Judge intake-detail UAT items against THIS chrome.)
+  Rev **00009-4r4** (`frontend:20260716-160718`, commits `4eb1c6e`+`acf1ba4`): safety poll
+  re-arms on new dispatch (stuck 7-min timer — after a terminal run the SSE stream closes
+  itself and the poll had stopped, leaving new runs invisible), unusable review output now
+  toasts instead of silently dead-ending, and NEW "Heranalyseer" secondary button in the
+  awaiting_review banner re-dispatches apply-intake-skill on the same intake (manual redo
+  without a new intake). Judge intake-detail UAT items against THIS chrome.)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev **00024-67b**,
   image `backend:20260716-142214`, alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live,
   `/readyz` 200. Rev 00024 adds quick 260716-ji9: draft-only intake-invite mail type
