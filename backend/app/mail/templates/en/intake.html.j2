@@ -1,0 +1,15 @@
+{#
+  Intake-invite mail (EN) — D-12 translation of the NL canonical (nl/intake.html.j2),
+  same recognizable layout (heading, CTA, footer); no reminder branch.
+  NOTIF-01: cta_url is {app_base_url}/intake/{intake_id}, NEVER a bearer token.
+  autoescape stays ON (T-10-01); no `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Hi {{ first_name or "team" }}</h1>
+<p>We have prepared an intake for you. Fill in the form whenever it suits you — it forms the basis for our research.</p>
+<p>You can save along the way and continue later. The more concrete the answers, the sharper we can frame the research.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open the intake form →</a></p>
+<p style="margin-top: 24px;">If you have any questions or anything is unclear — just reply to this email.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">This page is unique to your project ({{ project_title }}). Log in to fill in the intake.</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+{#
+  Intake-invite mail (FR) — D-12 translation of the NL canonical (nl/intake.html.j2),
+  same recognizable layout (heading, CTA, footer); no reminder branch.
+  NOTIF-01: cta_url is {app_base_url}/intake/{intake_id}, NEVER a bearer token.
+  autoescape stays ON (T-10-01); no `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Bonjour {{ first_name or "équipe" }}</h1>
+<p>Nous avons préparé un intake pour vous. Remplissez le formulaire quand cela vous convient — il constitue la base de notre recherche.</p>
+<p>Vous pouvez enregistrer en cours de route et continuer plus tard. Plus les réponses sont concrètes, plus nous pouvons cadrer la recherche avec précision.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Ouvrir le formulaire d'intake →</a></p>
+<p style="margin-top: 24px;">En cas de questions ou d'ambiguïtés — répondez simplement à cet e-mail.</p>
+<p style="margin-top: 24px;">— L'équipe Agenic</p>
+<div class="footer">Cette page est propre à votre projet ({{ project_title }}). Connectez-vous pour remplir l'intake.</div>
+{% endblock %}
