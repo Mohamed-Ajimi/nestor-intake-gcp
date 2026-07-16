@@ -239,6 +239,7 @@
     "at": "à",
     "defaultTitle": "Étape suivante",
     "awaitingSubmissionBody": "Le client doit remplir l'intake. Envoyez le lien d'intake.",
+    "sendIntakeMail": "Envoyer le lien d'intake par e-mail",
     "copyIntakeLink": "Copier le lien d'intake",
     "analyzingBody": "Nestor analyse votre intake. Cela prend en moyenne 90–120 secondes. Vous pouvez laisser cet onglet ouvert.",
     "runSkillBody": "Le client a soumis l'intake. Lancez la compétence d'intake pour obtenir l'analyse et les suggestions de Nestor.",
@@ -332,6 +333,8 @@
     "query": "Query :"
   },
   "recipients": {
+    "titleIntake": "envoyer le lien d'intake",
+    "confirmIntake": "Envoyer le lien d'intake",
     "titleValidation": "envoyer le lien de validation",
     "confirmValidation": "Envoyer le lien de validation",
     "titleReminder": "envoyer un rappel",

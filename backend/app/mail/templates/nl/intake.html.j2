@@ -1,0 +1,16 @@
+{#
+  Intake-invite mail (NL) — the client receives the link to fill in the intake form
+  (draft status only; 260716-ji9). Mirrors the validation.html.j2 shape, minus the
+  isReminder branch (there is no intake reminder).
+  NOTIF-01: cta_url is {app_base_url}/intake/{intake_id} — an intake-id app route,
+  NEVER a bearer intake token. autoescape stays ON (T-10-01); no `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block content %}
+<h1>Hi {{ first_name or "team" }}</h1>
+<p>We hebben een intake voor jullie klaargezet. Vul het formulier in wanneer het jullie past — het vormt de basis voor ons onderzoek.</p>
+<p>Je kan tussentijds opslaan en later verdergaan. Hoe concreter de antwoorden, hoe scherper we het onderzoek kunnen opzetten.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open intake-formulier →</a></p>
+<p style="margin-top: 24px;">Bij vragen of onduidelijkheden — gewoon reply op deze mail.</p>
+<p style="margin-top: 24px;">— Team Agenic</p>
+<div class="footer">Deze pagina is uniek voor jullie project ({{ project_title }}). Log in om de intake in te vullen.</div>
+{% endblock %}

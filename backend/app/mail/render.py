@@ -82,6 +82,29 @@ def render_validation(
     )
 
 
+def render_intake(
+    *,
+    first_name: str,
+    project_title: str,
+    cta_url: str,
+    app_base_url: str | None = None,
+    locale: str = "nl",
+) -> str:
+    """Render the intake-invite mail body in ``locale`` (nl fallback).
+
+    ``cta_url`` is the token-free intake-id app route
+    (``{app_base_url}/intake/{intake_id}``), NEVER a ``client_intake_token``
+    (NOTIF-01). ``locale`` (D-07, resolved server-side by the caller) selects
+    ``templates/{locale}/intake.html.j2`` — an unknown locale falls back to ``nl``.
+    """
+    return _localized_template("intake", locale).render(
+        first_name=first_name,
+        project_title=project_title,
+        cta_url=cta_url,
+        app_base_url=app_base_url,
+    )
+
+
 def render_results(
     *,
     first_name: str,

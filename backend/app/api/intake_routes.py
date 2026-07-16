@@ -655,16 +655,19 @@ _SUBJECTS: dict[str, dict[str, str]] = {
         "validation": _SUBJECT_VALIDATION,
         "reminder": _SUBJECT_REMINDER,
         "results": _SUBJECT_RESULTS,
+        "intake": "Jullie intake staat klaar — {client}",
     },
     "fr": {
         "validation": "À valider — questions de recherche pour {client}",
         "reminder": "Rappel — les questions de recherche attendent votre validation ({client})",
         "results": "Résultats de la recherche prêts — {client}",
+        "intake": "Votre intake est prêt — {client}",
     },
     "en": {
         "validation": "To validate — research questions for {client}",
         "reminder": "Reminder — research questions awaiting validation ({client})",
         "results": "Research results ready — {client}",
+        "intake": "Your intake is ready — {client}",
     },
 }
 
@@ -892,6 +895,34 @@ def send_results_mail(
     )
 
 
+@intake_router.post("/{intake_id}/mail/intake")
+def send_intake_mail(
+    intake_id: str,
+    body: MailRecipients,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Send the intake-invite mail (draft only); writes NO timestamp column.
+
+    404 on a cross-space/unknown intake id (existence-hidden, D-07). 409 when the
+    intake is not in ``draft`` — the invite only makes sense before the client has
+    submitted (the transition-guard idiom, 260716-ji9). Recipients resolve ONLY from
+    ACTIVE memberships of the intake's own space (D-06). The CTA is the token-free
+    ``{app_base_url}/intake/{intake_id}`` app route (NOTIF-01). On a successful send
+    a ``mail.sent`` audit row (no link) is written; there is no intake-sent-at column
+    (no migration — like the reminder path), so nothing is stamped.
+    """
+    return _run_intake_send(
+        intake_id,
+        body,
+        repo,
+        identity,
+        is_reminder=False,
+        is_results=False,
+        is_intake=True,
+    )
+
+
 def _run_intake_send(
     intake_id: str,
     body: MailRecipients,
@@ -900,6 +931,7 @@ def _run_intake_send(
     *,
     is_reminder: bool,
     is_results: bool,
+    is_intake: bool = False,
 ) -> dict:
     """404-gate the intake then render+send; stamp+audit on 2xx only (shared verb body).
 
@@ -913,6 +945,14 @@ def _run_intake_send(
     intake = repo.get(intake_id)
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    # Draft-only gate for the intake-invite type (260716-ji9) — the transition-guard
+    # idiom (cf. _next_submit_status). The other three types stay ungated (parity).
+    if is_intake and intake.status != "draft":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Cannot send the intake mail in status {intake.status!r}",
+        )
 
     # (email, locale) per active recipient — locale resolved SERVER-SIDE per recipient
     # (membership.locale -> space default_locale -> "nl"), NEVER from the sending admin's UI
@@ -946,6 +986,10 @@ def _run_intake_send(
         cta_url = f"{base}/intake/{intake.id}/results"
         mail_type = "results"
         timestamp_field: str | None = "results_link_sent_at"
+    elif is_intake:
+        cta_url = f"{base}/intake/{intake.id}"
+        mail_type = "intake"
+        timestamp_field = None  # no intake-sent-at column (no migration, 260716-ji9)
     else:
         cta_url = f"{base}/intake/{intake.id}"
         mail_type = "reminder" if is_reminder else "validation"
@@ -962,6 +1006,14 @@ def _run_intake_send(
             subject = _subject_for(locale, mail_type, client)
             if is_results:
                 html = mail_render.render_results(
+                    first_name=client,
+                    project_title=client,
+                    cta_url=cta_url,
+                    app_base_url=settings.app_base_url,
+                    locale=locale,
+                )
+            elif is_intake:
+                html = mail_render.render_intake(
                     first_name=client,
                     project_title=client,
                     cta_url=cta_url,
