@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveSkillRun, useSkillRunFull, type ActiveSkillRun } from "@/components/intake/SkillRunProgress";
 import { format, formatDistanceToNow } from "date-fns";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
@@ -562,6 +562,8 @@ function IntakeDetailPage() {
   // Opening the picker sets the type; the picker self-loads the intake's active members
   // (listSpaceMembers) and returns the selected membership ids to `handleSendMail`.
   const [mailPickerType, setMailPickerType] = useState<IntakeMailType | null>(null);
+  // S3: house-style archive confirmation dialog (replaces the native confirm()).
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   // Map each mail type to the busy key NextStepBanner already reads.
   const MAIL_BUSY_KEY: Record<IntakeMailType, BusyKey> = {
     validation: "sendValidation",
@@ -698,7 +700,11 @@ function IntakeDetailPage() {
 
   const onArchive = async () => {
     if (!intake) return;
-    if (!confirm(t("intakeDetail.confirm.archive"))) return;
+    setArchiveConfirmOpen(true);
+  };
+
+  const confirmArchive = async () => {
+    setArchiveConfirmOpen(false);
     setBusyKey("archive", true);
     await handleStatusChange("archived");
     setBusyKey("archive", false);
@@ -1052,7 +1058,20 @@ function IntakeDetailPage() {
          </section>
        )}
 
-       {/* scope-note (S6) — Task 2 */}
+       {/* S6: persistent end-of-platform-scope note for decomposed-and-later statuses.
+           The onStartAutoResearch toast stays as-is (D5 — harmless duplication). */}
+       {["decomposed", "in_research", "delivered"].includes(intake.status ?? "") && (
+         <div className="border-t border-ink/10 bg-paper2 px-6 py-3 text-sm text-ink/70">
+           <span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-ink/50">
+             {t("intakeDetail.scopeNote.label")}
+           </span>
+           <Trans
+             i18nKey="intakeDetail.scopeNote.body"
+             ns="admin"
+             components={[<span className="font-mono text-xs" />]}
+           />
+         </div>
+       )}
      </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
@@ -1067,6 +1086,43 @@ function IntakeDetailPage() {
          busy={Boolean(busy[MAIL_BUSY_KEY[mailPickerType]])}
          onConfirm={handleSendMail}
        />
+     )}
+
+     {/* S3: archive confirmation — hand-rolled fixed-overlay dialog (house modal style). */}
+     {archiveConfirmOpen && (
+       <div
+         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+         onClick={() => setArchiveConfirmOpen(false)}
+       >
+         <div
+           role="alertdialog"
+           className="w-full max-w-md border border-ink bg-paper p-6 shadow-lg"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <h2 className="font-serif text-2xl font-normal lowercase text-ink">
+             {t("intakeDetail.archiveDialog.title")}
+           </h2>
+           <p className="mt-3 font-sans text-sm leading-relaxed text-ink/70">
+             {t("intakeDetail.archiveDialog.body")}
+           </p>
+           <div className="mt-6 flex justify-end gap-2">
+             <button
+               type="button"
+               onClick={() => setArchiveConfirmOpen(false)}
+               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+             >
+               {t("intakeDetail.archiveDialog.cancel")}
+             </button>
+             <button
+               type="button"
+               onClick={confirmArchive}
+               className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85"
+             >
+               {t("intakeDetail.archiveDialog.confirm")}
+             </button>
+           </div>
+         </div>
+       </div>
      )}
 
 
@@ -1367,6 +1423,9 @@ function IntakeDetailPage() {
  intakeId={intake.id}
  onDeferRemove={(paths) => {
  pendingRemovals.current.push(...paths);
+ }}
+ onUndoDeferRemove={(paths) => {
+ pendingRemovals.current = pendingRemovals.current.filter((p) => !paths.includes(p));
  }}
  />
  </div>

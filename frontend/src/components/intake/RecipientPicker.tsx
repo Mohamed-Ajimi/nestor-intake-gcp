@@ -136,7 +136,8 @@ export function RecipientPicker({
               {members.map((m) => {
                 // Backend filters email-less members out of the read (WR-02), so `email` is
                 // always present here; the no-name fallback is a defensive last resort.
-                const label = m.name ?? m.email ?? t("recipients.noName");
+                // S1 (round-3, D2): show "Naam · email" inline; no duplicate email when
+                // the member has no name (the email already IS the label then).
                 return (
                   <label
                     key={m.id}
@@ -146,7 +147,10 @@ export function RecipientPicker({
                       checked={selected.has(m.id)}
                       onCheckedChange={() => toggle(m.id)}
                     />
-                    <span className="font-sans text-sm text-ink">{label}</span>
+                    <span className="font-sans text-sm text-ink">
+                      {m.name ?? m.email ?? t("recipients.noName")}
+                      {m.name && m.email && <span className="text-ink/50"> · {m.email}</span>}
+                    </span>
                   </label>
                 );
               })}

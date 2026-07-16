@@ -213,6 +213,44 @@ function downloadContextPackPDF(
   doc.save(`${slug}.pdf`);
 }
 
+// S4 (round-3): pure plain-text slice of the pack markdown for the inline preview card —
+// first `## ` section heading + its first paragraph. No markdown rendering, no HTML
+// (T-q3-01: rendered as React text nodes only). Returns null on empty input.
+function extractPackPreview(markdown: string): { heading: string; paragraph: string } | null {
+  if (!markdown || !markdown.trim()) return null;
+  const body = markdown.replace(/^#\s+Context Pack[^\n]*\n+/i, "");
+  const lines = body.split("\n");
+
+  const collectParagraph = (start: number): string => {
+    const para: string[] = [];
+    for (let i = start; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (line === "") {
+        if (para.length > 0) break;
+        continue;
+      }
+      if (line.startsWith("#")) break;
+      para.push(line.replace(/\*\*/g, ""));
+    }
+    return para.join(" ");
+  };
+
+  const headingIdx = lines.findIndex((l) => l.startsWith("## "));
+  if (headingIdx >= 0) {
+    const heading = lines[headingIdx].replace(/^##\s+/, "").replace(/\*\*/g, "");
+    return { heading, paragraph: collectParagraph(headingIdx + 1) };
+  }
+
+  // No `## ` heading: fall back to the first non-empty line as heading + next paragraph.
+  const firstIdx = lines.findIndex((l) => l.trim() !== "");
+  if (firstIdx < 0) return null;
+  const heading = lines[firstIdx]
+    .trim()
+    .replace(/^#+\s*/, "")
+    .replace(/\*\*/g, "");
+  return { heading, paragraph: collectParagraph(firstIdx + 1) };
+}
+
 export function ContextPackBlock({
   intakeId,
   intakeStatus,
@@ -326,6 +364,8 @@ export function ContextPackBlock({
   const isDone = !!latestPack;
   const accentColor = isDone ? "#DFF940" : "#FF2D87";
   const labelColor = isDone ? undefined : "#FF2D87";
+  // S4: inline first-section preview of the latest pack (plain text, no modal needed).
+  const preview = latestPack?.output ? extractPackPreview(latestPack.output) : null;
 
   return (
     <>
@@ -397,6 +437,19 @@ export function ContextPackBlock({
             })}
             {latestPack.cost_estimate_usd != null && ` · €${latestPack.cost_estimate_usd}`}
             {latestPack.model && ` · ${latestPack.model}`}
+          </div>
+        )}
+        {preview && (
+          <div className="mt-4 border border-ink/15 bg-paper p-4">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/50">
+              {t("contextPack.previewLabel")}
+            </div>
+            <p className="font-serif text-lg lowercase text-ink">{preview.heading}</p>
+            {preview.paragraph && (
+              <p className="mt-1 font-sans text-sm leading-relaxed text-ink/80">
+                {preview.paragraph}
+              </p>
+            )}
           </div>
         )}
         {error && <div className="mt-3 text-xs text-red-600">{error}</div>}
