@@ -564,8 +564,11 @@ function IntakeDetailPage() {
   const [mailPickerType, setMailPickerType] = useState<IntakeMailType | null>(null);
   // S3: house-style archive confirmation dialog (replaces the native confirm()).
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  // 260716-ji9: Intake-info moved out of the page flow into a header-triggered modal.
+  const [infoModalOpen, setInfoModalOpen] = useState(false);
   // Map each mail type to the busy key NextStepBanner already reads.
   const MAIL_BUSY_KEY: Record<IntakeMailType, BusyKey> = {
+    intake: "sendIntake",
     validation: "sendValidation",
     reminder: "sendReminder",
     results: "sendResults",
@@ -643,6 +646,8 @@ function IntakeDetailPage() {
 
   // Transactional email (Phase 10): each CTA opens the RecipientPicker, which self-loads
   // the intake's active members and returns the selected membership ids to `handleSendMail`.
+  const onSendIntakeMail = () => setMailPickerType("intake");
+
   const onSendValidationMail = async () => {
     setMailPickerType("validation");
   };
@@ -923,6 +928,13 @@ function IntakeDetailPage() {
               </p>
  </div>
  <div className="flex flex-wrap items-center gap-2">
+ <button
+ type="button"
+ onClick={() => setInfoModalOpen(true)}
+ className="border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+ >
+ {t("intakeDetail.info.openButton")}
+ </button>
  <div className="flex flex-col">
  <select
  value={intake.status ?? ""}
@@ -1002,6 +1014,7 @@ function IntakeDetailPage() {
          activeRun={bannerActiveRun}
          busy={busy}
          onRunSkill={runSkill}
+         onSendIntakeMail={onSendIntakeMail}
          onCopyIntakeLink={onCopyIntakeLink}
          onOpenAIReview={onOpenAIReview}
          onSendValidationMail={onSendValidationMail}
@@ -1125,6 +1138,112 @@ function IntakeDetailPage() {
        </div>
      )}
 
+     {/* 260716-ji9: Intake-info modal — the dl moved verbatim from the first page section;
+         same house overlay convention as the archive dialog, but wider + scrollable. */}
+     {infoModalOpen && (
+       <div
+         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+         onClick={() => setInfoModalOpen(false)}
+       >
+         <div
+           role="dialog"
+           className="max-h-[85vh] w-full max-w-2xl overflow-y-auto border border-ink bg-paper p-6 shadow-lg"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
+             {t("intakeDetail.info.title")}
+           </h2>
+           <dl className="mt-4">
+             <Meta label={t("intakeDetail.info.client")}>
+               {client ? (
+                 <Link to="/admin/pulse/clients" className="text-ink hover:underline">
+                   {client.name}
+                 </Link>
+               ) : (
+                 "—"
+               )}
+             </Meta>
+             <Meta label={t("intakeDetail.info.product")}>
+               {intake.product ? (
+                 <>
+                   <span className="text-ink">{intake.product.name}</span>
+                   {intake.product.tagline && (
+                     <span className="text-ink/60"> ({intake.product.tagline})</span>
+                   )}
+                 </>
+               ) : (
+                 intake.product_slug
+               )}
+             </Meta>
+             <Meta label={t("intakeDetail.info.status")}>
+               <StatusPill status={intake.status} />
+             </Meta>
+             <Meta label={t("intakeDetail.info.createdAt")}>{fmt(intake.created_at)}</Meta>
+             <Meta label={t("intakeDetail.info.lastEdited")}>{fmt(intake.updated_at)}</Meta>
+             {(intake.status === "delivered" || intake.status === "archived") && (
+               <Meta label={t("intakeDetail.info.deliveredOn")}>
+                 <DeliveredAtEditor
+                   intakeId={intake.id}
+                   value={intake.delivered_at}
+                   onSaved={(v) => setIntake({ ...intake, delivered_at: v })}
+                 />
+               </Meta>
+             )}
+             <Meta label={t("intakeDetail.info.initialIntakeLink")}>
+               <LinkRow
+                 url={intakeUrl}
+                 subtitle={t("intakeDetail.info.initialIntakeLinkSubtitle")}
+                 placeholder="—"
+               />
+             </Meta>
+             <Meta label={t("intakeDetail.info.validationLink")}>
+               <LinkRow
+                 url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
+                 subtitle={t("intakeDetail.info.validationLinkSubtitle")}
+                 placeholder="—"
+               />
+             </Meta>
+             <Meta label={t("intakeDetail.info.validation")}>
+               {intake.client_validated_at ? (
+                 <span className="text-emerald-700">
+                   {t("intakeDetail.info.validatedOn", { date: fmt(intake.client_validated_at) })}
+                 </span>
+               ) : (
+                 <span className="text-ink/60">{t("intakeDetail.info.notYetValidated")}</span>
+               )}
+             </Meta>
+             <Meta
+               label={
+                 <span className="inline-flex items-center gap-1">
+                   {t("intakeDetail.info.resultsLink")}
+                   <span
+                     className="cursor-help text-ink/40"
+                     title={t("intakeDetail.info.resultsLinkTooltip")}
+                   >
+                     ⓘ
+                   </span>
+                 </span>
+               }
+             >
+               <ResultsLinkRow
+                 intakeId={intake.id}
+                 hasFinalReport={!!intake.final_report_artifact_id}
+               />
+             </Meta>
+           </dl>
+           <div className="mt-6 flex justify-end">
+             <button
+               type="button"
+               onClick={() => setInfoModalOpen(false)}
+               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+             >
+               {t("intakeDetail.info.close")}
+             </button>
+           </div>
+         </div>
+       </div>
+     )}
+
 
   {/* HandoffBlock verwijderd: alle handoff-acties zitten nu in NextStepBanner per fase. */}
 
@@ -1194,90 +1313,6 @@ function IntakeDetailPage() {
  </aside>
 
  <main className="min-w-0 space-y-10">
- <section className="border border-ink/10 bg-paper p-6">
- <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">
- {t("intakeDetail.info.title")}
- </h2>
- <dl className="mt-4">
- <Meta label={t("intakeDetail.info.client")}>
- {client ? (
- <Link to="/admin/pulse/clients" className="text-ink hover:underline">
- {client.name}
- </Link>
- ) : (
- "—"
- )}
- </Meta>
- <Meta label={t("intakeDetail.info.product")}>
- {intake.product ? (
- <>
- <span className="text-ink">{intake.product.name}</span>
- {intake.product.tagline && (
- <span className="text-ink/60"> ({intake.product.tagline})</span>
- )}
- </>
- ) : (
- intake.product_slug
- )}
- </Meta>
- <Meta label={t("intakeDetail.info.status")}>
- <StatusPill status={intake.status} />
- </Meta>
-                  <Meta label={t("intakeDetail.info.createdAt")}>{fmt(intake.created_at)}</Meta>
-                  <Meta label={t("intakeDetail.info.lastEdited")}>{fmt(intake.updated_at)}</Meta>
-                  {(intake.status === "delivered" || intake.status === "archived") && (
-                    <Meta label={t("intakeDetail.info.deliveredOn")}>
-                      <DeliveredAtEditor
-                        intakeId={intake.id}
-                        value={intake.delivered_at}
-                        onSaved={(v) => setIntake({ ...intake, delivered_at: v })}
-                      />
-                    </Meta>
-                  )}
- <Meta label={t("intakeDetail.info.initialIntakeLink")}>
- <LinkRow
- url={intakeUrl}
- subtitle={t("intakeDetail.info.initialIntakeLinkSubtitle")}
- placeholder="—"
- />
- </Meta>
- <Meta label={t("intakeDetail.info.validationLink")}>
- <LinkRow
- url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
- subtitle={t("intakeDetail.info.validationLinkSubtitle")}
- placeholder="—"
- />
- </Meta>
- <Meta label={t("intakeDetail.info.validation")}>
- {intake.client_validated_at ? (
- <span className="text-emerald-700">
- {t("intakeDetail.info.validatedOn", { date: fmt(intake.client_validated_at) })}
- </span>
- ) : (
- <span className="text-ink/60">{t("intakeDetail.info.notYetValidated")}</span>
- )}
- </Meta>
- <Meta
- label={
- <span className="inline-flex items-center gap-1">
- {t("intakeDetail.info.resultsLink")}
- <span
- className="cursor-help text-ink/40"
- title={t("intakeDetail.info.resultsLinkTooltip")}
- >
- ⓘ
- </span>
- </span>
- }
- >
- <ResultsLinkRow
- intakeId={intake.id}
- hasFinalReport={!!intake.final_report_artifact_id}
- />
- </Meta>
- </dl>
- </section>
-
  {skillRuns && skillRuns.length > 0 && (
  <section className="border border-ink/10 bg-paper">
  <button
@@ -1386,7 +1421,7 @@ function IntakeDetailPage() {
  }}
  className="scroll-mt-32 border border-ink/10 bg-paper p-6"
  >
- <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">
+ <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
  {section.title}
  </h2>
  {section.description && (

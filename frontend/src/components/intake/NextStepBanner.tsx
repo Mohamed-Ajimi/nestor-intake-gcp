@@ -15,6 +15,7 @@ type Props = {
   activeRun?: ActiveSkillRun | null;
   busy: Partial<Record<BusyKey, boolean>>;
   onRunSkill: () => void;
+  onSendIntakeMail: () => void;
   onCopyIntakeLink: () => void;
   onOpenAIReview: () => void;
   onSendValidationMail: () => void;
@@ -32,6 +33,7 @@ type Props = {
 
 export type BusyKey =
   | "runSkill"
+  | "sendIntake"
   | "sendValidation"
   | "sendReminder"
   | "generateContextPack"
@@ -154,9 +156,14 @@ export function NextStepBanner(props: Props) {
     case "awaiting_client_submission":
       body = t("nextStep.awaitingSubmissionBody");
       actions = (
-        <SecondaryBtn onClick={props.onCopyIntakeLink}>
-          {t("nextStep.copyIntakeLink")}
-        </SecondaryBtn>
+        <>
+          <PrimaryBtn onClick={props.onSendIntakeMail} busy={busy.sendIntake}>
+            {t("nextStep.sendIntakeMail")}
+          </PrimaryBtn>
+          <SecondaryBtn onClick={props.onCopyIntakeLink}>
+            {t("nextStep.copyIntakeLink")}
+          </SecondaryBtn>
+        </>
       );
       break;
 

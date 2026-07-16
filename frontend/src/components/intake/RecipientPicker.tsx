@@ -40,8 +40,12 @@ export function RecipientPicker({
   onConfirm: (membershipIds: string[]) => void;
 }) {
   const { t } = useTranslation("intake");
-  // Title/CTA copy keyed on the mail type so one picker serves all three send verbs.
+  // Title/CTA copy keyed on the mail type so one picker serves all four send verbs.
   const TYPE_COPY: Record<IntakeMailType, { title: string; confirm: string }> = {
+    intake: {
+      title: t("recipients.titleIntake"),
+      confirm: t("recipients.confirmIntake"),
+    },
     validation: {
       title: t("recipients.titleValidation"),
       confirm: t("recipients.confirmValidation"),

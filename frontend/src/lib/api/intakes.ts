@@ -101,8 +101,8 @@ export type SpaceMember = {
   name?: string | null;
 };
 
-/** The three client-facing send verbs (mirrors the backend route suffixes). */
-export type IntakeMailType = "validation" | "reminder" | "results";
+/** The four client-facing send verbs (mirrors the backend route suffixes). */
+export type IntakeMailType = "intake" | "validation" | "reminder" | "results";
 
 /** Bare success flag returned by the send endpoints (no link/token in the body). */
 export type MailResult = { success: boolean };
@@ -117,7 +117,7 @@ export function listSpaceMembers(intakeId: string): Promise<ApiResult<SpaceMembe
 }
 
 /**
- * Send a client-facing mail (validation / reminder / results) to the selected
+ * Send a client-facing mail (intake / validation / reminder / results) to the selected
  * active members. `recipients` are membership ids (D-06 — never addresses); the
  * backend resolves the emails server-side and stamps the sent-at only on a 2xx send.
  */
