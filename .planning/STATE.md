@@ -29,7 +29,7 @@ Phase: 12 (frontend-deploy-cutover-supabase-retirement) — EXECUTING
 Plan: 1 of 5
 Next: Phase 06 (intake-crud-parity-and-frontend-api-seam)
 Status: Executing Phase 12
-Last activity: 2026-07-15 -- Completed quick task 260715-j7f: intake form stepper/progress redesign fuse (deployed with 260715-fts)
+Last activity: 2026-07-16 -- Completed quick task 260716-e59: 4 parity-UAT defect fixes (needs frontend redeploy to go live)
 
 Progress: 5 / 12 phases complete
 
@@ -122,6 +122,7 @@ Recent decisions affecting current work:
 | 260629-li2 | Role-gate admin UI (claims guard + Beheer nav hide + 401-disabled redirect) | 2026-06-29 | b49bc8d | [260629-li2-role-gate-admin-ui-on-frontend-claims-ro](./quick/260629-li2-role-gate-admin-ui-on-frontend-claims-ro/) |
 | 260715-fts | Apply Claude Design canvas UI consistency fixes to frontend (pre-UAT fuse) | 2026-07-15 | 8907172 | [260715-fts-apply-claude-design-canvas-ui-consistenc](./quick/260715-fts-apply-claude-design-canvas-ui-consistenc/) |
 | 260715-j7f | Fuse round-2 canvas redesign of client intake form (stepper sidebar progress) | 2026-07-15 | 5b5259b | [260715-j7f-fuse-round-2-canvas-redesign-of-client-i](./quick/260715-j7f-fuse-round-2-canvas-redesign-of-client-i/) |
+| 260716-e59 | Fix 4 UAT-found frontend defects (user lang switcher, nav i18n, decomposed filter, space-switch refetch) | 2026-07-16 | d358685 | [260716-e59-fix-4-uat-found-frontend-defects-user-la](./quick/260716-e59-fix-4-uat-found-frontend-defects-user-la/) |
 
 ## Deferred Items
 
