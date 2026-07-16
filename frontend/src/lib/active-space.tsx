@@ -93,7 +93,13 @@ export function ActiveSpaceProvider({ children }: { children: ReactNode }) {
     }
   }, [activeSpaceId]);
 
-  const setActiveSpace = (id: string | null) => setActiveSpaceIdState(id);
+  // Sync the module accessor SYNCHRONOUSLY before the state update: child effects
+  // (list pages refetching on [activeSpaceId]) flush before this provider's own
+  // effect, so an effect-only sync leaves withActiveSpace() one selection behind.
+  const setActiveSpace = (id: string | null) => {
+    setActiveSpaceId(id);
+    setActiveSpaceIdState(id);
+  };
 
   return (
     <ActiveSpaceContext.Provider value={{ activeSpaceId, setActiveSpace }}>
