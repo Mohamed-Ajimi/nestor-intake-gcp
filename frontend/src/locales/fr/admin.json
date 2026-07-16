@@ -5,6 +5,17 @@
     "productManage": "gestion",
     "logout": "Se déconnecter"
   },
+  "nav": {
+    "pulseNewIntake": "Nouvelle intake",
+    "pulseIntakes": "Intakes",
+    "pulseClients": "Clients",
+    "pulseSearch": "Recherche IA",
+    "salesNewProject": "Nouveau projet",
+    "salesProjects": "Projets",
+    "manageUsers": "utilisateurs",
+    "manageSpaces": "spaces",
+    "manageTemplates": "templates"
+  },
   "home": {
     "title": "choisissez un produit",
     "products": {
@@ -403,6 +414,7 @@
       "submitted": "Soumis",
       "reviewed": "Révisé",
       "validated_by_client": "Validé",
+      "decomposed": "Décomposé",
       "in_research": "En recherche",
       "delivered": "Livré",
       "archived": "Archivé"

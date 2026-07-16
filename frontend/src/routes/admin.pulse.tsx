@@ -10,10 +10,10 @@ function PulseLayout() {
     <ProductShell
       product="pulse"
       items={[
-        { to: "/admin/pulse/intakes/new", label: "Nieuwe intake", exact: true },
-        { to: "/admin/pulse/intakes", label: "Intakes", exact: false },
-        { to: "/admin/pulse/clients", label: "Klanten", exact: false },
-        { to: "/admin/pulse/search", label: "AI-zoek", exact: true },
+        { to: "/admin/pulse/intakes/new", labelKey: "nav.pulseNewIntake", exact: true },
+        { to: "/admin/pulse/intakes", labelKey: "nav.pulseIntakes", exact: false },
+        { to: "/admin/pulse/clients", labelKey: "nav.pulseClients", exact: false },
+        { to: "/admin/pulse/search", labelKey: "nav.pulseSearch", exact: true },
       ]}
     >
       <Outlet />

@@ -10,6 +10,7 @@ import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 import { listIntakes, type Intake } from "@/lib/api/intakes";
 import { StatusPill } from "@/components/intake/_status";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import {
   Table,
   TableBody,
@@ -24,7 +25,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 // list (`/intake`). Net-New Surface 2 (06-UI-SPEC). NOT under /admin, does NOT mount
 // ProductShell or the space switcher — a user is hard-pinned to one space, which the
 // backend derives from the verified token (the list call sends no space_id). Reuses the
-// shared StatusPill atom + the lib/api seam (no inline legacy data client).
+// shared StatusPill atom + the lib/api seam (no inline legacy data client). The header
+// DOES mount the persisting LanguageSwitcher (UAT defect 1): a user needs to change
+// their display language post-login, and this page has no other chrome to host it.
 
 // Firebase resolves `auth.currentUser` only after the first onAuthStateChanged tick;
 // await the initial state so the guard does not race a not-yet-populated currentUser.
@@ -123,6 +126,11 @@ function UserIntakeListPage() {
         <div className="mb-10 flex items-center justify-between">
           <p className="font-mono text-xs uppercase tracking-widest text-ink/60">{t("list.brand")}</p>
           <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-ink/60">
+            {/* Persisting NL/FR/EN switcher — trigger is w-full, so constrain it to a
+                fixed-width box to keep the flex header row intact. */}
+            <div className="w-28">
+              <LanguageSwitcher persist />
+            </div>
             {session?.email && <span className="font-medium text-ink/70">{session.email}</span>}
             <button
               type="button"

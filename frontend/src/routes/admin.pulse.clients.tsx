@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { StatusPill } from "@/components/intake/_status";
 import { listIntakes } from "@/lib/api/intakes";
 import { listSpaces } from "@/lib/api/admin";
+import { useActiveSpace } from "@/lib/active-space";
 
 export const Route = createFileRoute("/admin/pulse/clients")({
   // Optional search key: return `{ client?: string }` (key omitted when absent) rather
@@ -49,6 +50,7 @@ function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const { activeSpaceId } = useActiveSpace();
 
   useEffect(() => {
     let cancelled = false;
@@ -105,7 +107,8 @@ function ClientsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+    // Deps refetch on space switch (TENANT-04 view-filter; backend stays authoritative).
+  }, [activeSpaceId]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

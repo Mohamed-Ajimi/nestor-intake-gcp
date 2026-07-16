@@ -5,6 +5,17 @@
     "productManage": "beheer",
     "logout": "Uitloggen"
   },
+  "nav": {
+    "pulseNewIntake": "Nieuwe intake",
+    "pulseIntakes": "Intakes",
+    "pulseClients": "Klanten",
+    "pulseSearch": "AI-zoek",
+    "salesNewProject": "Nieuw project",
+    "salesProjects": "Projecten",
+    "manageUsers": "gebruikers",
+    "manageSpaces": "spaces",
+    "manageTemplates": "templates"
+  },
   "home": {
     "title": "kies een product",
     "products": {
@@ -403,6 +414,7 @@
       "submitted": "Ingediend",
       "reviewed": "Gereviewd",
       "validated_by_client": "Gevalideerd",
+      "decomposed": "Gedecomposeerd",
       "in_research": "In onderzoek",
       "delivered": "Geleverd",
       "archived": "Gearchiveerd"

@@ -36,6 +36,7 @@ const STATUS_FILTER_VALUES = [
   "submitted",
   "reviewed",
   "validated_by_client",
+  "decomposed",
   "in_research",
   "delivered",
   "archived",
@@ -94,7 +95,9 @@ function IntakesPage() {
   return () => {
     cancelled = true;
   };
- }, []);
+  // Refetch when the superadmin switches active space — listIntakes threads the
+  // selection via withActiveSpace at call time, so re-running the effect suffices.
+ }, [activeSpaceId]);
 
  const filtered = useMemo(() => {
  const q = search.trim().toLowerCase();
