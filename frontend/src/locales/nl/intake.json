@@ -244,6 +244,7 @@
     "analyzingBody": "Nestor analyseert je intake. Dit duurt gemiddeld 90–120 seconden. Je mag deze tab open laten.",
     "runSkillBody": "De klant heeft de intake ingediend. Run de intake-skill om Nestor's analyse en suggesties te krijgen.",
     "runSkill": "Run intake-skill",
+    "rerunSkill": "Heranalyseer",
     "reviewBody": "Nestor's analyse is klaar. Review hieronder en stuur ter validatie naar de klant.",
     "openAIReview": "Open AI review hieronder",
     "validationSendBody": "Suggesties toegepast. Stuur de validatie-link naar de klant via mail.",

@@ -182,12 +182,25 @@ export function NextStepBanner(props: Props) {
       break;
 
     case "awaiting_review":
-      body = t("nextStep.reviewBody");
-      actions = (
-        <PrimaryBtn onClick={props.onOpenAIReview}>
-          {t("nextStep.openAIReview")}
-        </PrimaryBtn>
-      );
+      if (activeRun?.status === "running") {
+        // A manual re-run is in flight — same running treatment as awaiting_skill_run.
+        body = t("nextStep.analyzingBody");
+        actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
+      } else {
+        body = t("nextStep.reviewBody");
+        actions = (
+          <>
+            <PrimaryBtn onClick={props.onOpenAIReview}>
+              {t("nextStep.openAIReview")}
+            </PrimaryBtn>
+            {/* Manual redo without a new intake: POST /skills/apply has no status gate —
+                the new run becomes latest and its output replaces the review. */}
+            <SecondaryBtn onClick={props.onRunSkill} busy={busy.runSkill}>
+              {t("nextStep.rerunSkill")}
+            </SecondaryBtn>
+          </>
+        );
+      }
       break;
 
     case "awaiting_validation_send":

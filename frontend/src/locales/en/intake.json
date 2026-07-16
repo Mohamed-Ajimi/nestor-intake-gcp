@@ -244,6 +244,7 @@
     "analyzingBody": "Nestor is analyzing your intake. This takes 90–120 seconds on average. You may leave this tab open.",
     "runSkillBody": "The client has submitted the intake. Run the intake skill to get Nestor's analysis and suggestions.",
     "runSkill": "Run intake skill",
+    "rerunSkill": "Re-run analysis",
     "reviewBody": "Nestor's analysis is ready. Review below and send to the client for validation.",
     "openAIReview": "Open AI review below",
     "validationSendBody": "Suggestions applied. Send the validation link to the client via email.",

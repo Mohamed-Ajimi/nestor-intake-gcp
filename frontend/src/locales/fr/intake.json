@@ -244,6 +244,7 @@
     "analyzingBody": "Nestor analyse votre intake. Cela prend en moyenne 90–120 secondes. Vous pouvez laisser cet onglet ouvert.",
     "runSkillBody": "Le client a soumis l'intake. Lancez la compétence d'intake pour obtenir l'analyse et les suggestions de Nestor.",
     "runSkill": "Lancer la compétence d'intake",
+    "rerunSkill": "Réanalyser",
     "reviewBody": "L'analyse de Nestor est prête. Passez-la en revue ci-dessous et envoyez-la au client pour validation.",
     "openAIReview": "Ouvrir la revue IA ci-dessous",
     "validationSendBody": "Suggestions appliquées. Envoyez le lien de validation au client par e-mail.",
