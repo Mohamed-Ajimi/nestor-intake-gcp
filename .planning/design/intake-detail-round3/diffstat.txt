@@ -1,0 +1,76 @@
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-01-draft.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-01-draft.html', LF will be replaced by CRLF the next time Git touches it
+ {pages => pulled}/pulse-intake-step-01-draft.html | 67 +++++++++++------------
+ 1 file changed, 32 insertions(+), 35 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-02-submitted.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-02-submitted.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-02-submitted.html            | 88 +++++++++++-----------
+ 1 file changed, 42 insertions(+), 46 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-03-skill-run-running.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-03-skill-run-running.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-03-skill-run-running.html    | 92 +++++++++++-----------
+ 1 file changed, 44 insertions(+), 48 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-04-ai-review.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-04-ai-review.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-04-ai-review.html            | 85 +++++++++++-----------
+ 1 file changed, 41 insertions(+), 44 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-05-ai-review-manual-edit.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-05-ai-review-manual-edit.html', LF will be replaced by CRLF the next time Git touches it
+ ...pulse-intake-step-05-ai-review-manual-edit.html | 85 +++++++++++-----------
+ 1 file changed, 41 insertions(+), 44 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-06-reviewed.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-06-reviewed.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-06-reviewed.html             | 104 ++++++++++-----------
+ 1 file changed, 50 insertions(+), 54 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-07-popup-recipient-picker.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-07-popup-recipient-picker.html', LF will be replaced by CRLF the next time Git touches it
+ ...ulse-intake-step-07-popup-recipient-picker.html | 104 ++++++++++-----------
+ 1 file changed, 50 insertions(+), 54 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-08-awaiting-client-validation.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-08-awaiting-client-validation.html', LF will be replaced by CRLF the next time Git touches it
+ ...-intake-step-08-awaiting-client-validation.html | 96 +++++++++++-----------
+ 1 file changed, 46 insertions(+), 50 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-09-validated.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-09-validated.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-09-validated.html            | 98 +++++++++++-----------
+ 1 file changed, 47 insertions(+), 51 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-10-context-pack-running.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-10-context-pack-running.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-10-context-pack-running.html | 102 ++++++++++-----------
+ 1 file changed, 49 insertions(+), 53 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-11-decomposed.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-11-decomposed.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-11-decomposed.html           | 115 ++++++++++-----------
+ 1 file changed, 56 insertions(+), 59 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-12-in-research.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-12-in-research.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-12-in-research.html          | 154 ++++++++++-----------
+ 1 file changed, 75 insertions(+), 79 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-13-report-upload.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-13-report-upload.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-13-report-upload.html        | 120 ++++++++++-----------
+ 1 file changed, 58 insertions(+), 62 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-14-results-send.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-14-results-send.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-14-results-send.html         | 129 ++++++++++-----------
+ 1 file changed, 63 insertions(+), 66 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-15-popup-recipient-picker-results.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-15-popup-recipient-picker-results.html', LF will be replaced by CRLF the next time Git touches it
+ ...ake-step-15-popup-recipient-picker-results.html | 129 ++++++++++-----------
+ 1 file changed, 63 insertions(+), 66 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-16-completed.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-16-completed.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-16-completed.html            | 121 ++++++++++-----------
+ 1 file changed, 59 insertions(+), 62 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-17-archived.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-17-archived.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-17-archived.html             | 109 ++++++++++-----------
+ 1 file changed, 53 insertions(+), 56 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-18-popup-archive-confirm.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-18-popup-archive-confirm.html', LF will be replaced by CRLF the next time Git touches it
+ ...pulse-intake-step-18-popup-archive-confirm.html | 121 ++++++++++-----------
+ 1 file changed, 59 insertions(+), 62 deletions(-)
+warning: in the working copy of '.planning/design/intake-detail-round3/pages/pulse-intake-step-19-edit-mode.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.planning/design/intake-detail-round3/pulled/pulse-intake-step-19-edit-mode.html', LF will be replaced by CRLF the next time Git touches it
+ .../pulse-intake-step-19-edit-mode.html            | 75 +++++++++++-----------
+ 1 file changed, 36 insertions(+), 39 deletions(-)
