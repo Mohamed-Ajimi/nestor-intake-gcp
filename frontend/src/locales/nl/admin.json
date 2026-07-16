@@ -75,6 +75,8 @@
     },
     "info": {
       "title": "Intake-info",
+      "openButton": "Intake-info",
+      "close": "Sluiten",
       "client": "Klant",
       "product": "Product",
       "status": "Status",

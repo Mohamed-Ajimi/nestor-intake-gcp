@@ -239,6 +239,7 @@
     "at": "at",
     "defaultTitle": "Next step",
     "awaitingSubmissionBody": "Client must fill in the intake. Send the intake link.",
+    "sendIntakeMail": "Send intake link via email",
     "copyIntakeLink": "Copy intake link",
     "analyzingBody": "Nestor is analyzing your intake. This takes 90–120 seconds on average. You may leave this tab open.",
     "runSkillBody": "The client has submitted the intake. Run the intake skill to get Nestor's analysis and suggestions.",
@@ -332,6 +333,8 @@
     "query": "Query:"
   },
   "recipients": {
+    "titleIntake": "send intake link",
+    "confirmIntake": "Send intake link",
     "titleValidation": "send validation link",
     "confirmValidation": "Send validation link",
     "titleReminder": "send reminder",

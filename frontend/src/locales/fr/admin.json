@@ -75,6 +75,8 @@
     },
     "info": {
       "title": "Infos intake",
+      "openButton": "Infos intake",
+      "close": "Fermer",
       "client": "Client",
       "product": "Produit",
       "status": "Statut",

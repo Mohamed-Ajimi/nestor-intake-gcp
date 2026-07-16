@@ -239,6 +239,7 @@
     "at": "om",
     "defaultTitle": "Volgende stap",
     "awaitingSubmissionBody": "Klant moet de intake invullen. Stuur de intake-link.",
+    "sendIntakeMail": "Verstuur intake-link via mail",
     "copyIntakeLink": "Kopieer intake-link",
     "analyzingBody": "Nestor analyseert je intake. Dit duurt gemiddeld 90–120 seconden. Je mag deze tab open laten.",
     "runSkillBody": "De klant heeft de intake ingediend. Run de intake-skill om Nestor's analyse en suggesties te krijgen.",
@@ -332,6 +333,8 @@
     "query": "Query:"
   },
   "recipients": {
+    "titleIntake": "intake-link versturen",
+    "confirmIntake": "Verstuur intake-link",
     "titleValidation": "validatie-link versturen",
     "confirmValidation": "Verstuur validatie-link",
     "titleReminder": "herinnering versturen",
