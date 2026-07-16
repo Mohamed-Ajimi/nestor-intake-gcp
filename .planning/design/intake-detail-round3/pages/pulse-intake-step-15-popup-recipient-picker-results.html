@@ -1,0 +1,971 @@
+<!-- @dsCard group="Intake stappen" -->
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Intake · Stap 15 — Popup: ontvangers resultaten-mail · Vandelay Industries BV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/tailwind.css">
+</head><body class="bg-background text-foreground font-sans">
+
+<!-- src: frontend/src/components/admin/ProductShell.tsx (ProductShell) — layout chrome wrapping admin.pulse → intake detail -->
+<!-- Onderliggende pagina = stap 14 (awaiting_results_send), gedimd onder de RecipientPicker-dialog -->
+<div class="flex min-h-screen bg-paper" aria-hidden="true">
+  <aside class="hidden w-64 shrink-0 flex-col border-r border-ink px-5 py-6 md:flex">
+    <a href="admin-home.html" class="font-mono text-[11px] uppercase tracking-wider text-ink/60 hover:text-ink">
+      ← Terug naar overzicht
+    </a>
+
+    <a href="admin-home.html" class="mt-6 block">
+      <!-- src: @/assets/agenic-logo.png -->
+      <div class="h-6 w-auto flex items-center font-serif text-lg lowercase tracking-tight text-ink">agenic</div>
+      <p class="mt-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/50">
+        Agenic ›
+      </p>
+      <p class="font-serif text-xl lowercase text-ink">
+        nestor pulse
+      </p>
+    </a>
+
+    <!-- src: frontend/src/components/admin/SpaceSwitcher.tsx (SpaceSwitcher) — superadmin space/client filter -->
+    <div class="mt-6">
+      <div class="flex flex-col gap-1">
+        <p class="label-mono text-ink/40">KLANT</p>
+        <button type="button" role="combobox" class="flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink">
+          <span class="truncate">Vandelay Industries BV</span>
+          <svg class="h-4 w-4 shrink-0 opacity-50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- src: frontend/src/components/LanguageSwitcher.tsx (LanguageSwitcher persist) -->
+    <div class="mt-4">
+      <button type="button" role="combobox" aria-label="Taal" class="flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink">
+        <span class="truncate">Nederlands</span>
+        <svg class="h-4 w-4 shrink-0 opacity-50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+      </button>
+    </div>
+
+    <nav class="mt-6 flex flex-col gap-1">
+      <!-- src: frontend/src/routes/admin.pulse.tsx (PulseLayout items) -->
+      <a href="pulse-intake-new.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        Nieuwe intake
+      </a>
+      <a href="pulse-intakes-list.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors bg-paper2 text-ink">
+        <span class="mark-green"></span>
+        Intakes
+      </a>
+      <a href="pulse-clients-list.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        Klanten
+      </a>
+      <a href="pulse-search.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        AI-zoek
+      </a>
+    </nav>
+
+    <!-- src: frontend/src/components/admin/adminNav.ts (ADMIN_NAV) — superadmin management section -->
+    <nav class="mt-8 flex flex-col gap-1 border-t border-ink/15 pt-4">
+      <p class="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/40">
+        Beheer
+      </p>
+      <a href="admin-users.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        gebruikers
+      </a>
+      <a href="admin-spaces.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        spaces
+      </a>
+      <a href="admin-templates.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        templates
+      </a>
+    </nav>
+
+    <div class="mt-auto border-t border-ink pt-4">
+      <p class="truncate text-sm font-medium text-ink">
+        yanick@agenic.be
+      </p>
+      <button onclick="location.href='auth-login.html'" class="mt-3 font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline">
+        Uitloggen
+      </button>
+    </div>
+  </aside>
+
+  <main class="flex-1 px-6 py-8 md:px-10 md:py-10">
+    <!-- src: frontend/src/routes/admin.pulse.intakes.$id.tsx (IntakeDetailPage) — status = delivered, rapport geüpload, results-link NOG NIET verstuurd (phase = awaiting_results_send) -->
+    <div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (sticky header) -->
+      <div class="sticky top-0 z-20 -mx-6 -mt-8 mb-6 border-b bg-paper/90 px-6 py-4 backdrop-blur md:-mx-10 md:-mt-10 md:px-10 border-ink/10">
+        <a href="pulse-intakes-list.html" class="inline-flex items-center gap-1 font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink">
+          <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Intakes
+        </a>
+        <div class="mt-1 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 class="font-serif text-2xl font-normal lowercase tracking-tight text-ink">Vandelay Industries BV — Marktonderzoek industriële verpakkingen</h1>
+            <p class="mt-0.5 text-xs text-ink/60">
+              Laatst bewerkt 26 minuten geleden
+              <span class="mx-2 text-ink/30">·</span>
+              Geleverd op 16 jul 2026
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-col">
+              <select class="border border-ink/30 bg-paper px-2.5 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:border-ink focus:outline-none">
+                <option>Concept</option>
+                <option>Ingediend</option>
+                <option>Gereviewd</option>
+                <option>Gevalideerd</option>
+                <option>Gedecomposeerd</option>
+                <option>In onderzoek</option>
+                <option selected>Geleverd</option>
+                <option>Gearchiveerd</option>
+              </select>
+            </div>
+            <!-- src: admin.pulse.intakes.$id.tsx (StatusPill status=delivered) -->
+            <span class="badge-ink">
+              GELEVERD
+            </span>
+            <button type="button" class="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90">
+              <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+              Bewerken
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- src: frontend/src/components/intake/NextStepBanner.tsx (NextStepBanner phase=awaiting_results_send) -->
+      <div class="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style="border-left-color: #FF2D87">
+        <div class="mb-2 font-mono text-[11px] uppercase tracking-wider" style="color: #FF2D87">
+          Volgende stap
+        </div>
+        <div class="mb-4 font-sans text-[15px] leading-relaxed text-ink">
+          Rapport geladen. Stuur de resultaten-link naar de klant.
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <!-- src: NextStepBanner.tsx (PrimaryBtn onSendResultsMail — opent RecipientPicker) -->
+          <button type="button" class="inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-50">
+            Verstuur resultaten-link via mail
+          </button>
+          <!-- src: NextStepBanner.tsx (SecondaryBtn onCopyResultsLink) -->
+          <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-50">
+            Kopieer resultaten-link
+          </button>
+        </div>
+      </div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (semantic search section — showSemanticSearch, nog geen query) -->
+      <section class="border border-ink/20 bg-paperLight p-4 mb-6">
+        <div class="font-mono text-[10px] uppercase tracking-wider text-ink/60 mb-2">
+          Zoek in research data (semantic)
+        </div>
+        <div class="flex gap-2">
+          <input type="text" placeholder="bv. 'klanten klagen over toegangscode' of 'pricing transparantie concurrenten'" class="flex-1 border border-ink/30 px-3 py-2 font-mono text-sm bg-paper">
+          <button type="button" class="font-mono text-xs uppercase tracking-wider bg-ink text-paperLight px-4 py-2 disabled:opacity-50">🔍 Zoek</button>
+        </div>
+      </section>
+
+      <!-- src: frontend/src/components/intake/IntakeWorkflowStepper.tsx (IntakeWorkflowStepper status=delivered — alle stappen done) -->
+      <div class="mb-6">
+        <div class="w-full">
+          <ol class="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-0">
+            <!-- step 0: submitted — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block"></div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">Klant ingediend</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">14 jul</p>
+              </div>
+            </li>
+            <!-- step 1: reviewed — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">Door jou gereviewd</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">15 jul</p>
+              </div>
+            </li>
+            <!-- step 2: validated_by_client — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">Klant gevalideerd</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">15 jul</p>
+              </div>
+            </li>
+            <!-- step 3: decomposed — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">Decompositie</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">15 jul</p>
+              </div>
+            </li>
+            <!-- step 4: in_research — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">In onderzoek</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">16 jul</p>
+              </div>
+            </li>
+            <!-- step 5: delivered — done -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full bg-ink"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink"></div>
+                <div class="hidden flex-1 sm:block"></div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/70">Geleverd</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">16 jul</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (statusBanner.delivered) -->
+      <div class="mb-6 border border-ink/10 bg-paper2 px-4 py-3 text-sm text-ink/70">
+        Geleverd aan klant.
+      </div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (main grid: nav aside + sections main) -->
+      <div class="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
+        <aside class="hidden lg:block">
+          <nav class="sticky top-28 space-y-1">
+            <p class="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
+              Secties
+            </p>
+            <a href="#sec-context" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors bg-paper2 text-ink">
+              <span class="nav-mark nav-mark-green"></span>
+              <span class="flex-1 break-words">Bedrijf &amp; context</span>
+            </a>
+            <a href="#sec-decision" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Beslissing &amp; doel</span>
+            </a>
+            <a href="#sec-questions" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Onderzoeksvragen</span>
+            </a>
+            <a href="#sec-scope" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Scope &amp; constraints</span>
+            </a>
+          </nav>
+        </aside>
+
+        <div class="min-w-0 space-y-10">
+          <!-- src: admin.pulse.intakes.$id.tsx (Intake-info section) -->
+          <section class="border border-ink/10 bg-paper p-6">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-ink/60">
+              Intake-info
+            </h2>
+            <dl class="mt-4">
+              <!-- src: admin.pulse.intakes.$id.tsx (Meta) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Klant</dt>
+                <dd class="font-sans text-ink"><a href="pulse-client-detail.html" class="text-ink hover:underline">Vandelay Industries BV</a></dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Product</dt>
+                <dd class="font-sans text-ink">pulse</dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Status</dt>
+                <dd class="font-sans text-ink">
+                  <span class="badge-ink">GELEVERD</span>
+                </dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Aangemaakt</dt>
+                <dd class="font-sans text-ink">10 jul 2026 om 09:14</dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Laatst bewerkt</dt>
+                <dd class="font-sans text-ink">16 jul 2026 om 15:12</dd>
+              </div>
+              <!-- src: admin.pulse.intakes.$id.tsx (Meta deliveredOn → DeliveredAtEditor — alleen bij delivered/archived) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Geleverd op</dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <input type="date" value="2026-07-16" class="border border-ink/30 bg-paper px-3 py-1.5 font-mono text-sm">
+                    </div>
+                    <p class="text-xs text-ink/50">De datum die de klant ziet op de resultaten-pagina.</p>
+                  </div>
+                </dd>
+              </div>
+              <!-- src: admin.pulse.intakes.$id.tsx (LinkRow initial intake link) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Initiële intake-link</dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <code title="https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e" class="max-w-full truncate rounded bg-paper2 px-2 py-1 font-mono text-xs text-ink/70 hover:bg-ink/10">https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e</code>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/10 hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Kopieer
+                      </button>
+                    </div>
+                    <p class="text-xs text-ink/40">Werkt zolang status = Concept</p>
+                  </div>
+                </dd>
+              </div>
+              <!-- src: admin.pulse.intakes.$id.tsx (LinkRow validation link) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Validatie-link</dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <code title="https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e" class="max-w-full truncate rounded bg-paper2 px-2 py-1 font-mono text-xs text-ink/70 hover:bg-ink/10">https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e</code>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/10 hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Kopieer
+                      </button>
+                    </div>
+                    <p class="text-xs text-ink/40">Zelfde pagina in validatie-modus (status = Beoordeeld)</p>
+                  </div>
+                </dd>
+              </div>
+              <!-- src: admin.pulse.intakes.$id.tsx (Meta validation — client_validated_at set) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Validatie</dt>
+                <dd class="font-sans text-ink"><span class="text-emerald-700">Klant heeft gevalideerd op 15 jul 2026 om 14:05</span></dd>
+              </div>
+              <!-- src: admin.pulse.intakes.$id.tsx (ResultsLinkRow) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">
+                  <span class="inline-flex items-center gap-1">Klant-resultaten-link
+                    <span class="cursor-help text-ink/40" title="Wat de klant ziet: één samengevat rapport (download) + vragen-overzicht + AI-zoek. Geen toegang tot raw research files of filenames.">ⓘ</span>
+                  </span>
+                </dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <code title="https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e/results" class="max-w-full truncate rounded bg-paper2 px-2 py-1 font-mono text-xs text-ink/70 hover:bg-ink/10">https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e/results</code>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Kopieer
+                      </button>
+                    </div>
+                    <p class="text-xs text-ink/40">Werkt zodra status = Geleverd</p>
+                  </div>
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <!-- AISkillsPanel niet zichtbaar: status in_research valt buiten VISIBLE_STATUSES (AISkillsPanel.tsx) -->
+
+          <!-- src: frontend/src/components/intake/ContextPackBlock.tsx (ContextPackBlock — pack gegenereerd, accent DFF940) -->
+          <div data-context-pack-block>
+            <div class="mb-6 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style="border-left-color: #DFF940">
+              <div class="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
+                Context Pack
+              </div>
+              <div class="mb-4 font-sans text-[15px] leading-relaxed text-ink">
+                Briefingdocument voor Nestor — destillaat van de gevalideerde intake in 11 secties (klant, beslissing, ankers, scope, concurrenten, hypotheses, …).
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60">Bekijk laatste</button>
+                <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60">Download PDF</button>
+                <button type="button" title="Pack opnieuw genereren — admin escape-hatch" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60">↻ Genereer opnieuw</button>
+              </div>
+              <div class="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink/40">
+                Laatst gegenereerd: 15 jul 2026 om 15:30 · context-pack-vandelay-verpakkingen.md · 14 kB
+              </div>
+
+              <!-- src: ContextPackBlock.tsx (questions accordion — 6 gevalideerde onderzoeksvragen) -->
+              <div class="mt-5 border-t border-ink/15 pt-4">
+                <div class="flex items-center justify-between gap-2">
+                  <button type="button" class="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/70 hover:text-ink">
+                    <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    Onderzoeksvragen (6)
+                  </button>
+                  <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60">
+                    <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Kopieer alle
+                  </button>
+                </div>
+                <ul class="mt-3 divide-y divide-ink/10 border border-ink/10 bg-paper">
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span class="inline-flex items-center border border-ink bg-agenic-yellow px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink">Ankervraag</span>
+                        <span>V1 · macro</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Wat is de omvang (in volume en waarde) van de Belgische markt voor herbruikbare food-grade transportverpakkingen in 2026, en wat is de verwachte CAGR tot 2030?</div>
+                    </div>
+                    <button type="button" title="Kopieer V1" aria-label="Kopieer V1" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span>V2 · micro</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Welke aanbieders (IFCO, Schoeller Allibert, Polymer Logistics) bieden herbruikbare food-grade verpakkingen aan in de Benelux, en hoe verhouden hun prijsmodellen zich per productsegment?</div>
+                    </div>
+                    <button type="button" title="Kopieer V2" aria-label="Kopieer V2" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span>V3 · regelgeving</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Welke herbruik-quota en eisen legt de EU-verpakkingsverordening (PPWR) tegen 2030 op aan transportverpakkingen in de foodsector, en wat betekent dat voor de businesscase per segment?</div>
+                    </div>
+                    <button type="button" title="Kopieer V3" aria-label="Kopieer V3" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span>V4 · financieel</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Welke terugverdientijd realiseren bestaande retoursystemen bij Belgische voedingsproducenten, en onder welk jaarvolume blijft die onder de 3 jaar?</div>
+                    </div>
+                    <button type="button" title="Kopieer V4" aria-label="Kopieer V4" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span>V5 · operationeel</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Welke operationele barrières (reiniging, hygiëne-certificering, retourlogistiek) remmen voedingsproducenten bij de omschakeling naar herbruikbare verpakkingen?</div>
+                    </div>
+                    <button type="button" title="Kopieer V5" aria-label="Kopieer V5" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                  <li class="flex items-start gap-3 px-4 py-3">
+                    <div class="flex-1">
+                      <div class="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                        <span>V6 · klantwaarde</span>
+                      </div>
+                      <div class="mt-1 font-sans text-sm text-ink">Welke prijspremie of besparing accepteren inkopers bij Belgische voedingsproducenten voor herbruikbare versus eenmalige verpakkingen?</div>
+                    </div>
+                    <button type="button" title="Kopieer V6" aria-label="Kopieer V6" class="shrink-0 border border-ink/20 p-1.5 text-ink/60 hover:bg-ink/5 hover:text-ink">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- src: ContextPackBlock.tsx (history accordion — collapsed) -->
+            <section class="mb-6 border border-ink/10 bg-paper">
+              <button type="button" class="flex w-full items-center justify-between px-6 py-3 text-left text-sm font-medium text-ink/70 hover:bg-ink/5">
+                <span class="flex items-center gap-2">
+                  <svg class="h-4 w-4" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  Eerdere context pack runs
+                  <span class="text-xs text-ink/60">(1)</span>
+                </span>
+              </button>
+            </section>
+          </div>
+
+          <!-- src: frontend/src/components/intake/FinalReportBlock.tsx (FinalReportBlock — rapport geüpload, accent DFF940) -->
+          <div data-final-report-block>
+            <section class="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style="border-left-color: #DFF940">
+              <div class="mb-2 font-mono text-[11px] uppercase tracking-wider">
+                <span class="text-ink/60">Volledig klant-rapport</span>
+              </div>
+              <p class="mb-3 font-sans text-[15px] leading-relaxed text-ink">
+                Eén samengevat rapport dat de klant downloadt via de portal. Upload de finale PDF (alle vragen in één document).
+              </p>
+              <div class="mb-3 font-sans text-sm text-ink">
+                Huidig rapport: <strong>eindrapport-vandelay-marktonderzoek-verpakkingen.pdf</strong><span class="text-ink/60"> · 3.7 MB · geüpload 16 jul 2026 om 15:12</span>
+              </div>
+              <!-- src: FinalReportBlock.tsx (dropzone — rapport aanwezig: vervang/bekijk/verwijder) -->
+              <div class="border border-dashed p-3 transition-colors border-ink/30 bg-transparent hover:bg-ink/5">
+                <div class="flex flex-wrap items-center gap-2">
+                  <button type="button" class="inline-flex items-center gap-1.5 bg-ink px-3 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/80 disabled:opacity-50">
+                    <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Vervang rapport
+                  </button>
+                  <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paperLight px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                    <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Bekijk
+                  </button>
+                  <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paperLight px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-50">
+                    Verwijder
+                  </button>
+                  <span class="ml-1 font-mono text-xs uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- src: frontend/src/components/intake/ResearchArtifacts.tsx (ResearchArtifactsBlock → ResearchArtifactsInner) -->
+          <section class="border border-ink bg-paperLight p-6">
+            <div class="mb-4 flex items-center justify-between">
+              <h2 class="font-mono text-xs uppercase tracking-wider text-ink">
+                Research artifacts
+              </h2>
+            </div>
+            <div class="space-y-6">
+              <!-- src: ResearchArtifacts.tsx (QuestionBlock V1 — ankervraag, 1 manueel artifact) -->
+              <div>
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">
+                    <span class="inline-flex items-center border border-ink bg-agenic-yellow px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink">Ankervraag</span>
+                    V1
+                  </span>
+                  <p class="mt-1 font-sans text-ink">Wat is de omvang (in volume en waarde) van de Belgische markt voor herbruikbare food-grade transportverpakkingen in 2026, en wat is de verwachte CAGR tot 2030?</p>
+                </div>
+                <!-- src: ResearchArtifacts.tsx (ResearchArtifactsPerSource — geen automatische artifacts) -->
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <!-- src: ResearchArtifacts.tsx (dropzone) -->
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+                <!-- src: ResearchArtifacts.tsx (ArtifactRow — geüpload artifact) -->
+                <ul class="mt-3 divide-y divide-ink/10 border border-ink/20 bg-paper">
+                  <li class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                    <svg class="h-4 w-4 text-ink/60" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    <span class="font-sans text-ink">marktanalyse-benelux-herbruikbare-verpakkingen.md</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/60">· manual</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">· deep_research</span>
+                    <span class="text-xs text-ink/60">· 16 jul 09:12</span>
+                    <span class="text-xs text-ink/40">· 48 KB</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink">Geïndexeerd</span>
+                    <span class="ml-auto flex items-center gap-1">
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Open
+                      </button>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Verwijder
+                      </button>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- QuestionBlock V2 — 1 manueel artifact -->
+              <div class="border-t border-ink/20 pt-6">
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">V2</span>
+                  <p class="mt-1 font-sans text-ink">Welke aanbieders (IFCO, Schoeller Allibert, Polymer Logistics) bieden herbruikbare food-grade verpakkingen aan in de Benelux, en hoe verhouden hun prijsmodellen zich per productsegment?</p>
+                </div>
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+                <ul class="mt-3 divide-y divide-ink/10 border border-ink/20 bg-paper">
+                  <li class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                    <svg class="h-4 w-4 text-ink/60" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    <span class="font-sans text-ink">concurrentie-overzicht-ifco-schoeller-polymer.md</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/60">· manual</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">· deep_research</span>
+                    <span class="text-xs text-ink/60">· 16 jul 11:47</span>
+                    <span class="text-xs text-ink/40">· 36 KB</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink">Geïndexeerd</span>
+                    <span class="ml-auto flex items-center gap-1">
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Open
+                      </button>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Verwijder
+                      </button>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- QuestionBlock V3 — 1 manueel artifact -->
+              <div class="border-t border-ink/20 pt-6">
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">V3</span>
+                  <p class="mt-1 font-sans text-ink">Welke herbruik-quota en eisen legt de EU-verpakkingsverordening (PPWR) tegen 2030 op aan transportverpakkingen in de foodsector, en wat betekent dat voor de businesscase per segment?</p>
+                </div>
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+                <ul class="mt-3 divide-y divide-ink/10 border border-ink/20 bg-paper">
+                  <li class="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                    <svg class="h-4 w-4 text-ink/60" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    <span class="font-sans text-ink">ppwr-regelgeving-impact-2030.md</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/60">· manual</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">· deep_research</span>
+                    <span class="text-xs text-ink/60">· 16 jul 13:05</span>
+                    <span class="text-xs text-ink/40">· 22 KB</span>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink">Geïndexeerd</span>
+                    <span class="ml-auto flex items-center gap-1">
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Open
+                      </button>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/30 bg-paper px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        Verwijder
+                      </button>
+                    </span>
+                  </li>
+                </ul>
+              </div>
+
+              <!-- QuestionBlock V4 — nog geen artifacts -->
+              <div class="border-t border-ink/20 pt-6">
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">V4</span>
+                  <p class="mt-1 font-sans text-ink">Welke terugverdientijd realiseren bestaande retoursystemen bij Belgische voedingsproducenten, en onder welk jaarvolume blijft die onder de 3 jaar?</p>
+                </div>
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- QuestionBlock V5 — nog geen artifacts -->
+              <div class="border-t border-ink/20 pt-6">
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">V5</span>
+                  <p class="mt-1 font-sans text-ink">Welke operationele barrières (reiniging, hygiëne-certificering, retourlogistiek) remmen voedingsproducenten bij de omschakeling naar herbruikbare verpakkingen?</p>
+                </div>
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- QuestionBlock V6 — nog geen artifacts -->
+              <div class="border-t border-ink/20 pt-6">
+                <div class="mb-2 font-sans text-sm text-ink">
+                  <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">V6</span>
+                  <p class="mt-1 font-sans text-ink">Welke prijspremie of besparing accepteren inkopers bij Belgische voedingsproducenten voor herbruikbare versus eenmalige verpakkingen?</p>
+                </div>
+                <div class="mt-4 mb-4">
+                  <div class="mb-2 font-mono text-[10px] uppercase tracking-wider text-ink/60">Research artifacts</div>
+                  <p class="mb-3 text-xs italic text-ink/40">Nog geen automatische artifacts. Start de research via de knop bovenaan.</p>
+                </div>
+                <div class="border border-dashed border-ink/40 bg-paper p-3">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                      Upload bestanden
+                    </button>
+                    <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                      <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                      Manuele notitie
+                    </button>
+                    <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- src: ResearchArtifacts.tsx (Algemeen — intake-brede uploads) -->
+              <div class="mt-6 border-t-2 border-ink/20 pt-6">
+                <div class="mb-2">
+                  <span class="font-mono text-xs uppercase tracking-wider text-ink/60">Algemeen</span>
+                  <p class="mt-1 max-w-3xl text-sm text-ink/60">Research die niet aan één specifieke vraag hoort — API-zoekresultaten, brede marktrapporten, geo-data, bronnen die over meerdere vragen heen relevant zijn.</p>
+                </div>
+                <div>
+                  <div class="mb-2 font-sans text-sm text-ink">
+                    <span class="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink/60">Algemeen</span>
+                    <p class="mt-1 text-ink/60">Voor intake-brede uploads.</p>
+                  </div>
+                  <div class="border border-dashed border-ink/40 bg-paper p-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Upload bestanden
+                      </button>
+                      <button type="button" class="inline-flex items-center gap-1.5 border border-ink bg-paper px-2.5 py-1 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M15 3v6h6"/></svg>
+                        Manuele notitie
+                      </button>
+                      <span class="font-mono text-[10px] uppercase tracking-wider text-ink/40">of sleep &amp; drop hier</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- src: admin.pulse.intakes.$id.tsx (section render loop, read mode) — SECTION 1: Bedrijf & context -->
+          <section id="sec-context" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Bedrijf &amp; context</h2>
+            <p class="mb-4 font-sans text-sm text-ink/60">Wie zijn jullie en in welke context speelt deze beslissing?</p>
+            <dl class="mt-3">
+              <!-- src: FieldDisplay.tsx (FieldDisplay type=text) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Bedrijfsnaam</dt>
+                <dd class="font-sans text-ink"><div><span>Vandelay Industries BV</span></div></dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Contactpersoon</dt>
+                <dd class="font-sans text-ink"><div><span>Els Vermeulen — Head of Product</span></div></dd>
+              </div>
+              <!-- src: FieldDisplay.tsx (FieldDisplay type=longtext) — reviewwaarde (manueel aangepast) is nu de definitieve waarde -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Bedrijfsintro</dt>
+                <dd class="font-sans text-ink"><div><p class="whitespace-pre-wrap">Vandelay Industries BV is een B2B-fabrikant van hoogwaardige industriële verpakkingen (food-grade en farma-conform), actief in de Benelux sinds 1998, met een productiesite in Herentals en 140 medewerkers.</p></div></dd>
+              </div>
+            </dl>
+          </section>
+
+          <!-- SECTION 2: Beslissing & doel -->
+          <section id="sec-decision" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Beslissing &amp; doel</h2>
+            <dl class="mt-3">
+              <!-- Nestor-voorstel toegepast tijdens review — definitieve waarde -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Beslissing of doel</dt>
+                <dd class="font-sans text-ink"><div><p class="whitespace-pre-wrap">Bepalen of Vandelay binnen 18 maanden een herbruikbaar verpakkingssysteem moet lanceren voor de Belgische foodsector — en zo ja, voor welke productsegmenten de terugverdientijd onder 3 jaar blijft.</p></div></dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Doelgroep</dt>
+                <dd class="font-sans text-ink"><div><p class="whitespace-pre-wrap">Inkopers, operations- en kwaliteitsverantwoordelijken bij Belgische voedingsproducenten (50–500 medewerkers).</p></div></dd>
+              </div>
+            </dl>
+          </section>
+
+          <!-- SECTION 3: Onderzoeksvragen — 6 gevalideerde vragen -->
+          <section id="sec-questions" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Onderzoeksvragen</h2>
+            <dl class="mt-3">
+              <!-- src: FieldDisplay.tsx (FieldDisplay type=list) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Onderzoeksvragen</dt>
+                <dd class="font-sans text-ink">
+                  <div>
+                    <div class="space-y-4">
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V1.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Wat is de omvang (in volume en waarde) van de Belgische markt voor herbruikbare food-grade transportverpakkingen in 2026, en wat is de verwachte CAGR tot 2030?</div></div>
+                      </div>
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V2.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Welke aanbieders (IFCO, Schoeller Allibert, Polymer Logistics) bieden herbruikbare food-grade verpakkingen aan in de Benelux, en hoe verhouden hun prijsmodellen zich per productsegment?</div></div>
+                      </div>
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V3.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Welke herbruik-quota en eisen legt de EU-verpakkingsverordening (PPWR) tegen 2030 op aan transportverpakkingen in de foodsector, en wat betekent dat voor de businesscase per segment?</div></div>
+                      </div>
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V4.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Welke terugverdientijd realiseren bestaande retoursystemen bij Belgische voedingsproducenten, en onder welk jaarvolume blijft die onder de 3 jaar?</div></div>
+                      </div>
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V5.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Welke operationele barrières (reiniging, hygiëne-certificering, retourlogistiek) remmen voedingsproducenten bij de omschakeling naar herbruikbare verpakkingen?</div></div>
+                      </div>
+                      <div class="flex gap-3">
+                        <span class="font-mono text-xs uppercase tracking-wider text-ink/60 pt-0.5">V6.</span>
+                        <div class="flex-1 space-y-1"><div class="font-sans text-ink">Welke prijspremie of besparing accepteren inkopers bij Belgische voedingsproducenten voor herbruikbare versus eenmalige verpakkingen?</div></div>
+                      </div>
+                    </div>
+                  </div>
+                </dd>
+              </div>
+            </dl>
+          </section>
+
+          <!-- SECTION 4: Scope & constraints — proposal_list in read mode -->
+          <section id="sec-scope" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Scope &amp; constraints</h2>
+            <dl class="mt-3">
+              <!-- src: FieldDisplay.tsx (FieldDisplay type=proposal_list) -->
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Extra vragen — voorstel Nestor</dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-4">
+                    <div class="flex items-start gap-3">
+                      <div class="mt-1 h-3 w-3 flex-shrink-0 border border-ink bg-ink">
+                        <svg class="h-full w-full text-paper" viewBox="0 0 12 12"><path d="M2 6 L5 9 L10 3" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+                      </div>
+                      <div class="flex-1 space-y-1">
+                        <div class="font-sans text-ink">Welke wet- en regelgeving (EU-verpakkingsverordening PPWR) beïnvloedt de haalbaarheid van herbruikbare verpakkingen?</div>
+                        <div class="font-sans text-sm italic text-ink/60">De PPWR legt herbruik-quota op vanaf 2030 — dit raakt direct de businesscase.</div>
+                        <div class="font-mono text-xs uppercase tracking-wider"><span class="text-ink/70">OPGENOMEN IN RESEARCH</span></div>
+                      </div>
+                    </div>
+                    <div class="flex items-start gap-3">
+                      <div class="mt-1 h-3 w-3 flex-shrink-0 border border-ink bg-paper"></div>
+                      <div class="flex-1 space-y-1">
+                        <div class="font-sans text-ink">Welke retoursystemen en wasinfrastructuur zijn nodig voor een gesloten verpakkingskringloop?</div>
+                        <div class="font-sans text-sm italic text-ink/60">Operationeel cruciaal maar mogelijk te gedetailleerd voor de eerste onderzoeksronde.</div>
+                        <div class="font-mono text-xs uppercase tracking-wider"><span class="text-ink/40">NIET OPGENOMEN</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </dd>
+              </div>
+            </dl>
+          </section>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- src: frontend/src/components/intake/RecipientPicker.tsx (RecipientPicker type="results") — shadcn Dialog vertaald naar statische markup -->
+<div class="fixed inset-0 bg-ink/40 z-50"></div>
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+  <div role="dialog" aria-modal="true" aria-labelledby="recipient-picker-title" class="relative grid w-full max-w-[520px] gap-4 border border-ink bg-paper p-6 shadow-lg">
+    <!-- src: RecipientPicker.tsx (DialogHeader / DialogTitle — recipients.titleResults) -->
+    <div class="flex flex-col space-y-1.5 text-left">
+      <h2 id="recipient-picker-title" class="font-serif text-2xl font-normal lowercase text-ink">resultaten-link versturen</h2>
+    </div>
+
+    <div class="grid gap-4 py-2">
+      <p class="font-mono text-[11px] uppercase tracking-wider text-ink/70">Ontvangers</p>
+      <!-- src: RecipientPicker.tsx (member checkbox rows — alle actieve leden vooraf aangevinkt, D-07) -->
+      <div class="grid gap-2">
+        <label class="flex cursor-pointer items-center gap-3 border border-ink/20 bg-paper px-3 py-2 hover:bg-ink/5">
+          <span role="checkbox" aria-checked="true" class="flex h-4 w-4 shrink-0 items-center justify-center border border-ink bg-ink text-paper">
+            <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+          <!-- PROPOSED: e-mailadres naast naam getoond voor duidelijkheid (bron toont enkel naam of e-mail) -->
+          <span class="font-sans text-sm text-ink">Els Vermeulen <span class="text-ink/50">· els.vermeulen@vandelay.be</span></span>
+        </label>
+        <label class="flex cursor-pointer items-center gap-3 border border-ink/20 bg-paper px-3 py-2 hover:bg-ink/5">
+          <span role="checkbox" aria-checked="true" class="flex h-4 w-4 shrink-0 items-center justify-center border border-ink bg-ink text-paper">
+            <svg class="h-3 w-3" stroke="currentColor" fill="none" stroke-width="3" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+          <span class="font-sans text-sm text-ink">Karel De Smet <span class="text-ink/50">· karel.desmet@vandelay.be</span></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- src: RecipientPicker.tsx (DialogFooter — ghost cancel + primary confirm, recipients.confirmResults) -->
+    <div class="flex flex-row justify-end gap-2">
+      <button type="button" class="px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5">
+        Annuleren
+      </button>
+      <button type="button" class="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-50">
+        Verstuur resultaten-link
+      </button>
+    </div>
+
+    <!-- src: components/ui/dialog.tsx (DialogClose) -->
+    <button type="button" aria-label="Sluiten" class="absolute right-4 top-4 text-ink/60 opacity-70 hover:opacity-100">
+      <svg class="h-4 w-4" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+</div>
+
+</body></html>

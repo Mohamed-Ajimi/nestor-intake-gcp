@@ -1,0 +1,539 @@
+<!-- @dsCard group="Intake stappen" -->
+<!DOCTYPE html>
+<html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Intake · Stap 19 — Bewerken · Vandelay Industries BV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/tailwind.css">
+</head><body class="bg-background text-foreground font-sans">
+
+<!-- src: frontend/src/components/admin/ProductShell.tsx (ProductShell) — layout chrome wrapping admin.pulse → intake detail -->
+<div class="flex min-h-screen bg-paper">
+  <aside class="hidden w-64 shrink-0 flex-col border-r border-ink px-5 py-6 md:flex">
+    <a href="admin-home.html" class="font-mono text-[11px] uppercase tracking-wider text-ink/60 hover:text-ink">
+      ← Terug naar overzicht
+    </a>
+
+    <a href="admin-home.html" class="mt-6 block">
+      <!-- src: @/assets/agenic-logo.png -->
+      <div class="h-6 w-auto flex items-center font-serif text-lg lowercase tracking-tight text-ink">agenic</div>
+      <p class="mt-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/50">
+        Agenic ›
+      </p>
+      <p class="font-serif text-xl lowercase text-ink">
+        nestor pulse
+      </p>
+    </a>
+
+    <!-- src: frontend/src/components/admin/SpaceSwitcher.tsx (SpaceSwitcher) — superadmin space/client filter -->
+    <div class="mt-6">
+      <div class="flex flex-col gap-1">
+        <p class="label-mono text-ink/40">KLANT</p>
+        <button type="button" role="combobox" class="flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink">
+          <span class="truncate">Vandelay Industries BV</span>
+          <svg class="h-4 w-4 shrink-0 opacity-50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- src: frontend/src/components/LanguageSwitcher.tsx (LanguageSwitcher persist) -->
+    <div class="mt-4">
+      <button type="button" role="combobox" aria-label="Taal" class="flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 font-mono text-xs uppercase tracking-wider text-ink">
+        <span class="truncate">Nederlands</span>
+        <svg class="h-4 w-4 shrink-0 opacity-50" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+      </button>
+    </div>
+
+    <nav class="mt-6 flex flex-col gap-1">
+      <!-- src: frontend/src/routes/admin.pulse.tsx (PulseLayout items) -->
+      <a href="pulse-intake-new.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        Nieuwe intake
+      </a>
+      <a href="pulse-intakes-list.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors bg-paper2 text-ink">
+        <span class="mark-green"></span>
+        Intakes
+      </a>
+      <a href="pulse-clients-list.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        Klanten
+      </a>
+      <a href="pulse-search.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        AI-zoek
+      </a>
+    </nav>
+
+    <!-- src: frontend/src/components/admin/adminNav.ts (ADMIN_NAV) — superadmin management section -->
+    <nav class="mt-8 flex flex-col gap-1 border-t border-ink/15 pt-4">
+      <p class="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/40">
+        Beheer
+      </p>
+      <a href="admin-users.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        gebruikers
+      </a>
+      <a href="admin-spaces.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        spaces
+      </a>
+      <a href="admin-templates.html" class="flex items-center gap-3 px-3 py-2 font-mono text-xs uppercase tracking-wider transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+        <span class="mark-outline"></span>
+        templates
+      </a>
+    </nav>
+
+    <div class="mt-auto border-t border-ink pt-4">
+      <p class="truncate text-sm font-medium text-ink">
+        yanick@agenic.be
+      </p>
+      <button onclick="location.href='auth-login.html'" class="mt-3 font-mono text-xs uppercase tracking-wider text-ink/60 underline-offset-2 hover:text-ink hover:underline">
+        Uitloggen
+      </button>
+    </div>
+  </aside>
+
+  <main class="flex-1 px-6 py-8 md:px-10 md:py-10">
+    <!-- src: frontend/src/routes/admin.pulse.intakes.$id.tsx (IntakeDetailPage) — status=submitted, editMode=true (draft + FieldRenderer + WR-04 deferred file delete) -->
+    <div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (sticky header — editMode: border-ink border-b-2, Opslaan/Annuleren i.p.v. Bewerken) -->
+      <div class="sticky top-0 z-20 -mx-6 -mt-8 mb-6 border-b bg-paper/90 px-6 py-4 backdrop-blur md:-mx-10 md:-mt-10 md:px-10 border-ink border-b-2">
+        <a href="pulse-intakes-list.html" class="inline-flex items-center gap-1 font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink">
+          <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Intakes
+        </a>
+        <div class="mt-1 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 class="font-serif text-2xl font-normal lowercase tracking-tight text-ink">Vandelay Industries BV — Marktonderzoek industriële verpakkingen</h1>
+            <p class="mt-0.5 text-xs text-ink/60">
+              Laatst bewerkt ongeveer 18 uur geleden
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-col">
+              <select class="border border-ink/30 bg-paper px-2.5 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:border-ink focus:outline-none">
+                <option>Concept</option>
+                <option selected>Ingediend</option>
+                <option>Gereviewd</option>
+                <option>Gevalideerd</option>
+                <option>Gedecomposeerd</option>
+                <option>In onderzoek</option>
+                <option>Geleverd</option>
+                <option>Gearchiveerd</option>
+              </select>
+            </div>
+            <!-- src: admin.pulse.intakes.$id.tsx (StatusPill status=submitted) -->
+            <span class="badge-ink">
+              <span class="mark-ink"></span>
+              INGEDIEND
+            </span>
+            <!-- src: admin.pulse.intakes.$id.tsx (editMode actions: Annuleren + Opslaan) -->
+            <button type="button" class="inline-flex items-center gap-1.5 border border-ink/10 bg-paper px-3 py-1.5 text-xs font-medium text-ink/70 hover:bg-ink/5">
+              <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              Annuleren
+            </button>
+            <button type="button" class="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80 disabled:opacity-50">
+              <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Opslaan
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- src: frontend/src/components/intake/NextStepBanner.tsx (NextStepBanner phase=awaiting_skill_run — blijft zichtbaar in edit mode) -->
+      <div class="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style="border-left-color: #FF2D87">
+        <div class="mb-2 font-mono text-[11px] uppercase tracking-wider" style="color: #FF2D87">
+          Volgende stap
+        </div>
+        <div class="mb-4 font-sans text-[15px] leading-relaxed text-ink">
+          De klant heeft de intake ingediend. Run de intake-skill om Nestor's analyse en suggesties te krijgen.
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-50">
+            Run intake-skill
+          </button>
+        </div>
+      </div>
+
+      <!-- src: frontend/src/components/intake/IntakeWorkflowStepper.tsx (IntakeWorkflowStepper status=submitted) -->
+      <div class="mb-6">
+        <div class="w-full">
+          <ol class="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-0">
+            <!-- step 0: submitted — current -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block"></div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors bg-agenic-green border border-ink" aria-current="step"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink">Klant ingediend</p>
+                <p class="mt-0.5 font-mono text-[10px] text-ink/40">14 jul</p>
+              </div>
+            </li>
+            <!-- step 1: reviewed — future -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors border border-ink bg-transparent"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/40">Door jou gereviewd</p>
+              </div>
+            </li>
+            <!-- step 2: validated_by_client — future -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors border border-ink bg-transparent"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/40">Klant gevalideerd</p>
+              </div>
+            </li>
+            <!-- step 3: decomposed — future -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors border border-ink bg-transparent"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/40">Decompositie</p>
+              </div>
+            </li>
+            <!-- step 4: in_research — future -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors border border-ink bg-transparent"></div>
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/40">In onderzoek</p>
+              </div>
+            </li>
+            <!-- step 5: delivered — future -->
+            <li class="flex flex-1 items-start gap-3 sm:flex-col sm:items-center sm:gap-0">
+              <div class="flex w-full items-center sm:flex-col">
+                <div class="hidden flex-1 sm:block">
+                  <div class="h-px w-full border-t border-dashed border-ink/10 bg-transparent"></div>
+                </div>
+                <div class="relative flex h-3 w-3 shrink-0 items-center justify-center transition-colors border border-ink bg-transparent"></div>
+                <div class="hidden flex-1 sm:block"></div>
+              </div>
+              <div class="min-w-0 sm:mt-2 sm:px-1 sm:text-center">
+                <p class="font-mono text-[10px] uppercase tracking-wider leading-tight text-ink/40">Geleverd</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (editMode banner) -->
+      <div class="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
+        <div class="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
+          BEWERKEN
+        </div>
+        <div class="text-ink font-sans">
+          Wijzigingen zijn niet opgeslagen tot je op Opslaan klikt.
+        </div>
+      </div>
+
+      <!-- src: admin.pulse.intakes.$id.tsx (main grid: nav aside + sections main) -->
+      <div class="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
+        <aside class="hidden lg:block">
+          <nav class="sticky top-28 space-y-1">
+            <p class="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
+              Secties
+            </p>
+            <a href="#sec-context" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors bg-paper2 text-ink">
+              <span class="nav-mark nav-mark-green"></span>
+              <span class="flex-1 break-words">Bedrijf &amp; context</span>
+            </a>
+            <!-- dirty-sectie indicator: sectie bevat een gewijzigd veld in de draft (visualisatie van changedKeys) -->
+            <a href="#sec-decision" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Beslissing &amp; doel</span>
+              <span class="border border-ink bg-agenic-yellow px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-ink">Gewijzigd</span>
+            </a>
+            <a href="#sec-questions" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Onderzoeksvragen</span>
+            </a>
+            <a href="#sec-scope" class="flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors text-ink/60 hover:bg-ink/5 hover:text-ink">
+              <span class="nav-mark nav-mark-ink"></span>
+              <span class="flex-1 break-words">Scope &amp; constraints</span>
+            </a>
+          </nav>
+        </aside>
+
+        <div class="min-w-0 space-y-10">
+          <!-- src: admin.pulse.intakes.$id.tsx (Intake-info section) -->
+          <section class="border border-ink/10 bg-paper p-6">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-ink/60">
+              Intake-info
+            </h2>
+            <dl class="mt-4">
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Klant</dt>
+                <dd class="font-sans text-ink"><a href="pulse-client-detail.html" class="text-ink hover:underline">Vandelay Industries BV</a></dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Product</dt>
+                <dd class="font-sans text-ink">pulse</dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Status</dt>
+                <dd class="font-sans text-ink">
+                  <span class="badge-ink"><span class="mark-ink"></span>INGEDIEND</span>
+                </dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Aangemaakt</dt>
+                <dd class="font-sans text-ink">10 jul 2026 om 09:14</dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Laatst bewerkt</dt>
+                <dd class="font-sans text-ink">14 jul 2026 om 16:32</dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Initiële intake-link</dt>
+                <dd class="font-sans text-ink">
+                  <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <code title="https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e" class="max-w-full truncate rounded bg-paper2 px-2 py-1 font-mono text-xs text-ink/70 hover:bg-ink/10">https://nestor-frontend-1055853212188.europe-west1.run.app/intake/6f6cb1e3-8d24-4a5a-9f01-c2b8a4a51f4e</code>
+                      <button type="button" class="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/10 hover:bg-ink/5">
+                        <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Kopieer
+                      </button>
+                    </div>
+                    <p class="text-xs text-ink/40">Werkt zolang status = Concept</p>
+                  </div>
+                </dd>
+              </div>
+              <div class="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
+                <dt class="font-sans text-sm font-normal text-ink/70">Validatie</dt>
+                <dd class="font-sans text-ink"><span class="text-ink/60">Nog niet gevalideerd</span></dd>
+              </div>
+            </dl>
+          </section>
+
+          <!-- src: frontend/src/components/intake/AISkillsPanel.tsx (AISkillsPanel — blijft gemount in edit mode, status=submitted) -->
+          <div class="mb-6 border border-ink/30 border-l-4 bg-paperLight px-6 py-5" style="border-left-color: #DFF940">
+            <div class="mb-2 flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
+              <svg class="h-3.5 w-3.5" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+              AI-verrijking
+            </div>
+            <div class="mb-4 font-sans text-[15px] leading-relaxed text-ink">
+              Draai de losse AI-skills over deze intake — structureren, inzichten extraheren en embeddings genereren voor semantisch zoeken. Elke run draait op de achtergrond.
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60 disabled:hover:border">Structureer antwoorden</button>
+              <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60 disabled:hover:border">Extraheer inzichten</button>
+              <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60 disabled:hover:border">Genereer embeddings</button>
+              <button type="button" class="inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60 disabled:hover:border">Transcribeer kickoff-call-vandelay-20260710.mp3</button>
+            </div>
+            <p class="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink/40">
+              Voortgang verschijnt in het skill-run-overzicht.
+            </p>
+          </div>
+
+          <!-- src: admin.pulse.intakes.$id.tsx (section render loop, editMode → FieldRenderer per veld) -->
+          <!-- SECTION 1: Bedrijf & context -->
+          <section id="sec-context" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Bedrijf &amp; context</h2>
+            <p class="mb-4 font-sans text-sm text-ink/60">Wie zijn jullie en in welke context speelt deze beslissing?</p>
+            <div class="mt-4 space-y-6">
+              <!-- src: FieldRenderer.tsx (FieldControl type=text) -->
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Bedrijfsnaam<span class="ml-1 text-red-600">*</span></label>
+                  </div>
+                  <input type="text" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60" value="Vandelay Industries BV">
+                </div>
+              </div>
+              <!-- src: FieldRenderer.tsx (FieldControl type=text) -->
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Contactpersoon<span class="ml-1 text-red-600">*</span></label>
+                  </div>
+                  <input type="text" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60" value="Els Vermeulen — Head of Product">
+                </div>
+              </div>
+              <!-- src: FieldRenderer.tsx (FieldControl type=longtext, resize-y) -->
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Bedrijfsintro</label>
+                    <p class="mt-1 text-xs text-ink/60">Kort: wat doen jullie, voor wie, sinds wanneer?</p>
+                  </div>
+                  <textarea rows="4" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60 resize-y">Wij produceren industriële verpakkingen voor de voedings- en farmasector, actief in de Benelux sinds 1998.</textarea>
+                </div>
+              </div>
+              <!-- src: FieldRenderer.tsx (FileControl multi=true, edit mode) + WR-04 deferred delete (onDeferRemove) -->
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Documenten</label>
+                    <p class="mt-1 text-xs text-ink/60">Jaarrapporten, catalogi of andere context (PDF, max 25MB per bestand).</p>
+                  </div>
+                  <div class="space-y-2">
+                    <ul class="space-y-1">
+                      <li class="flex items-center justify-between border border-ink/10 bg-paper px-3 py-2 text-sm">
+                        <span class="truncate text-ink/70">jaarrapport-2025.pdf <span class="text-ink/40">· 2,4 MB</span></span>
+                        <button type="button" class="ml-3 text-xs text-ink/40 hover:text-red-600">Verwijderen</button>
+                      </li>
+                      <!-- WR-04: bestand gemarkeerd voor uitgestelde verwijdering — delete vuurt pas ná succesvol Opslaan; Annuleren laat het object intact -->
+                      <li class="flex items-center justify-between border border-dashed border-ink/30 bg-paper2/50 px-3 py-2 text-sm">
+                        <span class="truncate text-ink/40 line-through">productcatalogus-verpakkingen.pdf · 8,1 MB</span>
+                        <span class="ml-3 flex shrink-0 items-center gap-2">
+                          <span class="font-mono text-[10px] uppercase tracking-wider text-ink/50">wordt verwijderd bij opslaan</span>
+                          <button type="button" class="text-xs font-medium text-ink underline underline-offset-2 hover:text-ink/70">Herstel</button>
+                        </span>
+                      </li>
+                    </ul>
+                    <div>
+                      <label class="flex cursor-pointer items-center justify-center border-2 border-dashed border-ink/10 bg-paper2/50 px-4 py-6 text-sm font-medium text-ink/60 hover:border-ink/30 hover:text-ink">
+                        Bestand kiezen — of sleep &amp; drop hier
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- src: FieldRenderer.tsx (FileControl audio-category, single) -->
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Kickoff-call opname</label>
+                    <p class="mt-1 text-xs text-ink/60">Audio-opname van het intakegesprek (.mp3, .m4a, .wav).</p>
+                  </div>
+                  <div class="space-y-2">
+                    <ul class="space-y-1">
+                      <li class="flex items-center justify-between border border-ink/10 bg-paper px-3 py-2 text-sm">
+                        <span class="truncate text-ink/70">kickoff-call-vandelay-20260710.mp3 <span class="text-ink/40">· 12:34 · 11,8 MB</span></span>
+                        <button type="button" class="ml-3 text-xs text-ink/40 hover:text-red-600">Verwijderen</button>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION 2: Beslissing & doel — bevat het gewijzigde veld (changedKeys → gele markering) -->
+          <section id="sec-decision" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Beslissing &amp; doel</h2>
+            <div class="mt-4 space-y-6">
+              <!-- src: admin.pulse.intakes.$id.tsx (changed field wrapper + "Gewijzigd" badge) -->
+              <div class="p-3 -mx-3 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="border border-ink bg-agenic-yellow px-2 py-0.5 font-mono text-xs uppercase tracking-wider text-ink">Gewijzigd</span>
+                </div>
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Beslissing of doel<span class="ml-1 text-red-600">*</span></label>
+                  </div>
+                  <textarea rows="4" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60 resize-y">We willen weten of er markt is voor herbruikbare verpakkingen in de Belgische foodsector, en tegen welke terugverdientijd een omschakeling realistisch is.</textarea>
+                </div>
+              </div>
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Doelgroep</label>
+                  </div>
+                  <textarea rows="3" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60 resize-y">Inkopers en operationeel verantwoordelijken bij Belgische voedingsproducenten.</textarea>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION 3: Onderzoeksvragen — list-veld in edit mode (ListControl) -->
+          <section id="sec-questions" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Onderzoeksvragen</h2>
+            <div class="mt-4 space-y-6">
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Onderzoeksvragen<span class="ml-1 text-red-600">*</span></label>
+                    <p class="mt-1 text-xs text-ink/60">Welke vragen moet het onderzoek beantwoorden?</p>
+                  </div>
+                  <!-- src: FieldRenderer.tsx (ListControl — items + "+ Voeg toe") -->
+                  <div class="space-y-3">
+                    <div class="border border-ink/10 bg-paper2/50 p-4">
+                      <div class="mb-2 flex items-center justify-between">
+                        <span class="text-xs font-medium uppercase tracking-wide text-ink/60">#1</span>
+                        <button type="button" class="text-sm text-ink/40 hover:text-red-600">×</button>
+                      </div>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="block font-mono text-xs uppercase tracking-wider text-ink">Vraag</label>
+                        </div>
+                        <textarea rows="3" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60 resize-y">Hoe groot is de Belgische markt voor herbruikbare industriële verpakkingen in de foodsector?</textarea>
+                      </div>
+                    </div>
+                    <div class="border border-ink/10 bg-paper2/50 p-4">
+                      <div class="mb-2 flex items-center justify-between">
+                        <span class="text-xs font-medium uppercase tracking-wide text-ink/60">#2</span>
+                        <button type="button" class="text-sm text-ink/40 hover:text-red-600">×</button>
+                      </div>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="block font-mono text-xs uppercase tracking-wider text-ink">Vraag</label>
+                        </div>
+                        <textarea rows="3" class="w-full border border-ink bg-paper2 px-3.5 py-2.5 text-[15px] text-ink placeholder:text-ink/40 focus:outline-none focus:border-2 focus:px-[calc(0.875rem-1px)] focus:py-[calc(0.625rem-1px)] disabled:bg-paper2 disabled:text-ink/60 resize-y">Welke concurrenten bieden al herbruikbare oplossingen aan en tegen welke prijsstelling?</textarea>
+                      </div>
+                    </div>
+                    <button type="button" class="border border-dashed border-ink/10 px-4 py-2 text-sm font-medium text-ink/60 hover:border-ink/30 hover:text-ink">
+                      + Voeg toe
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- SECTION 4: Scope & constraints — proposal_list leeg vóór de skill-run -->
+          <section id="sec-scope" class="scroll-mt-32">
+            <h2 class="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">Scope &amp; constraints</h2>
+            <div class="mt-4 space-y-6">
+              <div class="p-3 -mx-3">
+                <div class="space-y-2">
+                  <div>
+                    <label class="block font-mono text-xs uppercase tracking-wider text-ink">Extra vragen — voorstel Nestor</label>
+                  </div>
+                  <!-- src: FieldRenderer.tsx (ProposalListControl — items.length === 0) -->
+                  <p class="text-sm text-ink/60">Geen extra voorstellen.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+</body></html>
