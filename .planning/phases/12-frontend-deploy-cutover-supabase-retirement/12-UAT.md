@@ -21,13 +21,17 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
 ## Live environment (cutover executed 2026-07-14 — run this UAT against it)
 
 - **Frontend (test here):** https://nestor-frontend-1055853212188.europe-west1.run.app
-  (`nestor-frontend` rev **00005-9cs**, image `frontend:20260716-104627`, D-11 guard green in build;
-  supersedes rev 00001..00004 — rollback chain intact. Rev 00004 carried quick task
+  (`nestor-frontend` rev **00006-b9p**, image `frontend:20260716-132659`, D-11 guard green in build;
+  supersedes rev 00001..00005 — rollback chain intact. Rev 00004 carried quick task
   260716-e59: first-round UAT defect fixes — user-page LanguageSwitcher, i18n'd sidebar nav,
-  `decomposed` status filter, active-space-switch list refetch. Rev 00005 adds the follow-up
-  fix `1d7732a`: active-space filter was one selection behind — module accessor now synced
-  synchronously in setActiveSpace. NOT an isolation issue: backend space_id filtering verified,
-  user tokens pin the space server-side)
+  `decomposed` status filter, active-space-switch list refetch. Rev 00005 added `1d7732a`:
+  active-space filter one-step-behind fix (module accessor synced synchronously; NOT an
+  isolation issue — backend space_id filtering verified). Rev 00006 carries quick task
+  260716-i0j: round-3 canvas redesign of the intake detail page — merged workflow panel
+  (stepper+status+banner+search in one card), sticky sidebar, header pill dropped, boxed
+  sections, PLUS new behaviors: house archive dialog (replaces native confirm), deferred-delete
+  Herstel undo, inline context-pack preview, inline recipient emails, persistent scope-note.
+  Judge intake-detail UAT items against THIS chrome.)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev 00023,
   alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live, `/readyz` 200)
 - **Firebase authorized domain:** added by operator (login works). Bucket CORS: wired.
