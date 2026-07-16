@@ -226,13 +226,19 @@ export function ValidationDiffForField({
         {changed.map((rq, i) => {
           const idx = rq.original_index!;
           const meta = [rq.type, rq.domain].filter(Boolean).join(" · ");
+          // Show the APPLIED text, not the raw proposal: a manually edited suggestion
+          // stores the admin's wording in the answer, and that is what the client
+          // validates (UAT 2026-07-16 finding).
+          const applied = items[idx];
+          const appliedText =
+            typeof applied === "string" ? applied : (applied?.text ?? "");
           return (
             <DiffCard
               key={`rq-${idx}-${i}`}
               label={t("validationDiff.questionLabel", { index: idx + 1 })}
               meta={meta || undefined}
               original={rq.current ?? ""}
-              suggested={rq.suggested}
+              suggested={appliedText || rq.suggested}
               rationale={rq.rationale}
               confirmed={confirmedKeys.has(`${field.key}:rq-${idx}`)}
               onConfirm={() => onConfirmKey(`${field.key}:rq-${idx}`)}
@@ -263,7 +269,9 @@ export function ValidationDiffForField({
   return (
     <DiffCard
       original={p.current ?? ""}
-      suggested={p.suggested}
+      // The stored answer is what actually applies (manual edits differ from the
+      // raw proposal) — fall back to the proposal only if the answer is empty.
+      suggested={answerToString(answer) || p.suggested}
       rationale={p.rationale}
       confirmed={confirmedKeys.has(field.key)}
       onConfirm={() => onConfirmKey(field.key)}

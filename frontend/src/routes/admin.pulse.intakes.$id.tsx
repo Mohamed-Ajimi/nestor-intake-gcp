@@ -353,6 +353,7 @@ function IntakeDetailPage() {
  runId: reviewData.runId,
  parsed: reviewData.parsed,
  state: reviewState,
+ currentResearchQuestions: initial["research_questions"],
  });
  setSuccessUrl(`${window.location.origin}/intake/${token}`);
  } catch (e) {

@@ -279,11 +279,18 @@ export async function submitReview({
  runId,
  parsed,
  state,
+ currentResearchQuestions,
 }: {
  intakeId: string;
  runId: string;
  parsed: ParsedSkillOutput;
  state: AIReviewState;
+ // The intake's CURRENT `research_questions` answer array. Applied refinements are
+ // patched into it by `original_index` so the client validation diff (which compares
+ // the stored answer against the run's snapshot) actually surfaces them — writing
+ // only `research_questions_refined` left question changes invisible to the client
+ // (UAT 2026-07-16 finding).
+ currentResearchQuestions?: unknown;
 }): Promise<string> {
  void runId;
  const { decisions, extraQuestions } = state;
@@ -309,6 +316,31 @@ export async function submitReview({
  });
  if (refined.length > 0) {
  upserts.push({ field_key: "research_questions_refined", value: refined });
+ }
+
+ // Patch applied (approved/manual) refinements into the research_questions answer
+ // itself, by original_index, preserving each item's shape (string vs {text,...}).
+ // Kept/pending questions stay untouched.
+ if (Array.isArray(currentResearchQuestions)) {
+  const patched = [...(currentResearchQuestions as unknown[])];
+  let anyPatched = false;
+  rqs.forEach((q, i) => {
+   const dec = decisions[`rq_${i}`];
+   if (!dec || (dec.state !== "approved" && dec.state !== "manual")) return;
+   const idx = q.original_index;
+   if (idx == null || idx < 0 || idx >= patched.length) return;
+   const newText = dec.state === "approved" ? q.suggested : dec.value;
+   if (!newText) return;
+   const cur = patched[idx];
+   const curText = typeof cur === "string" ? cur : ((cur as { text?: string })?.text ?? "");
+   if (curText === newText) return;
+   patched[idx] =
+    cur && typeof cur === "object" ? { ...(cur as object), text: newText } : newText;
+   anyPatched = true;
+  });
+  if (anyPatched) {
+   upserts.push({ field_key: "research_questions", value: patched });
+  }
  }
 
  upserts.push({
