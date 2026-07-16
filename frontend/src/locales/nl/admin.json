@@ -127,6 +127,7 @@
       "sendFailed": "Versturen mislukt",
       "statusUnavailable": "Statuswijziging niet beschikbaar via de API (stopt bij decomposed).",
       "statusNotUpdated": "Status niet bijgewerkt",
+      "reviewOutputMissing": "AI-output kon niet geladen worden — draai de intake-skill opnieuw.",
       "statusUpdated": "Status bijgewerkt",
       "aiStartFailed": "AI-analyse starten mislukt",
       "mailNotSent": "Versturen mislukt — de mail is niet verstuurd. Probeer opnieuw.",

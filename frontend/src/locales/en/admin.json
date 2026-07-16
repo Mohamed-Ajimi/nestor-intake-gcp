@@ -127,6 +127,7 @@
       "sendFailed": "Send failed",
       "statusUnavailable": "Status change not available via the API (stops at decomposed).",
       "statusNotUpdated": "Status not updated",
+      "reviewOutputMissing": "Could not load the AI output — run the intake skill again.",
       "statusUpdated": "Status updated",
       "aiStartFailed": "Failed to start AI analysis",
       "mailNotSent": "Send failed — the email was not sent. Please try again.",

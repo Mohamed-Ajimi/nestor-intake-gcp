@@ -68,6 +68,13 @@ export function useActiveSkillRun(
   const forcePollRef = useRef(_forcePoll);
   forcePollRef.current = _forcePoll;
 
+  // Restart hook for a poll that already self-stopped: after a run finishes, the stream
+  // closes itself (WR-02) and the poll halts on the terminal status — dispatching a NEW
+  // run then left the page blind (stuck-timer UAT finding, 2026-07-16). Assigned inside
+  // the main effect so it closes over that effect's fetch/schedule; the `_forcePoll`
+  // watcher effect below kicks it without tearing down the stream (WR-06 intact).
+  const restartPollRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     if (!intakeId) {
       setData(null);
@@ -76,7 +83,7 @@ export function useActiveSkillRun(
     let cancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let stream: { close: () => void } | null = null;
-    const pollStart = Date.now();
+    let pollStart = Date.now();
     const MAX_POLL_MS = 10 * 60 * 1000;
 
     const fetchLatest = async (): Promise<ActiveSkillRun | null> => {
@@ -97,8 +104,11 @@ export function useActiveSkillRun(
         pollTimer = null;
       }
       if (cancelled) return;
-      // Keep polling only while the run is still in flight (status verbatim from backend).
-      if (status !== "running" && status !== "queued") return;
+      // Keep polling while the run is in flight (status verbatim from backend) OR while
+      // the caller signals an optimistic dispatch (`forcePollRef`) — the just-created run
+      // may not surface as `latest` on the first fetch, and the terminal status of the
+      // PREVIOUS run must not stop us from seeing the new one.
+      if (status !== "running" && status !== "queued" && !forcePollRef.current) return;
       if (Date.now() - pollStart > MAX_POLL_MS) return;
       pollTimer = setTimeout(async () => {
         const next = await fetchLatest();
@@ -118,6 +128,14 @@ export function useActiveSkillRun(
     // cannot (WR-01). When the caller forces it (an optimistic run start pre-stream) this
     // is the only transport that matters until a run surfaces.
     startPoll();
+
+    // Re-arm the safety poll for a NEW dispatch after the previous run went terminal:
+    // reset the poll-cap window so MAX_POLL_MS is measured from the restart, not mount.
+    restartPollRef.current = () => {
+      if (cancelled) return;
+      pollStart = Date.now();
+      startPoll();
+    };
 
     if (!forcePollRef.current) {
       // SSE is the primary live-push channel: map each event through `toActiveSkillRun`
@@ -141,12 +159,19 @@ export function useActiveSkillRun(
 
     return () => {
       cancelled = true;
+      restartPollRef.current = null;
       if (pollTimer) clearTimeout(pollTimer);
       if (stream) stream.close();
     };
     // `_forcePoll` is intentionally read via `forcePollRef` (not referenced in this effect
     // body) so toggling it does not tear down the live stream mid-run (WR-06).
   }, [intakeId]);
+
+  // Kick the poll back to life the moment the caller flags an optimistic dispatch. A
+  // separate effect (not a dep of the main one) so the SSE stream is never re-created.
+  useEffect(() => {
+    if (_forcePoll) restartPollRef.current?.();
+  }, [_forcePoll]);
 
   return { data };
 }

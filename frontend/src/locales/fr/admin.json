@@ -127,6 +127,7 @@
       "sendFailed": "Échec de l'envoi",
       "statusUnavailable": "Changement de statut non disponible via l'API (s'arrête à decomposed).",
       "statusNotUpdated": "Statut non mis à jour",
+      "reviewOutputMissing": "Impossible de charger la sortie IA — relancez le skill d'intake.",
       "statusUpdated": "Statut mis à jour",
       "aiStartFailed": "Échec du démarrage de l'analyse IA",
       "mailNotSent": "Échec de l'envoi — l'e-mail n'a pas été envoyé. Réessayez.",

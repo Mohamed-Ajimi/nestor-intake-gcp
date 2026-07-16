@@ -760,14 +760,20 @@ function IntakeDetailPage() {
     if (activeRun.skill !== "apply-intake-skill") return;
     if (activeRun.id === consumedRunId) return;
     const parsed = (fullRun as { output_parsed?: ParsedSkillOutput }).output_parsed;
-    if (!parsed) return;
+    if (!parsed) {
+      // Never dead-end silently: the banner says "review ready" — tell the admin the
+      // output is unusable, and consume the run id so this fires once, not in a loop.
+      setConsumedRunId(activeRun.id);
+      toast.error(t("intakeDetail.toast.reviewOutputMissing"));
+      return;
+    }
     const costUsd = (fullRun as { cost_estimate_usd?: number | null }).cost_estimate_usd ?? null;
     const costEur = costUsd != null ? costUsd * 0.92 : null;
     setReviewData({ runId: activeRun.id, parsed, costEur });
     setReviewMode(true);
     setConsumedRunId(activeRun.id);
     loadSkillRuns();
-  }, [fullRun, activeRun, consumedRunId, loadSkillRuns]);
+  }, [fullRun, activeRun, consumedRunId, loadSkillRuns, t]);
 
   // Terminal SSE event → re-fetch the intake + skill runs (D-09) so `derivePhase`
   // reflects the server-side status transition (e.g. → `decomposed`) WITHOUT a manual
