@@ -31,9 +31,15 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   (stepper+status+banner+search in one card), sticky sidebar, header pill dropped, boxed
   sections, PLUS new behaviors: house archive dialog (replaces native confirm), deferred-delete
   Herstel undo, inline context-pack preview, inline recipient emails, persistent scope-note.
+  Rev **00007-8f2** (image `frontend:20260716-142224`, quick 260716-ji9) adds: draft-phase
+  primary CTA "Verstuur intake-link via mail" (copy demoted to secondary), Intake-info moved
+  from first page section to a header-button modal, section headings render authored-case.
   Judge intake-detail UAT items against THIS chrome.)
-- **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev 00023,
-  alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live, `/readyz` 200)
+- **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev **00024-67b**,
+  image `backend:20260716-142214`, alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live,
+  `/readyz` 200. Rev 00024 adds quick 260716-ji9: draft-only intake-invite mail type
+  `POST /intakes/{id}/mail/intake` + intake.html.j2 nl/fr/en — NEW UAT item: send the intake-invite
+  mail from a draft intake and click through the received mail to the form)
 - **Firebase authorized domain:** added by operator (login works). Bucket CORS: wired.
 - **Wiring pre-verified:** SSR 200 at `/auth/login`; CORS preflight from the frontend origin OK.
 - **Expected failures (recorded in Known gaps below):** NDA download 404s (PDF not in image).
