@@ -21,8 +21,10 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
 ## Live environment (cutover executed 2026-07-14 — run this UAT against it)
 
 - **Frontend (test here):** https://nestor-frontend-1055853212188.europe-west1.run.app
-  (`nestor-frontend` rev **00003-dw8**, image `frontend:20260715-135954`, D-11 guard green in build;
-  supersedes rev 00001/00002 — rollback chain intact)
+  (`nestor-frontend` rev **00004-m8p**, image `frontend:20260716-102749`, D-11 guard green in build;
+  supersedes rev 00001/00002/00003 — rollback chain intact. Rev 00004 carries quick task
+  260716-e59: first-round UAT defect fixes — user-page LanguageSwitcher, i18n'd sidebar nav,
+  `decomposed` status filter, active-space-switch list refetch)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev 00023,
   alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live, `/readyz` 200)
 - **Firebase authorized domain:** added by operator (login works). Bucket CORS: wired.
