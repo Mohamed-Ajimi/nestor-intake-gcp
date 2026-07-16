@@ -414,6 +414,7 @@
       "submitted": "Submitted",
       "reviewed": "Reviewed",
       "validated_by_client": "Validated",
+      "decomposed": "Decomposed",
       "in_research": "In research",
       "delivered": "Delivered",
       "archived": "Archived"

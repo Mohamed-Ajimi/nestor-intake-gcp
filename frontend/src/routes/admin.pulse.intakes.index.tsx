@@ -36,6 +36,7 @@ const STATUS_FILTER_VALUES = [
   "submitted",
   "reviewed",
   "validated_by_client",
+  "decomposed",
   "in_research",
   "delivered",
   "archived",
