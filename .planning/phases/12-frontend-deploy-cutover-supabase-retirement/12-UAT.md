@@ -56,6 +56,15 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   Task 2 — the only open work in the phase. After ticking boxes, resume with
   `/gsd-execute-phase 12` (or tell the orchestrating session "parity green" / list failures)
   to write the 12-05 SUMMARY, run phase verification, and close the phase + milestone.
+- **⚠ PENDING DEPLOY (2026-07-16 session end):** commit `a710e8e` (client validation diff —
+  applied question refinements patched into the `research_questions` answer + diff cards show
+  applied text) is on master but NOT live. Rebuild + deploy the frontend BEFORE resuming the
+  validation UAT items. Retest: Heranalyseer → redo review (incl. research questions) → send
+  validation → client link must show ALL changed cards (intakes validated pre-fix won't).
+- **Session log 2026-07-16:** 8 defects found in UAT rounds 1-3, all fixed same-day (revs
+  00004→00009 frontend, 00024 backend — details in the rev block above). Suite run in Cloud
+  Build still pending after the ji9 backend change (fold into 11-UAT #6). Open decisions:
+  Templates page visibility, Intake-info link-row trimming, "Verzonden mails" history block.
 - **Post-UAT chore:** rotate the Resend API key (it transited assistant chat) and add the new
   value as version 2 of `nestor-resend-api-key`.
 
