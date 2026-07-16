@@ -140,6 +140,16 @@
       "saveFailed": "Échec de l'enregistrement",
       "cleanupFailed": "Échec du nettoyage des anciens fichiers",
       "changesSaved": "Modifications enregistrées"
+    },
+    "archiveDialog": {
+      "title": "Archiver l'intake ?",
+      "body": "Le projet sera clôturé et disparaîtra de la liste des intakes actifs. L'intake passe en lecture seule ; la page de résultats du client reste accessible.",
+      "confirm": "Archiver",
+      "cancel": "Annuler"
+    },
+    "scopeNote": {
+      "label": "Fin du périmètre plateforme",
+      "body": "La recherche automatique sort du cadre de cette phase (s'arrête à <0>decomposed</0>). La phase de recherche est lancée et suivie en dehors de ce système."
     }
   },
   "clientDrawer": {

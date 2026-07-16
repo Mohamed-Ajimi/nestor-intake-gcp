@@ -18,6 +18,9 @@ type Props = {
  // after a successful save and drops them on cancel. When omitted (client save-as-you-go
  // form, where every change persists immediately), the delete fires inline instead.
  onDeferRemove?: (paths: string[]) => void;
+ // S2 (round-3): un-defer a queued removal (Herstel). The parent filters the queued
+ // path back out of its pendingRemovals so a subsequent save no longer deletes it.
+ onUndoDeferRemove?: (paths: string[]) => void;
 };
 
 const inputCls =
@@ -65,7 +68,7 @@ export function FieldRenderer(props: Props) {
  );
 }
 
-function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove }: Props) {
+function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove, onUndoDeferRemove }: Props) {
  const { t } = useTranslation("intake");
  switch (field.type) {
  case "text":
@@ -143,9 +146,9 @@ function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemov
  case "list":
  return <ListControl field={field} value={value} onChange={onChange} intakeId={intakeId} disabled={disabled} />;
  case "file":
- return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={false} disabled={disabled} onDeferRemove={onDeferRemove} />;
+ return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={false} disabled={disabled} onDeferRemove={onDeferRemove} onUndoDeferRemove={onUndoDeferRemove} />;
  case "files":
- return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={true} disabled={disabled} onDeferRemove={onDeferRemove} />;
+ return <FileControl field={field} value={value} onChange={onChange} intakeId={intakeId} multi={true} disabled={disabled} onDeferRemove={onDeferRemove} onUndoDeferRemove={onUndoDeferRemove} />;
  case "download":
  return <DownloadControl field={field} intakeId={intakeId} />;
  case "proposal_list":
@@ -376,6 +379,7 @@ function FileControl({
  multi,
  disabled,
  onDeferRemove,
+ onUndoDeferRemove,
 }: {
  field: IntakeField;
  value: any;
@@ -384,9 +388,15 @@ function FileControl({
  multi: boolean;
  disabled?: boolean;
  onDeferRemove?: (paths: string[]) => void;
+ onUndoDeferRemove?: (paths: string[]) => void;
 }) {
  const { t } = useTranslation("intake");
  const [uploading, setUploading] = useState<number | null>(null);
+ // S2 (round-3): deferred-removed entries stay VISIBLE (strikethrough + Herstel) instead
+ // of silently disappearing from the draft. Only populated when onDeferRemove is present
+ // (edit-mode draft); the control unmounts when edit mode exits, so this never leaks
+ // across save/cancel. Entries are the full { path, filename, size, uploaded_at } objects.
+ const [deferredFiles, setDeferredFiles] = useState<any[]>([]);
  // The server authors the stored key (D-05); the browser only tags a category.
  // Audio-accept fields land under "audio" (they seed intake_sources), all other
  // client attachments under "attachments".
@@ -495,6 +505,11 @@ function FileControl({
  const removeFile = async (idx: number) => {
  const f = files[idx];
  if (f?.path) {
+ // S2: in deferred mode keep the removed entry visible with an undo affordance.
+ // Non-deferred (client save-as-you-go) behavior is unchanged.
+ if (onDeferRemove) {
+ setDeferredFiles((prev) => [...prev, f]);
+ }
  await removeStoredObject(f.path);
  }
  if (multi) {
@@ -503,6 +518,41 @@ function FileControl({
  onChange(null);
  }
  };
+
+ // S2: Herstel — un-defer the queued delete and put the entry back into the value.
+ const restoreDeferred = (entry: any, idx: number) => {
+ setDeferredFiles((prev) => prev.filter((_, i) => i !== idx));
+ onUndoDeferRemove?.([entry.path]);
+ if (multi) onChange([...files, entry]);
+ else onChange(entry);
+ };
+
+ const deferredList =
+ deferredFiles.length > 0 ? (
+ <ul className="space-y-1 mt-2">
+ {deferredFiles.map((f, i) => (
+ <li
+ key={`${f.path}-${i}`}
+ className="flex items-center justify-between border border-dashed border-ink/30 bg-paper2/50 px-3 py-2 text-sm"
+ >
+ <span className="truncate text-ink/40 line-through">{f.filename}</span>
+ <span className="ml-3 flex shrink-0 items-center gap-2">
+ <span className="font-mono text-[10px] uppercase tracking-wider text-ink/50">
+ {t("field.pendingDelete")}
+ </span>
+ <button
+ type="button"
+ onClick={() => restoreDeferred(f, i)}
+ disabled={!multi && files.length > 0}
+ className="text-xs font-medium text-ink underline underline-offset-2 hover:text-ink/70 disabled:opacity-40"
+ >
+ {t("field.restore")}
+ </button>
+ </span>
+ </li>
+ ))}
+ </ul>
+ ) : null;
 
  if (useSlots && !disabled) {
  const max = field.max_files ?? 5;
@@ -514,6 +564,7 @@ function FileControl({
  return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
  };
  return (
+ <div>
  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
  {slots.map((_, i) => {
  const f = files[i];
@@ -571,6 +622,8 @@ function FileControl({
  );
  })}
  </div>
+ {deferredList}
+ </div>
  );
  }
 
@@ -597,6 +650,7 @@ function FileControl({
  ))}
  </ul>
  )}
+ {deferredList}
  {!disabled && (multi || files.length === 0) && (
  <div>
  <label className="inline-flex cursor-pointer items-center border border-ink/10 bg-paper px-4 py-2 text-sm font-medium text-ink/70 hover:border-ink/30">

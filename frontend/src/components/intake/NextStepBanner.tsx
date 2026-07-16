@@ -317,7 +317,7 @@ export function NextStepBanner(props: Props) {
 
   return (
     <div
-      className="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5"
+      className="border-t border-ink/10 border-l-4 bg-paperLight px-6 py-5"
       style={{ borderLeftColor: accentColor }}
     >
       <div

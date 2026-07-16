@@ -140,6 +140,16 @@
       "saveFailed": "Save failed",
       "cleanupFailed": "Failed to clean up old files",
       "changesSaved": "Changes saved"
+    },
+    "archiveDialog": {
+      "title": "Archive intake?",
+      "body": "The project will be closed and removed from the active intake list. The intake becomes read-only; the client's results page remains available.",
+      "confirm": "Archive",
+      "cancel": "Cancel"
+    },
+    "scopeNote": {
+      "label": "End of platform scope",
+      "body": "Automated research is out of scope for this phase (stops at <0>decomposed</0>). The research phase is started and tracked outside this system."
     }
   },
   "clientDrawer": {

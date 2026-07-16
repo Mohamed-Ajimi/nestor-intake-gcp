@@ -36,8 +36,8 @@ export function ProductShell({
 
   return (
     <ActiveSpaceProvider>
-    <div className="flex min-h-screen bg-paper">
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-ink px-5 py-6 md:flex">
+    <div className="flex min-h-screen overflow-x-clip bg-paper">
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-ink px-5 py-6 md:flex">
         <Link
           to="/admin"
           className="font-mono text-[11px] uppercase tracking-wider text-ink/60 hover:text-ink"

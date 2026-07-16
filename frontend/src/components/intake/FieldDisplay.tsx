@@ -112,7 +112,7 @@ function Row({
  {label}
  {required && <span className="ml-1 text-ink/40">*</span>}
  </dt>
- <dd className="font-sans text-ink">
+ <dd className="min-w-0 font-sans text-ink">
  <div>{children}</div>
  {editedByClient && (
  <div className="mt-1 font-sans text-xs font-normal text-ink/60">
