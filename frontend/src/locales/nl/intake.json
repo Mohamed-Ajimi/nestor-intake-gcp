@@ -67,7 +67,9 @@
     "removeLong": "Verwijderen",
     "chooseFile": "Bestand kiezen",
     "loading": "Laden…",
-    "download": "Download"
+    "download": "Download",
+    "pendingDelete": "wordt verwijderd bij opslaan",
+    "restore": "Herstel"
   },
   "display": {
     "missing": "— ontbreekt",
@@ -429,7 +431,8 @@
     "modalTitle": "Briefing voor Nestor",
     "close": "Sluiten",
     "markdownCopied": "Markdown gekopieerd",
-    "copyMarkdown": "Kopieer markdown"
+    "copyMarkdown": "Kopieer markdown",
+    "previewLabel": "Inhoud — preview"
   },
   "pdf": {
     "dateFallback": "—",

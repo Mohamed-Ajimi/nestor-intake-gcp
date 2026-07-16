@@ -67,7 +67,9 @@
     "removeLong": "Remove",
     "chooseFile": "Choose file",
     "loading": "Loading…",
-    "download": "Download"
+    "download": "Download",
+    "pendingDelete": "will be deleted on save",
+    "restore": "Restore"
   },
   "display": {
     "missing": "— missing",
@@ -429,7 +431,8 @@
     "modalTitle": "Briefing for Nestor",
     "close": "Close",
     "markdownCopied": "Markdown copied",
-    "copyMarkdown": "Copy markdown"
+    "copyMarkdown": "Copy markdown",
+    "previewLabel": "Contents — preview"
   },
   "pdf": {
     "dateFallback": "—",

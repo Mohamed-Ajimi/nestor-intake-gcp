@@ -140,6 +140,16 @@
       "saveFailed": "Opslaan mislukt",
       "cleanupFailed": "Oude bestanden opruimen mislukt",
       "changesSaved": "Wijzigingen opgeslagen"
+    },
+    "archiveDialog": {
+      "title": "Intake archiveren?",
+      "body": "Het project wordt afgesloten en verdwijnt uit de actieve intake-lijst. De intake wordt alleen-lezen; de resultaten-pagina van de klant blijft bereikbaar.",
+      "confirm": "Archiveer",
+      "cancel": "Annuleer"
+    },
+    "scopeNote": {
+      "label": "Einde platform-scope",
+      "body": "Automatische research valt buiten deze fase (stopt bij <0>decomposed</0>). De onderzoeksfase wordt buiten dit systeem gestart en opgevolgd."
     }
   },
   "clientDrawer": {
