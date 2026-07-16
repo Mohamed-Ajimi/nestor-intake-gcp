@@ -922,7 +922,7 @@ function IntakeDetailPage() {
  value={intake.status ?? ""}
  disabled={updatingStatus}
  onChange={(e) => handleStatusChange(e.target.value)}
- className="border border-ink/30 bg-paper px-2.5 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:border-ink focus:outline-none"
+ className="border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:outline-none"
  >
  {STATUS_VALUES.map((value) => (
  <option key={value} value={value}>
@@ -931,7 +931,6 @@ function IntakeDetailPage() {
  ))}
  </select>
  </div>
-  <StatusPill status={intake.status} />
 
  {!editMode ? (
  <button
@@ -947,7 +946,7 @@ function IntakeDetailPage() {
  <button
  type="button"
  onClick={handleCancel}
- className="inline-flex items-center gap-1.5 border border-ink/10 bg-paper px-3 py-1.5 text-xs font-medium text-ink/70 hover:bg-ink/5"
+ className="inline-flex items-center gap-1.5 border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
  >
  <X className="h-3.5 w-3.5" />
  {t("intakeDetail.action.cancel")}
@@ -956,7 +955,7 @@ function IntakeDetailPage() {
  type="button"
  onClick={handleSave}
  disabled={saving}
- className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:bg-ink/80 disabled:opacity-50"
+ className="inline-flex items-center gap-1.5 bg-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/90 disabled:opacity-50"
  >
  {saving ? (
  <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -974,28 +973,87 @@ function IntakeDetailPage() {
  )}
  </div>
 
-     <NextStepBanner
-       phase={currentPhase}
-       validationLinkSentAt={intake.validation_link_sent_at}
-       resultsLinkSentAt={intake.results_link_sent_at}
-       deliveredAt={intake.delivered_at}
-       activeRun={bannerActiveRun}
-       busy={busy}
-       onRunSkill={runSkill}
-       onCopyIntakeLink={onCopyIntakeLink}
-       onOpenAIReview={onOpenAIReview}
-       onSendValidationMail={onSendValidationMail}
-       onCopyValidationLink={onCopyValidationLink}
-       onSendValidationReminder={onSendValidationReminder}
-       onGenerateContextPack={onGenerateContextPack}
-       onStartAutoResearch={onStartAutoResearch}
-       onStartManualResearch={onStartManualResearch}
-       onDownloadContextPack={onDownloadContextPack}
-       onUploadFinalReport={onUploadFinalReport}
-       onSendResultsMail={onSendResultsMail}
-       onCopyResultsLink={onCopyResultsLink}
-       onArchive={onArchive}
-     />
+     <div className="mb-8 border border-ink/15 bg-paper">
+       <div className="px-6 pt-6 pb-4">
+         <IntakeWorkflowStepper
+           status={intake.status}
+           clientValidatedAt={intake.client_validated_at}
+           submittedAt={intake.updated_at}
+         />
+       </div>
+
+       {!editMode && !reviewMode && intake.status && STATUS_WITH_BANNER.has(intake.status) && (
+         <div className="border-t border-ink/10 bg-paper2 px-6 py-3 text-xs text-ink/70">
+           {t(`intakeDetail.statusBanner.${intake.status}`)}
+         </div>
+       )}
+
+       <NextStepBanner
+         phase={currentPhase}
+         validationLinkSentAt={intake.validation_link_sent_at}
+         resultsLinkSentAt={intake.results_link_sent_at}
+         deliveredAt={intake.delivered_at}
+         activeRun={bannerActiveRun}
+         busy={busy}
+         onRunSkill={runSkill}
+         onCopyIntakeLink={onCopyIntakeLink}
+         onOpenAIReview={onOpenAIReview}
+         onSendValidationMail={onSendValidationMail}
+         onCopyValidationLink={onCopyValidationLink}
+         onSendValidationReminder={onSendValidationReminder}
+         onGenerateContextPack={onGenerateContextPack}
+         onStartAutoResearch={onStartAutoResearch}
+         onStartManualResearch={onStartManualResearch}
+         onDownloadContextPack={onDownloadContextPack}
+         onUploadFinalReport={onUploadFinalReport}
+         onSendResultsMail={onSendResultsMail}
+         onCopyResultsLink={onCopyResultsLink}
+         onArchive={onArchive}
+       />
+
+       {showSemanticSearch && (
+         <section className="border-t border-ink/10 bg-paperLight p-4">
+           <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60 mb-2">
+             {t("intakeDetail.search.title")}
+           </div>
+           <div className="flex gap-2">
+             <input
+               type="text"
+               value={searchQuery}
+               onChange={(e) => setSearchQuery(e.target.value)}
+               onKeyDown={(e) => e.key === "Enter" && handleSemanticSearch()}
+               placeholder={t("intakeDetail.search.placeholder")}
+               className="flex-1 border border-ink/30 px-3 py-2 font-mono text-sm bg-paper"
+             />
+             <button
+               type="button"
+               onClick={handleSemanticSearch}
+               disabled={searching}
+               className="font-mono text-xs uppercase tracking-wider bg-ink text-paperLight px-4 py-2 disabled:opacity-50"
+             >
+               {searching ? "…" : `🔍 ${t("intakeDetail.search.button")}`}
+             </button>
+           </div>
+           {searchResults.length > 0 && (
+             <div className="mt-4 space-y-2">
+               <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
+                 {t("intakeDetail.search.results", { count: searchResults.length })}
+               </div>
+               {searchResults.map((r, i) => (
+                 <div key={i} className="border-l-2 border-fluoYellow pl-3 py-2">
+                   <div className="text-[10px] font-mono text-ink/60 mb-1">
+                     V{r.question_priority} · {r.source} · score {(r.similarity * 100).toFixed(0)}%
+                   </div>
+                   <div className="text-sm">{r.chunk_text}</div>
+                 </div>
+               ))}
+             </div>
+           )}
+         </section>
+       )}
+
+       {/* scope-note (S6) — Task 2 */}
+     </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
      {mailPickerType && (
@@ -1010,57 +1068,6 @@ function IntakeDetailPage() {
          onConfirm={handleSendMail}
        />
      )}
-
-
-     {showSemanticSearch && (
-       <section className="border border-ink/20 bg-paperLight p-4 mb-6">
-         <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60 mb-2">
-           {t("intakeDetail.search.title")}
-         </div>
-         <div className="flex gap-2">
-           <input
-             type="text"
-             value={searchQuery}
-             onChange={(e) => setSearchQuery(e.target.value)}
-             onKeyDown={(e) => e.key === "Enter" && handleSemanticSearch()}
-             placeholder={t("intakeDetail.search.placeholder")}
-             className="flex-1 border border-ink/30 px-3 py-2 font-mono text-sm bg-paper"
-           />
-           <button
-             type="button"
-             onClick={handleSemanticSearch}
-             disabled={searching}
-             className="font-mono text-xs uppercase tracking-wider bg-ink text-paperLight px-4 py-2 disabled:opacity-50"
-           >
-             {searching ? "…" : `🔍 ${t("intakeDetail.search.button")}`}
-           </button>
-         </div>
-         {searchResults.length > 0 && (
-           <div className="mt-4 space-y-2">
-             <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60">
-               {t("intakeDetail.search.results", { count: searchResults.length })}
-             </div>
-             {searchResults.map((r, i) => (
-               <div key={i} className="border-l-2 border-fluoYellow pl-3 py-2">
-                 <div className="text-[10px] font-mono text-ink/60 mb-1">
-                   V{r.question_priority} · {r.source} · score {(r.similarity * 100).toFixed(0)}%
-                 </div>
-                 <div className="text-sm">{r.chunk_text}</div>
-               </div>
-             ))}
-           </div>
-         )}
-       </section>
-     )}
-
-
-    <div className="mb-6">
-      <IntakeWorkflowStepper
-      status={intake.status}
-      clientValidatedAt={intake.client_validated_at}
-      submittedAt={intake.updated_at}
-      />
-    </div>
 
 
   {/* HandoffBlock verwijderd: alle handoff-acties zitten nu in NextStepBanner per fase. */}
@@ -1102,12 +1109,6 @@ function IntakeDetailPage() {
  </div>
  )}
 
- {!editMode && !reviewMode && intake.status && STATUS_WITH_BANNER.has(intake.status) && (
- <div className="mb-6 border border-ink/10 bg-paper2 px-4 py-3 text-sm text-ink/70">
- {t(`intakeDetail.statusBanner.${intake.status}`)}
- </div>
- )}
-
  <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
  <aside className="hidden lg:block">
  <nav className="sticky top-28 space-y-1">
@@ -1138,7 +1139,7 @@ function IntakeDetailPage() {
 
  <main className="min-w-0 space-y-10">
  <section className="border border-ink/10 bg-paper p-6">
- <h2 className="text-sm font-semibold uppercase tracking-wide text-ink/60">
+ <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">
  {t("intakeDetail.info.title")}
  </h2>
  <dl className="mt-4">
@@ -1327,7 +1328,7 @@ function IntakeDetailPage() {
  ref={(el) => {
  sectionRefs.current[section.id] = el;
  }}
- className="scroll-mt-32"
+ className="scroll-mt-32 border border-ink/10 bg-paper p-6"
  >
  <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal lowercase text-ink">
  {section.title}
@@ -1413,7 +1414,7 @@ function Meta({ label, children }: { label: React.ReactNode; children: React.Rea
  return (
  <div className="grid grid-cols-1 gap-x-8 gap-y-1 border-b border-ink/10 py-4 last:border-b-0 sm:grid-cols-[260px_1fr]">
  <dt className="font-sans text-sm font-normal text-ink/70">{label}</dt>
- <dd className="font-sans text-ink">{children}</dd>
+ <dd className="min-w-0 font-sans text-ink">{children}</dd>
  </div>
  );
 }
@@ -1503,7 +1504,7 @@ function ResultsLinkRow({
  <button
  type="button"
  onClick={copy}
- className="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:bg-ink/5"
+ className="inline-flex items-center gap-1.5 border border-ink px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5"
  >
  <Copy className="h-3.5 w-3.5" />
  {t("intakeDetail.action.copy")}
@@ -1547,7 +1548,7 @@ function LinkRow({
  <button
  type="button"
  onClick={copy}
- className="inline-flex items-center gap-1 border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/70 hover:border-ink/10 hover:bg-ink/5"
+ className="inline-flex items-center gap-1.5 border border-ink px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-ink hover:bg-ink/5"
  >
  <Copy className="h-3.5 w-3.5" />
  {t("intakeDetail.action.copy")}
