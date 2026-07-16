@@ -49,6 +49,7 @@ import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
 import {
   derivePhase,
+  type PhaseSkillRunInput,
   phaseShowsAIReview,
   phaseShowsContextPack,
   phaseShowsFinalReport,
@@ -272,6 +273,38 @@ function IntakeDetailPage() {
   // never renders here, so derivePhase is fed `false` (no inline DB read remains).
   const [hasArtifacts] = useState(false);
 
+  // The phase machine must only ever see apply-intake-skill runs: enrichment skills
+  // (structure-answers, extract-insights, …) also land `succeeded` runs, and feeding one
+  // to derivePhase fakes "analysis ready" on a submitted intake (UAT 2026-07-16 finding).
+  // When the LATEST run is a non-apply skill, fall back to the newest apply-intake-skill
+  // run from the full list so a finished analysis is not forgotten either.
+  const [applyRunFallback, setApplyRunFallback] =
+    useState<PhaseSkillRunInput | null>(null);
+  const intakeId = intake?.id;
+  useEffect(() => {
+    if (!intakeId || !activeRun || activeRun.skill === "apply-intake-skill") {
+      setApplyRunFallback(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const res = await listSkillRuns(intakeId);
+      if (cancelled || !res.success) return;
+      // Don't assume server ordering — pick the apply run with the max completed_at.
+      const apply = res.data.runs
+        .filter((r) => r.skill === "apply-intake-skill")
+        .reduce<
+          (typeof res.data.runs)[number] | null
+        >((best, r) => ((r.completed_at ?? "") > (best?.completed_at ?? "") ? r : best), null);
+      setApplyRunFallback(
+        apply ? { status: apply.status, applied_at: apply.applied_at } : null,
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [intakeId, activeRun]);
+
   const phase = useMemo(() => {
     if (!intake) return null;
     return derivePhase(
@@ -283,11 +316,13 @@ function IntakeDetailPage() {
         final_report_artifact_id: intake.final_report_artifact_id,
       },
       activeRun
-        ? { status: activeRun.status, applied_at: activeRun.applied_at }
+        ? activeRun.skill === "apply-intake-skill"
+          ? { status: activeRun.status, applied_at: activeRun.applied_at }
+          : applyRunFallback
         : null,
       hasArtifacts,
     );
-  }, [intake, activeRun, hasArtifacts]);
+  }, [intake, activeRun, applyRunFallback, hasArtifacts]);
 
   // Auto-fetch full skill-run output ONLY when we're in the review phase.
   const shouldFetchFull =
