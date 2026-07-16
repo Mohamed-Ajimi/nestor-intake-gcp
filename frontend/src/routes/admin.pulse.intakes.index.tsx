@@ -95,7 +95,9 @@ function IntakesPage() {
   return () => {
     cancelled = true;
   };
- }, []);
+  // Refetch when the superadmin switches active space — listIntakes threads the
+  // selection via withActiveSpace at call time, so re-running the effect suffices.
+ }, [activeSpaceId]);
 
  const filtered = useMemo(() => {
  const q = search.trim().toLowerCase();
