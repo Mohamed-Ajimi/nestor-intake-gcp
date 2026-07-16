@@ -34,6 +34,9 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   Rev **00007-8f2** (image `frontend:20260716-142224`, quick 260716-ji9) adds: draft-phase
   primary CTA "Verstuur intake-link via mail" (copy demoted to secondary), Intake-info moved
   from first page section to a header-button modal, section headings render authored-case.
+  Rev **00008-x4h** (image `frontend:20260716-151546`, fix `d2f335b`) fixes a phase-machine
+  bug found live: a succeeded enrichment run (structure-answers etc.) faked "analysis ready"
+  and hid the Run-intake-skill CTA — derivePhase now only consumes apply-intake-skill runs.
   Judge intake-detail UAT items against THIS chrome.)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev **00024-67b**,
   image `backend:20260716-142214`, alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live,
