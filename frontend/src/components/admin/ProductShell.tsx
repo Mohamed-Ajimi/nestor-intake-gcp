@@ -10,7 +10,7 @@ import { ADMIN_NAV } from "@/components/admin/adminNav";
 import { SpaceSwitcher } from "@/components/admin/SpaceSwitcher";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
-type Item = { to: string; label: string; exact: boolean };
+type Item = { to: string; labelKey: string; exact: boolean };
 
 export function ProductShell({
   product,
@@ -88,7 +88,7 @@ export function ProductShell({
                 }
               >
                 <span className={active ? "mark-green" : "mark-outline"} />
-                {item.label}
+                {t(item.labelKey)}
               </Link>
             );
           })}
@@ -116,7 +116,7 @@ export function ProductShell({
                   }
                 >
                   <span className={active ? "mark-green" : "mark-outline"} />
-                  {item.label}
+                  {t(item.labelKey)}
                 </Link>
               );
             })}

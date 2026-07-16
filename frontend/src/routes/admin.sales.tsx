@@ -10,8 +10,8 @@ function SalesLayout() {
     <ProductShell
       product="sales"
       items={[
-        { to: "/admin/sales/projects/new", label: "Nieuw project", exact: true },
-        { to: "/admin/sales/projects", label: "Projecten", exact: false },
+        { to: "/admin/sales/projects/new", labelKey: "nav.salesNewProject", exact: true },
+        { to: "/admin/sales/projects", labelKey: "nav.salesProjects", exact: false },
       ]}
     >
       <Outlet />

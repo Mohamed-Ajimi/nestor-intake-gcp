@@ -5,6 +5,17 @@
     "productManage": "manage",
     "logout": "Log out"
   },
+  "nav": {
+    "pulseNewIntake": "New intake",
+    "pulseIntakes": "Intakes",
+    "pulseClients": "Clients",
+    "pulseSearch": "AI search",
+    "salesNewProject": "New project",
+    "salesProjects": "Projects",
+    "manageUsers": "users",
+    "manageSpaces": "spaces",
+    "manageTemplates": "templates"
+  },
   "home": {
     "title": "choose a product",
     "products": {
