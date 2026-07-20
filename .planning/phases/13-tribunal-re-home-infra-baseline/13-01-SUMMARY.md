@@ -155,3 +155,7 @@ byte-identity) and T-13-03 (secrets excluded from build context) were both satis
 None. This plan is a code copy; no placeholder/mock data was introduced. The two NEW code
 changes that ride on this base (Alembic `version_table`/`tribunal` schema in `env.py`, the
 per-run advisory lock in `execute.py`) are explicitly Plan 02, not stubs of this plan.
+
+## Self-Check: PASSED
+
+All 12 created files verified present; all 3 commits (`001007d`, `f8a5167`, `2833f34`) verified in the git log; working tree clean (no untracked `tribunal/` files).
