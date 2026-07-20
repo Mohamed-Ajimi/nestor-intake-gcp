@@ -199,3 +199,10 @@ No REFACTOR commit was needed (the docstring/inline-literal corrections were fol
 into the GREEN commits before they landed). RED tests fail-by-construction on this
 dev machine (the static assertions reference source that did not yet exist at RED
 time); GREEN is proven by the plan's grep gates above (`ISOLATION_OK` / `LOCK_OK`).
+
+## Self-Check: PASSED
+
+All created files verified present (`runs/execute.py`, both new test files, this
+SUMMARY). All 4 task commits verified in the git log (`8bc9ac7`, `7c1b8db`,
+`8b5de38`, `6acaff9`). Changed-file set equals the plan's `files_modified` (7
+files); the frozen `audit/hash_chain.py` was not touched; working tree clean.
