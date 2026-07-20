@@ -910,6 +910,209 @@ gcloud artifacts repositories delete nestor-pulse --location "$REGION" --project
 
 ---
 
+## Phase 14 — Auth retirement + integration seam (dedicated SA + invoker gate + seam env)
+
+This section is the enumerated source of truth for the Plan-04 operator live session that
+closes the WR-03 runtime-SA separation and the D-04 defence-in-depth IAM layer, then runs
+the **D-07 live proof** (which ABSORBS the Phase-13 deferred queue-path proof — strike it
+from Phase 16's backlog once this is green). Phase 14 is a SMALL delta on the already-deployed
+Phase-13 Tribunal services: it gives Tribunal its OWN least-privilege runtime SA
+(`tribunal-run`), binds the `tribunal-api` invoker to ONLY the intake `nestor-run` SA, wires
+the two non-secret seam env vars, removes the retired `IDENTITY_PLATFORM_*` references, and
+runs the two-suite CI denial gate.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state
+> was never adopted and `terraform apply` is FORBIDDEN on this project (CR-02: an apply would
+> rotate the `app_user` / `worker_user` BUILT_IN DB passwords and take down all three Tribunal
+> services). The `infra/main.tf` + `infra/variables.tf` Phase-14 edits (dedicated `tribunal_run`
+> SA, repointed grants, unconditional `run.invoker` = nestor-run, seam env vars) are the
+> **intended end-state, INERT** — the gcloud steps below are the manual reconciliation you run
+> in Cloud Shell. Images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **Secret hygiene (T-14-15) — read first.** The retired-secret cleanup (Step 14.f) is
+> CONSERVATIVE: remove only the Tribunal service's `IDENTITY_PLATFORM_*` env references. Do NOT
+> delete the Secret Manager entries themselves unless a no-other-reader grep across BOTH deploy
+> surfaces confirms the intake side does not share them — leave any unproven deletion as a
+> documented later cleanup.
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export TRIBUNAL_SA="tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+### Step 14.a — Create the dedicated `tribunal-run` SA + its least-privilege grants (WR-03/D-04b)
+
+Create the DEDICATED Tribunal runtime SA, then grant it ONLY the least-privilege set. This is
+the fix that makes the invoker gate (Step 14.e) meaningful: caller SA (`nestor-run`) != callee
+SA (`tribunal-run`).
+
+```bash
+gcloud iam service-accounts create tribunal-run \
+  --project="$GOOGLE_PROJECT" \
+  --display-name="Tribunal engine runtime (least-priv)"
+
+# cloudsql.client ONLY — NOT cloudsql.instanceUser. The Tribunal services authenticate with
+# a stored BUILT_IN-user password over asyncpg (Pitfall 5), NOT IAM DB login, so instanceUser
+# is unnecessary.
+gcloud projects add-iam-policy-binding "$GOOGLE_PROJECT" \
+  --member="serviceAccount:${TRIBUNAL_SA}" \
+  --role="roles/cloudsql.client"
+
+# Resource-scoped secretAccessor on the SIX Tribunal secrets ONLY.
+for S in Nestor_Claude Nestor_Gemini Nestor_OpenAI DATABASE_URL DATABASE_URL_WORKER AUDIT_GCS_BUCKET; do
+  gcloud secrets add-iam-policy-binding "$S" \
+    --member="serviceAccount:${TRIBUNAL_SA}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="$GOOGLE_PROJECT"
+done
+
+# Bucket-scoped objectAdmin on the tribunal audit bucket ONLY.
+export AUDIT_BUCKET="${GOOGLE_PROJECT}-nestor-audit"
+gcloud storage buckets add-iam-policy-binding "gs://${AUDIT_BUCKET}" \
+  --member="serviceAccount:${TRIBUNAL_SA}" \
+  --role="roles/storage.objectAdmin" \
+  --project="$GOOGLE_PROJECT"
+```
+
+> **Grants DELIBERATELY NOT given to `tribunal-run` (least privilege, WR-03 / T-14-14):**
+> `roles/identitytoolkit.admin`, the intake `app_superadmin` DB-password secret
+> (`nestor-app-superadmin-db-password`), and the intake uploads bucket
+> (`${GOOGLE_PROJECT}-nestor-uploads`). Those stay bound to the intake `nestor-run` SA alone —
+> a compromised Tribunal worker must NOT reach the intake admin surfaces.
+>
+> **Cleanup of the OLD Phase-13 grants (optional, after the redeploy is green).** Phase 13 bound
+> these same six secret + audit-bucket grants to `nestor-run`. Once Step 14.c has redeployed both
+> services as `tribunal-run` and the proof is green, you MAY remove the now-redundant `nestor-run`
+> grants on the six Tribunal secrets + the audit bucket (`gcloud secrets remove-iam-policy-binding
+> ... --member=serviceAccount:${INTAKE_SA}`). This is NOT required for correctness — leave it as a
+> documented tidy-up if you prefer to minimise change during the live session.
+
+### Step 14.b — Rebuild both Tribunal images via Cloud Build (retirement + provider swap in the image)
+
+The Plan-01 retirement (`firebase-admin` removed, the standalone identity surface deleted,
+`InternalCallerProvider` installed) must be baked into the image. Rebuild both from the
+`tribunal/` context and capture the tag:
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+```
+
+### Step 14.c — Redeploy `tribunal-worker` then `tribunal-api` as `tribunal-run`; capture the API URL
+
+The retargeted deploy scripts now set `SA="tribunal-run@..."`. Pass `IMAGE_TAG=$SHA` to pin the
+just-built image. Deploy the worker first (no public HTTP), then the api, then CAPTURE its URL:
+
+```bash
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+
+# Capture the tribunal-api URL WITHOUT a path (the OIDC audience — never guess it, Pitfall 4).
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+echo "tribunal-api URL: $TRIBUNAL_URL"
+```
+
+### Step 14.d — Set the seam env vars live on BOTH services (Pitfall 4 — URL without a path)
+
+The captured `$TRIBUNAL_URL` is BOTH tribunal-api's own `aud` and the audience the intake
+tribunal_client mints a token for. Set it on both, plus the intake SA email on tribunal-api:
+
+```bash
+# tribunal-api: its own aud + the intake SA email its InternalCallerProvider matches.
+gcloud run services update tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --update-env-vars="TRIBUNAL_SERVICE_URL=${TRIBUNAL_URL},INTAKE_RUNTIME_SA_EMAIL=${INTAKE_SA}"
+
+# nestor-api (intake): the tribunal-api URL its tribunal_client mints an ID token for.
+gcloud run services update nestor-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --update-env-vars="TRIBUNAL_SERVICE_URL=${TRIBUNAL_URL}"
+```
+
+> Re-running `deploy-api.sh` with `TRIBUNAL_SERVICE_URL=$TRIBUNAL_URL` exported also sets these
+> idempotently (the script defaults `INTAKE_RUNTIME_SA_EMAIL` to `nestor-run@$PROJECT...`), but
+> the URL is not known until the first deploy — so the two `--update-env-vars` above are the
+> canonical live-set step.
+
+### Step 14.e — Bind the `tribunal-api` invoker to ONLY the intake SA (D-04 outer gate)
+
+Grant `run.invoker` on tribunal-api to the intake `nestor-run` SA ONLY; keep the service
+`--no-allow-unauthenticated`. Then REMOVE any lingering `allUsers` invoker binding (a Phase-13
+`allow_unauthenticated=true` apply could have left one):
+
+```bash
+gcloud run services add-invoker-policy-binding tribunal-api \
+  --member="serviceAccount:${INTAKE_SA}" \
+  --region="$REGION" --project="$GOOGLE_PROJECT"
+
+# Belt-and-suspenders: strip any allUsers invoker if present (no-op if absent).
+gcloud run services remove-invoker-policy-binding tribunal-api \
+  --member="allUsers" \
+  --region="$REGION" --project="$GOOGLE_PROJECT" 2>/dev/null || \
+  echo "no allUsers invoker binding on tribunal-api — good"
+
+# Confirm the service stays internal-only.
+gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.metadata.annotations["run.googleapis.com/ingress"])' || true
+```
+
+### Step 14.f — Retired-secret cleanup (A6, CONSERVATIVE — T-14-15)
+
+The `IDENTITY_PLATFORM_*` env references are already ABSENT from the retargeted deploy scripts
+(Plan 01 removed the standalone identity surface + `firebase-admin`). VERIFY they are also absent
+from the live tribunal-api / tribunal-worker service config, and do NOT delete the Secret Manager
+entries without a no-other-reader check:
+
+```bash
+# Confirm no IDENTITY_PLATFORM_* env on the live services (should print nothing).
+gcloud run services describe tribunal-api    --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='yaml(spec.template.spec.containers[].env)' | grep -i IDENTITY_PLATFORM || echo "tribunal-api: clean"
+gcloud run services describe tribunal-worker --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='yaml(spec.template.spec.containers[].env)' | grep -i IDENTITY_PLATFORM || echo "tribunal-worker: clean"
+```
+
+> **Do NOT `gcloud secrets delete` any `IDENTITY_PLATFORM_*` secret** unless you have grepped BOTH
+> deploy surfaces (intake `nestor-api` AND the Tribunal services) and confirmed no reader remains.
+> If unproven, leave the entry and record it as a documented later cleanup (T-14-15 disposition=accept).
+
+### Step 14.g — Run the two-suite CI denial gate (D-08)
+
+Both Cloud Build suites must be GREEN — together they are the SEAM-02 gate. The intake seam
+denial suite runs under `cloudbuild.test.yaml` (real pgvector Postgres, `-m integration`); the
+`tribunal.*` RLS denial runs under `tribunal/cloudbuild.test.yaml` (the FULL testcontainers
+`postgres:15` suite as a non-superuser — the critical subset EXCLUDES RLS, per 14-03-SUMMARY):
+
+```bash
+# Intake seam denial (backend/tests/test_tribunal_seam_denial.py).
+# -k selectors (14-03): missing_tenant (=EXACTLY 400) / wrong_sa (403) / unauth (401) / guc_leak.
+gcloud builds submit backend --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+
+# tribunal.* cross-tenant RLS denial (tribunal/nestor_pulse_sdk/tests/test_seam_rls_denial.py).
+# -k selectors (14-03): cross_tenant_denied / no_tenant_context_denied (non-superuser only).
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+```
+
+> Both configs FAIL the build on a non-zero pytest exit. Record both build ids for the SUMMARY.
+> After both are green, proceed to the Task-3 D-07 live proof (positive server-to-server run +
+> the three negative proofs).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -947,3 +1150,11 @@ gcloud artifacts repositories delete nestor-pulse --location "$REGION" --project
 - [ ] Step 13.g — `tribunal-worker` deployed (min=1/max=5/no-cpu-throttling/timeout=3600, `DATABASE_URL_WORKER`, `NESTOR_TRIBUNAL_UNCAPPED=1`) then `tribunal-api` (min=0/max=3/timeout=300, `DATABASE_URL`) via the retargeted deploy scripts
 - [ ] Step 13.h — CHECKPOINT: Plan-04 proof run (E2E + `verify_chain` + ~5-concurrent-from-≥2-spaces concurrency + duration/cost) GREEN before any teardown (T-13-11)
 - [ ] Step 13.i — FINAL post-proof teardown of `project-cb01b861` (Cloud Run `nestor-pulse-api`/`nestor-pulse-worker` + Cloud SQL `nestor-prod-pg` + Artifact Registry `nestor-pulse`) — STRICTLY after 13.h is green (D-02); legacy Supabase project NEVER touched (independence, not deletion)
+- [ ] Step 14.a — dedicated `tribunal-run` SA created + least-priv grants ONLY (cloudsql.client + the six Tribunal secrets' secretAccessor + audit-bucket objectAdmin); DELIBERATELY NOT granted identitytoolkit.admin / the intake superadmin secret / the intake uploads bucket (WR-03 / T-14-14)
+- [ ] Step 14.b — both Tribunal images rebuilt via Cloud Build with the Plan-01 retirement baked in (`firebase-admin` removed, `InternalCallerProvider` installed); `$SHA` captured
+- [ ] Step 14.c — `tribunal-worker` then `tribunal-api` redeployed as `tribunal-run` (retargeted scripts); tribunal-api URL captured from `gcloud run services describe` WITHOUT a path (Pitfall 4)
+- [ ] Step 14.d — seam env set live: `TRIBUNAL_SERVICE_URL`+`INTAKE_RUNTIME_SA_EMAIL` on tribunal-api, `TRIBUNAL_SERVICE_URL` on nestor-api (same captured URL — the OIDC audience; the `main.tf` edits alone are inert per drift)
+- [ ] Step 14.e — `run.invoker` on tribunal-api bound to ONLY `nestor-run` (D-04 outer gate); any `allUsers` invoker stripped; service stays `--no-allow-unauthenticated` (T-14-12)
+- [ ] Step 14.f — retired-secret cleanup CONSERVATIVE: verified no `IDENTITY_PLATFORM_*` env on the live Tribunal services; NO Secret Manager entry deleted without a no-other-reader check (T-14-15)
+- [ ] Step 14.g — two-suite CI denial gate GREEN: intake `cloudbuild.test.yaml` (seam denial — missing_tenant=400/wrong_sa/unauth/guc_leak) + `tribunal/cloudbuild.test.yaml` (`tribunal.*` RLS, non-superuser) (D-08); both build ids recorded
+- [ ] Step 14 (Task 3) — CHECKPOINT: D-07 live proof — one real server-to-server run completed-green with D-05 acting-user attribution + `verify_chain` green, and the three negative proofs (unauthenticated 401/403, wrong-SA, cross-tenant) all reject; ABSORBS the Phase-13 deferred queue-path proof (strike it from Phase 16's backlog)
