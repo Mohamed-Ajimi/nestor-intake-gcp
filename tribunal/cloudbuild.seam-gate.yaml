@@ -1,0 +1,98 @@
+# tribunal/cloudbuild.seam-gate.yaml — Phase 14 SEAM-02 / D-08 denial gate (FOCUSED).
+#
+# WHY THIS EXISTS (14-04 Task 3, operator decision Option 1): the two seam denial suites
+# could not EXECUTE in their originally-mapped homes —
+#   * backend/tests/test_tribunal_seam_denial.py skips in the intake image (nestor_pulse_sdk
+#     not importable there — D-DEF-1), so the four seam cases were re-homed to
+#     nestor_pulse_sdk/tests/test_seam_denial.py (this harness, natively importable);
+#   * nestor_pulse_sdk/tests/test_seam_rls_denial.py skips under the full-suite config
+#     (no DATABASE_URL is set there, and testcontainers' default role is the postgres
+#     SUPERUSER which bypasses RLS — D-DEF-5).
+# This config makes both EXECUTE meaningfully: it stands up a real postgres:15, creates the
+# NON-superuser app_user/worker_user roles exactly as Cloud SQL does out-of-band (runbook
+# Step 13.d), runs `alembic upgrade head` as app_user (mirroring the tribunal-migrate job),
+# then runs ONLY the six seam-gate tests as app_user (non-superuser => RLS applies, FORCE RLS
+# binds the owner). A skip is a FAILURE here: the gate greps for exactly "6 passed" and zero
+# "skipped", so a silently-skipped denial test can never fake a green gate again.
+#
+# The FULL tribunal suite (tribunal/cloudbuild.test.yaml) still runs separately; its
+# pre-existing non-Phase-14 failures (D-DEF-3) are deferred to Phase 20 (CLOSE-02) and do
+# not gate Phase 14. THIS build green == the SEAM-02 denial gate green.
+#
+# INVOCATION (repo root):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.seam-gate.yaml \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  # One step, host networking (same daemon-host pattern proven by cloudbuild.test.yaml):
+  # postgres:15 publishes 5432 on the daemon host; the python container reaches it at
+  # localhost:5432 via --network=host. No docker.sock mount needed (no testcontainers here).
+  - id: seam-gate-nonsuperuser
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+
+        docker pull -q postgres:15
+
+        # 1. Real Postgres, superuser only for bootstrap (role creation), like Cloud SQL admin.
+        docker run -d --name seam-pg --network=host \
+          -e POSTGRES_PASSWORD=ci-bootstrap-pw \
+          postgres:15
+
+        for i in $$(seq 1 30); do
+          docker exec seam-pg pg_isready -U postgres && break
+          sleep 1
+        done
+
+        # 2. Out-of-band role creation — mirrors `gcloud sql users create app_user/worker_user`
+        #    (runbook Step 13.d). Both NON-superuser LOGIN roles; worker_user must exist
+        #    before migration 0008 GRANTs to it.
+        docker exec seam-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "CREATE ROLE app_user LOGIN PASSWORD 'ci-app-pw' NOSUPERUSER" \
+          -c "CREATE ROLE worker_user LOGIN PASSWORD 'ci-worker-pw' NOSUPERUSER" \
+          -c "CREATE DATABASE tribunal OWNER app_user"
+
+        # 3. Role-level search_path so the tests' plain create_async_engine (no
+        #    server_settings) resolves the `tribunal` schema the migrations create —
+        #    mirrors db/base.py's runtime search_path=tribunal,public.
+        docker exec seam-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "ALTER ROLE app_user SET search_path = tribunal, public"
+
+        # 4. Migrations AS app_user (the tribunal-migrate job uses the app_user DSN —
+        #    runbook Step 13.f), then the six seam-gate tests AS app_user (non-superuser,
+        #    so RLS genuinely applies; FORCE RLS binds app_user as table owner).
+        docker run --rm --network=host \
+          -v /workspace:/workspace -w /workspace \
+          -e DATABASE_URL="postgresql+asyncpg://app_user:ci-app-pw@localhost:5432/tribunal" \
+          python:3.11-slim bash -c '
+            set -euo pipefail
+            pip install --no-cache-dir -q -r requirements.txt
+            (cd nestor_pulse_sdk && python -m alembic upgrade head)
+            python -m pytest \
+              nestor_pulse_sdk/tests/test_seam_denial.py \
+              nestor_pulse_sdk/tests/test_seam_rls_denial.py \
+              -q -rs | tee /tmp/seam-gate.out
+            # ANTI-FALSE-GREEN: all six must PASS; a skip exits pytest 0 but fails the
+            # gate here (a skipped denial test is exactly the D-DEF-1/D-DEF-5 failure
+            # mode this config exists to close).
+            SUMMARY_LINE=$$(grep -E "[0-9]+ (passed|failed|skipped|error)" /tmp/seam-gate.out | tail -n 1)
+            echo "pytest summary: $$SUMMARY_LINE"
+            echo "$$SUMMARY_LINE" | grep -E "6 passed"
+            if echo "$$SUMMARY_LINE" | grep -E "skipped|failed|error"; then
+              echo "SEAM GATE RED: skips/failures in the pytest summary" >&2
+              exit 1
+            fi
+            echo "SEAM GATE GREEN: 6/6 executed and passed as non-superuser"
+          '
+
+        docker rm -f seam-pg
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: "1200s"
