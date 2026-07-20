@@ -785,6 +785,14 @@ resource "google_sql_user" "tribunal_app_user" {
   instance = google_sql_database_instance.main.name
   type     = "BUILT_IN"
   password = random_password.tribunal_app_user.result
+
+  # 13-REVIEW CR-02: the LIVE password was generated and seeded manually
+  # (runbook Step 13.d, 2026-07-20) and is embedded in the DATABASE_URL secret.
+  # A future `terraform import` + apply must NOT rotate it to this resource's
+  # random_password — that would take down all three Tribunal services.
+  lifecycle {
+    ignore_changes = [password]
+  }
 }
 
 resource "google_sql_user" "tribunal_worker_user" {
@@ -794,6 +802,12 @@ resource "google_sql_user" "tribunal_worker_user" {
   instance = google_sql_database_instance.main.name
   type     = "BUILT_IN"
   password = random_password.tribunal_worker_user.result
+
+  # 13-REVIEW CR-02: live password seeded manually into DATABASE_URL_WORKER —
+  # never rotate via apply/import (see tribunal_app_user note).
+  lifecycle {
+    ignore_changes = [password]
+  }
 }
 
 # ---------------------------------------------------- Tribunal provider key secrets (D-06)
@@ -953,8 +967,22 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
       max_instance_count = var.tribunal_worker_max_instances # D-08: size for 5+ (default 5)
     }
 
+    # 13-REVIEW CR-03: the asyncpg unix-socket DSN needs the Cloud SQL volume —
+    # gcloud's --add-cloudsql-instances does this implicitly at deploy.
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.main.connection_name]
+      }
+    }
+
     containers {
       image = local.tribunal_worker_image
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
 
       # No-cpu-throttling: CPU allocated even with no inbound HTTP so the poll loop +
       # long pipeline run between requests (the native equivalent of the gen1
@@ -1060,8 +1088,21 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
       max_instance_count = 3 # request-response tier
     }
 
+    # 13-REVIEW CR-03: asyncpg unix-socket DSN needs the Cloud SQL volume.
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.main.connection_name]
+      }
+    }
+
     containers {
       image = local.tribunal_api_image
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
 
       ports {
         container_port = 8080
@@ -1159,9 +1200,29 @@ resource "google_cloud_run_v2_job" "tribunal_migrate" {
     template {
       service_account = google_service_account.runtime.email
 
+      # 13-REVIEW CR-03: the asyncpg unix-socket DSN (host=/cloudsql/...) needs
+      # the Cloud SQL volume mounted — gcloud's --set-cloudsql-instances does
+      # this implicitly; the declared end-state must too.
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+
       containers {
         image = local.tribunal_api_image
-        args  = ["alembic", "upgrade", "head"]
+        # 13-REVIEW CR-03: `alembic upgrade head` from /app FAILS ("No
+        # 'script_location' key") — alembic.ini lives in /app/nestor_pulse_sdk
+        # with a cwd-relative script_location. Proven-live form (execution
+        # tribunal-migrate-sc64g, 2026-07-20):
+        command = ["sh"]
+        args    = ["-c", "cd /app/nestor_pulse_sdk && alembic upgrade head"]
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
 
         # asyncpg DSN (app_user) — NOT INSTANCE_CONNECTION_NAME/IAM (Pitfall 5). The migrate
         # Job runs the Tribunal alembic line under search_path=tribunal (env.py, Plan 02).

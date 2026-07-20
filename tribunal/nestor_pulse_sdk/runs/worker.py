@@ -38,7 +38,11 @@ from nestor_pulse_sdk.db.base import get_sessionmaker
 from nestor_pulse_sdk.db.rls import set_tenant_context
 
 log = structlog.get_logger(__name__)
-WORKER_ID = f"{socket.gethostname()}-{os.getpid()}"
+# Unique per PROCESS: Cloud Run instances can share hostname ('localhost') and
+# pid (1), so hostname-pid alone collides across instances — the advisory-lock
+# ownership re-check (runs/execute.py) keys on worker_id, which must therefore
+# be globally unique (13-REVIEW CR-01/IN-01).
+WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 POLL_INTERVAL_SECONDS = float(os.environ.get("NESTOR_WORKER_POLL_INTERVAL", "2.0"))
 STALE_RUN_MINUTES = int(os.environ.get("NESTOR_WORKER_STALE_MINUTES", "60"))
 
@@ -74,7 +78,7 @@ CLAIM_SQL = text("""
         FOR UPDATE SKIP LOCKED
         LIMIT 1
      )
-   RETURNING id, tenant_id, project_id, engine, brief
+   RETURNING id, tenant_id, project_id, engine, brief, worker_id
 """)
 
 

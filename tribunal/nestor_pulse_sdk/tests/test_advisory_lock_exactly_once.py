@@ -18,11 +18,13 @@ Key correctness points asserted here:
   * The lock key is the 64-bit form `('x'||md5(:run_id))::bit(64)::bigint`,
     NOT `hashtext()` (int4, 32-bit -> ~50% birthday collision at ~65k runs,
     which would spuriously serialize two DISTINCT runs -- threat T-13-07).
-  * After acquiring the lock, execute_run_locked RE-CHECKS the claimable set:
-    claimable = status='queued' OR (status='running' AND started_at stale).
+  * After acquiring the lock, execute_run_locked re-checks OWNERSHIP (13-REVIEW
+    CR-01 fix): still 'running', still OUR worker_id, claim still fresh. The
+    claimable set (status='queued' OR stale-'running') belongs to CLAIM_SQL in
+    worker.py — re-testing it post-claim refused the worker's own fresh claim.
     The paused/terminal states needs_input, needs_report_spec, cancelled,
-    completed, failed are EXPLICITLY NOT claimable and cause an early return
-    (no second engine dispatch) -- exactly-once.
+    completed, failed and stolen claims (worker_id mismatch) cause an early
+    return (no second engine dispatch) -- exactly-once.
 
 Tests:
   1. test_lock_sql_is_64bit_not_hashtext (static): the lock SQL in execute.py
@@ -34,10 +36,14 @@ Tests:
      calls execute_run_locked from runs.execute.
   4. test_no_out_of_scope_1_19_machinery (static): execute.py adds no Pub/Sub /
      Eventarc / reaper / concurrency-cap code (scope guard).
-  5. test_same_run_executes_exactly_once (LIVE, skip-guarded): two coroutines
-     handed the same claimed run_id dispatch the engine exactly once.
-  6. test_distinct_runs_do_not_serialize (LIVE, skip-guarded): two distinct
-     run_ids acquire independent 64-bit locks without blocking each other.
+  5. test_worker_claimed_run_dispatches (LIVE): CR-01 regression — a freshly
+     self-claimed run passes the ownership re-check and dispatches.
+  6. test_same_run_executes_exactly_once (LIVE): two coroutines handed the same
+     claimed run dispatch the engine exactly once.
+  7. test_stolen_claim_does_not_double_dispatch (LIVE): after a stale reclaim,
+     only the new owner dispatches.
+  8. test_distinct_runs_do_not_serialize (LIVE): two distinct claimed runs
+     acquire independent 64-bit locks without blocking each other.
 
 The live tests are authored-by-construction (dev machine has no Python/Docker)
 and executed in Plan 04's Cloud Build suite.
@@ -179,25 +185,82 @@ async def _make_live_sessionmaker():
     return sessionmaker, _cleanup
 
 
+def _patch_dispatch(side_effect):
+    """Patch the REAL dispatch target. execute_run_locked lazily does
+    `from nestor_pulse_sdk.runs.worker import execute_run` at call time, so the
+    interception point is the WORKER module attribute — patching runs.execute
+    would miss the call entirely (13-REVIEW WR-02)."""
+    worker_mod = pytest.importorskip("nestor_pulse_sdk.runs.worker")
+    return patch.object(
+        worker_mod, "execute_run", new=AsyncMock(side_effect=side_effect)
+    )
+
+
+async def _claim(sessionmaker, wid: str, stale_minutes: int = 60) -> dict | None:
+    """Model the production claim: run worker.py's CLAIM_SQL as worker `wid`."""
+    worker_mod = pytest.importorskip("nestor_pulse_sdk.runs.worker")
+    async with sessionmaker() as session:
+        async with session.begin():
+            sa = pytest.importorskip("sqlalchemy")
+            await session.execute(sa.text("SET search_path TO tribunal"))
+            result = await session.execute(
+                worker_mod.CLAIM_SQL, {"wid": wid, "stale": stale_minutes}
+            )
+            row = result.first()
+    return dict(row._mapping) if row is not None else None
+
+
 @pytest.mark.asyncio
-async def test_same_run_executes_exactly_once() -> None:
-    """Two concurrent execute_run_locked calls on the SAME claimed run_id run
-    the engine EXACTLY ONCE; the loser sees the run not-claimable and returns."""
+async def test_worker_claimed_run_dispatches() -> None:
+    """CR-01 regression: a run freshly claimed by THIS worker (status='running',
+    fresh started_at, our worker_id) MUST pass the post-lock re-check and
+    dispatch. The original re-check re-tested the pre-claim claimable set
+    (queued-or-stale) and refused its own claim — starving the queue forever."""
     execute_mod = pytest.importorskip("nestor_pulse_sdk.runs.execute")
     sessionmaker, cleanup = await _make_live_sessionmaker()
     try:
-        # Seed one queued run (helper inserts org/project/run under RLS bypass).
-        claimed = await _seed_queued_run(sessionmaker)
+        await _seed_queued_run(sessionmaker)
+        claimed = await _claim(sessionmaker, wid="worker-A")
+        assert claimed is not None, "CLAIM_SQL must claim the seeded queued run"
+        assert claimed["worker_id"] == "worker-A"
 
         dispatch_calls: list[uuid.UUID] = []
 
         async def _fake_execute_run(c: dict) -> None:
             dispatch_calls.append(c["id"])
-            # Mark the run terminal so the second lock-holder sees it not-claimable.
             await _mark_completed(sessionmaker, c["id"], c["tenant_id"])
 
-        # Patch the inner engine-dispatch so we count dispatches, not real work.
-        with patch.object(execute_mod, "execute_run", new=AsyncMock(side_effect=_fake_execute_run)):
+        with _patch_dispatch(_fake_execute_run):
+            await execute_mod.execute_run_locked(dict(claimed))
+
+        assert dispatch_calls == [claimed["id"]], (
+            "a freshly self-claimed run must dispatch exactly once "
+            "(CR-01: the old queued-or-stale re-check refused its own claim)"
+        )
+    finally:
+        await cleanup()
+
+
+@pytest.mark.asyncio
+async def test_same_run_executes_exactly_once() -> None:
+    """Two concurrent execute_run_locked calls on the SAME claimed run dispatch
+    the engine EXACTLY ONCE; the lock serializes them and the loser sees the
+    run no longer claimable (completed) and returns."""
+    execute_mod = pytest.importorskip("nestor_pulse_sdk.runs.execute")
+    sessionmaker, cleanup = await _make_live_sessionmaker()
+    try:
+        await _seed_queued_run(sessionmaker)
+        claimed = await _claim(sessionmaker, wid="worker-A")
+        assert claimed is not None
+
+        dispatch_calls: list[uuid.UUID] = []
+
+        async def _fake_execute_run(c: dict) -> None:
+            dispatch_calls.append(c["id"])
+            # Mark terminal so the second lock-holder sees it not-claimable.
+            await _mark_completed(sessionmaker, c["id"], c["tenant_id"])
+
+        with _patch_dispatch(_fake_execute_run):
             await asyncio.gather(
                 execute_mod.execute_run_locked(dict(claimed)),
                 execute_mod.execute_run_locked(dict(claimed)),
@@ -211,14 +274,64 @@ async def test_same_run_executes_exactly_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stolen_claim_does_not_double_dispatch() -> None:
+    """Stale-reclaim race: worker A claims, goes stale, worker B re-claims.
+    A's later dispatch attempt must be REFUSED (worker_id no longer A's) while
+    B's dispatch proceeds — exactly one engine dispatch total (T-13-06)."""
+    execute_mod = pytest.importorskip("nestor_pulse_sdk.runs.execute")
+    sa = pytest.importorskip("sqlalchemy")
+    sessionmaker, cleanup = await _make_live_sessionmaker()
+    try:
+        await _seed_queued_run(sessionmaker)
+        claimed_a = await _claim(sessionmaker, wid="worker-A")
+        assert claimed_a is not None
+
+        # Force A's claim stale, then B re-claims it (crash-recovery path).
+        async with sessionmaker() as session:
+            async with session.begin():
+                await session.execute(sa.text("SET search_path TO tribunal"))
+                await session.execute(
+                    sa.text(
+                        "UPDATE run SET started_at = NOW() - INTERVAL '1 day' "
+                        "WHERE id = :id"
+                    ),
+                    {"id": str(claimed_a["id"])},
+                )
+        claimed_b = await _claim(sessionmaker, wid="worker-B")
+        assert claimed_b is not None and claimed_b["id"] == claimed_a["id"]
+        assert claimed_b["worker_id"] == "worker-B"
+
+        dispatch_calls: list[str] = []
+
+        async def _fake_execute_run(c: dict) -> None:
+            dispatch_calls.append(str(c.get("worker_id")))
+            await _mark_completed(sessionmaker, c["id"], c["tenant_id"])
+
+        with _patch_dispatch(_fake_execute_run):
+            # A tries to dispatch its stolen claim; B dispatches its fresh one.
+            await execute_mod.execute_run_locked(dict(claimed_a))
+            await execute_mod.execute_run_locked(dict(claimed_b))
+
+        assert dispatch_calls == ["worker-B"], (
+            "only the current owner (worker-B) may dispatch; the stolen claim "
+            f"must be refused — got dispatches from {dispatch_calls}"
+        )
+    finally:
+        await cleanup()
+
+
+@pytest.mark.asyncio
 async def test_distinct_runs_do_not_serialize() -> None:
-    """Two DISTINCT run_ids acquire independent 64-bit advisory locks and both
-    dispatch -- the 64-bit key space keeps them from serializing (T-13-07)."""
+    """Two DISTINCT claimed runs acquire independent 64-bit advisory locks and
+    both dispatch -- the 64-bit key space keeps them from serializing (T-13-07)."""
     execute_mod = pytest.importorskip("nestor_pulse_sdk.runs.execute")
     sessionmaker, cleanup = await _make_live_sessionmaker()
     try:
-        claimed_a = await _seed_queued_run(sessionmaker)
-        claimed_b = await _seed_queued_run(sessionmaker)
+        await _seed_queued_run(sessionmaker)
+        await _seed_queued_run(sessionmaker)
+        claimed_a = await _claim(sessionmaker, wid="worker-A")
+        claimed_b = await _claim(sessionmaker, wid="worker-A")
+        assert claimed_a is not None and claimed_b is not None
         assert claimed_a["id"] != claimed_b["id"]
 
         dispatched: set[uuid.UUID] = set()
@@ -227,7 +340,7 @@ async def test_distinct_runs_do_not_serialize() -> None:
             dispatched.add(c["id"])
             await _mark_completed(sessionmaker, c["id"], c["tenant_id"])
 
-        with patch.object(execute_mod, "execute_run", new=AsyncMock(side_effect=_fake_execute_run)):
+        with _patch_dispatch(_fake_execute_run):
             await asyncio.gather(
                 execute_mod.execute_run_locked(dict(claimed_a)),
                 execute_mod.execute_run_locked(dict(claimed_b)),

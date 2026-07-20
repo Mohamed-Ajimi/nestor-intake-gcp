@@ -65,6 +65,20 @@ if _DATABASE_URL:
 target_metadata = Base.metadata
 
 
+def _include_object(obj, name, type_, reflected, compare_to):
+    """13-REVIEW WR-04: the shared database also carries the intake `nestor`
+    schema (and `public`). With include_schemas=True and no filter, autogenerate
+    and `alembic check` would reflect every intake table as "not in
+    target_metadata" and propose DROPping it. Only tribunal-line objects
+    (schema None via search_path, or 'tribunal') are ever considered."""
+    if type_ in ("table", "column", "index", "unique_constraint", "foreign_key_constraint"):
+        schema = getattr(obj, "schema", None) if type_ == "table" else getattr(
+            getattr(obj, "table", None), "schema", None
+        )
+        return schema in (None, "tribunal")
+    return True
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode -- emit SQL to stdout (alembic upgrade --sql)."""
     url = config.get_main_option("sqlalchemy.url")
@@ -76,6 +90,7 @@ def run_migrations_offline() -> None:
         # FORCE ROW LEVEL SECURITY DDL is in our migrations; render as-is.
         compare_type=True,
         include_schemas=True,
+        include_object=_include_object,
         # ENGINE-01: isolate the Tribunal line -- never share intake's alembic_version.
         version_table="tribunal_alembic_version",
         version_table_schema="tribunal",
@@ -111,6 +126,7 @@ def do_run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         include_schemas=True,
+        include_object=_include_object,
         # ENGINE-01: isolate the Tribunal line -- never share intake's alembic_version.
         version_table="tribunal_alembic_version",
         version_table_schema="tribunal",

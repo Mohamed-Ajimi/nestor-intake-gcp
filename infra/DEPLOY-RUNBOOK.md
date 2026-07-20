@@ -841,13 +841,20 @@ line into the `tribunal` schema (creating the schema + the `worker_user` grants 
 migration 0008). Uses the `DATABASE_URL` (app_user) secret — asyncpg, NOT the IAM connector.
 
 ```bash
+# PROVEN-LIVE FORM (2026-07-20, execution tribunal-migrate-sc64g). Two gotchas the
+# original draft got wrong (13-REVIEW CR-03):
+#   1. Jobs use --set-cloudsql-instances (NOT --add-cloudsql-instances — that's a
+#      services flag; gcloud prints help and deploys nothing).
+#   2. `alembic upgrade head` from /app FAILS ("No 'script_location' key found") —
+#      alembic.ini lives in /app/nestor_pulse_sdk with a cwd-relative script_location,
+#      so the command must cd there first.
 gcloud run jobs deploy tribunal-migrate \
   --image="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}" \
   --region="$REGION" --project="$GOOGLE_PROJECT" \
   --service-account="$RUNTIME_SA" \
-  --add-cloudsql-instances="$INSTANCE_CONN" \
+  --set-cloudsql-instances="$INSTANCE_CONN" \
   --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
-  --command="alembic" --args="upgrade,head"
+  --command="sh" --args="-c,cd /app/nestor_pulse_sdk && alembic upgrade head"
 
 gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
 ```
