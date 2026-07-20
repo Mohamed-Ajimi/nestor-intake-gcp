@@ -30,6 +30,12 @@ Two responsibilities, kept separate:
          X-Acting-User-Email  -> email       (the human, D-05)
          (constant)           -> raw_provider_user_id = "intake-seam"
 
+     ALL THREE headers are REQUIRED (missing/empty -> the pinned 400, WR-07):
+     the D-05 "the human is attributed" guarantee is a hard legal constraint
+     (frozen audit chain), so a seam call can never produce audit rows with a
+     silently-empty actor. The intake client (tribunal_client.py) always sends
+     all three.
+
      NO new or renamed AuthClaims field is introduced -- the audit chain's
      frozen `canonical_json` payload must not change shape (D-05 hard
      constraint; T-14-04).
@@ -175,7 +181,10 @@ async def get_internal_claims(request: Request) -> AuthClaims:
          AuthError(400) before any tenant is trusted (T-14-03), i.e. before an
          RLS query can run on an unset context and before an arbitrary string
          can reach the RLS GUC (set_tenant_context).
-      4. Map into the EXISTING AuthClaims fields (D-05 -- no new field).
+      4. The acting-user headers are REQUIRED too (WR-07) -- absent/empty
+         `X-Acting-User-Id` / `X-Acting-User-Email` raise AuthError(400) so the
+         D-05 audit attribution can never be silently empty.
+      5. Map into the EXISTING AuthClaims fields (D-05 -- no new field).
     """
     from nestor_pulse_sdk.auth.deps import get_auth_provider  # avoid import cycle
 
@@ -207,8 +216,20 @@ async def get_internal_claims(request: Request) -> AuthClaims:
             f"malformed {HEADER_TENANT_ID} header", status_code=400
         )
 
-    acting_user_id = request.headers.get(HEADER_ACTING_USER_ID, "")
-    acting_email = request.headers.get(HEADER_ACTING_USER_EMAIL, "")
+    acting_user_id = (request.headers.get(HEADER_ACTING_USER_ID) or "").strip()
+    acting_email = (request.headers.get(HEADER_ACTING_USER_EMAIL) or "").strip()
+    if not acting_user_id or not acting_email:
+        # PINNED status 400 (WR-07): the D-05 acting-user attribution is a hard
+        # legal constraint (frozen audit chain) -- an absent/empty acting-user
+        # header would flow AuthClaims(app_user_id="", email="") into every
+        # downstream audit row, silently voiding "the human is attributed".
+        # Same malformed-request class (400) as the tenant-header cases; this
+        # uses the EXISTING AuthClaims fields only (no shape change).
+        raise AuthError(
+            f"missing required {HEADER_ACTING_USER_ID} / "
+            f"{HEADER_ACTING_USER_EMAIL} header",
+            status_code=400,
+        )
 
     claims = AuthClaims(
         app_user_id=acting_user_id,

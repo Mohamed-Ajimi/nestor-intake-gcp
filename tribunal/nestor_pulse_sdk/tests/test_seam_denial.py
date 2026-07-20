@@ -39,6 +39,9 @@ membership check across multiple codes):
 |                            | trusted; no space-B data returned, no foreign id in body.   |
 | ``malformed_tenant``       | valid caller token, present-but-NON-UUID tenant header ->   |
 |                            | EXACTLY 400 (WR-03) BEFORE the value can reach the RLS GUC. |
+| ``missing_acting_user``    | valid caller token + tenant, absent/empty acting-user       |
+|                            | header(s) -> EXACTLY 400 (WR-07): D-05 audit attribution    |
+|                            | can never be silently empty.                                |
 | ``wrong_sa``               | ``verify_oauth2_token`` email != intake SA -> EXACTLY 403.  |
 | ``unauth``                 | no ``Authorization`` bearer header -> EXACTLY 401.          |
 | ``guc_leak``               | a request carrying space-A's tenant header can NEVER cause  |
@@ -281,6 +284,53 @@ def test_malformed_tenant_header_returns_exactly_400_before_guc():
             f"(contexts={recorder.tenant_contexts!r})."
         )
         assert _SPACE_B not in resp.text, "400 body leaked a foreign space id."
+    finally:
+        _cleanup(app)
+
+
+# ===========================================================================
+# Case: missing_acting_user — absent/empty D-05 attribution -> EXACTLY 400
+# ===========================================================================
+
+
+def test_missing_acting_user_headers_return_exactly_400():
+    """Absent OR empty ``X-Acting-User-Id`` / ``X-Acting-User-Email`` -> EXACTLY 400 (WR-07).
+
+    The D-05 "the human is attributed" guarantee is a hard legal constraint (frozen audit
+    chain): a seam call without the acting-user headers would flow
+    ``AuthClaims(app_user_id="", email="")`` into every downstream audit row. The seam
+    therefore REQUIRES both headers with the same pinned malformed-request 400 as the
+    tenant-header cases. Uses the EXISTING AuthClaims fields only — no shape change.
+    """
+    from fastapi.testclient import TestClient
+
+    app = _build_app()
+    try:
+        decoded = {"email": _INTAKE_SA, "email_verified": True, "aud": _AUD}
+        with patch(_VERIFY, return_value=decoded):
+            client = TestClient(app)
+
+            # (a) missing X-Acting-User-Id
+            hdrs = _headers()
+            del hdrs[HEADER_ACTING_USER_ID]
+            resp_a = client.post("/api/orgs/ensure", headers=hdrs)
+
+            # (b) missing X-Acting-User-Email
+            hdrs = _headers()
+            del hdrs[HEADER_ACTING_USER_EMAIL]
+            resp_b = client.post("/api/orgs/ensure", headers=hdrs)
+
+            # (c) present-but-empty acting-user id
+            resp_c = client.post(
+                "/api/orgs/ensure", headers=_headers(**{HEADER_ACTING_USER_ID: ""})
+            )
+
+        for label, resp in (("missing id", resp_a), ("missing email", resp_b), ("empty id", resp_c)):
+            assert resp.status_code == 400, (
+                f"acting-user case {label!r} must be EXACTLY 400 (WR-07, D-05 "
+                f"attribution), got {resp.status_code} (body={resp.text!r})."
+            )
+            assert _SPACE_B not in resp.text, f"400 body ({label}) leaked a foreign space id."
     finally:
         _cleanup(app)
 

@@ -18,6 +18,8 @@ Behaviors covered (14-01-PLAN.md Task 2 <behavior>):
   4. missing X-Nestor-Tenant-Id header -> AuthError(400)  [status PINNED: 400].
   4b. present-but-non-UUID X-Nestor-Tenant-Id -> AuthError(400)  [WR-03, same
       pinned malformed-request class, validated BEFORE claims are constructed].
+  4c. absent/empty X-Acting-User-Id / X-Acting-User-Email -> AuthError(400)
+      [WR-07: D-05 audit attribution can never be silently empty].
   5. email_verified missing/false -> AuthError(403).
 
 google.oauth2.id_token.verify_oauth2_token is mocked (no network) so the
@@ -186,6 +188,38 @@ async def test_malformed_tenant_header_raises_400_before_claims():
     # WR-03: malformed tenant is the same pinned malformed-request class as the
     # missing-header case — EXACTLY 400, raised BEFORE claims are constructed.
     assert ei.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 4c. Absent/empty acting-user attribution headers -> 400 (WR-07)
+# ---------------------------------------------------------------------------
+
+async def test_missing_or_empty_acting_user_headers_raise_400():
+    from nestor_pulse_sdk.auth.deps import set_auth_provider
+    from nestor_pulse_sdk.auth.internal_caller import get_internal_claims
+    from nestor_pulse_sdk.auth.provider import AuthError
+
+    provider = _make_provider()
+    set_auth_provider(provider)
+
+    decoded = {"email": _INTAKE_SA, "email_verified": True}
+
+    # (a) header absent entirely
+    hdrs = _headers()
+    del hdrs["X-Acting-User-Email"]
+    with patch(_VERIFY, return_value=decoded):
+        with pytest.raises(AuthError) as ei:
+            await get_internal_claims(_FakeRequest(hdrs))
+    assert ei.value.status_code == 400
+
+    # (b) header present but empty
+    hdrs = _headers(**{"X-Acting-User-Id": ""})
+    with patch(_VERIFY, return_value=decoded):
+        with pytest.raises(AuthError) as ei2:
+            await get_internal_claims(_FakeRequest(hdrs))
+    # WR-07: D-05 attribution is a hard legal constraint — an empty actor must
+    # never reach the audit chain. Same pinned 400 as the tenant-header cases.
+    assert ei2.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------

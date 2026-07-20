@@ -11,8 +11,8 @@
 # This config makes both EXECUTE meaningfully: it stands up a real postgres:15, creates the
 # NON-superuser app_user/worker_user roles exactly as Cloud SQL does out-of-band (runbook
 # Step 13.d), runs `alembic upgrade head` as app_user (mirroring the tribunal-migrate job),
-# then runs ONLY the seven seam-gate tests as app_user (non-superuser => RLS applies, FORCE RLS
-# binds the owner). A skip is a FAILURE here: the gate greps for exactly "7 passed" and zero
+# then runs ONLY the eight seam-gate tests as app_user (non-superuser => RLS applies, FORCE RLS
+# binds the owner). A skip is a FAILURE here: the gate greps for exactly "8 passed" and zero
 # "skipped", so a silently-skipped denial test can never fake a green gate again.
 #
 # The FULL tribunal suite (tribunal/cloudbuild.test.yaml) still runs separately; its
@@ -63,7 +63,7 @@ steps:
           -c "ALTER ROLE app_user SET search_path = tribunal, public"
 
         # 4. Migrations AS app_user (the tribunal-migrate job uses the app_user DSN —
-        #    runbook Step 13.f), then the seven seam-gate tests AS app_user (non-superuser,
+        #    runbook Step 13.f), then the eight seam-gate tests AS app_user (non-superuser,
         #    so RLS genuinely applies; FORCE RLS binds app_user as table owner).
         docker run --rm --network=host \
           -v /workspace:/workspace -w /workspace \
@@ -81,12 +81,12 @@ steps:
             # mode this config exists to close).
             SUMMARY_LINE=$$(grep -E "[0-9]+ (passed|failed|skipped|error)" /tmp/seam-gate.out | tail -n 1)
             echo "pytest summary: $$SUMMARY_LINE"
-            echo "$$SUMMARY_LINE" | grep -E "(^| )7 passed"
+            echo "$$SUMMARY_LINE" | grep -E "(^| )8 passed"
             if echo "$$SUMMARY_LINE" | grep -E "skipped|failed|error"; then
               echo "SEAM GATE RED: skips/failures in the pytest summary" >&2
               exit 1
             fi
-            echo "SEAM GATE GREEN: 7/7 executed and passed as non-superuser"
+            echo "SEAM GATE GREEN: 8/8 executed and passed as non-superuser"
           '
 
         docker rm -f seam-pg
