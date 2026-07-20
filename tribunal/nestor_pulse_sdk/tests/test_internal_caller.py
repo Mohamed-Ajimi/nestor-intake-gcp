@@ -16,6 +16,8 @@ Behaviors covered (14-01-PLAN.md Task 2 <behavior>):
   2. wrong-SA: decoded email != intake SA -> AuthError(403).
   3. bad token: verify_oauth2_token raises ValueError -> AuthError(401).
   4. missing X-Nestor-Tenant-Id header -> AuthError(400)  [status PINNED: 400].
+  4b. present-but-non-UUID X-Nestor-Tenant-Id -> AuthError(400)  [WR-03, same
+      pinned malformed-request class, validated BEFORE claims are constructed].
   5. email_verified missing/false -> AuthError(403).
 
 google.oauth2.id_token.verify_oauth2_token is mocked (no network) so the
@@ -160,6 +162,29 @@ async def test_missing_tenant_header_raises_before_any_tenant_trusted():
             await get_internal_claims(_FakeRequest(hdrs))
     # PINNED: 400 -- a missing required header from an authenticated internal
     # caller is a malformed request, not an auth failure. Plan 03 must match.
+    assert ei.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 4b. Present-but-non-UUID X-Nestor-Tenant-Id -> 400 (WR-03)
+# ---------------------------------------------------------------------------
+
+async def test_malformed_tenant_header_raises_400_before_claims():
+    from nestor_pulse_sdk.auth.deps import set_auth_provider
+    from nestor_pulse_sdk.auth.internal_caller import get_internal_claims
+    from nestor_pulse_sdk.auth.provider import AuthError
+
+    provider = _make_provider()
+    set_auth_provider(provider)
+
+    hdrs = _headers(**{"X-Nestor-Tenant-Id": "not-a-uuid"})
+
+    decoded = {"email": _INTAKE_SA, "email_verified": True}
+    with patch(_VERIFY, return_value=decoded):
+        with pytest.raises(AuthError) as ei:
+            await get_internal_claims(_FakeRequest(hdrs))
+    # WR-03: malformed tenant is the same pinned malformed-request class as the
+    # missing-header case — EXACTLY 400, raised BEFORE claims are constructed.
     assert ei.value.status_code == 400
 
 

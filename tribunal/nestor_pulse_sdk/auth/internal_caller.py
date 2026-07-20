@@ -53,6 +53,7 @@ References:
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi import Request
@@ -169,9 +170,11 @@ async def get_internal_claims(request: Request) -> AuthClaims:
     Flow:
       1. Parse the bearer OIDC token.
       2. Validate the CALLER via the installed InternalCallerProvider.
-      3. Read the three seam headers; the tenant header is REQUIRED -- a missing
-         `X-Nestor-Tenant-Id` raises AuthError(400) before any tenant is trusted
-         (T-14-03), i.e. before an RLS query can run on an unset context.
+      3. Read the three seam headers; the tenant header is REQUIRED and must be
+         a UUID -- a missing OR malformed `X-Nestor-Tenant-Id` raises
+         AuthError(400) before any tenant is trusted (T-14-03), i.e. before an
+         RLS query can run on an unset context and before an arbitrary string
+         can reach the RLS GUC (set_tenant_context).
       4. Map into the EXISTING AuthClaims fields (D-05 -- no new field).
     """
     from nestor_pulse_sdk.auth.deps import get_auth_provider  # avoid import cycle
@@ -189,6 +192,19 @@ async def get_internal_claims(request: Request) -> AuthClaims:
         # denial test asserts this exact code.
         raise AuthError(
             f"missing required {HEADER_TENANT_ID} header", status_code=400
+        )
+
+    try:
+        uuid.UUID(tenant_id)
+    except ValueError:
+        # PINNED status 400 (WR-03): a present-but-non-UUID tenant from an
+        # authenticated internal caller is a malformed request, same class as
+        # the missing-header case. Validated HERE, at the seam boundary and
+        # BEFORE the claims are constructed, so an attacker-chosen arbitrary
+        # string can never be handed to the RLS GUC (set_tenant_context) or
+        # crash ensure_org's uuid.UUID() as an opaque 500.
+        raise AuthError(
+            f"malformed {HEADER_TENANT_ID} header", status_code=400
         )
 
     acting_user_id = request.headers.get(HEADER_ACTING_USER_ID, "")

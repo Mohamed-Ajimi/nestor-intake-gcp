@@ -37,6 +37,8 @@ membership check across multiple codes):
 | ``missing_tenant``         | valid caller token, NO ``X-Nestor-Tenant-Id`` -> EXACTLY    |
 |                            | 400 (the PINNED code, 14-01-SUMMARY) BEFORE any tenant is   |
 |                            | trusted; no space-B data returned, no foreign id in body.   |
+| ``malformed_tenant``       | valid caller token, present-but-NON-UUID tenant header ->   |
+|                            | EXACTLY 400 (WR-03) BEFORE the value can reach the RLS GUC. |
 | ``wrong_sa``               | ``verify_oauth2_token`` email != intake SA -> EXACTLY 403.  |
 | ``unauth``                 | no ``Authorization`` bearer header -> EXACTLY 401.          |
 | ``guc_leak``               | a request carrying space-A's tenant header can NEVER cause  |
@@ -46,7 +48,7 @@ membership check across multiple codes):
 Skip-clean (dev-box discipline): ``pytestmark = pytest.mark.integration``; the heavy
 imports are guarded with ``pytest.importorskip`` (``fastapi``, ``httpx``, ``google.oauth2``)
 so the file COLLECTS on a box without the deps. In the Tribunal CI image
-(``tribunal/cloudbuild.test.yaml``) all guards resolve and the four cases EXECUTE — the
+(``tribunal/cloudbuild.test.yaml``) all guards resolve and the denial cases EXECUTE — the
 D-08 seam half of the SEAM-02 gate. No live DB needed (DB-free by design).
 
 Analog: ``nestor_pulse_sdk/tests/test_internal_caller.py`` (unit-level provider tests,
@@ -239,6 +241,46 @@ def test_missing_tenant_header_returns_exactly_400_no_foreign_body():
         # No foreign space id leaks into the error body.
         body = resp.text
         assert _SPACE_B not in body, "400 body leaked a foreign space id."
+    finally:
+        _cleanup(app)
+
+
+# ===========================================================================
+# Case: malformed_tenant — present-but-non-UUID tenant header -> EXACTLY 400
+# ===========================================================================
+
+
+def test_malformed_tenant_header_returns_exactly_400_before_guc():
+    """Valid caller token but a NON-UUID ``X-Nestor-Tenant-Id`` -> EXACTLY 400 (WR-03).
+
+    The rejection fires in ``get_internal_claims`` at the seam boundary, BEFORE the claims
+    are constructed — so the attacker-chosen arbitrary string can never be handed to the RLS
+    GUC (``set_tenant_context``) inside an open transaction, and never crashes ``ensure_org``'s
+    ``uuid.UUID()`` as an opaque 500. Same pinned malformed-request class (400) as the
+    missing-header case.
+    """
+    from fastapi.testclient import TestClient
+
+    recorder = _RecordingSession()
+    app = _build_app(recorder=recorder)
+    try:
+        hdrs = _headers(**{HEADER_TENANT_ID: "not-a-uuid"})
+
+        decoded = {"email": _INTAKE_SA, "email_verified": True, "aud": _AUD}
+        with patch(_VERIFY, return_value=decoded):
+            client = TestClient(app)
+            resp = client.post("/api/orgs/ensure", headers=hdrs)
+
+        assert resp.status_code == 400, (
+            f"malformed X-Nestor-Tenant-Id must be EXACTLY 400 (WR-03, pinned "
+            f"malformed-request class), got {resp.status_code} (body={resp.text!r})."
+        )
+        # The garbage value must NEVER have reached the DB tenant context.
+        assert not recorder.tenant_contexts, (
+            f"GUC-LEAK: a malformed tenant reached set_tenant_context "
+            f"(contexts={recorder.tenant_contexts!r})."
+        )
+        assert _SPACE_B not in resp.text, "400 body leaked a foreign space id."
     finally:
         _cleanup(app)
 
