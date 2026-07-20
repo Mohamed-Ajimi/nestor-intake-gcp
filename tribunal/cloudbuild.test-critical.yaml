@@ -1,0 +1,31 @@
+# tribunal/cloudbuild.test-critical.yaml — Phase-13 critical test gate (PROVEN GREEN 22/22, 2026-07-20).
+# Runs the phase-owned test files (schema isolation, advisory-lock exactly-once incl. the
+# CR-01 regression + fencing-token races, hash-chain replay) against a dedicated Postgres
+# on the Cloud Build host network with a DATABASE_URL handed to every test (no
+# testcontainers-in-docker). Roles pre-created because migration 0008 GRANTs to them; the
+# login role gets search_path=tribunal,public to mirror the production engine.
+# The carried test_rls_isolation.py is EXCLUDED here: this harness connects as a Postgres
+# superuser and RLS never applies to superusers — running it faithfully needs a
+# non-superuser DSN harness (full-suite triage chore, see 13-PROOF-RESULTS.md).
+steps:
+  - id: pytest-hostnet
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        docker pull -q postgres:15
+        docker run -d --name pg --network=host -e POSTGRES_PASSWORD=testpw postgres:15
+        for i in $$(seq 1 30); do docker exec pg pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+        docker exec pg psql -U postgres -c "CREATE ROLE worker_user LOGIN PASSWORD 'workerpw'" 
+        docker exec pg psql -U postgres -c "CREATE ROLE app_user LOGIN PASSWORD 'apppw'"
+        docker exec pg psql -U postgres -c "ALTER ROLE postgres SET search_path = tribunal,public"
+        docker run --rm --network=host \
+          -v /workspace:/workspace -w /workspace \
+          -e DATABASE_URL="postgresql+asyncpg://postgres:testpw@localhost:5432/postgres" \
+          python:3.11-slim bash -c "pip install --no-cache-dir -q -r requirements.txt && python -m pytest nestor_pulse_sdk/tests/test_schema_isolation.py nestor_pulse_sdk/tests/test_advisory_lock_exactly_once.py nestor_pulse_sdk/tests/test_hash_chain_replay.py -v -rs --tb=short"
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: "1800s"
