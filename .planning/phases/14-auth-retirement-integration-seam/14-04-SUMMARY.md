@@ -201,6 +201,34 @@ None beyond the plan's `<threat_model>`. The live changes implement exactly the 
 - Commits present: `5c1f6b3` (Task 1), `ad91454` (Task 2), `28dde69` (server.py fix), `3fce1f9` (deferred-items), `0dd46df` (seam re-home).
 - Live end-state verified: tribunal-api/worker on tribunal-run; invoker=nestor-run only; seam env on both services; SEAM GATE build `25b8f9eb` green; positive run `b188a83e` completed chain=OK.
 
+## Fix-cycle Addendum (2026-07-20, post-review redeploy)
+
+A code-review fix cycle landed 11 findings on master (`e93c0a8` review report → `dd6aa6d`): runbook 14.g gate corrected (6→8), `deploy-api.sh` self-heals TRIBUNAL_SERVICE_URL + fails fast if empty, OIDC verify offloaded to the threadpool, malformed `X-Nestor-Tenant-Id` → 400, `ensure_org/ensure_project` concurrency-hardened, wildcard CORS removed in deployed mode, `LOCAL_DEV_AUTH` refused under `K_SERVICE`, acting-user headers now REQUIRED (400 when absent), google-auth declared explicitly.
+
+**Review commit range:** `e93c0a8`..`dd6aa6d` (11 fix commits) + my `dd9768e` (pin correction, below).
+
+### Blocking regression found + fixed (Rule 3)
+The review's WR-08 commit (`57dfedd`) pinned `google-auth==2.40.3` in `tribunal/requirements.txt`, but `google-adk==1.34.1` publishes `google-auth[pyopenssl]>=2.47` — so every FRESH tribunal image build (the seam-gate pip install AND the Step-14.b redeploy) failed `pip ResolutionImpossible` (build `e6e00f68`). The pre-WR-08 green image had resolved google-auth transitively to ≥2.47; the exact pin was simply below the floor. **Fix (`dd9768e`):** relaxed the pin to `google-auth>=2.47,<3`, reproducing the known-good transitive resolution while still guarding against a 3.x major bump. The live service was never at risk — its image predated the WR-08 commit.
+
+### Seam gate rerun — GREEN "8 passed"
+`gcloud builds submit tribunal --config=tribunal/cloudbuild.seam-gate.yaml` (repo root) → **build `79c095fd` SUCCESS**, log: `SEAM GATE GREEN: 8/8 executed and passed as non-superuser`. The 8 = 6 seam denial cases (now incl. `malformed_tenant`→400 [WR-03] and `missing_acting_user`→400 [WR-07]) + 2 RLS cases, all as the non-superuser `app_user`. The gate's exact-match grep (`8 passed`) rejects any skip.
+
+### Redeploy (deploy-gap closed for the fixed code)
+- **New image SHA:** `20260720-233938` (api build `0d0ccd33`, worker build `36e2651b`).
+- **tribunal-api** rev `tribunal-api-20260720-233938-234912` — **Ready=True, 100% traffic**, image `…:20260720-233938`, SA `tribunal-run`.
+- **tribunal-worker** redeployed on `tribunal-run`, image `…:20260720-233938`.
+
+### Re-verified live end-state
+| Check | Result |
+|-------|--------|
+| New tribunal-api revision Ready + traffic | `20260720-233938-234912` — True, 100% |
+| Service account | `tribunal-run@…` (both api + worker) |
+| Seam env present | `TRIBUNAL_SERVICE_URL=https://tribunal-api-ybkr7metoq-ew.a.run.app` + `INTAKE_RUNTIME_SA_EMAIL=nestor-run@…` |
+| Invoker binding | `roles/run.invoker` = `serviceAccount:nestor-run@…` ONLY |
+| Unauthenticated negative proof | `POST /api/orgs/ensure` no bearer → **403** (IAM edge) |
+
+**Fix-cycle commit:** `dd9768e` (google-auth pin) + this addendum.
+
 ---
 *Phase: 14-auth-retirement-integration-seam*
 *Completed: 2026-07-20*
