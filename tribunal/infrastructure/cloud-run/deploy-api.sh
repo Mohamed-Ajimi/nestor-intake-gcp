@@ -5,7 +5,8 @@
 # (was the old standalone Tribunal build). Retargeted per Phase 13:
 #   - PROJECT   -> $GOOGLE_PROJECT (the intake project; operator exports it)
 #   - INSTANCE  -> the intake Cloud SQL instance ($GOOGLE_PROJECT:$REGION:$INSTANCE_NAME)
-#   - SA        -> nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com (the intake runtime SA)
+#   - SA        -> tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com (Phase 14: the
+#      DEDICATED least-privilege Tribunal runtime SA, WR-03/D-04b — was nestor-run in Phase 13)
 #   - image     -> europe-west1-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:<tag>
 #     (the existing `nestor` Artifact Registry repo — no new repo; built via Cloud Build,
 #      NOT locally. See tribunal/cloudbuild.api.yaml.)
@@ -29,13 +30,26 @@ set -euo pipefail
 PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
 REGION="${REGION:-europe-west1}"
 INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
-SA="nestor-run@${PROJECT}.iam.gserviceaccount.com"
+# Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal runtime SA — NOT the
+# intake nestor-run SA. Making caller SA (nestor-run) != callee SA (tribunal-run) is what
+# makes the tribunal-api invoker gate meaningful (D-04) and the wrong-SA proof constructible.
+SA="tribunal-run@${PROJECT}.iam.gserviceaccount.com"
 INSTANCE="${PROJECT}:${REGION}:${INSTANCE_NAME}"
 SERVICE_NAME="tribunal-api"
 REPO="${REPO:-nestor}"
 
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 API_IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/tribunal-api:${IMAGE_TAG}"
+
+# Phase 14 seam env vars (both PLAIN non-secret; read by the InternalCallerProvider):
+#   TRIBUNAL_SERVICE_URL   = tribunal-api's OWN run.app URL WITHOUT a path (the OIDC audience
+#                            it verifies its caller token's aud against — Pitfall 4).
+#   INTAKE_RUNTIME_SA_EMAIL = the intake nestor-run SA the OIDC caller email must match.
+# TRIBUNAL_SERVICE_URL cannot be known until the service is first deployed + described, so the
+# runbook (§ Phase 14, Step 14.d) captures it and sets both via `--update-env-vars` post-deploy;
+# these defaults let a re-run carry them idempotently once captured.
+TRIBUNAL_SERVICE_URL="${TRIBUNAL_SERVICE_URL:-}"
+INTAKE_RUNTIME_SA_EMAIL="${INTAKE_RUNTIME_SA_EMAIL:-nestor-run@${PROJECT}.iam.gserviceaccount.com}"
 
 command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1; }
 
@@ -57,7 +71,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=3 \
   --timeout=300 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="NESTOR_ENV=prod,NESTOR_TRIBUNAL_UNCAPPED=1" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_TRIBUNAL_UNCAPPED=1,TRIBUNAL_SERVICE_URL=${TRIBUNAL_SERVICE_URL},INTAKE_RUNTIME_SA_EMAIL=${INTAKE_RUNTIME_SA_EMAIL}" \
   --set-secrets="\
 DATABASE_URL=DATABASE_URL:latest,\
 AUDIT_GCS_BUCKET=AUDIT_GCS_BUCKET:latest,\

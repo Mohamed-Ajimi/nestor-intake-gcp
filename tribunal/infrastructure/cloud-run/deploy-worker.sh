@@ -5,7 +5,8 @@
 # project (was the old standalone Tribunal build). Retargeted per Phase 13:
 #   - PROJECT   -> $GOOGLE_PROJECT (the intake project; operator exports it)
 #   - INSTANCE  -> the intake Cloud SQL instance ($GOOGLE_PROJECT:$REGION:$INSTANCE_NAME)
-#   - SA        -> nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com (the intake runtime SA)
+#   - SA        -> tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com (Phase 14: the
+#      DEDICATED least-privilege Tribunal runtime SA, WR-03/D-04b — was nestor-run in Phase 13)
 #   - image     -> europe-west1-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:<tag>
 #     (the existing `nestor` Artifact Registry repo — no new repo; built via Cloud Build,
 #      NOT locally: the dev box has no Docker. See tribunal/cloudbuild.worker.yaml.)
@@ -37,7 +38,10 @@ set -euo pipefail
 PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
 REGION="${REGION:-europe-west1}"
 INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
-SA="nestor-run@${PROJECT}.iam.gserviceaccount.com"
+# Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal runtime SA — NOT the
+# intake nestor-run SA. A compromised worker reaches only the Tribunal secrets + audit
+# bucket (no identitytoolkit.admin, no intake superadmin secret, no intake uploads bucket).
+SA="tribunal-run@${PROJECT}.iam.gserviceaccount.com"
 INSTANCE="${PROJECT}:${REGION}:${INSTANCE_NAME}"
 SERVICE_NAME="tribunal-worker"
 REPO="${REPO:-nestor}"

@@ -336,3 +336,26 @@ variable "tribunal_audit_bucket_name" {
   type        = string
   default     = ""
 }
+
+# ================================================================================
+# Phase 14 — Auth retirement + integration seam (dedicated SA + seam env)
+# ================================================================================
+# Phase 14 gives the Tribunal services their OWN least-privilege runtime SA
+# (`tribunal-run`, WR-03/D-04b) — distinct from the intake `nestor-run` SA — and
+# binds the tribunal-api invoker to ONLY the intake SA (D-04 outer gate). Two new
+# variables support that: the dedicated SA's account id, and the non-secret seam
+# service URL both the intake tribunal_client and the Tribunal InternalCallerProvider
+# read. As with every prior phase these are the INTENDED end-state, INERT until the
+# operator runs the § Phase 14 gcloud steps in infra/DEPLOY-RUNBOOK.md (Plan 04).
+
+variable "tribunal_runtime_sa_id" {
+  description = "Account ID (local part) for the DEDICATED Tribunal Cloud Run runtime service account (WR-03/D-04b). Distinct from `runtime_sa_id` (the intake `nestor-run` SA): the Tribunal services + migrate Job run as THIS least-privilege SA (cloudsql.client + the six Tribunal secrets + the audit bucket ONLY — no identitytoolkit.admin, no intake superadmin secret, no intake uploads bucket). Making caller SA (nestor-run) != callee SA (tribunal-run) is what makes the tribunal-api invoker gate meaningful."
+  type        = string
+  default     = "tribunal-run"
+}
+
+variable "tribunal_service_url" {
+  description = "The tribunal-api Cloud Run service URL WITHOUT a path (e.g. https://tribunal-api-xxxx.run.app). Non-secret. Used verbatim as the OIDC audience: the intake nestor-api's tribunal_client mints an ID token for it, and tribunal-api's InternalCallerProvider verifies its own aud against it. Default \"\" and IaC-drift-inert until the runbook `--update-env-vars TRIBUNAL_SERVICE_URL=...` step (§ Phase 14) captures it from `gcloud run services describe tribunal-api` and sets it live on BOTH services (Pitfall 4 — never guess the URL, never include a path)."
+  type        = string
+  default     = ""
+}

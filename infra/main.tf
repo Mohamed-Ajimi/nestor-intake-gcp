@@ -440,6 +440,16 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "APP_BASE_URL"
         value = var.app_base_url
       }
+      # Phase 14 (SEAM-02 / D-06): the tribunal-api service URL WITHOUT a path — read by
+      # app/research/tribunal_client.py as the OIDC audience it mints an ID token for when
+      # calling /api/orgs/ensure + /api/projects/ensure (14-02-SUMMARY). PLAIN non-secret
+      # (a service URL, never a Secret Manager reference). IaC-DRIFT: inert until the
+      # runbook `--update-env-vars TRIBUNAL_SERVICE_URL=<captured describe url>` on nestor-api
+      # (§ Phase 14, Step 14.d) sets it live — same captured URL as tribunal-api's own aud.
+      env {
+        name  = "TRIBUNAL_SERVICE_URL"
+        value = var.tribunal_service_url
+      }
       # Path B (D-05a): the secret RESOURCE NAME (NOT the password value) that
       # base.py::_load_superadmin_password() reads at runtime via Secret Manager.
       # `<secret resource name>/versions/latest` is the exact form
@@ -755,6 +765,55 @@ locals {
   tribunal_audit_bucket_name = var.tribunal_audit_bucket_name != "" ? var.tribunal_audit_bucket_name : "${var.project}-nestor-audit"
 }
 
+# ================================================================================
+# Phase 14 — dedicated least-privilege Tribunal runtime SA (WR-03 / D-04b)
+# ================================================================================
+# The WR-03 finding: Phase 13 ran BOTH Tribunal services + the migrate Job on the
+# intake `nestor-run` SA (google_service_account.runtime), which also carries
+# identitytoolkit.admin, the intake superadmin DB-password secret, and the intake
+# uploads bucket. That makes the tribunal-api invoker gate theater — the caller and
+# callee SA are the SAME identity, and a compromised Tribunal worker inherits the
+# intake admin surfaces. Phase 14 gives Tribunal its OWN least-privilege SA so:
+#   1. caller (nestor-run) != callee (tribunal-run) — the invoker gate becomes real
+#      and the wrong-SA negative proof (Task 3) is even constructible; and
+#   2. a compromised Tribunal worker reaches ONLY the Tribunal secrets + audit bucket,
+#      never identitytoolkit.admin / the intake superadmin secret / intake uploads.
+#
+# LEAST-PRIVILEGE GRANT LIST (the ONLY grants tribunal-run gets):
+#   - roles/cloudsql.client (project) — the connector/instance attach for the asyncpg
+#     unix-socket DSN. NOT roles/cloudsql.instanceUser: the Tribunal services
+#     authenticate with a stored BUILT_IN-user password (Pitfall 5), NOT IAM DB login,
+#     so instanceUser (IAM login) is unnecessary.
+#   - resource-scoped secretmanager.secretAccessor on the SIX Tribunal secrets ONLY
+#     (tribunal_gemini / tribunal_claude / tribunal_openai / tribunal_database_url /
+#     tribunal_database_url_worker / tribunal_audit_bucket).
+#   - bucket-scoped storage.objectAdmin on the tribunal_audit bucket ONLY.
+# Deliberately NOT granted: identitytoolkit.admin, the intake app_superadmin secret,
+# the intake uploads bucket — those stay bound to the intake runtime SA alone.
+#
+# IaC-DRIFT: as with every prior phase, this is the INTENDED end-state, INERT until
+# the operator runs the § Phase 14 gcloud steps in infra/DEPLOY-RUNBOOK.md (Plan 04).
+resource "google_service_account" "tribunal_run" {
+  account_id   = var.tribunal_runtime_sa_id
+  display_name = "Tribunal engine runtime (least-priv)"
+}
+
+# cloudsql.client ONLY (NOT instanceUser — BUILT_IN-password path, not IAM DB login).
+resource "google_project_iam_member" "tribunal_run_cloudsql_client" {
+  project = var.project
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.tribunal_run.email}"
+}
+
+# NOTE: the resource-scoped secretAccessor grants on the six Tribunal secrets and the
+# tribunal_audit-bucket objectAdmin grant are declared ONCE (below, in the Phase-13
+# blocks) and REPOINTED from the intake runtime SA to `tribunal_run.email` in this
+# phase — the grants follow the SA that now runs the services/job. See
+# google_secret_manager_secret_iam_member.runtime_tribunal_* and
+# google_storage_bucket_iam_member.runtime_tribunal_audit_object_admin — their `member`
+# is now `google_service_account.tribunal_run.email`. Keeping a single grant per secret
+# (repointed) rather than adding a duplicate keeps the least-privilege set exact.
+
 # ---------------------------------------------------- Tribunal BUILT_IN DB users (Pitfall 5)
 # `app_user` (API) + `worker_user` (cross-tenant claim role). BUILT_IN password users
 # (mirror google_sql_user.app_superadmin above) because the Tribunal services authenticate
@@ -826,7 +885,9 @@ resource "google_secret_manager_secret" "tribunal_gemini" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_gemini_accessor" {
   secret_id = google_secret_manager_secret.tribunal_gemini.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed from the intake runtime SA to the DEDICATED
+  # tribunal-run SA — the grant follows the SA that now runs the Tribunal services.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 resource "google_secret_manager_secret" "tribunal_claude" {
@@ -839,7 +900,8 @@ resource "google_secret_manager_secret" "tribunal_claude" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_claude_accessor" {
   secret_id = google_secret_manager_secret.tribunal_claude.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 resource "google_secret_manager_secret" "tribunal_openai" {
@@ -852,7 +914,8 @@ resource "google_secret_manager_secret" "tribunal_openai" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_openai_accessor" {
   secret_id = google_secret_manager_secret.tribunal_openai.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 # ---------------------------------------------------- Tribunal DB URL + bucket secrets
@@ -871,7 +934,8 @@ resource "google_secret_manager_secret" "tribunal_database_url" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_database_url_accessor" {
   secret_id = google_secret_manager_secret.tribunal_database_url.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 resource "google_secret_manager_secret" "tribunal_database_url_worker" {
@@ -884,7 +948,8 @@ resource "google_secret_manager_secret" "tribunal_database_url_worker" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_database_url_worker_accessor" {
   secret_id = google_secret_manager_secret.tribunal_database_url_worker.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 resource "google_secret_manager_secret" "tribunal_audit_bucket" {
@@ -897,7 +962,8 @@ resource "google_secret_manager_secret" "tribunal_audit_bucket" {
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_audit_bucket_accessor" {
   secret_id = google_secret_manager_secret.tribunal_audit_bucket.secret_id
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 # ---------------------------------------------------- Tribunal audit-evidence bucket (D-09)
@@ -941,7 +1007,9 @@ resource "google_storage_bucket" "tribunal_audit" {
 resource "google_storage_bucket_iam_member" "runtime_tribunal_audit_object_admin" {
   bucket = google_storage_bucket.tribunal_audit.name
   role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.runtime.email}"
+  # Phase 14 (WR-03): repointed from the intake runtime SA to the dedicated tribunal-run
+  # SA — objectAdmin (upload + patch retention) follows the SA that now runs the engine.
+  member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
 # ---------------------------------------------------- tribunal-worker service (D-04/D-08)
@@ -957,7 +1025,9 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
   location = var.region
 
   template {
-    service_account = google_service_account.runtime.email
+    # Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal SA, NOT the intake
+    # runtime SA — a compromised worker reaches only the Tribunal secrets + audit bucket.
+    service_account = google_service_account.tribunal_run.email
 
     # Long timeout so a full deep-research run (~35 min) is not severed (old deploy: 3600).
     timeout = "3600s"
@@ -1055,10 +1125,12 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
   }
 
   depends_on = [
-    google_project_iam_member.runtime_cloudsql_client,
-    google_project_iam_member.runtime_cloudsql_instance_user,
+    # Phase 14 (WR-03): cloudsql.client now follows the dedicated tribunal-run SA
+    # (NOT instanceUser — BUILT_IN-password path, not IAM DB login).
+    google_project_iam_member.tribunal_run_cloudsql_client,
     # worker_user + the worker's secrets/grants + the audit bucket grant must exist before
     # the worker boots, or native secret_key_ref resolution / the first audit upload fails.
+    # These grants are now bound to tribunal-run (repointed this phase).
     google_sql_user.tribunal_worker_user,
     google_secret_manager_secret_iam_member.runtime_tribunal_database_url_worker_accessor,
     google_secret_manager_secret_iam_member.runtime_tribunal_claude_accessor,
@@ -1079,7 +1151,8 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
   location = var.region
 
   template {
-    service_account = google_service_account.runtime.email
+    # Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal SA (see the worker).
+    service_account = google_service_account.tribunal_run.email
 
     timeout = "300s"
 
@@ -1111,6 +1184,21 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
       env {
         name  = "NESTOR_TRIBUNAL_UNCAPPED"
         value = "1"
+      }
+      # Phase 14 seam env vars (both PLAIN non-secret — read by InternalCallerProvider,
+      # 14-01-SUMMARY). TRIBUNAL_SERVICE_URL is tribunal-api's OWN run.app URL WITHOUT a
+      # path (the OIDC audience it verifies its token's aud against — Pitfall 4);
+      # INTAKE_RUNTIME_SA_EMAIL is the intake nestor-run SA the caller email must match.
+      # IaC-DRIFT: inert until the runbook `--update-env-vars TRIBUNAL_SERVICE_URL=<captured
+      # describe url>,INTAKE_RUNTIME_SA_EMAIL=...` (§ Phase 14, Step 14.d) sets them live —
+      # the URL cannot be known until the service is first deployed + described.
+      env {
+        name  = "TRIBUNAL_SERVICE_URL"
+        value = var.tribunal_service_url
+      }
+      env {
+        name  = "INTAKE_RUNTIME_SA_EMAIL"
+        value = google_service_account.runtime.email
       }
       env {
         name = "AUDIT_GCS_BUCKET"
@@ -1162,8 +1250,8 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
   }
 
   depends_on = [
-    google_project_iam_member.runtime_cloudsql_client,
-    google_project_iam_member.runtime_cloudsql_instance_user,
+    # Phase 14 (WR-03): cloudsql.client now follows the dedicated tribunal-run SA.
+    google_project_iam_member.tribunal_run_cloudsql_client,
     google_sql_user.tribunal_app_user,
     google_secret_manager_secret_iam_member.runtime_tribunal_database_url_accessor,
     google_secret_manager_secret_iam_member.runtime_tribunal_claude_accessor,
@@ -1174,14 +1262,19 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
   ]
 }
 
-# Authenticated-only invoker for the Tribunal API by default (gated on the same
-# var.allow_unauthenticated toggle as the intake api). No unconditional allUsers binding.
+# ---------------------------------------------------- tribunal-api invoker (D-04 outer gate)
+# Phase 14 (WR-03/D-04): the ONLY principal allowed to invoke tribunal-api is the intake
+# nestor-run SA — an UNCONDITIONAL run.invoker binding (NOT gated on allow_unauthenticated,
+# and NOT allUsers). The service stays --no-allow-unauthenticated: any browser / third party
+# / wrong-SA caller is rejected at the Cloud Run IAM gate (T-14-12), and even a mis-set IAM
+# binding is caught by the InternalCallerProvider inner gate (Plan 01, T-14-13). This gate is
+# only MEANINGFUL because Phase 14 gave Tribunal a dedicated SA — caller (nestor-run) != callee
+# (tribunal-run) — so the wrong-SA negative proof (Task 3) is even constructible.
 resource "google_cloud_run_v2_service_iam_member" "tribunal_api_invoker" {
-  count    = var.allow_unauthenticated ? 1 : 0
   name     = google_cloud_run_v2_service.tribunal_api.name
   location = google_cloud_run_v2_service.tribunal_api.location
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = "serviceAccount:${google_service_account.runtime.email}"
 }
 
 # ---------------------------------------------------- tribunal-migrate JOB (alembic upgrade head)
@@ -1198,7 +1291,9 @@ resource "google_cloud_run_v2_job" "tribunal_migrate" {
 
   template {
     template {
-      service_account = google_service_account.runtime.email
+      # Phase 14 (WR-03/D-04b): the migrate Job runs as the DEDICATED tribunal-run SA
+      # too (it touches only the tribunal schema + the DATABASE_URL secret).
+      service_account = google_service_account.tribunal_run.email
 
       # 13-REVIEW CR-03: the asyncpg unix-socket DSN (host=/cloudsql/...) needs
       # the Cloud SQL volume mounted — gcloud's --set-cloudsql-instances does
@@ -1240,9 +1335,10 @@ resource "google_cloud_run_v2_job" "tribunal_migrate" {
   }
 
   depends_on = [
-    google_project_iam_member.runtime_cloudsql_client,
-    google_project_iam_member.runtime_cloudsql_instance_user,
-    # app_user + its DATABASE_URL secret grant must exist before the Job runs alembic.
+    # Phase 14 (WR-03): cloudsql.client follows the dedicated tribunal-run SA.
+    google_project_iam_member.tribunal_run_cloudsql_client,
+    # app_user + its DATABASE_URL secret grant (now bound to tribunal-run) must exist
+    # before the Job runs alembic.
     google_sql_user.tribunal_app_user,
     google_secret_manager_secret_iam_member.runtime_tribunal_database_url_accessor,
   ]
