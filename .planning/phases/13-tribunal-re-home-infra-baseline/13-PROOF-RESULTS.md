@@ -6,7 +6,9 @@
 > live proof run and pasted here. This file feeds **Phase 16** stale-run + cost calibration
 > (ENGINE-02) and closes the ENGINE-04 (chain) + ENGINE-08 (concurrency) gates.
 
-Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progress.
+Status: **ALL PROOF GATES GREEN (2026-07-20)** — deploy ✅, test gate 22/22 ✅, LUKOIL E2E
+`verify_chain` OK ✅, ≥2-concurrent proof ✅; post-review fixes redeployed (`20260720-fix2`).
+Teardown DEFERRED by operator ("Not now").
 
 > **Single-project discovery (live-session correction).** There is NO separate intake
 > project: `project-cb01b861-cb4a-438d-b9a` IS "Nestor Pulse" and hosts BOTH the live
