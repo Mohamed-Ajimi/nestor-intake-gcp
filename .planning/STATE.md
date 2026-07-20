@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone_complete
-stopped_at: Milestone complete (Phase 12 was final phase)
-last_updated: 2026-07-20T08:50:21.621Z
-last_activity: 2026-07-20 -- Phase 12 execution started
+status: Awaiting next milestone
+stopped_at: Phase 12 context gathered
+last_updated: "2026-07-20T08:58:06.383Z"
+last_activity: 2026-07-20 — Milestone v1.0 completed and archived
 progress:
   total_phases: 12
   completed_phases: 12
@@ -25,13 +25,10 @@ See: .planning/PROJECT.md (updated 2026-06-18)
 
 ## Current Position
 
-Phase: 12
-Plan: Not started
-Next: Phase 06 (intake-crud-parity-and-frontend-api-seam)
-Status: Milestone complete
-Last activity: 2026-07-20
-
-Progress: 5 / 12 phases complete
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-20 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -104,6 +101,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- ~~[2026-07-13] COMBINED 7+8+9 LIVE UAT RUN~~ — SUPERSEDED at v1.0 close (2026-07-20): remaining items folded into the 12-UAT deferred ledger (see Deferred Items above; revisit post-Tribunal). Original text kept below for reference.
 - [2026-07-13] COMBINED 7+8+9 LIVE UAT RUN — core flow PROVEN live (upload → apply-intake-skill (first real Claude call, €0.04) → review → client validation → context pack → decomposed → signed-URL download). Scores: 07-UAT 3 pass/4 blocked; 08-HUMAN-UAT 2 pass/1 blocked; 09-HUMAN-UAT 5 pass/4 blocked. Deployed rev nestor-api-00017-zbt (bucket+IAM+CORS applied; 900s timeout; STORAGE_BUCKET set). 12+ inline fixes committed during the session (superadmin answers upsert, value_json Any, AI trigger wiring, client validation phase, FieldControl crash, submit gating). REMAINING: (a) audio follow-up session — transcribe E2E, superadmin audio upload, delete + WR-04 click-through, cross-space browser denial; (b) gap-closure plans from 07-UAT Gaps (missing UI triggers for structure/extract/transcribe/embeddings, artifacts-read endpoint + ContextPackBlock display, context-pack progress UX, Kopieer-intake-link, NDA template-asset serving). Resume audio: /gsd-verify-work 9.
 
 ### Blockers/Concerns
@@ -135,14 +133,26 @@ Recent decisions affecting current work:
 
 ## Deferred Items
 
-Items acknowledged and carried forward from previous milestone close:
+Items acknowledged and deferred at v1.0 milestone close on 2026-07-20 (operator decision:
+PARITY ACCEPTED WITH DEFERRALS — revisit in/after the Tribunal milestone):
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| *(none)* | | | |
+| uat | 12-UAT.md consolidated parity ledger — 21 unchecked items (AI enrichment verification, storage click-throughs, invite flow, i18n, cross-space SSE 404, two-role E2E) | deferred to post-Tribunal | 2026-07-20 |
+| uat | Per-phase *-HUMAN-UAT.md partials (01, 03, 05, 06, 07, 08, 09, 10, 11) — items folded into / superseded by the 12-UAT ledger | deferred to post-Tribunal | 2026-07-20 |
+| verification | 9 phase VERIFICATION.md files status human_needed — same human-testing debt as the UAT ledger | deferred to post-Tribunal | 2026-07-20 |
+| chore | Rotate Resend API key (transited assistant chat) → version 2 of nestor-resend-api-key | open | 2026-07-20 |
+| chore | Rerun full backend suite in Cloud Build (not rerun after ji9 backend change; 5 known mail test-harness defects) | open | 2026-07-20 |
+| chore | Drop NDA PDF into frontend image + rebuild (download 404s) | open | 2026-07-20 |
+| chore | Remove legacy VITE_SUPABASE_* from frontend/.env | open | 2026-07-20 |
+| tracking | 8 quick-task dirs report status "missing" — scanner artifact (all complete per Quick Tasks table; SUMMARYs lack status frontmatter) | acknowledged | 2026-07-20 |
 
 ## Session Continuity
 
 Last session: 2026-07-14T13:35:29.239Z
 Stopped at: Phase 12 context gathered
 Resume file: .planning/phases/12-frontend-deploy-cutover-supabase-retirement/12-CONTEXT.md
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

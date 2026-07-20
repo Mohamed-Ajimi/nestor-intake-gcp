@@ -35,23 +35,26 @@ feature parity the re-platform must preserve. -->
 - ✓ Transactional email notifications (Resend) — existing
 - ✓ Admin authentication (magic-link OTP) — existing
 - ✓ Client organizations, products, and intake templates management — existing
+- ✓ FastAPI backend on Cloud Run mediating ALL data access (no direct browser→DB) — v1.0
+- ✓ Cloud SQL (Postgres + pgvector) schema via Alembic migrations, incl. empty `findings`/`deliverables` Tribunal handoff tables — v1.0
+- ✓ Identity Platform auth replacing Supabase GoTrue; login required for everyone — v1.0
+- ✓ Per-client spaces with org-scoped isolation enforced at the API layer + RLS, proven by CI-gated cross-tenant denial suite — v1.0
+- ✓ superadmin (cross-tenant) and user (own space) roles via server-set custom claims — v1.0
+- ✓ Bearer-link client access removed; email is notification-only — v1.0
+- ✓ Frontend data layer re-pointed to `lib/api/*` (zero Supabase calls) — v1.0
+- ✓ All seven pre-research AI functions ported to Cloud Run — v1.0
+- ✓ GCS signed-URL storage replacing `nestor-uploads` — v1.0
+- ✓ Multi-language UI NL/FR/EN — v1.0
+- ✓ Frontend hosted on GCP (Cloud Run SSR container, D-11 no-Supabase-bundle guard) — v1.0
+- ✓ E2E flow on GCP + Supabase independence — v1.0 (PARITY ACCEPTED WITH DEFERRALS 2026-07-20: 21 UAT items → post-Tribunal, ledger in phase-12 12-UAT.md; independence-only per D-08, legacy project untouched)
 
 ### Active
 
-<!-- The v1 GCP re-platform milestone. Building toward full cutover. -->
+<!-- Next milestone (v1.1 Tribunal) — define via /gsd-new-milestone. Carried-over debt: -->
 
-- [ ] FastAPI backend on Cloud Run that mediates ALL data access (no direct browser→DB)
-- [ ] Cloud SQL (Postgres + pgvector) schema via migrations — includes `findings` / `deliverables` (kept empty, Tribunal handoff target)
-- [ ] Identity Platform auth replacing Supabase GoTrue; **login required for everyone**
-- [ ] Per-client **spaces** with real org-scoped isolation enforced at the API layer
-- [ ] **superadmin** (Agenic, cross-tenant) and **user** (own space only) roles
-- [x] Bearer-link client access removed; email becomes notification-only ("something is ready, log in") — Validated in Phase 10: notifications (code complete + review-fixed; live UAT pending in 10-HUMAN-UAT.md)
-- [ ] Frontend data layer re-pointed off Supabase to the new GCP API client
-- [ ] All pre-research AI functions ported to Cloud Run (apply-intake-skill, generate-context-pack, structure-answers, extract-insights, embeddings + semantic search, transcribe-audio)
-- [x] GCS storage replacing the `nestor-uploads` bucket — Validated in Phase 9: gcs-storage (code complete + review-fixed; live UAT pending in 09-HUMAN-UAT.md)
-- [x] Multi-language UI: **NL / FR / EN** (i18n) — Validated in Phase 11: internationalization (code complete + review-fixed; live UAT pending in 11-HUMAN-UAT.md)
-- [x] Frontend hosted on GCP (Cloud Run or Firebase Hosting) — Validated in Phase 12: cutover live 2026-07-14, current rev 00010-ndr (2026-07-20), D-11 no-Supabase-bundle guard green
-- [x] End-to-end flow validated on GCP for superadmin + user; Supabase independence established — Validated in Phase 12 with operator decision PARITY ACCEPTED WITH DEFERRALS (2026-07-20): partial UAT passed, 21 items deferred to post-Tribunal (ledger in 12-UAT.md). Retirement = independence-only (D-08): zero Supabase deps in new stack; legacy project deliberately left untouched
+- [ ] Deferred v1.0 UAT ledger re-run (21 items, post-Tribunal — see STATE.md Deferred Items)
+- [ ] Chores: Resend key rotation, Cloud Build suite rerun, NDA PDF drop + image rebuild, legacy VITE_SUPABASE_* env cleanup
+- [ ] Open product decisions: Templates page visibility, Intake-info link-row trimming, "Verzonden mails" history block
 
 ### Out of Scope
 
@@ -125,4 +128,20 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-20 after Phase 12 (frontend deploy + cutover + Supabase independence) — ALL 12 PHASES COMPLETE. Live: frontend rev 00010-ndr + backend rev 00024-67b, alembic 0010. Parity accepted with deferrals (21 UAT items → post-Tribunal, ledger in 12-UAT.md). Open chores: Resend key rotation, Cloud Build suite rerun, NDA PDF drop. Next: milestone close, then Tribunal milestone*
+## Current State (v1.0 shipped 2026-07-20)
+
+Live on GCP project "Nestor Pulse": frontend `nestor-frontend` rev 00010-ndr + backend `nestor-api`
+rev 00024-67b (Cloud Run, europe-west1), Cloud SQL Postgres 16 + pgvector at alembic 0010, Identity
+Platform auth, GCS storage, Resend mail. 12 phases / 70 plans / 485 commits in 33 days. Deferred at
+close: 21 UAT items + chores (STATE.md Deferred Items). Legacy Supabase project intact but unused
+(independence-only retirement, D-08).
+
+## Next Milestone Goals (v1.1 Tribunal — to be scoped)
+
+Port the deep-research engine (`run-research`/Tribunal) off Supabase: search/crawl providers
+(SerpAPI, SearchAPI, Apify), research artifacts pipeline into `findings`/`deliverables`, lift the
+`decomposed` scope ceiling (statuses `in_research` → `delivered`), results delivery to clients, and
+re-run the deferred v1.0 UAT ledger on the extended flow. Scope via `/gsd-new-milestone`.
+
+---
+*Last updated: 2026-07-20 after v1.0 milestone (GCP Re-platform shipped — all 12 phases complete, archived to milestones/)*
