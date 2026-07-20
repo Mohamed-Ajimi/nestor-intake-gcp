@@ -36,23 +36,26 @@ if os.environ.get("LOCAL_DEV_AUTH") != "1":
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
 
-DEMO_MODE = os.environ.get("DEMO_MODE") == "1"
 # LOCAL_DEV_AUTH: run the FULL real stack (DB, RLS, engines) but short-circuit
-# token verification to a fixed dev identity, so the browser can drive real mode
-# without Identity Platform / Firebase login. Gate is this env check alone --
-# never set in a deployed environment. Ignored under DEMO_MODE (which has no DB).
+# token verification to a fixed dev identity, so a developer can drive real mode
+# without the internal service-to-service seam. Gate is this env check alone --
+# never set in a deployed environment.
+#
+# Phase 14 (SEAM-01): the standalone identity surface (Firebase/Identity Platform
+# login, the current-user + bootstrap + auth-config endpoints, the static UI mount,
+# and the demo fixture router) is RETIRED in the tribunal/ copy. The Tribunal API
+# is now a strictly-internal engine: the only authenticated caller is the intake
+# backend, verified by InternalCallerProvider at the set_auth_provider() swap point.
 LOCAL_DEV_AUTH = os.environ.get("LOCAL_DEV_AUTH") == "1"
 
 app = FastAPI(
-    title="Nestor Pulse SDK" + (" (demo)" if DEMO_MODE else ""),
+    title="Nestor Pulse SDK",
     version="0.2.0",
-    description="SDK pipeline API -- async runs, engine toggle, tenant-scoped RLS.",
+    description="Internal research engine API -- async runs, tenant-scoped RLS.",
 )
 
-# CORS first (applies in both modes)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,96 +63,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-if DEMO_MODE:
-    # Demo: skip auth + DB entirely. Mount in-memory fixture router only.
-    # Never enabled in production -- this env check is the gate.
-    from nestor_pulse_sdk.demo.api import router as demo_router
-    app.include_router(demo_router)
+from nestor_pulse_sdk.health import router as health_router  # Plan 10.5 Task 3
+from nestor_pulse_sdk.projects import router as projects_router
+from nestor_pulse_sdk.runs.api import router as runs_router
+from nestor_pulse_sdk.audit.api import router as audit_router
+from nestor_pulse_sdk.citations import router as sources_router
+from nestor_pulse_sdk.uploads.api import router as uploads_router  # Plan 10 Task 2
+from nestor_pulse_sdk.auth.middleware import RequestIDMiddleware, auth_exception_handler
+from nestor_pulse_sdk.auth.provider import AuthError
+from nestor_pulse_sdk.auth.deps import set_auth_provider  # noqa: F401
+
+app.add_middleware(RequestIDMiddleware)
+app.add_exception_handler(AuthError, auth_exception_handler)
+
+# Plan 10.5: health endpoints FIRST, before any JWT-gated routers.
+# /healthz and /readyz are exempt from auth (Cloud Run prober calls without token).
+app.include_router(health_router)
+
+# D-06: projects must be creatable/listable before any run can be started
+# (runs/api.py 404s on an unknown project_id).
+app.include_router(projects_router)
+app.include_router(runs_router)
+# Plan 07: audit verifier + 4 guided-query endpoints (D-13)
+app.include_router(audit_router)
+# Plan 09: GET /api/sources/{id} citation renderer (D-07)
+app.include_router(sources_router)
+# Plan 10: GCS presigned-URL + Cloud Function extract proxy (replaces AWS Lambda path)
+app.include_router(uploads_router)
+
+# Phase 14 (SEAM-02): the internal-seam provisioning endpoints
+# (POST /api/orgs/ensure + POST /api/projects/ensure) replace the retired
+# user-facing /api/orgs/bootstrap. Driven ONLY by the intake backend.
+from nestor_pulse_sdk.orgs import router as orgs_router
+app.include_router(orgs_router)
+
+# Phase 14 (SEAM-01): install the auth provider. get_current_user is overridden
+# so every route (incl. get_db_session's RLS SET LOCAL) reads verified claims.
+from nestor_pulse_sdk.auth.deps import get_current_user
+
+if LOCAL_DEV_AUTH:
+    # Local clean-room: replace token verification with a fixed dev identity.
+    # The override propagates into get_db_session (sets app.tenant_id to the
+    # dev tenant) and every route depending on the current user. Real DB,
+    # real RLS context, real engines -- just no service-to-service seam required.
+    from nestor_pulse_sdk.auth.local_dev import dev_claims
+
+    app.dependency_overrides[get_current_user] = dev_claims
+    import warnings
+    warnings.warn(
+        "LOCAL_DEV_AUTH=1: auth is bypassed with a fixed dev identity. "
+        "NEVER enable this in a deployed environment.",
+        stacklevel=2,
+    )
 else:
-    from nestor_pulse_sdk.health import router as health_router  # Plan 10.5 Task 3
-    from nestor_pulse_sdk.account import router as account_router
-    from nestor_pulse_sdk.projects import router as projects_router
-    from nestor_pulse_sdk.runs.api import router as runs_router
-    from nestor_pulse_sdk.audit.api import router as audit_router
-    from nestor_pulse_sdk.citations import router as sources_router
-    from nestor_pulse_sdk.uploads.api import router as uploads_router  # Plan 10 Task 2
-    from nestor_pulse_sdk.orgs import router as orgs_router  # Plan 01-17 Task 3 (D-16)
-    from nestor_pulse_sdk.auth.middleware import RequestIDMiddleware, auth_exception_handler
-    from nestor_pulse_sdk.auth.provider import AuthError
-    from nestor_pulse_sdk.auth.deps import set_auth_provider  # noqa: F401
-    from fastapi import Request as _Request
-    from fastapi.responses import JSONResponse as _JSONResponse
+    # Deployed mode: the intake backend is the sole authenticated caller.
+    # InternalCallerProvider re-verifies the Google-signed OIDC token (aud ==
+    # this Tribunal service URL, caller email == intake runtime SA -- D-04 inner
+    # gate), and get_internal_claims threads the tenant + acting-user headers
+    # into the frozen AuthClaims shape (D-05). Both env vars are NON-secret
+    # (a service URL + an SA email) -- Plan 04 sets them on the tribunal-api
+    # service: TRIBUNAL_SERVICE_URL, INTAKE_RUNTIME_SA_EMAIL.
+    from nestor_pulse_sdk.auth.internal_caller import (
+        InternalCallerProvider,
+        get_internal_claims,
+    )
 
-    app.add_middleware(RequestIDMiddleware)
-    app.add_exception_handler(AuthError, auth_exception_handler)
-
-    # Plan 10.5: health endpoints FIRST, before any JWT-gated routers.
-    # /healthz and /readyz are exempt from auth (Cloud Run prober calls without token).
-    app.include_router(health_router)
-
-    # Plan 01-17 Task 3 (D-14): GET /api/auth/config — exempt from JWT (like /healthz).
-    # Returns the Identity Platform Web API key for the Login page so it is never
-    # hardcoded in source control. The key is a public browser-embeddable identifier
-    # (T-17-03 accept); abuse is bounded by admin-created-accounts-only (D-14).
-    @app.get("/api/auth/config", include_in_schema=False)
-    async def _auth_config(_req: _Request) -> _JSONResponse:
-        return _JSONResponse({
-            "web_api_key": os.environ.get("IDENTITY_PLATFORM_WEB_API_KEY", ""),
-        })
-
-    # GET /api/me -- current user + workspace for the app chrome (real-mode parity
-    # with the demo router; previously real mode had no /api/me so corners 401'd).
-    app.include_router(account_router)
-    # D-06: projects must be creatable/listable before any run can be started
-    # (runs/api.py 404s on an unknown project_id).
-    app.include_router(projects_router)
-    app.include_router(runs_router)
-    # Plan 07: audit verifier + 4 guided-query endpoints (D-13)
-    app.include_router(audit_router)
-    # Plan 09: GET /api/sources/{id} citation renderer (D-07)
-    app.include_router(sources_router)
-    # Plan 10: GCS presigned-URL + Cloud Function extract proxy (replaces AWS Lambda path)
-    app.include_router(uploads_router)
-    # Plan 01-17: POST /api/orgs/bootstrap (unscoped; provisions new tester's org+user+project)
-    app.include_router(orgs_router)
-
-    if LOCAL_DEV_AUTH:
-        # Local clean-room: replace token verification with a fixed dev identity.
-        # The override propagates into get_db_session (sets app.tenant_id to the
-        # dev tenant) and every route depending on the current user. Real DB,
-        # real RLS context, real engines -- just no Firebase login required.
-        from nestor_pulse_sdk.auth.deps import get_current_user
-        from nestor_pulse_sdk.auth.local_dev import dev_claims
-
-        app.dependency_overrides[get_current_user] = dev_claims
-        import warnings
-        warnings.warn(
-            "LOCAL_DEV_AUTH=1: auth is bypassed with a fixed dev identity. "
-            "NEVER enable this in a deployed environment.",
-            stacklevel=2,
-        )
-
-# Plan 11: static UI from Claude Design handoff bundle ("Agenic" design system).
-# Bundle is plain HTML/CSS/JSX + React/Babel via CDN — no build step.
-# Mock data currently lives in Home.jsx; real API wiring is a follow-up task.
-_WEB_DIR = Path(__file__).parent / "web"
-if _WEB_DIR.exists():
-    @app.middleware("http")
-    async def _no_store_static(request, call_next):
-        """Dev UI is plain JSX transpiled in-browser (no build hash), so the
-        browser must NEVER cache it -- a stale Home.jsx is why edits 'don't show
-        up'. Force revalidation on every /app asset."""
-        response = await call_next(request)
-        if request.url.path.startswith("/app"):
-            response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-        return response
-
-    app.mount("/app", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
-
-    @app.get("/", include_in_schema=False)
-    async def _root_redirect():
-        return RedirectResponse(url="/app/Home.html")
+    set_auth_provider(InternalCallerProvider(
+        service_url=os.environ["TRIBUNAL_SERVICE_URL"],
+        allowed_caller_email=os.environ["INTAKE_RUNTIME_SA_EMAIL"],
+    ))
+    app.dependency_overrides[get_current_user] = get_internal_claims
 
 # Run with: uvicorn nestor_pulse_sdk.server:app --host 0.0.0.0 --port 8081
