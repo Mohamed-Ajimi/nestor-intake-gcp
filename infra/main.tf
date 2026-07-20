@@ -1144,8 +1144,9 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
 # ---------------------------------------------------- tribunal-api service (request-response)
 # Mirrors google_cloud_run_v2_service.api: min=0, max=3, timeout 300. Secrets: DATABASE_URL is
 # sourced from DATABASE_URL (app_user, tenant-scoped) + the three Nestor_* provider keys +
-# AUDIT_GCS_BUCKET. No allUsers invoker here (see tribunal_api_invoker below — gated on the
-# same var.allow_unauthenticated toggle as the intake api).
+# AUDIT_GCS_BUCKET. NEVER an allUsers invoker here: Phase 14 binds run.invoker
+# UNCONDITIONALLY to ONLY the intake runtime SA (see tribunal_api_invoker below — deliberately
+# NOT gated on var.allow_unauthenticated; the D-04 outer gate).
 resource "google_cloud_run_v2_service" "tribunal_api" {
   name     = var.tribunal_api_service_name
   location = var.region
