@@ -919,7 +919,7 @@ from Phase 16's backlog once this is green). Phase 14 is a SMALL delta on the al
 Phase-13 Tribunal services: it gives Tribunal its OWN least-privilege runtime SA
 (`tribunal-run`), binds the `tribunal-api` invoker to ONLY the intake `nestor-run` SA, wires
 the two non-secret seam env vars, removes the retired `IDENTITY_PLATFORM_*` references, and
-runs the two-suite CI denial gate.
+runs the SEAM-02 CI denial gate (`tribunal/cloudbuild.seam-gate.yaml`, Step 14.g).
 
 > **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state
 > was never adopted and `terraform apply` is FORBIDDEN on this project (CR-02: an apply would
