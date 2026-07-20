@@ -1,0 +1,13 @@
+# Keep Cloud Build source uploads small when submitting the repo ROOT as context
+# (cloudbuild.test.yaml does `cd backend` + `pytest backend/tests`, so the source
+# root must be the repo root, not the backend/ subdir).
+.git/
+node_modules/
+**/node_modules/
+frontend/
+tribunal/
+.planning/
+.output/
+**/__pycache__/
+**/.pytest_cache/
+*.log
