@@ -82,3 +82,16 @@ post-proof and declined ("Not now") — recorded as carried chore in 13-PROOF-RE
 - verify_chain OK on 3 real runs (1 solo + 2 concurrent)
 - Duration + cost recorded for Phase 16 calibration
 - All working-tree changes committed
+
+## Addendum — post-review fix cycle (same day)
+
+The code-review gate (13-REVIEW.md) found CR-01: the worker queue path refused its own
+fresh claim (never exercised by the smoke-path proofs; the live tests had silently
+SKIPPED in Cloud Build). Fixed as a fencing-token claim consume + globally unique
+WORKER_ID; live tests rewritten to model claim-then-lock; **critical gate 22/22 green**
+(tribunal/cloudbuild.test-critical.yaml). CR-02/CR-03/WR-04 IaC+runbook+env.py fixes
+landed. Both services redeployed on tag `20260720-fix2` (worker rev `-185906`), health
+re-verified 200/200 `db:ok`. Deferred with cause: RLS carried tests need a non-superuser
+harness; WR-03 (SA separation) → Phase 14; WR-05 (audit_log UPDATE/DELETE grants) →
+Phase 15; WR-01 residual (ultra-long-run double-dispatch window) → Phase 16 stale-window
+calibration (measured max 17 min vs 60-min window).

@@ -22,9 +22,9 @@ Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progre
 | Resource | Value |
 |----------|-------|
 | Intake project id (`$GOOGLE_PROJECT`) | `project-cb01b861-cb4a-438d-b9a` (the single "Nestor Pulse" project) |
-| Image tag (`$SHA`) | `20260720-161029-fix1` (both images; `-fix1` = env.py commit fix rebuild) |
-| `tribunal-api` revision | `tribunal-api-20260720-161029-fix1-164103` |
-| `tribunal-worker` revision | `tribunal-worker-20260720-161029-fix1-163954` |
+| Image tag (`$SHA`) | `20260720-fix2` (final, both images — post-review fencing-token worker; earlier: `20260720-161029` initial, `-fix1` env.py commit fix) |
+| `tribunal-api` revision | `tribunal-api-20260720-fix2-*` (proof runs executed on `-fix1-164103`) |
+| `tribunal-worker` revision | `tribunal-worker-20260720-fix2-185906` (proof runs on `-fix1-163954`; fix2 = CR-01 fencing token + unique worker_id, health re-verified 200/200) |
 | `tribunal-migrate` Job execution | `tribunal-migrate-sc64g` — succeeded (exit 0; earlier `-5rmmh` failed on alembic cwd, `-mhwdh` rolled back — see deviations) |
 | Alembic version table | ✅ `tribunal.tribunal_alembic_version` = `0010`; 10 tables in `tribunal`; 0 leak into `public`; `ck_run_status` includes `needs_report_spec` |
 | tribunal-api `/healthz` | `/health` → 200 `{"status":"ok"}` (`/healthz` is intercepted by Cloud Run's platform — documented in `health.py`) |
