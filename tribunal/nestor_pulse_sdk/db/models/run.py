@@ -99,9 +99,14 @@ class Run(Base):
         CheckConstraint(
             "engine IN ('adk','sdk','tribunal')", name="ck_run_engine"
         ),
-        # D-09 status constraint (+ 'needs_input' clarification pause, migration 0005).
+        # D-09 status constraint (+ 'needs_input' clarification pause, migration
+        # 0005; + 'needs_report_spec' report-spec pause, migration 0007). The DB
+        # CHECK already carries 'needs_report_spec' (migration 0007 drops+recreates
+        # it); this ORM literal is synced to match so `alembic check`/autogenerate
+        # sees no ORM/DB drift (13-RESEARCH.md Pitfall 4 -- cosmetic, no DB change).
         CheckConstraint(
-            "status IN ('queued','running','completed','failed','cancelled','needs_input')",
+            "status IN ('queued','running','completed','failed','cancelled',"
+            "'needs_input','needs_report_spec')",
             name="ck_run_status",
         ),
         # (tenant_id, idempotency_key) UNIQUE -- repeat POST returns existing run.

@@ -259,12 +259,18 @@ async def execute_run(claimed: dict) -> None:
 
 async def worker_loop() -> None:
     """
-    Main poll loop. Claims one run at a time via SKIP LOCKED, dispatches it,
-    then polls again. Sleeps between polls when the queue is empty.
+    Main poll loop. Claims one run at a time via SKIP LOCKED, dispatches it
+    through the per-run advisory lock (execute_run_locked), then polls again.
+    Sleeps between polls when the queue is empty.
 
     D-09 single-worker simplification: one Cloud Run instance with min-instances=1
-    and always-on CPU. PHASE4-01 hardens this with a worker pool.
+    and always-on CPU. The advisory lock (ENGINE-08) makes >1 poller/instance
+    safe, so this loop can now run at max-instances > 1 without forking the audit
+    chain (D-08: size for 5+ concurrent).
     """
+    # Imported here (not at module top) to keep the import graph acyclic:
+    # runs.execute lazily imports execute_run from THIS module.
+    from nestor_pulse_sdk.runs.execute import execute_run_locked
     sessionmaker = get_sessionmaker()
     log.info("worker_started", worker_id=WORKER_ID, poll_s=POLL_INTERVAL_SECONDS)
     while True:
@@ -276,12 +282,15 @@ async def worker_loop() -> None:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
             continue
         log.info("run_claimed", run_id=str(claimed["id"]), engine=claimed["engine"])
-        # EXECUTE step: runner.run() + tenant context set inside execute_run().
+        # EXECUTE step: the per-run 64-bit advisory lock WRAPS the dispatch so
+        # >1 poller/instance is safe for the audit chain (ENGINE-08, T-13-06).
+        # execute_run_locked re-checks claimability under the lock, then delegates
+        # to execute_run() (runner.run() + set_tenant_context, T-06-02 preserved).
         # Defensive guard: a single run (or even a logging error inside its own
         # failure path) must NEVER kill the worker -- it would stall the queue and,
         # in an A/B fan-out, the sibling arm. Swallow + keep polling.
         try:
-            await execute_run(claimed)
+            await execute_run_locked(claimed)
         except Exception:  # noqa: BLE001
             try:
                 log.exception("execute_run_crashed", run_id=str(claimed["id"]))
