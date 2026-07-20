@@ -23,9 +23,25 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+
+# ENGINE-01 / 13-RESEARCH.md Pattern 1 + Pitfall 1/2 (Plan 13-02):
+# The Tribunal engine shares a Cloud SQL instance with the intake backend, and
+# BOTH Alembic lines ship colliding revision IDs 0001-0010. To keep the two
+# lines from ever sharing an `alembic_version` table (which would silently skip
+# Tribunal's 0001 -> tables never created -> first run 500s), the Tribunal line
+# writes its OWN version table in its OWN schema and runs every migration with
+# `search_path=tribunal` so unqualified `op.create_table(...)` and migration
+# 0008's GRANT/POLICY statements land in `tribunal`, not `public`.
+#
+# DB-topology decision (13-RESEARCH.md Open Q1): the **`tribunal` SCHEMA on the
+# shared intake database** is chosen over the separate-database fallback --
+# schema route wins for future cross-schema flexibility and matches the CONTEXT
+# wording. It requires 0008's `SCHEMA public` -> `SCHEMA tribunal` rewrite (done
+# in this plan) plus the schema-create + `SET search_path TO tribunal` in both
+# the offline and online migration paths below.
 
 # Make the repo root importable so `nestor_pulse_sdk.*` resolves regardless
 # of where alembic is invoked from.
@@ -59,16 +75,37 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         # FORCE ROW LEVEL SECURITY DDL is in our migrations; render as-is.
         compare_type=True,
+        include_schemas=True,
+        # ENGINE-01: isolate the Tribunal line -- never share intake's alembic_version.
+        version_table="tribunal_alembic_version",
+        version_table_schema="tribunal",
     )
     with context.begin_transaction():
+        # Emit the schema-create + search_path preamble so the generated SQL
+        # script targets `tribunal` for every unqualified CREATE TABLE / GRANT /
+        # POLICY (mirrors the online path's connection-level SET search_path).
+        context.execute("CREATE SCHEMA IF NOT EXISTS tribunal")
+        context.execute("SET search_path TO tribunal")
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
+    # ENGINE-01: ensure the tribunal schema exists and target it via search_path
+    # BEFORE configuring/running migrations, so the version table lands in
+    # `tribunal` and every unqualified CREATE TABLE / GRANT / POLICY (incl.
+    # migration 0008) resolves to `tribunal`, never `public`. This runs on the
+    # sync Connection that async run_sync() hands us -- keep Tribunal's existing
+    # asyncpg engine unchanged (Pitfall 5: do NOT swap it for an IAM connector).
+    connection.execute(text("CREATE SCHEMA IF NOT EXISTS tribunal"))
+    connection.execute(text("SET search_path TO tribunal"))
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_schemas=True,
+        # ENGINE-01: isolate the Tribunal line -- never share intake's alembic_version.
+        version_table="tribunal_alembic_version",
+        version_table_schema="tribunal",
     )
     with context.begin_transaction():
         context.run_migrations()

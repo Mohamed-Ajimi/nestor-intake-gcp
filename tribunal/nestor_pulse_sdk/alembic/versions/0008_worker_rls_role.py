@@ -59,21 +59,28 @@ _RLS_TABLES = (
 
 def upgrade() -> None:
     # ---- Privileges: worker_user needs DML on every tenant table + sequences.
-    op.execute("GRANT USAGE ON SCHEMA public TO worker_user")
+    # ENGINE-01 / 13-RESEARCH.md Pitfall 2 (Plan 13-02): the Tribunal line runs
+    # under `search_path=tribunal` (env.py) and its tables live in the `tribunal`
+    # schema, NOT `public`. These grants MUST target `tribunal` -- if they said
+    # `public` the worker_user would get privileges on the wrong schema and the
+    # cross-tenant SKIP-LOCKED claim would silently match ZERO rows (threat
+    # T-13-05). The unqualified CREATE POLICY statements below resolve via the
+    # `tribunal` search_path set by env.py, so they need no schema qualifier.
+    op.execute("GRANT USAGE ON SCHEMA tribunal TO worker_user")
     op.execute(
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tribunal "
         "TO worker_user"
     )
     op.execute(
-        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO worker_user"
+        "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA tribunal TO worker_user"
     )
     # Cover tables/sequences created by FUTURE migrations too (app_user owns them).
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA tribunal "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO worker_user"
     )
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA tribunal "
         "GRANT USAGE, SELECT ON SEQUENCES TO worker_user"
     )
 
@@ -93,18 +100,18 @@ def downgrade() -> None:
         op.execute(f"DROP POLICY IF EXISTS {table}_worker_all ON {table}")
 
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA tribunal "
         "REVOKE USAGE, SELECT ON SEQUENCES FROM worker_user"
     )
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE app_user IN SCHEMA tribunal "
         "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM worker_user"
     )
     op.execute(
-        "REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM worker_user"
+        "REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA tribunal FROM worker_user"
     )
     op.execute(
-        "REVOKE SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
+        "REVOKE SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA tribunal "
         "FROM worker_user"
     )
-    op.execute("REVOKE USAGE ON SCHEMA public FROM worker_user")
+    op.execute("REVOKE USAGE ON SCHEMA tribunal FROM worker_user")
