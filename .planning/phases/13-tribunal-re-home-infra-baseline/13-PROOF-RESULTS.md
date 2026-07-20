@@ -102,11 +102,20 @@ green this session); worker deploys at `max-instances=5` toward the D-08 5+ targ
 
 ## Teardown (Task 3 tail — Step 13.i, D-02) — STRICTLY AFTER the proofs are green
 
+> **DEFERRED (operator decision 2026-07-20).** All proof gates were green and the teardown
+> was offered; the operator chose "Not now". The old-build resources remain in place as a
+> carried chore. Reminder of the exact scope when it is picked up (resource-level ONLY —
+> single-project reality means NEVER delete the project):
+> `nestor-pulse-api` + `nestor-pulse-worker` services, STOPPED `nestor-prod-pg` SQL
+> instance (irreversible), `nestor-pulse` AR repo. Out of the runbook list and untouched
+> either way: `nestor-pulse-pdf-extractor` (decide then), `nestor-audit-prod` bucket
+> (retention-managed audit evidence — keep).
+
 | Action | Done? |
 |--------|-------|
-| `nestor-pulse-api` (old `project-cb01b861`) deleted | _(record)_ |
-| `nestor-pulse-worker` (old) deleted | _(record)_ |
-| `nestor-prod-pg` Cloud SQL instance (old) deleted | _(record — irreversible)_ |
-| `nestor-pulse` Artifact Registry repo (old) deleted | _(record)_ |
-| Intake `tribunal-api` `/readyz` still 200 post-teardown | _(record — no cross-dependency on old project)_ |
+| `nestor-pulse-api` (old) deleted | DEFERRED |
+| `nestor-pulse-worker` (old) deleted | DEFERRED |
+| `nestor-prod-pg` Cloud SQL instance (old) deleted | DEFERRED (instance remains STOPPED) |
+| `nestor-pulse` Artifact Registry repo (old) deleted | DEFERRED |
+| Intake `tribunal-api` `/readyz` still 200 post-teardown | n/a until teardown |
 | Legacy Supabase project | UNTOUCHED (independence, never deleted) |
