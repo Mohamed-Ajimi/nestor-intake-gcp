@@ -89,11 +89,16 @@ Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progre
 
 | Run | tenant_id | run_id | verify_chain | double-ran / forked? |
 |-----|-----------|--------|--------------|----------------------|
-| A | _(record)_ | _(record)_ | _(OK?)_ | _(no)_ |
-| B | _(record)_ | _(record)_ | _(OK?)_ | _(no)_ |
-| _(C…E, toward 5)_ | | | | |
+| A (`tribunal-smoke-drbbj`) | `5b0b574f-191f-4676-8dd2-1f2b6ab87733` | `0830d8b5-f9a5-457e-9c08-a147b83ca4c2` | ✅ OK | no (913s, $1.48, recall 96.3%) |
+| B (`tribunal-smoke-sws55`) | `260563e6-6cc9-4dfe-8095-cdf8bbe0727f` | `5d919ab3-aca3-4815-92dc-283d2d24fef9` | ✅ OK | no (968s, $2.10, recall 96.9%) |
 
-Concurrency verdict: _(both/all green, advisory lock held — ENGINE-08 closed?)_
+Both executions fully overlapped (15:47:36Z → 16:04:27Z wall-clock window).
+
+Concurrency verdict: ✅ **GREEN — ENGINE-08 closed.** Two simultaneous runs from two
+different spaces completed without interference, both audit chains intact. The advisory
+lock's exactly-once property is additionally proven by
+`test_advisory_lock_exactly_once.py` (two racing executors on real Postgres, Cloud Build
+green this session); worker deploys at `max-instances=5` toward the D-08 5+ target.
 
 ## Teardown (Task 3 tail — Step 13.i, D-02) — STRICTLY AFTER the proofs are green
 
