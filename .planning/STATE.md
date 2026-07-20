@@ -1,44 +1,46 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Awaiting next milestone
-stopped_at: Phase 12 context gathered
-last_updated: "2026-07-20T08:58:06.383Z"
-last_activity: 2026-07-20 — Milestone v1.0 completed and archived
+milestone: v1.1
+milestone_name: Tribunal Integration
+status: executing
+stopped_at: Phase 13 context gathered
+last_updated: "2026-07-20T13:19:58.936Z"
+last_activity: 2026-07-20 -- Phase 13 execution started
 progress:
-  total_phases: 12
-  completed_phases: 12
-  total_plans: 70
-  completed_plans: 70
-  percent: 100
+  total_phases: 8
+  completed_phases: 0
+  total_plans: 4
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-18)
+See: .planning/PROJECT.md (updated 2026-07-20)
 
-**Core value:** A logged-in superadmin or client user can run an intake end-to-end on GCP — from form submission through AI skill application to a validated, decomposed context pack — with each client's data fully isolated to its own space, and the legacy Supabase system retired.
-**Current focus:** Milestone complete
+**Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
+**Current focus:** Phase 13 — Tribunal Re-home + Infra Baseline
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-20 — Milestone v1.0 completed and archived
+Phase: 13 (Tribunal Re-home + Infra Baseline) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 13
+Last activity: 2026-07-20 -- Phase 13 execution started
+
+Progress: [░░░░░░░░░░] 0% (v1.1)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 68
+- Total plans completed: 70 (v1.0, shipped)
 - Average duration: — min
-- Total execution time: 0.0 hours
+- Total execution time: 0.0 hours (v1.1)
 
-**By Phase:**
+**By Phase (v1.0):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -60,58 +62,53 @@ Last activity: 2026-07-20 — Milestone v1.0 completed and archived
 - Trend: —
 
 *Updated after each plan completion*
-| Phase 01 P01 | 18 | 3 tasks | 5 files |
-| Phase 01 P02 | 22 | 2 tasks | 16 files |
-| Phase 01 P03 | 15 | 3 tasks | 6 files |
-| Phase 01 P04 | 12 | 2 tasks | 3 files |
-| Phase 02 P01 | 18 | 3 tasks | 7 files |
-| Phase 02 P02 | 5 | 2 tasks | 3 files |
-| Phase 02 P03 | 22min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Recent decisions affecting current work (v1.1):
+
+- Roadmap (v1.1): Build order is re-home+audit-gate → auth-retirement+seam → engine enhancements → trigger+progress spine → raw-output+audit-guard → report delivery → Q&A chat → chores/UAT closure (research-recommended 7-phase spine + a dedicated engine-enhancements phase for the two frontier ideas).
+- Roadmap (v1.1): ENGINE-04 audit-chain verification pulled EARLY into Phase 13 (re-home) — hard EU AI Act Art. 12 legal deadline 2026-08-02; a broken chain after the move must be caught before any dependent work.
+- Roadmap (v1.1): ENGINE-08 concurrency advisory lock placed in Phase 13 (infra hardening) — the audit hash-chain is single-worker-safe today; the lock must precede real multi-client production use.
+- Roadmap (v1.1): ENGINE-05 (plan-critique) + ENGINE-06 (draft tournament) grouped as their own Phase 15 — they touch pipeline/report-contract code; land them on the proven-green re-homed engine (after ENGINE-02) and before the Phase 16 trigger integrates against the final report/stage shape, to avoid re-wiring the audited payload after the spine is built.
+- Roadmap (v1.1): Two-schema topology — Tribunal keeps its own `tribunal` schema, own Alembic line (separate `alembic_version` table), own GUC/RLS; intake backend is the sole HTTP seam (no shared DB session). Avoids Alembic revision-ID collision + GUC-name mismatch (Pitfalls 1/2).
+- Project (v1.1): Human-in-the-loop report — raw engine output is superadmin-only; client sees only the hand-crafted PDF (D-report). Run `completed` does NOT auto-deliver — the PDF upload flips `in_research → delivered`.
+- Project (v1.1): Voyage `voyage-3-large` (1024-dim) for Q&A chat — fidelity to legacy `ask-research`; new vendor + `VOYAGE_API_KEY` secret; dedicated `Vector(1024)` table, never mixed with the OpenAI `Vector(1536)` column.
+
+<details>
+<summary>Earlier v1.0 decisions (archived context)</summary>
 
 - Roadmap: Build order is schema → backend/Cloud SQL → auth → isolation-proven-by-tests → CRUD+frontend seam → AI ports → SSE → storage → i18n → cutover (research-recommended).
 - Roadmap: Phase 4 (tenant isolation + CI-gated cross-tenant denial suite) gates all downstream feature endpoints — isolation must be proven before features ship.
 - Roadmap: Tests are phase-zero work, not cleanup (QA-01 denial suite, QA-02 `USING(true)` CI guard, QA-03 phase-machine/AI contract tests).
 - Project: Big-bang cutover — Supabase paused (recoverable), retired only after parity is green for both roles.
-- [Phase ?]: Plan 01-01: RLS test harness uses sync pg8000 (Q1 RESOLVED) so the test engine and Alembic env.py share one driver.
-- [Phase ?]: Plan 01-01: Wave 0 RED scaffold — schema-shape + RLS-isolation suites authored against the final contract, RED until plans 01-02/01-03 land.
-- [Phase ?]: Plan 01-02: all nestor tables live in the Postgres 'nestor' schema (Base.metadata schema='nestor'); shape tests query table_schema='nestor'.
-- [Phase ?]: Plan 01-02: no public.clients (Q2 RESOLVED) — org = space; space_id (= org id) is the sole isolation key; client identity is organizations.name.
-- [Phase ?]: Plan 01-02: explicit Index() names (no index=True) so ORM and 0001 migration index names match 1:1 and alembic check stays clean.
-- [Phase ?]: Plan 01-03: adopt NULLIF(current_setting('app.current_space_id', true),'')::uuid in the FIRST RLS migration (0002) so unset AND empty-string GUC reversion fail safe — no 0009->0010 replay.
-- [Phase ?]: Plan 01-03: superadmin bypass via app_superadmin login role + current_user='app_superadmin' policy (Cloud SQL has no BYPASSRLS); OR'd with isolation so the app role stays space-scoped.
-- [Phase ?]: Plan 01-03: QA-02 CI guard (scripts/ci_no_permissive_rls.sh) bans USING(true)/WITH CHECK(true) via grep exit code; negative test plants an offender and asserts non-zero exit.
-- [Phase ?]: Plan 01-04: updated_at handled by ORM onupdate (not a DB trigger); choice pinned as UPDATED_AT_MECHANISM: orm-onupdate marker in 0004 and asserted by the test.
-- [Phase ?]: Plan 01-04: 0004 ports ONLY in-scope (<= decomposed) triggers (prefill_intake_answers retargeted to organizations.name + submit_intake transition logic); the 3 post-decomposed Tribunal triggers are absent as objects AND as literal names (INTAKE-05).
-- [Phase ?]: Plan 01-04: dev seed (scripts/seed_dev.py) is standalone + idempotent; test asserts no migration references it so production comes up empty (INFRA-02 / D-09).
-- [Phase ?]: [Phase 02]: Plan 02-01: base.py keeps reading os.environ directly (no import cycle with app.core); config.py is for main.py/typed validation only (D-06).
-- [Phase ?]: [Phase 02]: Plan 02-01: get_engine() mode-switch gated on (database_url is None and INSTANCE_CONNECTION_NAME) so explicit DSN always wins (Phase-1 regression safe, Pitfall 6); Connector imported lazily inside _get_connector.
-- [Phase ?]: [Phase 02]: Plan 02-01: shared _POOL_KW (size=2, overflow=3, pre_ping, recycle=1800) on both engine modes (D-04); split /healthz (no DB) + /readyz (SELECT 1, generic 503 no leak), sync handlers (pg8000 blocking).
-- [Phase ?]: [Phase 02]: Plan 02-02: alembic env.py gets an additive IAM-connector branch via importable _use_connector(cfg) + _build_connectable(); fires only when INSTANCE_CONNECTION_NAME set AND no pre-set sqlalchemy.url, reusing base.py._connector_creator (enable_iam_auth stays in base.py, no duplication).
-- [Phase ?]: [Phase 02]: Plan 02-02: one multi-stage uv Dockerfile serves both the Cloud Run service (single Uvicorn CMD on PORT) and the migration Job (CMD overridden with args=[alembic,upgrade,head]); alembic.ini + app/db/alembic bundled; no Gunicorn/workers, no baked secrets (D-02/D-05/D-09).
-- [Phase ?]: Runtime SA IAM DB user GRANTed DIRECT space-scoped privileges (no named app role in Phase 1); RLS still applies (OQ1/A5, migration 0005)
-- [Phase ?]: Cloud Run invoker authenticated-only by default (allow_unauthenticated=false); /readyz verified via gcloud run services proxy (OQ2)
-- [Phase ?]: GCP live execution deferred to user per D-10; all artifacts authored by construction
+- [Phase 1]: Plan 01-01: RLS test harness uses sync pg8000 (Q1 RESOLVED) so the test engine and Alembic env.py share one driver.
+- [Phase 1]: Plan 01-02: no public.clients (Q2 RESOLVED) — org = space; space_id (= org id) is the sole isolation key; client identity is organizations.name.
+- [Phase 1]: Plan 01-03: superadmin bypass via app_superadmin login role + current_user='app_superadmin' policy (Cloud SQL has no BYPASSRLS); OR'd with isolation so the app role stays space-scoped.
+- [Phase 1]: Plan 01-04: 0004 ports ONLY in-scope (<= decomposed) triggers; the 3 post-decomposed Tribunal triggers are absent as objects AND as literal names (INTAKE-05).
+- [Phase 2]: get_engine() mode-switch gated so explicit DSN always wins (Phase-1 regression safe, Pitfall 6); shared bounded pool on both engine modes (D-04); split /healthz + /readyz.
+- [Phase 2]: one multi-stage uv Dockerfile serves both the Cloud Run service and the migration Job; no baked secrets.
+- Runtime SA IAM DB user GRANTed DIRECT space-scoped privileges; RLS still applies (migration 0005).
+- GCP live execution deferred to user per D-10; all artifacts authored by construction.
+
+</details>
 
 ### Pending Todos
 
-- ~~[2026-07-13] COMBINED 7+8+9 LIVE UAT RUN~~ — SUPERSEDED at v1.0 close (2026-07-20): remaining items folded into the 12-UAT deferred ledger (see Deferred Items above; revisit post-Tribunal). Original text kept below for reference.
-- [2026-07-13] COMBINED 7+8+9 LIVE UAT RUN — core flow PROVEN live (upload → apply-intake-skill (first real Claude call, €0.04) → review → client validation → context pack → decomposed → signed-URL download). Scores: 07-UAT 3 pass/4 blocked; 08-HUMAN-UAT 2 pass/1 blocked; 09-HUMAN-UAT 5 pass/4 blocked. Deployed rev nestor-api-00017-zbt (bucket+IAM+CORS applied; 900s timeout; STORAGE_BUCKET set). 12+ inline fixes committed during the session (superadmin answers upsert, value_json Any, AI trigger wiring, client validation phase, FieldControl crash, submit gating). REMAINING: (a) audio follow-up session — transcribe E2E, superadmin audio upload, delete + WR-04 click-through, cross-space browser denial; (b) gap-closure plans from 07-UAT Gaps (missing UI triggers for structure/extract/transcribe/embeddings, artifacts-read endpoint + ContextPackBlock display, context-pack progress UX, Kopieer-intake-link, NDA template-asset serving). Resume audio: /gsd-verify-work 9.
+- ~~[2026-07-13] COMBINED 7+8+9 LIVE UAT RUN~~ — SUPERSEDED at v1.0 close; remaining items folded into the 12-UAT deferred ledger (see Deferred Items; revisit in Phase 20 / post-Tribunal).
 
 ### Blockers/Concerns
 
-- Scope guard (INTAKE-05): `run-research`/Tribunal must never be reachable from the new frontend/backend credentials; flow stops at `decomposed`. Enforced in Phase 6.
-- Connection management (AI-06): never hold a DB connection across a 90–120s LLM/Whisper call; bounded pools vs Cloud SQL tier limit. Addressed in Phase 2 and enforced in Phase 7.
-- Requirements metadata previously stated 38 v1 requirements; actual count is 44 (corrected in REQUIREMENTS.md traceability).
-- [Phase 5 follow-up — IaC DRIFT, major]: the live deploy required manual steps the committed `infra/*.tf` doesn't apply (identitytoolkit.admin grant to nestor-run, allUsers invoker, SUPERADMIN_DB_PASSWORD_SECRET env + secretAccessor on nestor-app-superadmin-pw, CORS_ALLOWED_ORIGINS). Terraform state was never adopted (Phase 2 deployed gcloud-native). Reconcile (terraform import) or document a deploy runbook BEFORE Phase 12 cutover. See 05-UAT.md Gaps.
-- [Phase 5 follow-up — minor]: `backend/app/api/admin_routes.py` space update/deactivate/reactivate `audit.log` calls omit `space_id` (only create_space passes it). Audit row still written; space_id null on those 3 events.
-- [Phase 5 live-deploy state]: nestor-api is currently `allUsers`-invocable (public; app enforces Firebase auth). Lock back down (remove allUsers invoker) when local testing is done, OR keep if continuing into Phase 6 frontend work.
+- [v1.1 — legal, HARD DEADLINE] EU AI Act Art. 12 audit-chain enforcement 2026-08-02: `verify_chain` must be proven green after the Tribunal re-home. Addressed in Phase 13 (ENGINE-04), guarded again in Phase 17.
+- [v1.1 — cost] `NESTOR_TRIBUNAL_UNCAPPED=1` in Tribunal's current deploy posture means the $25/run ceiling is wired but never enforced. Must flip off before any production research run (Phase 16, ENGINE-03). Set `STALE_RUN_MINUTES` above the Phase-13 measured max run length.
+- [v1.1 — isolation] Every new v1.1 surface (raw-output download, deliverables writes, chat retrieval) is a fresh place the broken-RLS class of bug can recur; each read/write goes through the space-scoped session and is added to the CI-gated denial suite from day one (Phases 14/17/18/19).
+- [v1.1 — open decision] Auto-proceed vs surface interactive pauses (`needs_input` / `needs_report_spec`) must be resolved before Phase 16 implementation; recommended v1.1 default is auto-proceed (SEAM-04, zero-touch).
+- [v1.1 — verify before migration] Voyage `voyage-3-large` output dimension (1024) must be validated against current vendor docs before the Phase 19 column migration — column size is immutable after data exists.
+- [Phase 5 follow-up — IaC DRIFT, major, carried]: the live deploy required manual steps the committed `infra/*.tf` doesn't apply (identitytoolkit.admin grant, allUsers invoker, SUPERADMIN_DB_PASSWORD_SECRET env + secretAccessor, CORS_ALLOWED_ORIGINS). Terraform state never adopted. Reconcile or maintain a deploy runbook — now applies to the two new Tribunal Cloud Run services too.
+- Scope guard (INTAKE-05): legacy `run-research` (SerpAPI/SearchAPI/Apify) is superseded and must never run from new creds; deep research now flows exclusively through Tribunal.
 
 ### Quick Tasks Completed
 
@@ -134,25 +131,28 @@ Recent decisions affecting current work:
 ## Deferred Items
 
 Items acknowledged and deferred at v1.0 milestone close on 2026-07-20 (operator decision:
-PARITY ACCEPTED WITH DEFERRALS — revisit in/after the Tribunal milestone):
+PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase 20** (CLOSE-01/02/03):
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| uat | 12-UAT.md consolidated parity ledger — 21 unchecked items (AI enrichment verification, storage click-throughs, invite flow, i18n, cross-space SSE 404, two-role E2E) | deferred to post-Tribunal | 2026-07-20 |
-| uat | Per-phase *-HUMAN-UAT.md partials (01, 03, 05, 06, 07, 08, 09, 10, 11) — items folded into / superseded by the 12-UAT ledger | deferred to post-Tribunal | 2026-07-20 |
-| verification | 9 phase VERIFICATION.md files status human_needed — same human-testing debt as the UAT ledger | deferred to post-Tribunal | 2026-07-20 |
-| chore | Rotate Resend API key (transited assistant chat) → version 2 of nestor-resend-api-key | open | 2026-07-20 |
-| chore | Rerun full backend suite in Cloud Build (not rerun after ji9 backend change; 5 known mail test-harness defects) | open | 2026-07-20 |
-| chore | Drop NDA PDF into frontend image + rebuild (download 404s) | open | 2026-07-20 |
-| chore | Remove legacy VITE_SUPABASE_* from frontend/.env | open | 2026-07-20 |
-| tracking | 8 quick-task dirs report status "missing" — scanner artifact (all complete per Quick Tasks table; SUMMARYs lack status frontmatter) | acknowledged | 2026-07-20 |
+| uat | 12-UAT.md consolidated parity ledger — 21 unchecked items (AI enrichment verification, storage click-throughs, invite flow, i18n, cross-space SSE 404, two-role E2E) | scoped to Phase 20 (CLOSE-01) | 2026-07-20 |
+| uat | Per-phase *-HUMAN-UAT.md partials (01, 03, 05, 06, 07, 08, 09, 10, 11) — folded into the 12-UAT ledger | scoped to Phase 20 (CLOSE-01) | 2026-07-20 |
+| verification | 9 phase VERIFICATION.md files status human_needed — same human-testing debt as the UAT ledger | scoped to Phase 20 (CLOSE-01) | 2026-07-20 |
+| chore | Rotate Resend API key (transited assistant chat) → version 2 of nestor-resend-api-key | scoped to Phase 20 (CLOSE-02) | 2026-07-20 |
+| chore | Rerun full backend suite in Cloud Build (5 known mail test-harness defects) | scoped to Phase 20 (CLOSE-02) | 2026-07-20 |
+| chore | Drop NDA PDF into frontend image + rebuild (download 404s) | scoped to Phase 20 (CLOSE-02) | 2026-07-20 |
+| chore | Remove legacy VITE_SUPABASE_* from frontend/.env | scoped to Phase 20 (CLOSE-02) | 2026-07-20 |
+| product | 3 open decisions: Templates page visibility, Intake-info link-row trimming, "Verzonden mails" history block | scoped to Phase 20 (CLOSE-03) | 2026-07-20 |
+| tracking | 8 quick-task dirs report status "missing" — scanner artifact (all complete per Quick Tasks table) | acknowledged | 2026-07-20 |
 
 ## Session Continuity
 
-Last session: 2026-07-14T13:35:29.239Z
-Stopped at: Phase 12 context gathered
-Resume file: .planning/phases/12-frontend-deploy-cutover-supabase-retirement/12-CONTEXT.md
+Last session: 2026-07-20T12:32:42.072Z
+Stopped at: Phase 13 context gathered
+Resume file: .planning/phases/13-tribunal-re-home-infra-baseline/13-CONTEXT.md
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Review the v1.1 roadmap (.planning/ROADMAP.md — Phases 13-20).
+- Plan the first phase with /gsd-plan-phase 13 (Tribunal Re-home + Infra Baseline).
+- NOTE: Phase 13 carries the EU AI Act Art. 12 audit-chain gate (deadline 2026-08-02) — prioritize.

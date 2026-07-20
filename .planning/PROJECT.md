@@ -50,9 +50,15 @@ feature parity the re-platform must preserve. -->
 
 ### Active
 
-<!-- Next milestone (v1.1 Tribunal) — define via /gsd-new-milestone. Carried-over debt: -->
+<!-- v1.1 Tribunal Integration — scoped 2026-07-20 via /gsd-new-milestone. -->
 
-- [ ] Deferred v1.0 UAT ledger re-run (21 items, post-Tribunal — see STATE.md Deferred Items)
+- [ ] Tribunal engine (`nestor_pulse_sdk`) redeployed into the intake GCP project (API + async worker on Cloud Run), driven server-to-server by the intake backend
+- [ ] Tribunal standalone app retired: own logins/orgs/screens removed from the flow; intake auth + spaces govern research runs
+- [ ] Superadmin triggers research on a `decomposed` intake (status → `in_research`), sees run step details in the admin UI (Tribunal screens adapted to intake design), gets email on completion
+- [ ] Full research output stored as a superadmin-only downloadable file
+- [ ] Superadmin uploads final report PDF (crafted externally in Claude Design) → client sees it in their UI (status → `delivered`) + client email notification
+- [ ] Q&A chat over indexed research findings (port of legacy `ask-research`: Voyage embeddings + Claude Haiku), for client + superadmin after delivery
+- [ ] Deferred v1.0 UAT ledger re-run (21 items — see STATE.md Deferred Items)
 - [ ] Chores: Resend key rotation, Cloud Build suite rerun, NDA PDF drop + image rebuild, legacy VITE_SUPABASE_* env cleanup
 - [ ] Open product decisions: Templates page visibility, Intake-info link-row trimming, "Verzonden mails" history block
 
@@ -109,6 +115,10 @@ feature parity the re-platform must preserve. -->
 | Multi-language UI (NL/FR/EN) | Broader client reach; done now rather than retrofitted later | — Pending |
 | Include `findings`/`deliverables` tables (empty) | Preserve the Tribunal handoff contract in the schema without populating them | — Pending |
 | Drop Tally/Jotform external-form intake | Anonymous external forms conflict with the login-only model | — Pending |
+| v1.1: Redeploy Tribunal into the intake GCP project | One project to operate; avoids cross-project IAM/DB sprawl | — Pending |
+| v1.1: Retire Tribunal standalone app (logins/orgs/UI) | One login + one UI; intake auth/spaces govern research runs; Tribunal screens re-skinned in intake design | — Pending |
+| v1.1: Human-in-the-loop report (Claude Design, external) | Raw engine output is superadmin-only; client gets a hand-polished PDF, not raw findings | — Pending |
+| v1.1: Voyage embeddings (`voyage-3-large`) for Q&A chat | Fidelity to legacy `ask-research` behavior; accepted cost: new vendor + API key alongside OpenAI | — Pending |
 
 ## Evolution
 
@@ -136,12 +146,31 @@ Platform auth, GCS storage, Resend mail. 12 phases / 70 plans / 485 commits in 3
 close: 21 UAT items + chores (STATE.md Deferred Items). Legacy Supabase project intact but unused
 (independence-only retirement, D-08).
 
-## Next Milestone Goals (v1.1 Tribunal — to be scoped)
+## Current Milestone: v1.1 Tribunal Integration
 
-Port the deep-research engine (`run-research`/Tribunal) off Supabase: search/crawl providers
-(SerpAPI, SearchAPI, Apify), research artifacts pipeline into `findings`/`deliverables`, lift the
-`decomposed` scope ceiling (statuses `in_research` → `delivered`), results delivery to clients, and
-re-run the deferred v1.0 UAT ledger on the extended flow. Scope via `/gsd-new-milestone`.
+**Goal:** Absorb the existing Tribunal deep-research engine (`MOELD/Nestor/nestor_pulse_sdk`) into
+the GCP intake platform — one project, one login, one UI — extending the flow from `decomposed`
+through research, human-crafted report delivery, and a client Q&A chat over the indexed findings.
+
+**Target features:**
+- Tribunal API + worker redeployed as Cloud Run services in the intake GCP project; standalone app (own logins/orgs/screens, own GCP project `project-cb01b861`) retired from the flow
+- Superadmin research trigger on `decomposed` intakes; run progress/step details adapted into the intake admin UI design; completion email to superadmin
+- Raw research output as a superadmin-only downloadable file (nothing client-visible until delivery)
+- Human report step: superadmin crafts report in Claude Design externally, uploads final PDF → client UI + email notification (status → `delivered`)
+- Q&A chat over indexed findings (legacy `ask-research` port: `voyage-3-large` embeddings + Claude Haiku RAG), client + superadmin, post-delivery
+- Deferred v1.0 UAT ledger re-run (21 items) + carried-over chores
+
+**Key context (established during scoping):**
+- The Tribunal engine is already coded and was mid-dev-round on its own GCP project (skeptic
+  verification pipeline, budget governor, citations, audit trail; Cloud Run `nestor-pulse-api` +
+  `nestor-pulse-worker`, own Cloud SQL `nestor-prod-pg`, own Alembic line). This milestone is
+  re-homing + integration, not engine building.
+- Open architecture decision: merge Tribunal's DB into the intake Cloud SQL instance vs. separate
+  database in the same project.
+- Open comparison: legacy `run-research.ts` (SerpAPI/SearchAPI/Apify) vs. Tribunal — user unsure
+  whether anything is lost; research must settle it.
+- Research must establish what actually works in Tribunal today (dev state had pending verify steps
+  as of 2026-06-15).
 
 ---
-*Last updated: 2026-07-20 after v1.0 milestone (GCP Re-platform shipped — all 12 phases complete, archived to milestones/)*
+*Last updated: 2026-07-20 after v1.1 milestone scoping (Tribunal Integration started via /gsd-new-milestone)*
