@@ -29,7 +29,7 @@ Phase: 12 (frontend-deploy-cutover-supabase-retirement) — EXECUTING
 Plan: 1 of 5
 Next: Phase 06 (intake-crud-parity-and-frontend-api-seam)
 Status: Executing Phase 12
-Last activity: 2026-07-16 -- Completed quick task 260716-e59: 4 parity-UAT defect fixes (needs frontend redeploy to go live)
+Last activity: 2026-07-20 -- Deployed frontend rev 00010-ndr (a710e8e validation-diff fix live); operator deferred remaining 12-UAT items to post-Tribunal (quick task 260720-eh4)
 
 Progress: 5 / 12 phases complete
 
@@ -130,6 +130,7 @@ Recent decisions affecting current work:
 | fast | Restart skill-run safety poll on new dispatch (stuck 7-min timer) + toast on unusable review output | 2026-07-16 | 4eb1c6e | — |
 | fast | Heranalyseer re-run button in awaiting_review banner | 2026-07-16 | acf1ba4 | — |
 | fast | Client validation diff: patch applied refinements into research_questions + show applied text | 2026-07-16 | a710e8e | — |
+| 260720-eh4 | Record rev 00010-ndr deploy (a710e8e live) + operator UAT-deferral decision in 12-UAT.md | 2026-07-20 | 7731421 | [260720-eh4-record-rev-00010-ndr-deploy-defer-remain](./quick/260720-eh4-record-rev-00010-ndr-deploy-defer-remain/) |
 
 ## Deferred Items
 
