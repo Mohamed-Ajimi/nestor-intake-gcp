@@ -50,6 +50,21 @@ from fastapi.middleware.cors import CORSMiddleware
 # backend, verified by InternalCallerProvider at the set_auth_provider() swap point.
 LOCAL_DEV_AUTH = os.environ.get("LOCAL_DEV_AUTH") == "1"
 
+# WR-06 (T-14-05 — never a silent auth downgrade): LOCAL_DEV_AUTH replaces the
+# ENTIRE seam (OIDC verify + SA pinning + tenant validation) with a fixed dev
+# identity, so an env flag alone is too weak a gate for a deployed service that
+# fronts cross-tenant research data. Cloud Run always injects K_SERVICE and the
+# operator flow cannot unset it — if both are present this is a deployed
+# environment carrying the bypass (a mistaken --update-env-vars, or a stale
+# value replayed by --set-env-vars replacement semantics): refuse LOUDLY at
+# import so the revision fails to boot instead of silently serving unauthenticated.
+if LOCAL_DEV_AUTH and os.environ.get("K_SERVICE"):
+    raise RuntimeError(
+        "LOCAL_DEV_AUTH=1 is forbidden in a deployed environment (K_SERVICE is "
+        "set): it would replace the internal-caller seam with a fixed dev "
+        "identity. Remove LOCAL_DEV_AUTH from the Cloud Run service env."
+    )
+
 app = FastAPI(
     title="Nestor Pulse SDK",
     version="0.2.0",
