@@ -56,6 +56,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Request
+from starlette.concurrency import run_in_threadpool
 
 from google.auth.transport import requests as ga_requests
 from google.oauth2 import id_token as ga_id_token
@@ -107,8 +108,13 @@ class InternalCallerProvider(AuthProvider):
         never trusts a tenant from the token itself.
         """
         try:
-            info: dict[str, Any] = ga_id_token.verify_oauth2_token(
-                token, self._transport, self._aud
+            # WR-02: verify_oauth2_token performs a SYNCHRONOUS HTTPS fetch of
+            # Google's public certs on every call (google-auth's requests-based
+            # transport, no cross-call cert cache). Run it on the starlette
+            # threadpool so a slow cert fetch can never stall the event loop
+            # (and with it every in-flight request incl. health probes).
+            info: dict[str, Any] = await run_in_threadpool(
+                ga_id_token.verify_oauth2_token, token, self._transport, self._aud
             )
         except Exception as exc:  # ValueError on bad aud/sig/expiry
             raise AuthError(
