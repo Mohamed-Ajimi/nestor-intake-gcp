@@ -121,19 +121,21 @@ _ACTING_EMAIL = "superadmin@agenic.be"
 class _RecordingSession:
     """Minimal AsyncSession stand-in that records the tenant handed to it.
 
-    ``ensure_org`` calls ``session.get(Org, uuid)`` then ``session.flush()`` +
-    ``set_tenant_context(session, tenant)``; ``set_tenant_context`` issues
-    ``SELECT set_config('app.tenant_id', :tid, true)`` via ``session.execute``. We capture
-    the ``:tid`` bind so the test can assert the DB context == the verified header tenant
-    (never a foreign space). Every method is async to match the real session surface.
+    ``ensure_org`` issues an idempotent ``INSERT ... ON CONFLICT DO NOTHING`` (WR-04)
+    then ``session.flush()`` + ``set_tenant_context(session, tenant)``;
+    ``set_tenant_context`` issues ``SELECT set_config('app.tenant_id', :tid, true)`` via
+    ``session.execute``. We capture the ``:tid`` bind so the test can assert the DB
+    context == the verified header tenant (never a foreign space); the insert statement
+    itself carries no ``tid`` bind and is ignored by the recorder. Every method is async
+    to match the real session surface.
     """
 
     def __init__(self) -> None:
         self.tenant_contexts: list[str] = []
 
     async def get(self, _model, _pk):
-        # Pretend the Org already exists (no INSERT path); ensure_org then just
-        # flushes + sets the tenant context, which is the security-relevant step.
+        # Kept for session-surface compatibility (unused by the WR-04 ON CONFLICT
+        # ensure_org flow); the security-relevant step is the recorded set_config.
         return object()
 
     async def flush(self) -> None:

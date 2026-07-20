@@ -14,12 +14,17 @@ already set `app.tenant_id` before these run):
   ensure_org(space_id, email, session) -> str
       Get-or-create the Org with id == space_id (identity mapping). Org is NOT
       RLS-scoped (it IS the tenant), so the get/insert is safe. Returns space_id.
+      Concurrency-safe (WR-04): INSERT ... ON CONFLICT DO NOTHING -- two racing
+      calls for the same space never raise IntegrityError.
 
   ensure_project(space_id, session) -> str
       Get-or-create exactly one Project per space (owner_user_id=None -- there is
       no app_user in the seam). Discoverable by tenant_id; returns the project_id.
       Phase 16 owns persisting the project_id intake-side (D-06 boundary) -- this
-      function just returns it.
+      function just returns it. Concurrency-safe (WR-04): a per-space
+      transaction-scoped advisory lock serializes the get-or-create, so two
+      racing calls can never create two projects for one space (there is no
+      unique constraint on Project.tenant_id backing the invariant).
 
 SECURITY INVARIANTS (T-14-03):
   - Org.id == space_id ALWAYS comes from the verified internal caller's header
@@ -92,25 +97,34 @@ async def ensure_org(*, space_id: str, email: str, session: Any) -> str:
     str
         The space_id (== org_id), for chaining into the response.
     """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert  # type: ignore
     from nestor_pulse_sdk.db.models import Org  # type: ignore
     from nestor_pulse_sdk.db.rls import set_tenant_context  # type: ignore
 
     tenant_uuid = uuid.UUID(space_id)
 
-    org = await session.get(Org, tenant_uuid)
-    if org is None:
-        org = Org(
+    # WR-04: get-or-create must hold under CONCURRENT calls for the same space.
+    # The previous read-then-insert raced: two callers both saw "no org" and both
+    # INSERTed the same PK -> IntegrityError -> 500. INSERT ... ON CONFLICT DO
+    # NOTHING is atomic: the losing racer waits on the winner's row lock, then
+    # does nothing. Values are deterministic given (email, space_id), so racers
+    # always insert identical rows -- idempotent semantics preserved, and
+    # org.id == space_id (identity mapping) is unchanged.
+    await session.execute(
+        pg_insert(Org)
+        .values(
             id=tenant_uuid,  # id == space_id (identity mapping)
             name=_email_to_org_name(email, space_id),
             slug=_email_to_slug(email, space_id),
         )
-        session.add(org)
+        .on_conflict_do_nothing()
+    )
 
-    # Flush the Org first (so any child-row FKs resolve), then set the tenant
-    # context to the now-known org id. Org is not RLS-scoped, but child tables
-    # (project) are RLS-FORCED: their policy reads current_setting('app.tenant_id')
-    # and would raise on an unset setting. Setting it here makes ensure_project
-    # (called after ensure_org in the /projects/ensure endpoint) run under RLS.
+    # Flush any pending ORM state, then set the tenant context to the now-known
+    # org id. Org is not RLS-scoped, but child tables (project) are RLS-FORCED:
+    # their policy reads current_setting('app.tenant_id') and would raise on an
+    # unset setting. Setting it here makes ensure_project (called after
+    # ensure_org in the /projects/ensure endpoint) run under RLS.
     await session.flush()
     await set_tenant_context(session, str(tenant_uuid))
 
@@ -127,10 +141,22 @@ async def ensure_project(*, space_id: str, session: Any) -> str:
     Assumes the tenant context is already set (ensure_org sets it, and the
     /projects/ensure endpoint calls ensure_org first).
     """
-    from sqlalchemy import select  # type: ignore
+    from sqlalchemy import select, text  # type: ignore
     from nestor_pulse_sdk.db.models import Project  # type: ignore
 
     tenant_uuid = uuid.UUID(space_id)
+
+    # WR-04: no unique constraint on Project.tenant_id backs the "exactly one
+    # project per space" invariant, so a bare select-then-insert races -- two
+    # concurrent calls could create TWO project rows for one space (and Phase 16
+    # would bind different project ids permanently). Serialize per-space with a
+    # TRANSACTION-scoped advisory lock (auto-released at commit/rollback; no
+    # schema migration required). The losing racer blocks here until the winner
+    # commits; its select below (READ COMMITTED) then sees the winner's row.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:space, 0))"),
+        {"space": str(tenant_uuid)},
+    )
 
     existing = (
         await session.execute(
