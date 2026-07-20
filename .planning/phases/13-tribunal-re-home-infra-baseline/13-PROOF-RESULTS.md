@@ -60,6 +60,36 @@ Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progre
 | Full-suite status | ⚠ DEFERRED: full suite timed out at 1200s (~62%) and contains tests needing live provider keys (absent in the keyless build env). Config fixed (host-network pattern, 3600s, E2_HIGHCPU_8) — triage of key-dependent failures is a carried chore. |
 | Harness fixes landed | Cloud Build reserved-socket + sibling-port networking (`--network=host` docker step); `env.py` loop-aware alembic runner |
 
+### Post-review test cycle (13-REVIEW, same day)
+
+The mandatory code-review gate found **CR-01**: the worker's queue path never
+dispatched (post-lock re-check re-tested the pre-claim claimable set and refused its own
+fresh claim). Undetected because (a) all three live proof runs used the smoke script's
+direct-pipeline path, and (b) the "green" critical build had silently **SKIPPED** the 7
+live-DB tests (testcontainers could not start inside the host-network step) — the earlier
+"24 green" reading in this file's first draft was wrong and is corrected here.
+
+Fix cycle (all committed):
+- Ownership → **fencing-token claim consume** (`_CONSUME_CLAIM_SQL`: bump `started_at`
+  iff it equals the claim's token, under the advisory lock) — a claim dispatches at most
+  once, ever. Duplicate invocations, stolen claims, and superseded self-reclaims all
+  refuse deterministically.
+- `WORKER_ID` made globally unique (hostname-pid collides across Cloud Run instances —
+  live logs showed `localhost-1`).
+- Live tests rewritten to model claim-then-lock with the real patch target; new CR-01
+  regression + stolen-claim tests.
+- Working harness: dedicated host-network Postgres + `DATABASE_URL` + pre-created
+  `worker_user`/`app_user` roles + login-role `search_path` (committed as
+  `tribunal/cloudbuild.test-critical.yaml`).
+
+**Final gate: 22/22 PASSED** (schema isolation 5, advisory lock 8 incl. all live races,
+hash-chain replay 10) — build green 2026-07-20. `test_rls_isolation.py` excluded from
+this gate: the harness connects as a Postgres superuser and RLS never applies to
+superusers (v1.0 lesson); faithful re-run needs a non-superuser DSN harness → carried
+into the full-suite triage chore.
+
+Services redeployed on tag `20260720-fix2` with the corrected worker (see below).
+
 ## LUKOIL benchmark E2E proof run (Task 2 — ENGINE-02 + ENGINE-04)
 
 > Single real run via `run_tribunal_smoke.py --brief "<LUKOIL COMBINED_BRIEF>"` (or
