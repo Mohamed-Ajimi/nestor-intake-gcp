@@ -97,7 +97,15 @@ def do_run_migrations(connection: Connection) -> None:
     # sync Connection that async run_sync() hands us -- keep Tribunal's existing
     # asyncpg engine unchanged (Pitfall 5: do NOT swap it for an IAM connector).
     connection.execute(text("CREATE SCHEMA IF NOT EXISTS tribunal"))
+    # COMMIT the autobegun preamble transaction before context.configure().
+    # Without this, SQLAlchemy 2.0 autobegin means Alembic's begin_transaction()
+    # finds a transaction it does not own, so nothing ever commits and the whole
+    # migration silently ROLLS BACK when the connection closes (observed live:
+    # all 10 migrations logged, zero tables persisted). SET search_path is
+    # session-scoped, so it survives the commit for the migration run below.
+    connection.commit()
     connection.execute(text("SET search_path TO tribunal"))
+    connection.commit()
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
