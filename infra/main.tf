@@ -714,3 +714,475 @@ resource "google_cloud_run_v2_service_iam_member" "frontend_invoker" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# ================================================================================
+# Phase 13 — Tribunal re-home (deep-research engine into the intake project)
+# ================================================================================
+# By-construction IaC for the re-homed Tribunal engine (D-01/D-02). This block adds
+# the FULL Tribunal footprint alongside the intake resources above:
+#   - two Cloud Run services: always-on `tribunal-worker` (min=1, max=5, cpu_idle=false,
+#     timeout 3600 — D-04 always-on + D-08 concurrency) and `tribunal-api`
+#     (min=0, max=3, timeout 300).
+#   - a `tribunal-migrate` Cloud Run Job (alembic upgrade head into the `tribunal` schema).
+#   - a 7-year, mode="Unlocked" audit-evidence GCS bucket (D-09 — object retention, NOT
+#     Bucket Lock; verified against nestor_pulse_sdk/audit/gcs_blob.py).
+#   - six Secret Manager secrets: the three provider keys under the `Nestor_*` names the
+#     copied secrets_bootstrap.py reads (D-06), plus DATABASE_URL / DATABASE_URL_WORKER /
+#     AUDIT_GCS_BUCKET — each with a resource-scoped secretAccessor to the runtime SA.
+#   - two BUILT_IN Cloud SQL users: `app_user` (API) and `worker_user` (the cross-tenant
+#     claim role — granted on the `tribunal` schema ONLY, never `nestor`; T-13-09).
+#
+# DB AUTH TOPOLOGY (RESEARCH Pitfall 5): unlike the intake api (IAM connector), the
+# Tribunal services authenticate with a STORED password over asyncpg (DATABASE_URL /
+# DATABASE_URL_WORKER secrets). Hence BUILT_IN users + password DSNs here, NOT an
+# INSTANCE_CONNECTION_NAME/IAM path. The DSN carries the unix-socket host, so the
+# services still attach the Cloud SQL instance (the runbook `--add-cloudsql-instances`).
+#
+# IaC-DRIFT: Terraform state was never adopted for this project (see the Phase 5/7/8/9/10/12
+# drift notes above + in DEPLOY-RUNBOOK.md and .planning/STATE.md). Every resource below —
+# and its IAM bindings + secret injections — is the INTENDED end-state only; it is INERT
+# until applied out-of-band via the § Phase 13 gcloud steps in infra/DEPLOY-RUNBOOK.md
+# (Plan 04, operator-run). Reconcile via `terraform import` (or keep manual).
+
+locals {
+  # Tribunal images share the existing `nestor` Artifact Registry repo (no new repo),
+  # pathed to the two Tribunal image names and driven by var.tribunal_image_tag
+  # (passed on apply, like image_tag/frontend_image_tag).
+  tribunal_api_image    = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/tribunal-api:${var.tribunal_image_tag}"
+  tribunal_worker_image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/tribunal-worker:${var.tribunal_image_tag}"
+
+  # Audit bucket name: explicit var override, else the project-prefixed default.
+  tribunal_audit_bucket_name = var.tribunal_audit_bucket_name != "" ? var.tribunal_audit_bucket_name : "${var.project}-nestor-audit"
+}
+
+# ---------------------------------------------------- Tribunal BUILT_IN DB users (Pitfall 5)
+# `app_user` (API) + `worker_user` (cross-tenant claim role). BUILT_IN password users
+# (mirror google_sql_user.app_superadmin above) because the Tribunal services authenticate
+# with a stored password over asyncpg, NOT the IAM connector. Passwords are GENERATED (never
+# committed literals) and flow only random_password -> the DATABASE_URL{,_WORKER} secret
+# versions (composed + seeded out-of-band per the runbook — the *values* here are NOT wired
+# into a secret_version resource in IaC, so nothing lands in committed state).
+#
+# ISOLATION FIREWALL (T-13-09): `worker_user` is granted USAGE + DML on the `tribunal`
+# schema ONLY — never the intake `nestor` schema. The actual GRANT lives in Tribunal
+# migration 0008 (Plan 02), run by the tribunal-migrate Job under `search_path=tribunal`.
+# This resource only CREATES the role; the runbook (Task 2) documents creating both roles
+# out-of-band with `gcloud sql users create` before the migrate Job runs.
+resource "random_password" "tribunal_app_user" {
+  length           = 32
+  special          = true
+  override_special = "!#%*-_=+:?"
+}
+
+resource "random_password" "tribunal_worker_user" {
+  length           = 32
+  special          = true
+  override_special = "!#%*-_=+:?"
+}
+
+resource "google_sql_user" "tribunal_app_user" {
+  name     = "app_user"
+  instance = google_sql_database_instance.main.name
+  type     = "BUILT_IN"
+  password = random_password.tribunal_app_user.result
+}
+
+resource "google_sql_user" "tribunal_worker_user" {
+  # worker_user: the cross-tenant claim role. Granted USAGE/DML on the `tribunal`
+  # schema ONLY (migration 0008, Plan 02) — NEVER `nestor` (isolation firewall, T-13-09).
+  name     = "worker_user"
+  instance = google_sql_database_instance.main.name
+  type     = "BUILT_IN"
+  password = random_password.tribunal_worker_user.result
+}
+
+# ---------------------------------------------------- Tribunal provider key secrets (D-06)
+# Three secrets under the EXACT `Nestor_*` names secrets_bootstrap.py reads (no bootstrap
+# refactor — RESEARCH Open Q3). Each mirrors the anthropic_api_key trio above: secret
+# resource + resource-scoped secretAccessor to the runtime SA. VALUES seeded out-of-band
+# per the runbook (drift-honest — no *_version resource here, so no value in committed state,
+# T-13-08). Gemini is reseeded from the old project's key (D-06 — all three providers day one).
+resource "google_secret_manager_secret" "tribunal_gemini" {
+  secret_id = var.tribunal_gemini_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_gemini_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_gemini.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret" "tribunal_claude" {
+  secret_id = var.tribunal_claude_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_claude_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_claude.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret" "tribunal_openai" {
+  secret_id = var.tribunal_openai_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_openai_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_openai.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# ---------------------------------------------------- Tribunal DB URL + bucket secrets
+# DATABASE_URL (app_user, API) + DATABASE_URL_WORKER (worker_user) — asyncpg unix-socket
+# DSNs read from the process env by db/base.py. Plus AUDIT_GCS_BUCKET (the bucket name).
+# Same drift-honest handling: resource + scoped accessor in IaC; VALUE seeded out-of-band
+# per the runbook (T-13-08 — the DSNs carry the generated BUILT_IN-user passwords, so they
+# MUST NOT enter committed state; they are composed + `gcloud secrets versions add`-ed by hand).
+resource "google_secret_manager_secret" "tribunal_database_url" {
+  secret_id = var.tribunal_database_url_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_database_url_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret" "tribunal_database_url_worker" {
+  secret_id = var.tribunal_database_url_worker_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_database_url_worker_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_database_url_worker.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+resource "google_secret_manager_secret" "tribunal_audit_bucket" {
+  secret_id = var.tribunal_audit_bucket_secret_id
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_tribunal_audit_bucket_accessor" {
+  secret_id = google_secret_manager_secret.tribunal_audit_bucket.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# ---------------------------------------------------- Tribunal audit-evidence bucket (D-09)
+# The immutable audit-body store the hash-chain writes to. Mirrors google_storage_bucket.uploads
+# above (uniform BLA + public-access-prevention enforced, force_destroy=false) BUT adds the D-09
+# legal retention: 7-YEAR, mode="Unlocked" OBJECT retention.
+#
+# D-09 — OBJECT retention, NOT Bucket Lock (verified against
+# nestor_pulse_sdk/audit/gcs_blob.py, Pitfall 7): the engine sets per-object
+# `blob.retention.mode = "Unlocked"` + `retain_until_time = now + 7y` on every upload.
+# For the bucket to ACCEPT per-object retention its `retention_policy` must be absent-or-unlocked
+# and object retention must be ENABLED at create time. We therefore:
+#   - set `enable_object_retention = true` (turns on the per-object Object Retention API the
+#     engine uses) and
+#   - DELIBERATELY DO NOT declare a bucket-level `retention_policy { is_locked = true }`
+#     (that is Bucket Lock — irreversible, FORBIDDEN for this project, D-09).
+# The literal 7-year duration lives on each object (gcs_blob.py `_RETENTION_YEARS = 7`), so no
+# bucket-level lifecycle rule encodes it — retention is per-object + Unlocked (reversible).
+resource "google_storage_bucket" "tribunal_audit" {
+  name     = local.tribunal_audit_bucket_name
+  location = var.region
+
+  uniform_bucket_level_access = true       # IAM-only access control (no per-object ACLs)
+  public_access_prevention    = "enforced" # zero public objects — audit bodies are never public
+
+  # D-09: turn ON the Object Retention API so gcs_blob.py's per-object
+  # blob.retention.mode="Unlocked" + retain_until_time = now+7y is honored. This is the
+  # per-object mechanism — NOT a bucket-level retention_policy (which would be Bucket Lock).
+  enable_object_retention = true
+
+  # DELIBERATELY NO `retention_policy` block: a bucket-level retention_policy with
+  # is_locked = true is Bucket Lock (permanent, irreversible) — FORBIDDEN (D-09). Retention
+  # is applied per-object with mode="Unlocked" (reversible) by the engine at upload time.
+
+  force_destroy = false # never auto-wipe the legal audit chain on destroy
+}
+
+# Bucket-scoped storage.objectAdmin for the runtime SA (least privilege, mirror
+# runtime_object_admin above). objectAdmin (not objectViewer/objectCreator) is required
+# because gcs_blob.py both uploads bodies AND patches per-object retention (blob.patch()).
+resource "google_storage_bucket_iam_member" "runtime_tribunal_audit_object_admin" {
+  bucket = google_storage_bucket.tribunal_audit.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.runtime.email}"
+}
+
+# ---------------------------------------------------- tribunal-worker service (D-04/D-08)
+# Always-on poll-loop worker. Mirrors google_cloud_run_v2_service.api but: min=1 (always-on,
+# vs intake api's 0), max=5 (D-08 — the per-run advisory lock + SKIP-LOCKED make >1 poller
+# safe), cpu_idle=false (no-cpu-throttling — the worker polls Postgres on its own schedule and
+# runs ~35-min deep-research pipelines off the request path), timeout 3600s. No unauthenticated
+# invoker (no allUsers binding — background worker, no public HTTP). Secrets: DATABASE_URL is
+# sourced from DATABASE_URL_WORKER (worker_user, the cross-tenant claim role) + the three
+# Nestor_* provider keys. NESTOR_TRIBUNAL_UNCAPPED=1 (D-07 — uncapped this phase).
+resource "google_cloud_run_v2_service" "tribunal_worker" {
+  name     = var.tribunal_worker_service_name
+  location = var.region
+
+  template {
+    service_account = google_service_account.runtime.email
+
+    # Long timeout so a full deep-research run (~35 min) is not severed (old deploy: 3600).
+    timeout = "3600s"
+
+    scaling {
+      min_instance_count = 1                                 # D-04: always-on (intake api uses 0)
+      max_instance_count = var.tribunal_worker_max_instances # D-08: size for 5+ (default 5)
+    }
+
+    containers {
+      image = local.tribunal_worker_image
+
+      # No-cpu-throttling: CPU allocated even with no inbound HTTP so the poll loop +
+      # long pipeline run between requests (the native equivalent of the gen1
+      # `run.googleapis.com/cpu-throttling=false` annotation the old deploy script set).
+      resources {
+        cpu_idle = false
+      }
+
+      # D-07: uncapped this phase (matches the old deploy-worker.sh env).
+      env {
+        name  = "NESTOR_TRIBUNAL_UNCAPPED"
+        value = "1"
+      }
+      # Stale-claim reclaim window (calibrated in Phase 16; carried as plain non-secret env).
+      env {
+        name  = "NESTOR_WORKER_STALE_MINUTES"
+        value = var.tribunal_worker_stale_minutes
+      }
+      # AUDIT_GCS_BUCKET: the audit-body bucket name. Injected from the secret purely for
+      # uniformity with the DB/provider secrets (the value is the non-secret bucket name).
+      env {
+        name = "AUDIT_GCS_BUCKET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_audit_bucket.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # DATABASE_URL <- DATABASE_URL_WORKER (worker_user, cross-tenant claim role). asyncpg
+      # DSN read by db/base.py from the process env. NEVER app_user's DATABASE_URL.
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_database_url_worker.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # Provider keys under the Nestor_* names secrets_bootstrap.py reads (D-06).
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_claude.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "GOOGLE_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_gemini.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "OPENAI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_openai.secret_id
+            version = "latest"
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.runtime_cloudsql_client,
+    google_project_iam_member.runtime_cloudsql_instance_user,
+    # worker_user + the worker's secrets/grants + the audit bucket grant must exist before
+    # the worker boots, or native secret_key_ref resolution / the first audit upload fails.
+    google_sql_user.tribunal_worker_user,
+    google_secret_manager_secret_iam_member.runtime_tribunal_database_url_worker_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_claude_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_gemini_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_openai_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_audit_bucket_accessor,
+    google_storage_bucket_iam_member.runtime_tribunal_audit_object_admin,
+  ]
+}
+
+# ---------------------------------------------------- tribunal-api service (request-response)
+# Mirrors google_cloud_run_v2_service.api: min=0, max=3, timeout 300. Secrets: DATABASE_URL is
+# sourced from DATABASE_URL (app_user, tenant-scoped) + the three Nestor_* provider keys +
+# AUDIT_GCS_BUCKET. No allUsers invoker here (see tribunal_api_invoker below — gated on the
+# same var.allow_unauthenticated toggle as the intake api).
+resource "google_cloud_run_v2_service" "tribunal_api" {
+  name     = var.tribunal_api_service_name
+  location = var.region
+
+  template {
+    service_account = google_service_account.runtime.email
+
+    timeout = "300s"
+
+    scaling {
+      min_instance_count = 0 # scale to zero (matches intake api)
+      max_instance_count = 3 # request-response tier
+    }
+
+    containers {
+      image = local.tribunal_api_image
+
+      ports {
+        container_port = 8080
+      }
+
+      env {
+        name  = "NESTOR_TRIBUNAL_UNCAPPED"
+        value = "1"
+      }
+      env {
+        name = "AUDIT_GCS_BUCKET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_audit_bucket.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # DATABASE_URL <- DATABASE_URL (app_user, tenant-scoped — NOT the worker DSN).
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "ANTHROPIC_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_claude.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "GOOGLE_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_gemini.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "OPENAI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.tribunal_openai.secret_id
+            version = "latest"
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.runtime_cloudsql_client,
+    google_project_iam_member.runtime_cloudsql_instance_user,
+    google_sql_user.tribunal_app_user,
+    google_secret_manager_secret_iam_member.runtime_tribunal_database_url_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_claude_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_gemini_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_openai_accessor,
+    google_secret_manager_secret_iam_member.runtime_tribunal_audit_bucket_accessor,
+    google_storage_bucket_iam_member.runtime_tribunal_audit_object_admin,
+  ]
+}
+
+# Authenticated-only invoker for the Tribunal API by default (gated on the same
+# var.allow_unauthenticated toggle as the intake api). No unconditional allUsers binding.
+resource "google_cloud_run_v2_service_iam_member" "tribunal_api_invoker" {
+  count    = var.allow_unauthenticated ? 1 : 0
+  name     = google_cloud_run_v2_service.tribunal_api.name
+  location = google_cloud_run_v2_service.tribunal_api.location
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# ---------------------------------------------------- tribunal-migrate JOB (alembic upgrade head)
+# Mirrors google_cloud_run_v2_job.migrate: same runtime SA, override CMD with
+# `alembic upgrade head`. Runs the Tribunal alembic line into the `tribunal` SCHEMA (the
+# env.py edits in Plan 02 set version_table_schema=tribunal + search_path=tribunal so
+# unqualified CREATE TABLE / the 0008 GRANTs land in `tribunal`, never colliding with the
+# intake `alembic_version`). Uses DATABASE_URL (app_user, asyncpg) — NOT the IAM connector
+# env (Pitfall 5). Depends on app_user existing; the runbook creates the roles + notes the
+# `CREATE SCHEMA tribunal` happens via env.py at first migrate.
+resource "google_cloud_run_v2_job" "tribunal_migrate" {
+  name     = "tribunal-migrate"
+  location = var.region
+
+  template {
+    template {
+      service_account = google_service_account.runtime.email
+
+      containers {
+        image = local.tribunal_api_image
+        args  = ["alembic", "upgrade", "head"]
+
+        # asyncpg DSN (app_user) — NOT INSTANCE_CONNECTION_NAME/IAM (Pitfall 5). The migrate
+        # Job runs the Tribunal alembic line under search_path=tribunal (env.py, Plan 02).
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.tribunal_database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.runtime_cloudsql_client,
+    google_project_iam_member.runtime_cloudsql_instance_user,
+    # app_user + its DATABASE_URL secret grant must exist before the Job runs alembic.
+    google_sql_user.tribunal_app_user,
+    google_secret_manager_secret_iam_member.runtime_tribunal_database_url_accessor,
+  ]
+}
