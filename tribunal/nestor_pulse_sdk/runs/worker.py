@@ -78,7 +78,7 @@ CLAIM_SQL = text("""
         FOR UPDATE SKIP LOCKED
         LIMIT 1
      )
-   RETURNING id, tenant_id, project_id, engine, brief, worker_id
+   RETURNING id, tenant_id, project_id, engine, brief, worker_id, started_at
 """)
 
 

@@ -22,15 +22,17 @@ Why the lock exists (13-RESEARCH.md Pitfall 3 / threat T-13-06):
   `('x' || md5(:run_id))::bit(64)::bigint` (verbatim from 01-19). Do NOT use the
   int4 string-hash builtin.
 
-Post-claim ownership re-check (13-REVIEW CR-01 fix):
+Post-claim fencing-token consume (13-REVIEW CR-01 fix):
   The CLAIM_SQL in worker.py owns the claimable-set test (status='queued' OR
   status='running'-and-stale); by the time this module runs, the claim has
   already moved the row to a fresh 'running' owned by the claiming worker. The
-  post-lock re-check therefore verifies OWNERSHIP: still 'running', still
-  worker_id = ours, claim still fresh. EXPLICITLY refused: needs_input,
-  needs_report_spec (paused for the user), cancelled, completed, failed, and
-  rows stale-reclaimed by another worker. If the re-check refuses, return
-  without a second dispatch (exactly-once).
+  claim's (worker_id, started_at) pair is a FENCING TOKEN: under the advisory
+  lock we atomically consume it (bump started_at), so any given claim
+  dispatches at most once, ever. EXPLICITLY refused: needs_input,
+  needs_report_spec (paused for the user), cancelled, completed, failed, rows
+  stale-reclaimed by another worker, and duplicate invocations of an
+  already-consumed claim. If the consume refuses, return without a second
+  dispatch (exactly-once).
 
 SCOPE GUARD (13-RESEARCH.md Anti-Patterns): this file carries ONLY the lock
 keystone. It deliberately does NOT add the message-bus trigger, the event-driven
@@ -56,10 +58,9 @@ from nestor_pulse_sdk.db.base import get_sessionmaker
 
 log = structlog.get_logger(__name__)
 
-# Stale-running threshold: a run left 'running' longer than this (worker died
-# mid-execute) is reclaimable. Mirrors worker.py's CLAIM_SQL crash-recovery
-# window (NESTOR_WORKER_STALE_MINUTES) so the two agree.
-STALE_RUN_MINUTES = int(os.environ.get("NESTOR_WORKER_STALE_MINUTES", "60"))
+# Staleness lives in worker.py's CLAIM_SQL (NESTOR_WORKER_STALE_MINUTES) only:
+# the consume step below needs no staleness test — the fencing token (the
+# claim's exact started_at) already invalidates superseded claims.
 
 # 64-bit per-run advisory lock (transaction-scoped, auto-releases on
 # commit/rollback/crash). 64-bit md5 key, NOT the int4 string-hash builtin --
@@ -68,24 +69,29 @@ _ADVISORY_LOCK_SQL = text(
     "SELECT pg_advisory_xact_lock(('x' || md5(:run_id))::bit(64)::bigint)"
 )
 
-# Post-lock OWNERSHIP re-check (13-REVIEW CR-01 fix). This runs AFTER
-# worker.py's CLAIM_SQL has already moved the row from the claimable set
+# Post-lock claim CONSUME (13-REVIEW CR-01 fix, fencing-token form). This runs
+# AFTER worker.py's CLAIM_SQL has already moved the row from the claimable set
 # (status='queued' OR stale-'running') to a fresh 'running' owned by THIS
 # worker — so re-testing "queued or stale" here would refuse our own claim and
-# starve the queue. The correct post-claim invariant is: the row is still
-# 'running', still owned by :wid, and the claim is still fresh. Everything else
-# refuses the dispatch (exactly-once, H-3):
+# starve the queue. Instead, the claim's (worker_id, started_at) pair acts as a
+# FENCING TOKEN: under the advisory lock we atomically consume it by bumping
+# started_at, so any given claim can be dispatched at most ONCE, ever. The
+# UPDATE matches zero rows — and the dispatch is refused (exactly-once, H-3) —
+# when:
 #   - paused states (needs_input, needs_report_spec) -> user pause supervened
 #   - terminal states (cancelled, completed, failed) -> another path finished it
 #   - worker_id != :wid -> a stale-reclaim stole the run from us
-#   - started_at gone stale -> our own claim aged out; the thief owns it now
-_CLAIMABLE_SQL = text(
+#   - started_at != our token -> this exact claim was already consumed
+#     (a concurrent duplicate invocation, or a newer claim superseded ours)
+_CONSUME_CLAIM_SQL = text(
     """
-    SELECT status FROM run
+    UPDATE run
+       SET started_at = NOW()
      WHERE id = :run_id
        AND status = 'running'
        AND worker_id = :wid
-       AND started_at >= NOW() - make_interval(mins => :stale)
+       AND started_at = :token
+    RETURNING id
     """
 )
 
@@ -110,11 +116,13 @@ async def execute_run_locked(claimed: dict) -> None:
     """
     run_id = claimed["id"]
     worker_id = claimed.get("worker_id")
-    if not worker_id:
-        # Fail closed: without the claimant's identity the ownership re-check
-        # cannot distinguish our claim from a thief's — refusing is the only
-        # exactly-once-safe answer (13-REVIEW CR-01).
-        log.error("execute_run_locked_missing_worker_id", run_id=str(run_id))
+    claim_token = claimed.get("started_at")
+    if not worker_id or claim_token is None:
+        # Fail closed: without the claim's fencing token (worker_id +
+        # started_at from CLAIM_SQL's RETURNING) the consume step cannot
+        # distinguish our claim from a thief's or a duplicate — refusing is the
+        # only exactly-once-safe answer (13-REVIEW CR-01).
+        log.error("execute_run_locked_missing_claim_token", run_id=str(run_id))
         return
 
     # Import lazily to avoid a circular import: worker.py imports this module.
@@ -125,20 +133,22 @@ async def execute_run_locked(claimed: dict) -> None:
         async with session.begin():
             # Acquire the transaction-scoped 64-bit advisory lock for this run.
             await session.execute(_ADVISORY_LOCK_SQL, {"run_id": str(run_id)})
-            # Re-check OWNERSHIP while holding the lock (see _CLAIMABLE_SQL).
+            # Atomically CONSUME the claim while holding the lock (fencing
+            # token — see _CONSUME_CLAIM_SQL). Zero rows -> not ours anymore.
             result = await session.execute(
-                _CLAIMABLE_SQL,
+                _CONSUME_CLAIM_SQL,
                 {
                     "run_id": str(run_id),
                     "wid": str(worker_id),
-                    "stale": STALE_RUN_MINUTES,
+                    "token": claim_token,
                 },
             )
             still_claimable = result.first() is not None
 
     if not still_claimable:
-        # needs_input / needs_report_spec / cancelled / completed / failed, or
-        # the run was stale-reclaimed by another worker (worker_id mismatch)
+        # needs_input / needs_report_spec / cancelled / completed / failed, a
+        # stale-reclaim by another worker (worker_id mismatch), or this exact
+        # claim already consumed by a concurrent duplicate (token mismatch)
         # -> exactly-once: do not re-dispatch the engine.
         log.info("run_not_claimable_after_lock", run_id=str(run_id))
         return
