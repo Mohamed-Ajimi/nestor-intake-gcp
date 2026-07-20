@@ -89,6 +89,20 @@ class Settings(BaseSettings):
     # intake-id app route, NEVER a bearer token).
     app_base_url: str | None = None
 
+    # Tribunal integration seam (Phase 14, SEAM-02). The Cloud Run service URL of
+    # tribunal-api (env TRIBUNAL_SERVICE_URL, e.g. "https://tribunal-api-xxxx.run.app").
+    #
+    # NON-secret by design — it is a service URL, NOT a Secret Manager reference and
+    # NEVER read as a call-time os.environ secret (contrast the AI/mail API keys, which
+    # deliberately stay OUT of Settings per D-07). Read via
+    # ``get_settings().tribunal_service_url`` at the call site (Phase 16); the
+    # ``tribunal_client`` functions stay parameterized on ``service_url`` so they remain
+    # testable. There is NO secret in this seam — the OIDC token is keyless via ADC.
+    #
+    # MUST be the service URL WITHOUT a path suffix: it is used verbatim as the OIDC
+    # token audience for keyless ``fetch_id_token`` minting (Pitfall 4).
+    tribunal_service_url: str | None = None
+
     # AI model ids (Phase 7, D-06). These are MODEL IDENTIFIERS — non-secret — so
     # they belong in typed config and are env-overridable (MODEL_APPLY_INTAKE etc.)
     # to swap a renamed/upgraded model without a redeploy. The handlers resolve the
