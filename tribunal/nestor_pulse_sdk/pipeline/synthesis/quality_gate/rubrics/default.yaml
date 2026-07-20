@@ -1,0 +1,155 @@
+# Nestor research-brief quality rubric v1
+# Reverse-engineered Outcomes; routes through AuditedLLMClient.
+# Memory: ~/.claude/projects/.../memory/project_quality_gate_outcomes_clone.md
+# ADR: .planning/decisions/ADR-005-outcomes-quality-gate.md
+
+version: 1
+judge_model: claude-sonnet-4-6
+pass_threshold: 3.8  # weighted-average minimum
+samples: 1  # future: 3-5 for self-consistency (median aggregation)
+bias_mitigation:
+  randomize_order: false  # future flag
+  length_normalize: false  # future flag
+
+dimensions:
+  - id: groundedness
+    enabled: true
+    weight: 0.30
+    threshold: 4.0
+    question: |
+      For every load-bearing factual or numeric claim in the brief, is there a
+      citation, and does the cited source actually support the claim as written?
+      Score 1-5 where:
+        1 = Most claims uncited or hallucinated; multiple claims contradict their cited source.
+        2 = Many claims uncited; some cited claims are mis-attributed.
+        3 = All material claims cited but several citations are weak (single source for contested claims).
+        4 = All material claims cited from credible sources; one or two could use a stronger source.
+        5 = Every load-bearing claim cited from primary/authoritative sources; contested claims cross-cited.
+    anchors:
+      bad:
+        score: 2
+        example: "The German industrial-automation market grew 23% in 2025."
+        why: "No citation, no source breakdown — a number with no provenance."
+      good:
+        score: 5
+        example: "The German industrial-automation market grew 12.3% in 2025 [ZVEI Bundesverband Q4-2025 report] vs 9.1% the prior year [VDMA Maschinenbau Statistik 2025-Q4], indicating accelerating growth despite the ECB rate environment."
+        why: "Every figure carries a primary-source citation; contested growth claim cross-cited."
+
+  - id: actionability
+    enabled: true
+    weight: 0.25
+    threshold: 3.5
+    question: |
+      Are the brief's recommendations specific enough that a competent reader could act
+      on them within 30 days without further research?
+      Score 1-5 where:
+        1 = Recommendations are abstract ("consider opportunities"); no concrete next step.
+        2 = Recommendations name a category but no specifics.
+        3 = Partially specific — segments and geographies but no targets, criteria, or timing.
+        4 = At least 80% of recommendations name specific targets, criteria, AND timing.
+        5 = Each recommendation specifies: who acts, what they do, success criteria, timeline, AND what evidence would invalidate it.
+    anchors:
+      bad:
+        score: 1
+        example: "We recommend exploring the German automation space."
+        why: "Abstract; no target, no criteria, no timing, no invalidation signal."
+      good:
+        score: 5
+        example: "Initiate diligence on 3-5 €5-15M EBITDA German industrial-automation targets with service-revenue mix > 40% and Mittelstand-aligned ownership; target close H1 2027 contingent on ZVEI's projected 8-10% sector EBITDA expansion materializing in Q3 2026 data. Invalidating signal: ZVEI Q3-2026 sector EBITDA growth < 4% YoY."
+        why: "Specific targets, criteria, timing, AND a named invalidating signal."
+
+  - id: focus_area_coverage
+    enabled: false  # Phase 1.5 — Plan 09 plumbs mission_brief.focus_areas into the judge call
+    weight: 0.20
+    threshold: 4.0
+    question: |
+      Does the brief substantively address every focus area listed in mission_brief.focus_areas?
+      A focus area is "substantively addressed" if it gets at least one cited claim AND
+      one recommendation, OR one cited claim and an explicit "no recommendation possible
+      because…" justification.
+      Score 1-5 where:
+        1 = Ignores most focus areas; brief drifts to easier topics.
+        2 = Some focus areas addressed; others mentioned in passing only.
+        3 = Covers all focus areas but unevenly (some get one sentence).
+        4 = Each focus area gets proportional treatment with cited claims.
+        5 = Each focus area gets cited claims + recommendation or justified non-recommendation.
+    anchors:
+      bad:
+        score: 2
+        example: "Mission asked for market-size, regulatory, competitive, M&A, talent. Brief covers market-size in depth (3 pages) and mentions M&A in one paragraph; regulatory + competitive + talent absent."
+        why: "Brief drifted to the easy focus area; 3 of 5 areas unaddressed."
+      good:
+        score: 5
+        example: "Each of the 5 focus areas opens a section with cited claims; talent section explicitly says 'no recommendation possible — talent data unavailable for Q2 2026' with the data-gap named."
+        why: "Proportional coverage; gaps named where they exist."
+
+  - id: coherence
+    enabled: false  # Phase 1.5 — needs 10-15 calibration briefs from real client work
+    weight: 0.10
+    threshold: 3.5
+    question: |
+      Does the brief read as a unified analysis where the conclusion follows from the
+      evidence, or as concatenated deep-research outputs stitched together?
+      Score 1-5 where:
+        1 = Three deep-research summaries with a transition paragraph.
+        2 = Some synthesis but voice shifts noticeably between sections.
+        3 = One analytical voice but the conclusion doesn't track from the evidence.
+        4 = Unified voice; conclusion mostly tracks; one or two leaps.
+        5 = Single analytical voice; conclusion is the inevitable read of the body.
+    anchors:
+      bad:
+        score: 1
+        example: "[Gemini analysis] ... [Claude analysis] ... [OpenAI analysis] ... In summary, the market is mixed."
+        why: "Three concatenated outputs; conclusion is a non-statement."
+      good:
+        score: 5
+        example: "Sections build sequentially: market sizing → regulatory tailwinds → competitive consolidation pattern → M&A target profile → invalidation criteria. Conclusion follows the chain directly."
+        why: "Argumentative structure; conclusion is implied by the body."
+
+  - id: calibrated_precision
+    enabled: false  # Phase 2 — needs drift tracker infrastructure
+    weight: 0.10
+    threshold: 3.5
+    question: |
+      Does the brief commit to positions where evidence supports them, and explicitly
+      flag uncertainty (with the specific evidence-gap) where it doesn't — rather than
+      hedging uniformly?
+      Score 1-5 where:
+        1 = Uniform hedging ("might", "could", "potentially") everywhere.
+        2 = Some commitment but driven by tone, not evidence.
+        3 = Mixed — some sections committed, some hedged, choice not evidence-driven.
+        4 = Commitments mostly track evidence strength; hedges name the gap.
+        5 = Every commitment carries evidence; every hedge cites the specific evidence-gap.
+    anchors:
+      bad:
+        score: 1
+        example: "The market might be growing. Companies could potentially benefit. There may be opportunities to consider."
+        why: "Uniform hedging; no signal of where evidence is strong vs weak."
+      good:
+        score: 5
+        example: "Market growth is well-documented (12.3% YoY, multiple primary sources). Buyer behavior toward consolidation is suggestive but not confirmed — only 2 of 12 surveyed mid-cap holdings disclosed consolidation strategy; gap: no public buyer-intent survey covers the sub-€20M segment."
+        why: "Committed where evidence is strong; hedge cites the specific data-gap."
+
+  - id: conflict_surfacing
+    enabled: false  # Phase 2 — needs per-provider claim attribution from Plan 09
+    weight: 0.05
+    threshold: 3.5
+    question: |
+      When the 3 deep-research providers (Gemini / Claude / OpenAI) diverged on a
+      material question, does the brief explicitly note the divergence and either
+      reconcile it or flag it as an open question?
+      Score 1-5 where:
+        1 = Divergences hidden; brief presents a single confident view that conflicts with provider outputs.
+        2 = Divergences hinted at but not named.
+        3 = Divergences mentioned but not resolved or flagged.
+        4 = Material divergences either reconciled with named evidence or surfaced as open questions.
+        5 = Every material divergence reconciled with evidence OR surfaced with the disagreement quoted from each provider.
+    anchors:
+      bad:
+        score: 1
+        example: "Gemini said 8% growth; Claude said 14%; OpenAI said 11%. Brief: 'The market grew at double-digit rates in 2025.'"
+        why: "Brief flattens conflicting estimates into a non-statement; the disagreement is the signal."
+      good:
+        score: 5
+        example: "Gemini and Claude project 12-14% growth from ZVEI primary data; OpenAI projects 6-8% citing VDMA's broader machinery aggregate. The discrepancy resolves at sub-sector level: industrial-automation specifically tracks ZVEI's 12-14% range; the broader machinery aggregate includes declining traditional segments."
+        why: "Divergence named, sourced, and reconciled with the sub-sector framing."

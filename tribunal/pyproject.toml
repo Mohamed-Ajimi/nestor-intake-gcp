@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nestor-pulse"
+version = "0.2.0"
+description = "Multi-tenant research synthesis platform"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["nestor_pulse_sdk/tests"]
+markers = [
+    "slow: tests that take more than 10 seconds (skip in quick run)",
+    "integration: tests requiring testcontainers-postgresql (Docker)",
+    "perf: performance/latency assertions",
+    "live: tests that call real third-party APIs (opt-in; skip in CI)",
+]
+addopts = "--strict-markers --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning:google.*",
+    "ignore::DeprecationWarning:pydantic.*",
+]
+
+[tool.coverage.run]
+source = ["nestor_pulse_sdk"]
+omit = ["nestor_pulse_sdk/tests/*", "nestor_pulse_sdk/alembic/*"]

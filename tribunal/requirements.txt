@@ -1,0 +1,58 @@
+# Pinned requirements for Nestor Pulse (Python 3.11 venv).
+#
+# Per CONTEXT D-09: every direct dep pinned with `==` for reproducibility.
+# Regenerated 2026-05-27 during conda→venv migration: the previous pinned set
+# captured from a stale conda env had phantom versions (litellm==1.79.6 didn't
+# exist on PyPI) and unresolvable transitive conflicts. This file pins the
+# resolver-selected versions from a clean install on Python 3.11.9.
+#
+# Setup (Windows): `py -3.11 -m venv .venv && .venv\Scripts\pip install -r requirements.txt`
+# Update flow: bump a `==X.Y.Z` here, run `pip install -r requirements.txt`, then
+#              `pip freeze` to confirm; commit both edits together.
+
+# --- Core agent + LLM SDKs ---
+google-adk==1.34.1
+google-genai==1.75.0
+anthropic==0.104.1
+openai==2.38.0
+litellm==1.86.1
+
+# --- GCP ---
+google-cloud-secret-manager==2.28.0
+
+# --- Web framework + ASGI ---
+fastapi==0.136.3
+uvicorn==0.48.0
+websockets==15.0.1
+
+# --- HTTP clients ---
+httpx==0.28.1
+requests==2.34.2
+
+# --- DB / async ---
+aiosqlite==0.22.1
+
+# --- Config / data ---
+python-dotenv==1.2.2
+pydantic==2.13.4
+
+# --- Phase 1 SDK additions (per .planning/phases/01-production-foundation/01-RESEARCH.md § Standard Stack) ---
+sqlalchemy[asyncio]==2.0.50
+asyncpg==0.31.0
+alembic==1.18.4
+firebase-admin==6.9.0
+google-cloud-storage==2.19.0
+claude-agent-sdk==0.2.87
+tenacity==9.1.4
+structlog==24.4.0
+python-json-logger==2.0.7
+jcs==0.2.1
+pytest==8.4.2
+pytest-asyncio==0.26.0
+pytest-cov==6.3.0
+testcontainers[postgresql]==4.14.2
+
+# --- Plan 01-08 (ADR-005 LLM-judge quality gate) ---
+# PyYAML is a transitive dep of google-adk; pinning explicitly because
+# nestor_pulse_sdk/pipeline/synthesis/quality_gate/llm_judge/rubric.py reads YAML directly.
+pyyaml==6.0.3

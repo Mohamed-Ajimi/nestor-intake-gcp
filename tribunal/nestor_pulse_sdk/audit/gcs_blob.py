@@ -1,0 +1,192 @@
+"""
+nestor_pulse_sdk.audit.gcs_blob -- GCS audit body storage with per-object retention.
+
+Design:
+  - Every LLM call's full request + response body is uploaded to GCS as JSON.
+  - Key pattern: runs/{run_id}/{audit_id}_{provider}_{model}.json
+    audit_id is a UUID4 unique to every individual LLM call (assigned before upload),
+    so keys are globally unique and never collide even when multiple calls share the
+    same run_id + provider + model (e.g. three deep-research providers in parallel).
+    NOTE: audit_seq was previously used in the key but was always 0 at upload time,
+    causing same-provider/model writes in the same run to collide on the GCS object
+    name. Under Object Retention that collision returns HTTP 403 ("Object is subject
+    to bucket's retention"). audit_id replaces it as the key's unique component.
+  - Per-object retention: 7 years, mode="Unlocked" (NOT Bucket Lock -- Pitfall 7).
+    Bucket Lock is irreversible at the bucket level and FORBIDDEN for this project.
+    Per-object retention is set on each blob individually via blob.retention + blob.patch().
+  - Provider API keys + auth headers are REDACTED before upload (Security Domain T-07-04).
+  - Bucket name: from env var AUDIT_GCS_BUCKET (default: "nestor-audit-prod").
+
+Pitfall 7 -- Object Retention, NOT Bucket Lock:
+  Do NOT call bucket.configure_default_object_acl() or enable bucket-level retention policy.
+  Use blob.retention.mode = "Unlocked" + blob.retention.retain_until_time = now + 7y.
+  This is reversible (can be shortened) unlike Bucket Lock which is permanent.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from typing import Iterable
+
+_logger = logging.getLogger(__name__)
+
+# Per-object retention duration: 7 years (Plan 01 + D-12).
+_RETENTION_YEARS = 7
+
+# Default GCS bucket name; overridable via AUDIT_GCS_BUCKET env var.
+_DEFAULT_BUCKET = "nestor-audit-prod"
+
+# Headers / keys that contain provider credentials -- must be redacted before upload.
+_DEFAULT_REDACT_KEYS: frozenset[str] = frozenset({
+    "authorization",
+    "x-api-key",
+    "anthropic-api-key",
+    "openai-api-key",
+    "google-api-key",
+    "x-goog-api-key",
+    "api_key",
+    "apikey",
+})
+
+
+def _redact_dict(d: dict, redact_keys: frozenset[str]) -> dict:
+    """
+    Recursively redact sensitive keys from a dict, case-insensitively.
+    Replaces values with "[REDACTED]".
+    """
+    result = {}
+    for k, v in d.items():
+        if k.lower() in redact_keys:
+            result[k] = "[REDACTED]"
+        elif isinstance(v, dict):
+            result[k] = _redact_dict(v, redact_keys)
+        elif isinstance(v, list):
+            result[k] = [
+                _redact_dict(item, redact_keys) if isinstance(item, dict) else item
+                for item in v
+            ]
+        else:
+            result[k] = v
+    return result
+
+
+async def upload_audit_body(
+    run_id: uuid.UUID,
+    audit_id: uuid.UUID,
+    provider: str,
+    model: str,
+    request_dict: dict,
+    response_dict: dict,
+    audit_seq: int = 0,
+    redact_keys: Iterable[str] = _DEFAULT_REDACT_KEYS,
+) -> str:
+    """
+    Upload one LLM call's full request + response body to GCS with per-object retention.
+
+    Steps:
+      1. Redact provider API keys + auth headers from request_dict (T-07-04).
+      2. Build GCS key: runs/{run_id}/{audit_id}_{provider}_{model}.json
+         audit_id is a per-call UUID4 that makes the key unique even when the same
+         run_id + provider + model combination is uploaded multiple times in parallel
+         (e.g. three deep-research providers). audit_seq is kept in the JSON payload
+         metadata only (may be 0 at upload time; it is assigned under the per-run lock
+         after the upload).
+      3. Upload via google.cloud.storage blob.upload_from_string (content_type=application/json).
+      4. Set per-object retention: blob.retention.mode = "Unlocked",
+         blob.retention.retain_until_time = now + 7y, blob.patch() (Pitfall 7 -- NOT Bucket Lock).
+      5. Return gs://{bucket}/{key}.
+
+    Args:
+      run_id:        Run UUID (for GCS key + payload tagging).
+      audit_id:      Per-call UUID4 (unique key component; replaces audit_seq in the key).
+      provider:      "anthropic", "google", or "openai".
+      model:         Model identifier (sanitized in key; "/" replaced by "-").
+      request_dict:  Raw request body dict (will be deep-copied + redacted).
+      response_dict: Raw response body dict (will be deep-copied; no sensitive keys expected).
+      audit_seq:     Sequence number stored in the JSON payload only (NOT used in the key).
+                     May be 0 at upload time; the real value is assigned under the per-run lock
+                     after upload and stored in the DB row.
+      redact_keys:   Additional keys to redact (case-insensitive).
+
+    Returns:
+      gs:// URI of the uploaded blob.
+
+    Raises:
+      google.cloud.exceptions.GoogleCloudError: on upload failure.
+      ImportError: if google-cloud-storage is not installed (caught by caller).
+    """
+    redact_set = frozenset(k.lower() for k in redact_keys)
+    safe_request = _redact_dict(deepcopy(request_dict), redact_set)
+    safe_response = deepcopy(response_dict)
+
+    # Sanitize model name for use in the key (replace "/" and spaces with "-")
+    safe_model = model.replace("/", "-").replace(" ", "-")[:64]
+    safe_provider = provider.replace("/", "-")[:32]
+
+    key = f"runs/{run_id}/{audit_id}_{safe_provider}_{safe_model}.json"
+
+    body = json.dumps(
+        {
+            "run_id": str(run_id),
+            "audit_id": str(audit_id),
+            "seq": audit_seq,
+            "provider": provider,
+            "model": model,
+            "request": safe_request,
+            "response": safe_response,
+        },
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+
+    # Local-dev fallback: when NESTOR_AUDIT_LOCAL_DIR is set, persist the audit
+    # body to disk and return a file:// URI instead of GCS. This keeps the audit
+    # chain functional (a body is stored + a URI pointer recorded) on a machine
+    # with no GCP project/bucket. Gated on the env var alone -- deployed
+    # environments never set it, so the real GCS path below is untouched.
+    local_dir = os.environ.get("NESTOR_AUDIT_LOCAL_DIR")
+    if local_dir:
+        from pathlib import Path
+
+        path = Path(local_dir) / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        uri = path.resolve().as_uri()
+        _logger.info("Wrote audit body locally: %s", uri)
+        return uri
+
+    try:
+        from google.cloud import storage  # type: ignore
+    except ImportError as exc:
+        _logger.error(
+            "google-cloud-storage not installed; cannot upload audit body: %s", exc
+        )
+        raise
+
+    bucket_name = os.environ.get("AUDIT_GCS_BUCKET", _DEFAULT_BUCKET)
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(key)
+
+    blob.upload_from_string(body, content_type="application/json")
+
+    # Per-object retention (Pitfall 7 -- NOT Bucket Lock).
+    # Object Retention API: set retain_until_time per blob after upload.
+    retain_until = datetime.now(tz=timezone.utc) + timedelta(days=_RETENTION_YEARS * 365)
+    blob.retention.mode = "Unlocked"
+    blob.retention.retain_until_time = retain_until
+    blob.patch()
+
+    _logger.info(
+        "Uploaded audit body: gs://%s/%s (retention until %s)",
+        bucket_name,
+        key,
+        retain_until.date(),
+    )
+
+    return f"gs://{bucket_name}/{key}"
