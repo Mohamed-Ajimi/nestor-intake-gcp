@@ -56,13 +56,21 @@ app = FastAPI(
     description="Internal research engine API -- async runs, tenant-scoped RLS.",
 )
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS — WR-05 (14-REVIEW): the Tribunal API is a strictly-internal
+# server-to-server engine; no browser origin ever calls it, so deployed mode
+# installs NO CORS middleware at all (a wildcard would advertise cross-origin
+# readability of anything a future IAM/ingress misconfiguration exposes, and
+# contradicts the intake project's no-permissive-CORS doctrine). The permissive
+# local wildcard survives ONLY under LOCAL_DEV_AUTH (a local browser tool
+# driving real mode); combined with the WR-06 rule that LOCAL_DEV_AUTH is
+# refused on Cloud Run, this middleware can never reach production.
+if LOCAL_DEV_AUTH:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 from nestor_pulse_sdk.health import router as health_router  # Plan 10.5 Task 3
 from nestor_pulse_sdk.projects import router as projects_router
