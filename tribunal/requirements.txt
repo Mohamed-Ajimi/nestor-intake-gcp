@@ -25,7 +25,14 @@ google-cloud-secret-manager==2.28.0
 # explicitly per D-09 instead of relying on the transitive carrier
 # (google-cloud-storage / google-adk). On the next `pip freeze` refresh, bump
 # this to the resolver-selected version alongside the rest of the file.
-google-auth==2.40.3
+#
+# 14-04 fix-cycle (2026-07-20): the original WR-08 exact pin `==2.40.3` was BELOW
+# google-adk==1.34.1's published floor `google-auth[pyopenssl]>=2.47`, so a fresh
+# image build failed pip ResolutionImpossible (the pre-WR-08 green image had
+# resolved google-auth transitively to >=2.47). Relaxed to a floor-matching range
+# so pip reproduces exactly that known-good resolution while still failing loudly
+# on a major-version (3.x) bump of the direct seam dependency.
+google-auth>=2.47,<3
 
 # --- Web framework + ASGI ---
 fastapi==0.136.3
