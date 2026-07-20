@@ -6,7 +6,14 @@
 > live proof run and pasted here. This file feeds **Phase 16** stale-run + cost calibration
 > (ENGINE-02) and closes the ENGINE-04 (chain) + ENGINE-08 (concurrency) gates.
 
-Status: **AWAITING OPERATOR LIVE SESSION** — values are placeholders until the proof runs land.
+Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progress.
+
+> **Single-project discovery (live-session correction).** There is NO separate intake
+> project: `project-cb01b861-cb4a-438d-b9a` IS "Nestor Pulse" and hosts BOTH the live
+> intake platform AND the old standalone Tribunal build. All "old project" teardown steps
+> are **resource-level** (services `nestor-pulse-*`, stopped SQL `nestor-prod-pg`, AR repo
+> `nestor-pulse`) — NEVER project deletion. Provider secrets (`Nestor_*`) already existed
+> in-project; no reseeding was needed (D-06 satisfied trivially).
 
 ---
 
@@ -14,16 +21,33 @@ Status: **AWAITING OPERATOR LIVE SESSION** — values are placeholders until the
 
 | Resource | Value |
 |----------|-------|
-| Intake project id (`$GOOGLE_PROJECT`) | _(record)_ |
-| Image tag (`$SHA`) | _(record)_ |
-| `tribunal-api` revision | _(record — e.g. tribunal-api-00001-abc)_ |
-| `tribunal-worker` revision | _(record)_ |
-| `tribunal-migrate` Job execution | _(record — execution id, exit 0)_ |
-| Alembic version table | `tribunal.tribunal_alembic_version` (confirm — NOT `public.alembic_version`) |
-| tribunal-api `/healthz` | _(200?)_ |
-| tribunal-api `/readyz` | _(200? — needs Cloud SQL RUNNABLE)_ |
-| Worker log `worker_started` | _(seen? binds worker_user, no SCHEMA-public grant errors)_ |
-| FIRST-BUILD legitimacy gate (verbatim `requirements.txt`) | _(built cleanly? — Plan-01 T-13-SC gate)_ |
+| Intake project id (`$GOOGLE_PROJECT`) | `project-cb01b861-cb4a-438d-b9a` (the single "Nestor Pulse" project) |
+| Image tag (`$SHA`) | `20260720-161029-fix1` (both images; `-fix1` = env.py commit fix rebuild) |
+| `tribunal-api` revision | `tribunal-api-20260720-161029-fix1-164103` |
+| `tribunal-worker` revision | `tribunal-worker-20260720-161029-fix1-163954` |
+| `tribunal-migrate` Job execution | `tribunal-migrate-sc64g` — succeeded (exit 0; earlier `-5rmmh` failed on alembic cwd, `-mhwdh` rolled back — see deviations) |
+| Alembic version table | ✅ `tribunal.tribunal_alembic_version` = `0010`; 10 tables in `tribunal`; 0 leak into `public`; `ck_run_status` includes `needs_report_spec` |
+| tribunal-api `/healthz` | `/health` → 200 `{"status":"ok"}` (`/healthz` is intercepted by Cloud Run's platform — documented in `health.py`) |
+| tribunal-api `/readyz` | ✅ 200 `{"status":"ready","db":"ok"}` |
+| Worker log `worker_started` | ✅ `worker_started poll_s=2.0`, health server up, zero WARNING+ logs (worker_user DSN, no SCHEMA-public grant errors) |
+| FIRST-BUILD legitimacy gate (verbatim `requirements.txt`) | ✅ Both images built cleanly on first submit (T-13-SC) |
+
+### Live-session deviations (Task 1)
+
+1. **`db/base.py` runtime search_path fix (commit `fix(13-02)`):** runtime engine was
+   schema-blind; added `server_settings search_path=tribunal,public` — proven by `/readyz`
+   `db:ok`.
+2. **`env.py` transaction-ownership fix (commit `fix(13-02)`):** the pre-configure
+   `CREATE SCHEMA`/`SET search_path` autobegan a transaction Alembic didn't own → first
+   migration run (`-mhwdh`) logged 0001→0010 then silently ROLLED BACK. Preamble commits
+   added; rerun persisted (verified via one-off `tribunal-verify` job).
+3. **Migrate job invocation:** jobs use `--set-cloudsql-instances` (not
+   `--add-cloudsql-instances`) and alembic must run from `/app/nestor_pulse_sdk`
+   (`sh -c "cd /app/nestor_pulse_sdk && alembic upgrade head"`) because
+   `alembic.ini script_location` is cwd-relative.
+4. **Old services share `DATABASE_URL*:latest`:** the defunct `nestor-pulse-*` services
+   (SQL `nestor-prod-pg` STOPPED) reference the same secret ids; they may crash-loop on
+   cold start until torn down — harmless (they have no `public.run` to corrupt).
 
 ## Cloud Build test suite (Task 2 — Step 13.e `cloudbuild.test.yaml`)
 
