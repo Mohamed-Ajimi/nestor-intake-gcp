@@ -1,0 +1,11 @@
+{
+  "_purpose": "Pitfall 8 regression: legacy nestor_pulse/tools/*.py must remain byte-identical across Phase 1. test_legacy_tools_not_modified compares SHA-256 of each file against these values.",
+  "_owner_plan": "01-09",
+  "_update_rule": "If a legacy file is intentionally updated, regenerate hashes in the same commit so PR review surfaces the change.",
+  "_regen_cmd": "sha256sum nestor_pulse/tools/{gemini,claude,openai}_deep_researcher.py",
+  "files": {
+    "nestor_pulse/tools/gemini_deep_researcher.py": "92db8d8fcd8da8166d2041e24ae53324c36bed9c06e7a1f5d1e63c0c001d6daa",
+    "nestor_pulse/tools/claude_deep_researcher.py": "fa03ab505f5ba9162f01eb78e1874cce077fee162711a28e4dfd190f40173d08",
+    "nestor_pulse/tools/openai_deep_researcher.py": "ad6c8f62b2d04fd8e7fcd6a2a7cf3213f552502649f3cffa7b94e0aff7661e6b"
+  }
+}
