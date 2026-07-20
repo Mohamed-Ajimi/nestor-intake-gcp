@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Phase 13 context gathered
-last_updated: "2026-07-20T13:19:58.936Z"
+status: ready_to_plan
+stopped_at: Phase 13 complete (4/4) — ready to discuss Phase 14
+last_updated: 2026-07-20T17:10:59.152Z
 last_activity: 2026-07-20 -- Phase 13 execution started
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
+  completed_plans: 74
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 13 — Tribunal Re-home + Infra Baseline
+**Current focus:** Phase 14 — auth retirement + integration seam
 
 ## Current Position
 
-Phase: 13 (Tribunal Re-home + Infra Baseline) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 13
-Last activity: 2026-07-20 -- Phase 13 execution started
+Phase: 14
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-20
 
 Progress: [░░░░░░░░░░] 0% (v1.1)
 
@@ -36,7 +36,7 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 
 **Velocity:**
 
-- Total plans completed: 70 (v1.0, shipped)
+- Total plans completed: 74 (v1.0, shipped)
 - Average duration: — min
 - Total execution time: 0.0 hours (v1.1)
 
@@ -55,6 +55,7 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 | 10 | 5 | - | - |
 | 11 | 9 | - | - |
 | 12 | 5 | - | - |
+| 13 | 4 | - | - |
 
 **Recent Trend:**
 

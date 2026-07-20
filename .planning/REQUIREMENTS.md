@@ -9,14 +9,14 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Engine Re-home (ENGINE)
 
-- [ ] **ENGINE-01**: Tribunal API + worker run as Cloud Run services in the intake GCP project, with a `tribunal` schema on the shared Cloud SQL instance and Tribunal's own Alembic migration line intact
-- [ ] **ENGINE-02**: One real research run completes end-to-end green on the new deployment before dependent features build on it
+- [x] **ENGINE-01**: Tribunal API + worker run as Cloud Run services in the intake GCP project, with a `tribunal` schema on the shared Cloud SQL instance and Tribunal's own Alembic migration line intact
+- [x] **ENGINE-02**: One real research run completes end-to-end green on the new deployment before dependent features build on it
 - [ ] **ENGINE-03**: The per-run cost cap is re-enabled for client runs (dev `NESTOR_TRIBUNAL_UNCAPPED` flag off) and the stale-run reclaim window is calibrated above the real max run length (no double-runs)
-- [ ] **ENGINE-04**: The tamper-evident audit hash-chain verifies green (`verify_chain`) after the move — **blocking gate, before 2026-08-02 (EU AI Act Art. 12 enforcement)**
+- [x] **ENGINE-04**: The tamper-evident audit hash-chain verifies green (`verify_chain`) after the move — **blocking gate, before 2026-08-02 (EU AI Act Art. 12 enforcement)**
 - [ ] **ENGINE-05**: A plan-critique pass reviews the research plan before the multi-provider fan-out launches (frontier idea A2)
 - [ ] **ENGINE-06**: Competing report drafts are ranked pairwise (tournament) and the winner becomes the run's report (frontier idea A1)
 - [ ] **ENGINE-07**: Research runs execute via the queue + always-on worker model (never inside an HTTP request), so runs of any length are immune to Cloud Run request timeouts
-- [ ] **ENGINE-08**: Multiple research runs from different clients run concurrently without interference — per-run audit-chain advisory lock added (completing Tribunal's unexecuted concurrency plan 01-19), proven by a test of ≥2 simultaneous runs from different spaces
+- [x] **ENGINE-08**: Multiple research runs from different clients run concurrently without interference — per-run audit-chain advisory lock added (completing Tribunal's unexecuted concurrency plan 01-19), proven by a test of ≥2 simultaneous runs from different spaces
 
 ### Integration Seam (SEAM)
 
@@ -82,10 +82,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENGINE-01 | Phase 13 | Pending |
-| ENGINE-02 | Phase 13 | Pending |
-| ENGINE-04 | Phase 13 | Pending |
-| ENGINE-08 | Phase 13 | Pending |
+| ENGINE-01 | Phase 13 | Complete |
+| ENGINE-02 | Phase 13 | Complete |
+| ENGINE-04 | Phase 13 | Complete |
+| ENGINE-08 | Phase 13 | Complete |
 | SEAM-01 | Phase 14 | Pending |
 | SEAM-02 | Phase 14 | Pending |
 | ENGINE-05 | Phase 15 | Pending |

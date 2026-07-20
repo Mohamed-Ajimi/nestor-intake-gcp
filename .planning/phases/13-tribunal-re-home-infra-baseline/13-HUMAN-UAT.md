@@ -18,7 +18,7 @@ result: pass — verified live this session immediately after the fix2 redeploy 
 
 ### 2. Queue-path dispatch proof on the fixed revision
 expected: a run enqueued through the REAL worker queue path (not the smoke script's direct-pipeline path) is claimed by worker_loop, consumed via the fencing token, dispatched exactly once, completes green with verify_chain OK
-result: [pending] — proven at test level (22/22 Cloud Build gate incl. CR-01 regression on real Postgres) but not yet by a live paid run; costs ~$2 / ~18 min if run now, otherwise Phase 16's trigger work exercises this path as its first step
+result: deferred — operator decision 2026-07-20: accept test-level proof (22/22 Cloud Build gate incl. CR-01 regression on real Postgres) and prove the live queue path as the FIRST step of Phase 16's trigger work
 
 ### 3. Database schema validation (live)
 expected: tribunal.tribunal_alembic_version = 0010; tribunal tables present; zero tribunal-table leak into public

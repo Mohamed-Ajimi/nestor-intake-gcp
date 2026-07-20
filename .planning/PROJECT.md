@@ -173,4 +173,4 @@ through research, human-crafted report delivery, and a client Q&A chat over the 
   as of 2026-06-15).
 
 ---
-*Last updated: 2026-07-20 after v1.1 milestone scoping (Tribunal Integration started via /gsd-new-milestone)*
+*Last updated: 2026-07-20 (Phase 13 complete — Tribunal re-homed, live + proven)
