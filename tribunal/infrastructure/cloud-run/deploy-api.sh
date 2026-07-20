@@ -1,54 +1,47 @@
 #!/usr/bin/env bash
-# infrastructure/cloud-run/deploy-api.sh
+# infrastructure/cloud-run/deploy-api.sh  (RETARGETED — Phase 13 re-home)
 #
-# Deploy the nestor-pulse-api Cloud Run service.
+# Deploy the tribunal-api Cloud Run service into the INTAKE "Nestor Pulse" project
+# (was the old standalone Tribunal build). Retargeted per Phase 13:
+#   - PROJECT   -> $GOOGLE_PROJECT (the intake project; operator exports it)
+#   - INSTANCE  -> the intake Cloud SQL instance ($GOOGLE_PROJECT:$REGION:$INSTANCE_NAME)
+#   - SA        -> nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com (the intake runtime SA)
+#   - image     -> europe-west1-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:<tag>
+#     (the existing `nestor` Artifact Registry repo — no new repo; built via Cloud Build,
+#      NOT locally. See tribunal/cloudbuild.api.yaml.)
 #
 # Prerequisites:
-#   - bash infrastructure/cloud-run/build-and-push.sh (creates .last-build.env)
-#   - Cloud SQL nestor-prod-pg must be RUNNABLE:
-#       gcloud sql instances patch nestor-prod-pg --activation-policy=ALWAYS
-#   - All secrets listed in --set-secrets must exist in Secret Manager
-#     (run infrastructure/gcloud/secret-manager-bootstrap.sh if any are missing).
+#   - Image built via Cloud Build (tribunal/cloudbuild.api.yaml) — the dev box has no Docker.
+#   - The intake Cloud SQL instance must be RUNNABLE.
+#   - All secrets in --set-secrets must exist in Secret Manager (see § Phase 13 of
+#     infra/DEPLOY-RUNBOOK.md — create + out-of-band value seed).
 #
-# Security (T-10.5-01): no API keys or secrets are baked into the image.
-# Secrets are mounted as env vars at deploy time via --set-secrets.
-# The DATABASE_URL secret already contains the Cloud SQL Unix socket path:
-#   postgresql+asyncpg://app_user:PW@/nestor_db?host=/cloudsql/PROJECT:REGION:INSTANCE
+# Security: no API keys or secrets are baked into the image. Secrets are mounted as env
+# vars at deploy time via --set-secrets (reference only, never the value). The DATABASE_URL
+# secret carries the Cloud SQL Unix socket asyncpg DSN:
+#   postgresql+asyncpg://app_user:PW@/<db>?host=/cloudsql/PROJECT:REGION:INSTANCE
 # db/base.py reads DATABASE_URL from os.environ directly.
 #
-# Plan: 01-10.5 Task 4.
-# Re-run safe -- Cloud Run deploys are zero-downtime revisions.
+# Re-run safe (zero-downtime revisions).
 
 set -euo pipefail
 
-PROJECT="${GOOGLE_CLOUD_PROJECT:-project-cb01b861-cb4a-438d-b9a}"
+PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
 REGION="${REGION:-europe-west1}"
-SA="nestor-pulse-runtime@${PROJECT}.iam.gserviceaccount.com"
-INSTANCE="${PROJECT}:${REGION}:nestor-prod-pg"
-SERVICE_NAME="nestor-pulse-api"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
+SA="nestor-run@${PROJECT}.iam.gserviceaccount.com"
+INSTANCE="${PROJECT}:${REGION}:${INSTANCE_NAME}"
+SERVICE_NAME="tribunal-api"
+REPO="${REPO:-nestor}"
+
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+API_IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/tribunal-api:${IMAGE_TAG}"
 
 command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1; }
 
-# Source image URLs from the last build
-ENV_FILE="${SCRIPT_DIR}/.last-build.env"
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "ERROR: ${ENV_FILE} not found. Run build-and-push.sh first."
-  exit 1
-fi
-# shellcheck source=/dev/null
-source "$ENV_FILE"
-if [[ -z "${API_IMAGE_URL:-}" ]]; then
-  echo "ERROR: API_IMAGE_URL is empty in ${ENV_FILE}"
-  exit 1
-fi
 echo "==> Deploying ${SERVICE_NAME} with image: ${API_IMAGE_URL}"
 
-# Revision suffix for auditable rollback:
-#   gcloud run services update-traffic nestor-pulse-api \
-#     --to-revisions=<sha>-00001=100 --region=europe-west1
-GIT_SHA="$(git -C "${SCRIPT_DIR}/../.." rev-parse --short=8 HEAD 2>/dev/null || echo "local")"
-REVISION_SUFFIX="${GIT_SHA}-$(date +%H%M%S)"
+REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
 
 gcloud run deploy "${SERVICE_NAME}" \
   --project="${PROJECT}" \
@@ -56,7 +49,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --image="${API_IMAGE_URL}" \
   --service-account="${SA}" \
   --add-cloudsql-instances="${INSTANCE}" \
-  --allow-unauthenticated \
+  --no-allow-unauthenticated \
   --memory=1Gi \
   --cpu=1 \
   --concurrency=80 \
@@ -64,15 +57,13 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=3 \
   --timeout=300 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="GCP_PROJECT=${PROJECT},NESTOR_ENV=prod,CLOUDSQL_INSTANCE=${INSTANCE},NESTOR_TRIBUNAL_UNCAPPED=1" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_TRIBUNAL_UNCAPPED=1" \
   --set-secrets="\
 DATABASE_URL=DATABASE_URL:latest,\
+AUDIT_GCS_BUCKET=AUDIT_GCS_BUCKET:latest,\
 ANTHROPIC_API_KEY=Nestor_Claude:latest,\
 GOOGLE_API_KEY=Nestor_Gemini:latest,\
-OPENAI_API_KEY=Nestor_OpenAI:latest,\
-IDENTITY_PLATFORM_PROJECT_ID=IDENTITY_PLATFORM_PROJECT_ID:latest,\
-IDENTITY_PLATFORM_SMOKE_USER_PW=IDENTITY_PLATFORM_SMOKE_USER_PW:latest,\
-IDENTITY_PLATFORM_WEB_API_KEY=IDENTITY_PLATFORM_WEB_API_KEY:latest"
+OPENAI_API_KEY=Nestor_OpenAI:latest"
 
 # Print the deployed URL
 API_URL=$(gcloud run services describe "${SERVICE_NAME}" \
@@ -83,12 +74,9 @@ API_URL=$(gcloud run services describe "${SERVICE_NAME}" \
 echo
 echo "=================================================================="
 echo "Deployed: ${SERVICE_NAME}"
-echo "  URL:     ${API_URL}"
+echo "  Project:   ${PROJECT}"
+echo "  URL:       ${API_URL}"
 echo "  Revision suffix: ${REVISION_SUFFIX}"
-echo "  SA:      ${SA}"
+echo "  SA:        ${SA}"
 echo "  Cloud SQL: ${INSTANCE}"
-echo ""
-echo "Smoke:"
-echo "  curl -sf ${API_URL}/healthz  -> 200 (no auth)"
-echo "  curl -sf ${API_URL}/readyz   -> 200 (no auth; needs Cloud SQL RUNNABLE)"
 echo "=================================================================="

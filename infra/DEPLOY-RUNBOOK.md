@@ -669,6 +669,240 @@ pointing at the wrong host → `APP_BASE_URL` still holds the Step-12.1 placehol
 
 ---
 
+## Phase 13 — Tribunal re-home (deep-research engine into the intake project)
+
+This section is the **single enumerated source of truth** for the Plan-04 operator live
+session that stands up the re-homed Tribunal engine in THIS intake "Nestor Pulse" project
+and — as the FINAL post-proof step — tears down the old standalone `project-cb01b861`
+build (D-02). It closes the recurring "deployed but not wired" IaC-drift gap by listing
+every secret / env / IAM binding / DB role / bucket / migrate-Job / deploy step in order.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform
+> state was never adopted and `terraform apply` is blocked on the dev box (no
+> Python/Docker/Terraform/gcloud). The `infra/main.tf` + `infra/variables.tf` Tribunal
+> blocks are the **intended end-state, INERT** — the steps below are the **manual** gcloud
+> reconciliation you run in Cloud Shell. Images are built via **Cloud Build** (never
+> locally). Reconcile via `terraform import` (or keep manual) later.
+
+> **Secret hygiene (T-13-08) — read first.** Never echo, log, paste, or commit a secret
+> VALUE. Add values ONLY as Secret Manager versions via the `--data-file=-` stdin idiom
+> (paste, then Ctrl-D). This includes the two `DATABASE_URL*` DSNs (they embed the
+> generated BUILT_IN-user passwords) and the reseeded provider keys.
+
+```bash
+# Shared exports for this session (set these once in Cloud Shell).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"                                  # the intake Cloud SQL instance
+export INSTANCE_CONN="${GOOGLE_PROJECT}:${REGION}:${INSTANCE_NAME}"
+export RUNTIME_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export DB_NAME="nestor"
+```
+
+### Step 13.a — Artifact Registry (reuse the existing `nestor` repo)
+
+The two Tribunal images land in the SAME `nestor` Artifact Registry repo as the backend +
+frontend (no new repo). Paths: `.../nestor/tribunal-api:<tag>` and
+`.../nestor/tribunal-worker:<tag>`. Nothing to create — the repo already exists from Phase 2.
+
+### Step 13.b — Create the six secrets (resource + resource-scoped accessor), then seed VALUES out-of-band
+
+Create each secret container EMPTY, scope a `secretAccessor` grant to the runtime SA
+(least privilege — NEVER project-wide, T-13-12), then add each VALUE from stdin (never
+echoed, T-13-08). The three provider secrets are named the EXACT `Nestor_*` names the
+copied `secrets_bootstrap.py` reads (D-06 / Open Q3 — no bootstrap refactor).
+
+```bash
+for S in Nestor_Claude Nestor_Gemini Nestor_OpenAI DATABASE_URL DATABASE_URL_WORKER AUDIT_GCS_BUCKET; do
+  gcloud secrets create "$S" --replication-policy=automatic --project="$GOOGLE_PROJECT" 2>/dev/null || \
+    echo "secret $S already exists — skipping create"
+  gcloud secrets add-iam-policy-binding "$S" \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --project="$GOOGLE_PROJECT"
+done
+```
+
+Seed the provider keys. **Reseed `Nestor_Gemini` from the OLD project's key** (D-06 — the
+third provider arm is enabled day one). Reseed `Nestor_Claude` / `Nestor_OpenAI` from the
+same source (they are DISTINCT secret ids from the intake `nestor-anthropic-api-key` /
+`nestor-openai-api-key`; the engine reads the `Nestor_*` names verbatim):
+
+```bash
+# Paste the key, then Ctrl-D. Nothing is echoed to history (T-13-08).
+gcloud secrets versions add Nestor_Claude  --data-file=- --project="$GOOGLE_PROJECT"
+gcloud secrets versions add Nestor_Gemini  --data-file=- --project="$GOOGLE_PROJECT"   # reseed from project-cb01b861's GEMINI/GOOGLE_API_KEY (D-06)
+gcloud secrets versions add Nestor_OpenAI  --data-file=- --project="$GOOGLE_PROJECT"
+```
+
+Compose + seed the two asyncpg unix-socket DSNs (after Step 13.d creates the roles, so you
+know the generated passwords). The DSN form is:
+
+```
+postgresql+asyncpg://<user>:<password>@/nestor?host=/cloudsql/<GOOGLE_PROJECT>:europe-west1:nestor-pg
+```
+
+```bash
+# DATABASE_URL       = app_user   (tribunal-api, tenant-scoped)
+# DATABASE_URL_WORKER= worker_user (tribunal-worker, cross-tenant claim role)
+# Build each string LOCALLY (never echoed), then pipe via stdin (Ctrl-D). URL-encode any
+# reserved chars in the generated passwords.
+gcloud secrets versions add DATABASE_URL        --data-file=- --project="$GOOGLE_PROJECT"
+gcloud secrets versions add DATABASE_URL_WORKER --data-file=- --project="$GOOGLE_PROJECT"
+```
+
+Seed `AUDIT_GCS_BUCKET` with the bucket NAME (created in Step 13.c — this value is the
+non-secret bucket name; it is a secret only for injection uniformity):
+
+```bash
+export AUDIT_BUCKET="${GOOGLE_PROJECT}-nestor-audit"
+printf '%s' "$AUDIT_BUCKET" | gcloud secrets versions add AUDIT_GCS_BUCKET --data-file=- --project="$GOOGLE_PROJECT"
+```
+
+### Step 13.c — Create the audit-evidence bucket (7-year Unlocked object retention — D-09)
+
+Create the bucket with **Object Retention ENABLED** (`--enable-per-object-retention`) so the
+engine's per-object `blob.retention.mode="Unlocked"` + `retain_until_time = now + 7y`
+(`nestor_pulse_sdk/audit/gcs_blob.py`) is honored. **Do NOT** set a bucket-level retention
+policy / Bucket Lock — that is irreversible and FORBIDDEN (D-09). Harden it like the uploads
+bucket (uniform BLA + public-access-prevention). The bucket must exist BEFORE the proof run or
+the run's own chain dangles (T-13-10).
+
+```bash
+gcloud storage buckets create "gs://${AUDIT_BUCKET}" \
+  --location="$REGION" \
+  --uniform-bucket-level-access \
+  --public-access-prevention \
+  --enable-per-object-retention \
+  --project="$GOOGLE_PROJECT"
+
+# Bucket-scoped objectAdmin to the runtime SA (least privilege — read/write + patch retention).
+gcloud storage buckets add-iam-policy-binding "gs://${AUDIT_BUCKET}" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/storage.objectAdmin" \
+  --project="$GOOGLE_PROJECT"
+```
+
+### Step 13.d — Create the two BUILT_IN Cloud SQL roles (app_user + worker_user)
+
+The Tribunal services authenticate with a stored password over asyncpg (NOT the intake IAM
+connector — RESEARCH Pitfall 5), so both roles are BUILT_IN (password) users. Generate a
+strong password for each (never echoed / committed), create the users, then feed the
+passwords into the DATABASE_URL* DSNs in Step 13.b.
+
+```bash
+# Generate locally; capture into vars (do NOT echo).
+APP_PW="$(openssl rand -base64 24)"
+WORKER_PW="$(openssl rand -base64 24)"
+
+gcloud sql users create app_user    --instance="$INSTANCE_NAME" --password="$APP_PW"    --project="$GOOGLE_PROJECT"
+gcloud sql users create worker_user --instance="$INSTANCE_NAME" --password="$WORKER_PW" --project="$GOOGLE_PROJECT"
+```
+
+> **Schema + grants (isolation firewall, T-13-09).** The `CREATE SCHEMA tribunal` and the
+> `worker_user` GRANTs are NOT run by hand here — they happen inside the `tribunal-migrate`
+> Job: `nestor_pulse_sdk/alembic/env.py` (Plan 02) sets `version_table_schema=tribunal` +
+> `search_path=tribunal` so migration `0008` grants `worker_user` USAGE/DML on the `tribunal`
+> schema **ONLY** — never the intake `nestor` schema. Do not grant `worker_user` anything on
+> `nestor`.
+
+### Step 13.e — Build both Tribunal images via Cloud Build (no local Docker)
+
+Build from the `tribunal/` context so `requirements.txt`, `nestor_pulse_sdk/`, AND
+`nestor_pulse/` are all in context. **`nestor_pulse/` IS in both images** — the API's
+deep-research division imports `nestor_pulse.tools.claude_deep_researcher` at module load
+(13-01 SUMMARY deviation #1); omitting it ImportErrors at boot. The Dockerfiles copy it.
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+```
+
+Optionally run the test gate first (proves the audit chain + advisory-lock exactly-once on
+real Postgres; a non-zero pytest exit fails the build):
+
+```bash
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+```
+
+### Step 13.f — Run the `tribunal-migrate` Job (alembic upgrade head into the `tribunal` schema)
+
+Deploy the Job from the api image, then execute it with `--wait`. It runs the Tribunal alembic
+line into the `tribunal` schema (creating the schema + the `worker_user` grants via env.py /
+migration 0008). Uses the `DATABASE_URL` (app_user) secret — asyncpg, NOT the IAM connector.
+
+```bash
+gcloud run jobs deploy tribunal-migrate \
+  --image="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}" \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --service-account="$RUNTIME_SA" \
+  --add-cloudsql-instances="$INSTANCE_CONN" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest" \
+  --command="alembic" --args="upgrade,head"
+
+gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+### Step 13.g — Deploy `tribunal-worker` (always-on, max=5) then `tribunal-api`
+
+Use the retargeted deploy scripts (they read `$GOOGLE_PROJECT` / `$REGION` / `$INSTANCE_NAME`
+and default the image tag to `latest` — pass `IMAGE_TAG=$SHA` to pin the just-built image):
+
+```bash
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+```
+
+The worker deploys always-on (`--min-instances=1 --max-instances=5 --no-cpu-throttling
+--timeout=3600 --no-allow-unauthenticated`, `NESTOR_TRIBUNAL_UNCAPPED=1`) with
+`DATABASE_URL=DATABASE_URL_WORKER:latest`; the api deploys `--min-instances=0
+--max-instances=3 --timeout=300` with `DATABASE_URL=DATABASE_URL:latest`.
+
+### Step 13.h — Proof run (Plan 04) — CHECKPOINT
+
+> **Do NOT proceed to teardown until this gate is green.** The E2E proof run, `verify_chain`
+> validation, the ~5-concurrent-from-≥2-spaces concurrency test (ENGINE-08 / D-08), and the
+> duration/cost recording are **Plan 04**, executed against the freshly-deployed services.
+> The old `project-cb01b861` build is the fallback until this gate passes (T-13-11).
+
+### Step 13.i — FINAL post-proof teardown of the old standalone project (D-02) — ONLY AFTER 13.h IS GREEN
+
+> **DESTRUCTIVE. Strictly sequenced AFTER the Plan-04 proof run is green (T-13-11).** Do NOT
+> run any command in this step until Step 13.h passes. This removes the old standalone
+> Tribunal build in `project-cb01b861` now that the re-homed engine is proven in the intake
+> project.
+
+```bash
+export OLD_PROJECT="project-cb01b861"   # the old standalone Tribunal project
+
+# 1. Delete the old Cloud Run services.
+gcloud run services delete nestor-pulse-api    --region "$REGION" --project="$OLD_PROJECT" --quiet
+gcloud run services delete nestor-pulse-worker --region "$REGION" --project="$OLD_PROJECT" --quiet
+
+# 2. Delete the old Cloud SQL instance (irreversible — confirm the proof run persisted
+#    everything you need first).
+gcloud sql instances delete nestor-prod-pg --project="$OLD_PROJECT" --quiet
+
+# 3. Delete the old Artifact Registry repo.
+gcloud artifacts repositories delete nestor-pulse --location "$REGION" --project="$OLD_PROJECT" --quiet
+```
+
+> **Supabase note (independence, not deletion).** This teardown targets ONLY the old
+> `project-cb01b861` Tribunal build. The legacy Supabase project is NEVER paused or deleted
+> — "retirement" here means zero Supabase dependencies in the new stack, not destroying the
+> old data (see the STATE.md independence note).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -697,3 +931,12 @@ pointing at the wrong host → `APP_BASE_URL` still holds the Step-12.1 placehol
 - [ ] Step 12.4 — two-pass URL wiring off the CAPTURED `FRONTEND_URL`: (a) backend `CORS_ALLOWED_ORIGINS`+`APP_BASE_URL` = URL, (b) uploads-bucket CORS += URL (GET-only, Step 9.1b pattern), (c) Firebase Console authorized domains += run.app host (manual, A5) — never a `*` wildcard, never a guessed URL (T-12-10/T-12-11)
 - [ ] Step 12.5 — verify `curl $FRONTEND_URL` → 200 SSR HTML, then run the consolidated 12-UAT (all inherited 07–11 items + two-role `draft → decomposed` E2E, D-05) fully green; scope ceiling `decomposed` respected (run-research never invoked)
 - [ ] D-08 guard confirmed: NO Supabase-side actions taken anywhere in the phase (independence proven code-side — no `VITE_SUPABASE_*` in the build + bundle guard green, D-09/D-11)
+- [ ] Step 13.a — Tribunal images target the EXISTING `nestor` Artifact Registry repo (no new repo)
+- [ ] Step 13.b — six secrets created + resource-scoped secretAccessor to the runtime SA + VALUES seeded out-of-band via stdin (`Nestor_Claude/Gemini/OpenAI` reseeded — Gemini from the old project, D-06; `DATABASE_URL{,_WORKER}` composed asyncpg DSNs; `AUDIT_GCS_BUCKET` = bucket name); no value echoed/committed (T-13-08/T-13-12)
+- [ ] Step 13.c — audit-evidence bucket `${GOOGLE_PROJECT}-nestor-audit` created with `--enable-per-object-retention` (7y Unlocked per-object — D-09; NOT Bucket Lock) + uniform BLA + public-access-prevention + bucket-scoped objectAdmin to the runtime SA (T-13-10)
+- [ ] Step 13.d — BUILT_IN `app_user` + `worker_user` Cloud SQL roles created (password/asyncpg, NOT IAM — Pitfall 5); `worker_user` schema GRANTs deferred to migration 0008 → `tribunal` schema ONLY, never `nestor` (T-13-09)
+- [ ] Step 13.e — both Tribunal images built via Cloud Build (`cloudbuild.api.yaml` / `.worker.yaml`; `nestor_pulse/` IS in both — boot dep, 13-01 deviation #1); optional test gate (`cloudbuild.test.yaml`) green
+- [ ] Step 13.f — `tribunal-migrate` Job deployed + executed `--wait` (alembic upgrade head into the `tribunal` schema; app_user DSN)
+- [ ] Step 13.g — `tribunal-worker` deployed (min=1/max=5/no-cpu-throttling/timeout=3600, `DATABASE_URL_WORKER`, `NESTOR_TRIBUNAL_UNCAPPED=1`) then `tribunal-api` (min=0/max=3/timeout=300, `DATABASE_URL`) via the retargeted deploy scripts
+- [ ] Step 13.h — CHECKPOINT: Plan-04 proof run (E2E + `verify_chain` + ~5-concurrent-from-≥2-spaces concurrency + duration/cost) GREEN before any teardown (T-13-11)
+- [ ] Step 13.i — FINAL post-proof teardown of `project-cb01b861` (Cloud Run `nestor-pulse-api`/`nestor-pulse-worker` + Cloud SQL `nestor-prod-pg` + Artifact Registry `nestor-pulse`) — STRICTLY after 13.h is green (D-02); legacy Supabase project NEVER touched (independence, not deletion)

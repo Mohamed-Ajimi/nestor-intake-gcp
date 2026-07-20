@@ -1,0 +1,35 @@
+# tribunal/cloudbuild.api.yaml — build + push the tribunal-api image (Phase 13 re-home).
+#
+# The dev box has no Docker (D-10), so the two Tribunal images are built via Cloud Build,
+# NOT locally. This config mirrors frontend/cloudbuild.yaml (docker build + push,
+# CLOUD_LOGGING_ONLY, 1200s timeout) but takes NO build-args: the Tribunal images carry no
+# build-time public config (unlike the Vite frontend). The image lands in the EXISTING
+# `nestor` Artifact Registry repo — path `.../nestor/tribunal-api:<tag>` — no new repo.
+#
+# BUILD CONTEXT: run from the `tribunal/` directory so requirements.txt, nestor_pulse_sdk/,
+# AND nestor_pulse/ are all in context (the api Dockerfile now COPYs nestor_pulse/ —
+# tools/claude_deep_researcher.py is a module-level boot dep of the deep-research division;
+# see the Dockerfile header). tribunal/.gcloudignore trims caches/.venv/secrets.
+#
+# INVOCATION (Cloud Shell; § Phase 13 of infra/DEPLOY-RUNBOOK.md):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.api.yaml \
+#     --substitutions=_IMAGE=europe-west1-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:$(date +%Y%m%d-%H%M%S) \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  - id: build
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f=infrastructure/cloud-run/api/Dockerfile"
+      - "-t=${_IMAGE}"
+      - "."
+
+images:
+  - "${_IMAGE}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"
