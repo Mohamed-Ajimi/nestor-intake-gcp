@@ -1,0 +1,34 @@
+# tribunal/cloudbuild.worker.yaml — build + push the tribunal-worker image (Phase 13 re-home).
+#
+# The dev box has no Docker (D-10), so the worker image is built via Cloud Build, NOT locally.
+# Mirrors cloudbuild.api.yaml / frontend/cloudbuild.yaml (docker build + push,
+# CLOUD_LOGGING_ONLY, 1200s timeout). No build-args. The image lands in the EXISTING `nestor`
+# Artifact Registry repo — path `.../nestor/tribunal-worker:<tag>` — no new repo.
+#
+# BUILD CONTEXT: run from the `tribunal/` directory so requirements.txt, nestor_pulse_sdk/,
+# AND nestor_pulse/ are in context. The worker Dockerfile COPYs BOTH nestor_pulse_sdk/ and
+# nestor_pulse/ (the worker runs the deep-research adapters that import
+# nestor_pulse.tools.*_deep_researcher — see the worker Dockerfile header).
+#
+# INVOCATION (Cloud Shell; § Phase 13 of infra/DEPLOY-RUNBOOK.md):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.worker.yaml \
+#     --substitutions=_IMAGE=europe-west1-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:$(date +%Y%m%d-%H%M%S) \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  - id: build
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f=infrastructure/cloud-run/worker/Dockerfile"
+      - "-t=${_IMAGE}"
+      - "."
+
+images:
+  - "${_IMAGE}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"

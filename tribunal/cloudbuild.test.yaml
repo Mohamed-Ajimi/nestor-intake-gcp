@@ -1,0 +1,64 @@
+# tribunal/cloudbuild.test.yaml — Tribunal test-suite gate (Phase 13 re-home).
+#
+# Runs `pytest nestor_pulse_sdk/tests/` against a REAL Postgres so the re-homed engine
+# (audit chain, RLS isolation, the per-run advisory-lock exactly-once test from Plan 02)
+# is proven on the intake infra. A non-zero pytest exit FAILS the build — the merge/deploy
+# gate. Mirrors this repo's cloudbuild.test.yaml pattern (real Postgres + pytest gate,
+# CLOUD_LOGGING_ONLY, 1200s), adapted to the Tribunal suite.
+#
+# WHY the Docker socket (not a fixed DATABASE_URL like the intake gate): the Tribunal suite
+# is testcontainers-based (conftest.py::postgres_container spins up `postgres:15` via
+# `testcontainers[postgresql]==4.14.2`, pinned in requirements.txt). Rather than modify the
+# copied conftest (the engine tree is carried byte-identical — ENGINE-04 integrity), we give
+# the test step access to the Cloud Build Docker daemon by mounting the host socket, so
+# testcontainers can start its own ephemeral Postgres exactly as it does on a dev box with
+# Docker. The pgvector image is pulled up front so the suite's container start is fast.
+#
+# NO NEW PACKAGES (T-13-SC): deps are installed from the verbatim-carried tribunal/requirements.txt
+# (Plan 01 audit — no new package selected). pytest / pytest-asyncio / testcontainers are all
+# already pinned there.
+#
+# INVOCATION (Cloud Shell; run BEFORE deploying, per § Phase 13 of infra/DEPLOY-RUNBOOK.md):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.test.yaml \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  # 1. Pre-pull the Postgres image testcontainers will use, into the shared Docker daemon,
+  #    so the suite's container start does not pay the pull cost inside the test timeout.
+  - id: pull-postgres
+    name: "gcr.io/cloud-builders/docker"
+    args: ["pull", "postgres:15"]
+
+  # 2. Install the Tribunal deps from the VERBATIM requirements.txt (Py 3.11 — matches the
+  #    image runtime), then run the suite. testcontainers talks to the mounted host Docker
+  #    socket to start its ephemeral Postgres. A non-zero pytest exit FAILS the build.
+  - id: pytest
+    name: "python:3.11-slim"
+    entrypoint: "bash"
+    # Mount the Cloud Build host Docker socket so testcontainers (running inside this step)
+    # can start sibling containers on the host daemon.
+    volumes:
+      - name: docker-sock
+        path: /var/run/docker.sock
+    env:
+      # testcontainers needs the docker CLI/daemon; point Ryuk + the client at the host socket.
+      - "DOCKER_HOST=unix:///var/run/docker.sock"
+      # Skip the Ryuk reaper (it needs privileged socket access Cloud Build may deny); the
+      # ephemeral test containers are torn down by the conftest fixture's finally block.
+      - "TESTCONTAINERS_RYUK_DISABLED=true"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        # The docker CLI is needed by testcontainers to launch the Postgres container.
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io >/dev/null
+        pip install --no-cache-dir -r requirements.txt
+        # Run the Tribunal suite. A non-zero exit propagates and FAILS the build (the gate).
+        # -q keeps logs terse; the advisory-lock exactly-once test (Plan 02) runs here too.
+        python -m pytest nestor_pulse_sdk/tests/ -q
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: "1200s"

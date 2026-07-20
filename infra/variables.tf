@@ -223,3 +223,116 @@ variable "app_base_url" {
   type        = string
   default     = ""
 }
+
+# ================================================================================
+# Phase 13 — Tribunal re-home (deep-research engine into the intake project)
+# ================================================================================
+# The re-homed Tribunal engine (from the old standalone project-cb01b861) runs as
+# TWO new Cloud Run resources in THIS intake project alongside nestor-api: an
+# always-on `tribunal-worker` (min=1, max=5 — D-08 concurrency via the per-run
+# advisory lock + SKIP-LOCKED) and a request-response `tribunal-api` (min=0, max=3).
+# A one-shot `tribunal-migrate` Job runs the Tribunal alembic line into a SEPARATE
+# `tribunal` Postgres SCHEMA (never `nestor`). The engine reads its provider keys
+# under the `Nestor_*` secret names its copied `secrets_bootstrap.py` already expects
+# (D-06 / RESEARCH Open Q3 — no bootstrap refactor). The audit chain persists to a
+# dedicated GCS bucket with 7-year per-object retention, mode="Unlocked" (D-09).
+#
+# DB topology (RESEARCH Pitfall 5): the Tribunal services authenticate with a
+# STORED password over asyncpg (the `DATABASE_URL` / `DATABASE_URL_WORKER` secrets),
+# NOT the intake IAM-connector path — so `app_user` / `worker_user` are BUILT_IN
+# Cloud SQL users (mirror `app_superadmin`), not CLOUD_IAM_SERVICE_ACCOUNT users.
+#
+# IaC-DRIFT: as with every prior phase, `terraform apply` is blocked on the dev box
+# (no Python/Docker/terraform) — these variables + the resources they drive are the
+# INTENDED end-state, INERT until the operator runs the § Phase 13 gcloud steps in
+# infra/DEPLOY-RUNBOOK.md (Plan 04). Every value is enumerated in that runbook.
+
+variable "tribunal_worker_service_name" {
+  description = "Cloud Run service name for the always-on Tribunal worker (poll loop, min=1/max=5 — D-04/D-08)."
+  type        = string
+  default     = "tribunal-worker"
+}
+
+variable "tribunal_api_service_name" {
+  description = "Cloud Run service name for the request-response Tribunal API (min=0/max=3)."
+  type        = string
+  default     = "tribunal-api"
+}
+
+variable "tribunal_worker_max_instances" {
+  description = "Max instances for the Tribunal worker (D-08 — sized for 5+ concurrent runs; the per-run advisory lock + SKIP-LOCKED make multiple pollers safe)."
+  type        = number
+  default     = 5
+}
+
+variable "tribunal_worker_stale_minutes" {
+  description = "NESTOR_WORKER_STALE_MINUTES for the worker — how long a `running` claim may go without a heartbeat before another poller may re-claim it. Calibrated in Phase 16; carried here as a plain non-secret env (matches the old deploy script's default 60)."
+  type        = string
+  default     = "60"
+}
+
+variable "tribunal_image_tag" {
+  description = "Tribunal image tag in the `nestor` Artifact Registry repo (paths `.../nestor/tribunal-api:<tag>` and `.../nestor/tribunal-worker:<tag>`). Passed on apply exactly like `image_tag`; no default — the operator supplies the real tag per infra/DEPLOY-RUNBOOK.md § Phase 13 after the Cloud Build step."
+  type        = string
+  default     = ""
+}
+
+# ---------------------------------------------------- Tribunal provider secrets (D-06)
+# Reseeded under the EXACT names the copied `secrets_bootstrap.py` reads
+# (`Nestor_Claude` -> ANTHROPIC_API_KEY, `Nestor_OpenAI` -> OPENAI_API_KEY,
+# `Nestor_Gemini` -> GOOGLE_API_KEY). Same drift-honest handling as the intake AI
+# keys: the secret RESOURCE + the runtime SA's resource-scoped secretAccessor are
+# in IaC, but the VALUE is seeded out-of-band per the runbook (T-13-08). Note these
+# are DISTINCT secret ids from the intake `nestor-anthropic-api-key` /
+# `nestor-openai-api-key` — the Tribunal engine reads the `Nestor_*` names verbatim.
+
+variable "tribunal_gemini_secret_id" {
+  description = "Secret Manager secret ID for Tribunal's GOOGLE_API_KEY (Gemini — D-06, the third provider arm). Read by secrets_bootstrap.py as `Nestor_Gemini`. Value reseeded out-of-band from the old project's key per the runbook (T-13-08)."
+  type        = string
+  default     = "Nestor_Gemini"
+}
+
+variable "tribunal_claude_secret_id" {
+  description = "Secret Manager secret ID for Tribunal's ANTHROPIC_API_KEY. Read by secrets_bootstrap.py as `Nestor_Claude`. DISTINCT from the intake `nestor-anthropic-api-key` (the engine reads the `Nestor_*` name verbatim — no bootstrap refactor, RESEARCH Open Q3)."
+  type        = string
+  default     = "Nestor_Claude"
+}
+
+variable "tribunal_openai_secret_id" {
+  description = "Secret Manager secret ID for Tribunal's OPENAI_API_KEY. Read by secrets_bootstrap.py as `Nestor_OpenAI`. DISTINCT from the intake `nestor-openai-api-key`."
+  type        = string
+  default     = "Nestor_OpenAI"
+}
+
+# ---------------------------------------------------- Tribunal DB URL secrets (asyncpg)
+# The two stored-credential DSNs the Tribunal services read from the process env
+# (db/base.py reads DATABASE_URL directly). asyncpg unix-socket form:
+#   postgresql+asyncpg://<user>:<pw>@/<db>?host=/cloudsql/<PROJECT>:<REGION>:<INSTANCE>
+# The API reads DATABASE_URL (app_user); the worker reads DATABASE_URL_WORKER
+# (worker_user — the cross-tenant claim role). Same drift-honest handling: resource
+# + scoped accessor in IaC, value composed + seeded out-of-band per the runbook.
+
+variable "tribunal_database_url_secret_id" {
+  description = "Secret Manager secret ID holding the Tribunal API's DATABASE_URL (app_user, asyncpg unix-socket DSN into the `tribunal` schema). Value composed + seeded out-of-band per the runbook (T-13-08)."
+  type        = string
+  default     = "DATABASE_URL"
+}
+
+variable "tribunal_database_url_worker_secret_id" {
+  description = "Secret Manager secret ID holding the Tribunal worker's DATABASE_URL_WORKER (worker_user, asyncpg DSN). worker_user is granted USAGE/DML on the `tribunal` schema ONLY (migration 0008, Plan 02) — never `nestor` (isolation firewall, T-13-09). Value seeded out-of-band per the runbook."
+  type        = string
+  default     = "DATABASE_URL_WORKER"
+}
+
+# ---------------------------------------------------- Tribunal audit bucket name secret
+variable "tribunal_audit_bucket_secret_id" {
+  description = "Secret Manager secret ID holding the AUDIT_GCS_BUCKET name (the bucket audit/gcs_blob.py writes the 7y-retained hash-chain bodies to). Kept as a secret (not a plain env) purely for injection uniformity with the DB/provider secrets; the VALUE is the bucket name, seeded out-of-band per the runbook."
+  type        = string
+  default     = "AUDIT_GCS_BUCKET"
+}
+
+variable "tribunal_audit_bucket_name" {
+  description = "Name of the GCS audit-evidence bucket for the Tribunal hash-chain bodies (7y per-object retention, mode=Unlocked — D-09). Default \"\" derives `${var.project}-nestor-audit` in main.tf. Set explicitly to pin a name."
+  type        = string
+  default     = ""
+}
