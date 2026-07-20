@@ -170,11 +170,24 @@ async def _make_live_sessionmaker():
     command.upgrade(cfg, "head")
 
     engine = sa_asyncio.create_async_engine(url, future=True)
-    from nestor_pulse_sdk.db.base import get_sessionmaker
+    from nestor_pulse_sdk.db import base as base_mod
 
-    sessionmaker = get_sessionmaker(engine)
+    # 13-REVIEW WR-06: get_engine() is lru_cached, so a second test on a NEW
+    # pytest-asyncio event loop would reuse an engine whose asyncpg connections
+    # belong to the PREVIOUS (closed) loop -> "attached to a different loop".
+    # execute_run_locked calls get_sessionmaker() (cached engine) internally,
+    # so reset the cache at every live-test setup and dispose at cleanup.
+    base_mod.get_engine.cache_clear()
+
+    sessionmaker = base_mod.get_sessionmaker(engine)
 
     async def _cleanup() -> None:
+        try:
+            cached = base_mod.get_engine()
+            await cached.dispose()
+        except Exception:  # noqa: BLE001
+            pass
+        base_mod.get_engine.cache_clear()
         await engine.dispose()
         if container is not None:
             try:
