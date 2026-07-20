@@ -33,12 +33,18 @@ dependencies = [
     # blocking-human legitimacy checkpoint — google-cloud-storage is the official
     # googleapis client (github.com/googleapis/python-storage); python-multipart
     # is the Kludex DISTRIBUTION (github.com/Kludex/python-multipart), NOT the
-    # deprecated bare `multipart` package (do not add that one). google-auth
-    # arrives transitively via google-cloud-storage — do NOT pin it separately.
+    # deprecated bare `multipart` package (do not add that one).
     # NOTE: the live Cloud Run image does not have these until the 09-04 runbook
     # rebuild (Pitfall 7 — new deps are not in the running image).
     "google-cloud-storage>=3,<4",
     "python-multipart>=0.0.9",
+    # Phase 14 (SEAM-02, WR-08): google-auth became a DIRECT import —
+    # app/research/tribunal_client.py imports google.oauth2.id_token +
+    # google.auth.transport.requests to mint the keyless seam OIDC token — so it
+    # is declared explicitly (it previously arrived only transitively via
+    # google-cloud-storage, and a major bump of that carrier could have broken
+    # the security seam without any manifest change flagging it).
+    "google-auth>=2,<3",
     # Phase 10 notifications (10-01, NOTIF-01/02): Jinja2 HTML mail rendering with
     # autoescape (the email-context XSS guard T-10-01). Verified at the 10-01
     # blocking-human legitimacy checkpoint — Jinja2 is the Pallets project

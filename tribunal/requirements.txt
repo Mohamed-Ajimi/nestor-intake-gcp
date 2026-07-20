@@ -19,6 +19,13 @@ litellm==1.86.1
 
 # --- GCP ---
 google-cloud-secret-manager==2.28.0
+# Phase 14 (SEAM-01, WR-08): google-auth is now a DIRECT import
+# (nestor_pulse_sdk/auth/internal_caller.py imports google.oauth2.id_token +
+# google.auth.transport.requests for the seam's OIDC verify), so it is pinned
+# explicitly per D-09 instead of relying on the transitive carrier
+# (google-cloud-storage / google-adk). On the next `pip freeze` refresh, bump
+# this to the resolver-selected version alongside the rest of the file.
+google-auth==2.40.3
 
 # --- Web framework + ASGI ---
 fastapi==0.136.3
