@@ -141,6 +141,13 @@ None in this plan. Plan 04 (operator session) sets the two non-secret env vars a
 - **Plan 14-03** (denial suite) must assert the pinned **400** for missing-tenant, plus wrong-SA 403 / unauthenticated 401 / GUC-leak, and add the Tribunal-side "retired routes absent" + `tribunal.*` RLS denial tests (D-08).
 - **Plan 14-04** wires the two env vars + the dedicated SA and runs the live proof.
 
+## Self-Check: PASSED
+
+- Created files present: `internal_caller.py`, `test_internal_caller.py`, `14-01-SUMMARY.md`.
+- Deleted files gone: `identity_platform.py`, `account/`, `demo/`.
+- Commits present: `f13f81f` (Task 1), `2558549` (RED), `2668d14` (GREEN), `a7d46a6` (Task 3), `93eeb23` (docs).
+- Working tree clean; SUMMARY.md force-added and tracked (.planning/ is gitignored).
+
 ---
 *Phase: 14-auth-retirement-integration-seam*
 *Completed: 2026-07-20*
