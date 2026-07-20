@@ -41,7 +41,20 @@ def get_engine(database_url: str | None = None):
     Secret Manager under DATABASE_URL.
     """
     url = database_url if database_url is not None else os.environ["DATABASE_URL"]
-    return create_async_engine(url, echo=False, pool_pre_ping=True, future=True)
+    # Phase 13 re-home: migrations land every table in the `tribunal` schema
+    # (alembic env.py sets search_path=tribunal), but the models are schema-less,
+    # so the runtime connection must resolve `tribunal` first or every lookup
+    # hits the (empty) intake `public` schema. Postgres skips schemas that do
+    # not exist, so the `public` fallback keeps the testcontainers suite (which
+    # creates its tables in `public` of an ephemeral DB with no `tribunal`
+    # schema) behaving exactly as before.
+    return create_async_engine(
+        url,
+        echo=False,
+        pool_pre_ping=True,
+        future=True,
+        connect_args={"server_settings": {"search_path": "tribunal,public"}},
+    )
 
 
 def get_sessionmaker(engine=None) -> async_sessionmaker[AsyncSession]:
