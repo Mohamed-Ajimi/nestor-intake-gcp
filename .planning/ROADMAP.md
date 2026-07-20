@@ -94,7 +94,7 @@ trail intact.
 **Plans**: 4 plans
   - [x] 14-01-PLAN.md — Retire Tribunal auth surface + install InternalCallerProvider; salvage ensure_org/ensure_project + /ensure endpoints (SEAM-01/02)
   - [x] 14-02-PLAN.md — Intake seam client: OIDC minting + ensure_org/ensure_project HTTP client (SEAM-02)
-  - [ ] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
+  - [x] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
   - [ ] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
 ### Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)
@@ -172,7 +172,7 @@ Phases execute in numeric order: 13 → 14 → 15 → 16 → 17 → 18 → 19 �
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 14. Auth Retirement + Integration Seam | v1.1 | 2/4 | In Progress|  |
+| 14. Auth Retirement + Integration Seam | v1.1 | 3/4 | In Progress|  |
 | 15. Engine Enhancements | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 0/TBD | Not started | - |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 0/TBD | Not started | - |
