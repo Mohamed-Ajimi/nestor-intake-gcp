@@ -50,8 +50,8 @@ feature parity the re-platform must preserve. -->
 - [ ] All pre-research AI functions ported to Cloud Run (apply-intake-skill, generate-context-pack, structure-answers, extract-insights, embeddings + semantic search, transcribe-audio)
 - [x] GCS storage replacing the `nestor-uploads` bucket — Validated in Phase 9: gcs-storage (code complete + review-fixed; live UAT pending in 09-HUMAN-UAT.md)
 - [x] Multi-language UI: **NL / FR / EN** (i18n) — Validated in Phase 11: internationalization (code complete + review-fixed; live UAT pending in 11-HUMAN-UAT.md)
-- [ ] Frontend hosted on GCP (Cloud Run or Firebase Hosting)
-- [ ] End-to-end flow validated on GCP for superadmin + user; Supabase project retired
+- [x] Frontend hosted on GCP (Cloud Run or Firebase Hosting) — Validated in Phase 12: cutover live 2026-07-14, current rev 00010-ndr (2026-07-20), D-11 no-Supabase-bundle guard green
+- [x] End-to-end flow validated on GCP for superadmin + user; Supabase independence established — Validated in Phase 12 with operator decision PARITY ACCEPTED WITH DEFERRALS (2026-07-20): partial UAT passed, 21 items deferred to post-Tribunal (ledger in 12-UAT.md). Retirement = independence-only (D-08): zero Supabase deps in new stack; legacy project deliberately left untouched
 
 ### Out of Scope
 
@@ -125,4 +125,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-07-14 after Phase 11 (internationalization NL/FR/EN) — phase complete (9/9 plans, review-fixed: 2 critical + 9 warnings closed); 6 HUMAN-UAT items pend the next deploy (image rebuild + alembic 0010) — see 11-HUMAN-UAT.md; only Phase 12 (cutover) remains*
+*Last updated: 2026-07-20 after Phase 12 (frontend deploy + cutover + Supabase independence) — ALL 12 PHASES COMPLETE. Live: frontend rev 00010-ndr + backend rev 00024-67b, alembic 0010. Parity accepted with deferrals (21 UAT items → post-Tribunal, ledger in 12-UAT.md). Open chores: Resend key rotation, Cloud Build suite rerun, NDA PDF drop. Next: milestone close, then Tribunal milestone*
