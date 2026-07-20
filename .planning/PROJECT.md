@@ -173,4 +173,6 @@ through research, human-crafted report delivery, and a client Q&A chat over the 
   as of 2026-06-15).
 
 ---
-*Last updated: 2026-07-20 (Phase 13 complete — Tribunal re-homed, live + proven)
+*Last updated: 2026-07-21 (Phase 14 complete — Tribunal auth retired, intake is sole caller via
+OIDC seam, tribunal-run SA + invoker lockdown live, 8/8 denial gate green; live seam HTTP UAT
+deferred to Phase 16 trigger route)

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Completed 14-04-PLAN.md — Phase 14 done (D-07 proven live)
-last_updated: "2026-07-20T21:04:57.429Z"
+status: ready_to_plan
+stopped_at: Phase 14 complete (4/4) — ready to discuss Phase 15
+last_updated: 2026-07-20T22:06:59.178Z
 last_activity: 2026-07-20
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 8
-  completed_plans: 8
+  completed_plans: 78
   percent: 25
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 14 — Auth Retirement + Integration Seam
+**Current focus:** Phase 15 — engine enhancements (plan critique + draft tournament)
 
 ## Current Position
 
-Phase: 14 (Auth Retirement + Integration Seam) — COMPLETE (4 of 4 plans)
-Plan: 4 of 4 — done
-Status: Phase 14 complete; D-07 proven live (run b188a83e completed, chain=OK, $1.60; 3 negatives pass)
-Last activity: 2026-07-20 — 14-04 live deploy + D-07 proof; Phase-13 queue-path proof ABSORBED (strike from Phase 16)
+Phase: 15 of 4 (engine enhancements (plan critique + draft tournament))
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-20
 
 Progress: [██████████] 100%
 
@@ -36,7 +36,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 74 (v1.0, shipped)
+- Total plans completed: 78 (v1.0, shipped)
 - Average duration: — min
 - Total execution time: 0.0 hours (v1.1)
 
@@ -56,6 +56,7 @@ Progress: [██████████] 100%
 | 11 | 9 | - | - |
 | 12 | 5 | - | - |
 | 13 | 4 | - | - |
+| 14 | 4 | - | - |
 
 **Recent Trend:**
 
