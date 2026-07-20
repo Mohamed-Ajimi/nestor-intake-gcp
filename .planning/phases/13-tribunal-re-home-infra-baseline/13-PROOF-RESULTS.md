@@ -53,10 +53,12 @@ Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progre
 
 | Item | Value |
 |------|-------|
-| Build id | _(record)_ |
-| Exit status | _(0 = green)_ |
-| `test_schema_isolation.py` (Plan 02) | _(pass?)_ |
-| `test_advisory_lock_exactly_once.py` (Plan 02) | _(pass?)_ |
+| Critical-subset build | ✅ GREEN 2026-07-20 (24 tests: `test_schema_isolation`, `test_advisory_lock_exactly_once`, `test_hash_chain_replay`, `test_rls_isolation` — all pass on real Postgres) |
+| `test_schema_isolation.py` (Plan 02) | ✅ pass (incl. live `upgrade head` → `tribunal.tribunal_alembic_version`) |
+| `test_advisory_lock_exactly_once.py` (Plan 02) | ✅ pass (exactly-once under two racing executors; distinct runs don't serialize) |
+| `test_hash_chain_replay.py` | ✅ pass (10/10 — tamper detection, canonical JSON, two-phase crash) |
+| Full-suite status | ⚠ DEFERRED: full suite timed out at 1200s (~62%) and contains tests needing live provider keys (absent in the keyless build env). Config fixed (host-network pattern, 3600s, E2_HIGHCPU_8) — triage of key-dependent failures is a carried chore. |
+| Harness fixes landed | Cloud Build reserved-socket + sibling-port networking (`--network=host` docker step); `env.py` loop-aware alembic runner |
 
 ## LUKOIL benchmark E2E proof run (Task 2 — ENGINE-02 + ENGINE-04)
 
@@ -67,14 +69,16 @@ Status: **TASK 1 COMPLETE (deploy green, 2026-07-20)** — Tasks 2–3 in progre
 
 | Metric | Value |
 |--------|-------|
-| `run_id` | _(record)_ |
-| `tenant_id` / `project_id` | _(record)_ |
-| Elapsed seconds (wall-clock, max run length) | _(record — feeds Phase 16 stale calibration)_ |
-| `cost_usd` (sum) | _(record — RECORDED not enforced; D-07 UNCAPPED=1)_ |
-| Total claims | _(> 0?)_ |
-| Grounded claims / `claim_source` count | _(≥ 1?)_ |
-| Recall % | _(> 0, in [0,1]?)_ |
-| **`verify_chain` result** | _( **OK** — `broken_at` is None — ENGINE-04 LEGAL GATE)_ |
+| `run_id` | `1315ea6a-6ea0-40b0-8434-48b2e8a74133` (job execution `tribunal-smoke-4rgwv`, exit 0) |
+| `tenant_id` / `project_id` | ephemeral self-provisioned "Tribunal Smoke" org (IDs in job logs) |
+| Elapsed seconds (wall-clock, max run length) | **1020s pipeline / ~1072s job wall-clock** (15:28:27Z → 15:46:19Z incl. start) — feeds Phase 16 stale calibration |
+| `cost_usd` (sum) | **$1.9696** (UNCAPPED=1; recorded not enforced, D-07) |
+| Total claims | 115 (dropped 4, survivors 115) |
+| Grounded claims / `claim_source` count | 112 |
+| Recall % | **97.4%** |
+| **`verify_chain` result** | ✅ **OK** — chain intact on the re-homed deployment (ENGINE-04 LEGAL GATE GREEN) |
+| Quality gates | quality_gate PASS · coverage_gate PASS · reentry_count 0 · budget_marker '' |
+| Non-fatal warnings | 3× group-skeptic parse errors (`'str' object has no attribute 'get'`); malformed `FOCUS_AREA` intake lines forced one coverage retry (recovered) — engine-quality items, not re-home defects |
 
 ## Concurrency proof (Task 3 — ENGINE-08 / D-08)
 
