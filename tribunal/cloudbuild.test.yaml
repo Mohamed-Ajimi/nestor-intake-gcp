@@ -24,39 +24,33 @@
 #     --project="$GOOGLE_PROJECT"
 
 steps:
-  # 1. Pre-pull the Postgres image testcontainers will use, into the shared Docker daemon,
-  #    so the suite's container start does not pay the pull cost inside the test timeout.
-  - id: pull-postgres
+  # Run pytest inside a --network=host container on the shared Cloud Build daemon.
+  # WHY host networking (proven live 2026-07-20, build 4th iteration):
+  #   - An explicit /var/run/docker.sock volume is REJECTED by Cloud Build (reserved path);
+  #     mounting it via `docker run -v` from the docker builder works.
+  #   - testcontainers publishes its ephemeral Postgres port on the DAEMON HOST; a normal
+  #     build step is itself a container, so localhost:mapped-port is unreachable there
+  #     (gateway-IP + TESTCONTAINERS_HOST_OVERRIDE gets connection-refused too).
+  #     --network=host makes localhost resolve on the daemon host where the port publishes.
+  - id: pytest-hostnet
     name: "gcr.io/cloud-builders/docker"
-    args: ["pull", "postgres:15"]
-
-  # 2. Install the Tribunal deps from the VERBATIM requirements.txt (Py 3.11 — matches the
-  #    image runtime), then run the suite. testcontainers talks to the mounted host Docker
-  #    socket to start its ephemeral Postgres. A non-zero pytest exit FAILS the build.
-  - id: pytest
-    name: "python:3.11-slim"
     entrypoint: "bash"
-    # NOTE: no explicit volumes block — Cloud Build REJECTS "/var/run/docker.sock" as a
-    # reserved volume path AND already mounts the host Docker socket into every step by
-    # default, so testcontainers can reach the daemon without any declaration.
-    env:
-      # testcontainers needs the docker CLI/daemon; point Ryuk + the client at the host socket.
-      - "DOCKER_HOST=unix:///var/run/docker.sock"
-      # Skip the Ryuk reaper (it needs privileged socket access Cloud Build may deny); the
-      # ephemeral test containers are torn down by the conftest fixture's finally block.
-      - "TESTCONTAINERS_RYUK_DISABLED=true"
     args:
       - "-c"
       - |
-        set -euo pipefail
-        # The docker CLI is needed by testcontainers to launch the Postgres container.
-        apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io >/dev/null
-        pip install --no-cache-dir -r requirements.txt
-        # Run the Tribunal suite. A non-zero exit propagates and FAILS the build (the gate).
-        # -q keeps logs terse; the advisory-lock exactly-once test (Plan 02) runs here too.
-        python -m pytest nestor_pulse_sdk/tests/ -q
+        docker pull -q postgres:15
+        docker run --rm --network=host \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v /workspace:/workspace -w /workspace \
+          -e TESTCONTAINERS_RYUK_DISABLED=true \
+          python:3.11-slim bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends docker.io >/dev/null && pip install --no-cache-dir -q -r requirements.txt && python -m pytest nestor_pulse_sdk/tests/ -q"
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
 
-timeout: "1200s"
+# Full suite incl. testcontainers spin-up + pip install needs headroom (first run timed
+# out at 1200s at ~62%). NOTE: some tests require live provider API keys and will fail in
+# this keyless build environment — triage deferred (see 13-PROOF-RESULTS.md); the
+# phase-critical subset (schema isolation, advisory lock, hash chain, RLS) is green.
+timeout: "3600s"
