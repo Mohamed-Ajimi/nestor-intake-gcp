@@ -57,7 +57,7 @@ intake — Tribunal research, human-crafted report delivery, and client Q&A over
 same GCP platform, with every client's data isolated to its own space and the legally required audit
 trail intact.
 
-- [ ] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run
+- [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [ ] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped
 - [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - Plan-critique pass and pairwise draft tournament added to the pipeline before the trigger builds on the report contract
 - [ ] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live 9-stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled
@@ -81,7 +81,7 @@ trail intact.
   - [x] 13-01-PLAN.md — Copy Tribunal engine into tribunal/ (verbatim; frozen hash-chain, sole cross-dep, import-graph gate)
   - [x] 13-02-PLAN.md — Isolated Alembic line (tribunal_alembic_version + schema + 0008 rewrite) + per-run advisory lock (ENGINE-08 keystone)
   - [x] 13-03-PLAN.md — By-construction IaC + Phase-13 runbook + Cloud Build configs + retargeted deploy scripts (audit bucket 7y Unlocked, worker max=5)
-  - [ ] 13-04-PLAN.md — Operator live session: migrate + deploy + LUKOIL E2E proof + verify_chain + ≥2-concurrent proof + record duration/cost + teardown old project (D-02)
+  - [x] 13-04-PLAN.md — Operator live session: migrate + deploy + LUKOIL E2E proof + verify_chain + ≥2-concurrent proof + record duration/cost + teardown old project (D-02)
 
 ### Phase 14: Auth Retirement + Integration Seam
 **Goal**: Tribunal's standalone auth, orgs, and UI are retired so the intake backend is the sole caller, with every run space-scoped end-to-end.
@@ -167,7 +167,7 @@ Phases execute in numeric order: 13 → 14 → 15 → 16 → 17 → 18 → 19 �
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
-| 13. Tribunal Re-home + Infra Baseline | v1.1 | 3/4 | In Progress|  |
+| 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete   | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 0/TBD | Not started | - |
 | 15. Engine Enhancements | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 0/TBD | Not started | - |
