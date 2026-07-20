@@ -1,5 +1,17 @@
 # Phase 14 — Deferred / Out-of-Scope Items (discovered during the 14-04 D-07 live session)
 
+> RESOLUTION UPDATE (operator decision Option 1, same session):
+> - **D-DEF-1 CLOSED** — the four seam-denial cases were re-homed to the Tribunal harness
+>   (`tribunal/nestor_pulse_sdk/tests/test_seam_denial.py`) where `nestor_pulse_sdk` is
+>   importable; they now EXECUTE (not skip). Gate: `tribunal/cloudbuild.seam-gate.yaml`.
+> - **D-DEF-5 CLOSED** — the seam-gate config provisions a NON-superuser `app_user` role and
+>   runs the RLS denial tests as it, so they EXECUTE (not skip). Both closed in build
+>   `25b8f9eb` ("6 passed", SEAM GATE GREEN).
+> - **D-DEF-4 CLOSED** — server.py import fix (commit `28dde69`), verified in build `93236469`.
+> - **D-DEF-2 / D-DEF-3 REMAIN DEFERRED** — pre-existing, not Phase-14 caused; scoped to
+>   Phase 20 CLOSE-02 (STATE.md: "Rerun full backend suite … 5 known mail test-harness
+>   defects"). They do NOT gate Phase 14 (operator decision Option 1c).
+
 These surfaced when the two Cloud Build CI suites (Step 14.g) ran live for the first time.
 They are logged here per the executor scope boundary (only auto-fix issues DIRECTLY caused by
 the current task). NONE of these are caused by the Phase-14 seam/IAM work itself.

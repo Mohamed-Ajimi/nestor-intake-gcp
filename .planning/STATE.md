@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 14 context gathered
-last_updated: "2026-07-20T18:50:50.735Z"
-last_activity: 2026-07-20 -- Phase 14 execution started
+stopped_at: Completed 14-04-PLAN.md — Phase 14 done (D-07 proven live)
+last_updated: "2026-07-20T21:04:57.429Z"
+last_activity: 2026-07-20
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 4
-  percent: 13
+  completed_plans: 8
+  percent: 25
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 14 (Auth Retirement + Integration Seam) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 14
-Last activity: 2026-07-20 -- Phase 14 execution started
+Phase: 14 (Auth Retirement + Integration Seam) — COMPLETE (4 of 4 plans)
+Plan: 4 of 4 — done
+Status: Phase 14 complete; D-07 proven live (run b188a83e completed, chain=OK, $1.60; 3 negatives pass)
+Last activity: 2026-07-20 — 14-04 live deploy + D-07 proof; Phase-13 queue-path proof ABSORBED (strike from Phase 16)
 
-Progress: [░░░░░░░░░░] 0% (v1.1)
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 - Trend: —
 
 *Updated after each plan completion*
+| Phase 14 P04 | 150 | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,9 @@ Recent decisions affecting current work (v1.1):
 - GCP live execution deferred to user per D-10; all artifacts authored by construction.
 
 </details>
+
+- [Phase 14]: Tribunal runs as dedicated least-priv tribunal-run SA; tribunal-api invoker=nestor-run ONLY (WR-03/D-04 closed live 2026-07-20)
+- [Phase 14]: D-07 proven live: run b188a83e completed chain=OK cost 1.60usd; 3 negatives pass; absorbs Phase-13 queue-path proof (strike from Phase 16)
 
 ### Pending Todos
 
@@ -148,9 +152,9 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-20T17:44:56.016Z
-Stopped at: Phase 14 context gathered
-Resume file: .planning/phases/14-auth-retirement-integration-seam/14-CONTEXT.md
+Last session: 2026-07-20T21:04:57.414Z
+Stopped at: Completed 14-04-PLAN.md — Phase 14 done (D-07 proven live)
+Resume file: None
 
 ## Operator Next Steps
 

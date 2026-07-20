@@ -58,7 +58,7 @@ same GCP platform, with every client's data isolated to its own space and the le
 trail intact.
 
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
-- [ ] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped
+- [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
 - [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - Plan-critique pass and pairwise draft tournament added to the pipeline before the trigger builds on the report contract
 - [ ] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live 9-stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled
 - [ ] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path
@@ -95,7 +95,7 @@ trail intact.
   - [x] 14-01-PLAN.md — Retire Tribunal auth surface + install InternalCallerProvider; salvage ensure_org/ensure_project + /ensure endpoints (SEAM-01/02)
   - [x] 14-02-PLAN.md — Intake seam client: OIDC minting + ensure_org/ensure_project HTTP client (SEAM-02)
   - [x] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
-  - [ ] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
+  - [x] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
 ### Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)
 **Goal**: The two new frontier engine enhancements are added to the Tribunal pipeline while it is already being touched during re-home — before the trigger integration builds on the run's report contract.
@@ -172,7 +172,7 @@ Phases execute in numeric order: 13 → 14 → 15 → 16 → 17 → 18 → 19 �
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 14. Auth Retirement + Integration Seam | v1.1 | 3/4 | In Progress|  |
+| 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete   | 2026-07-20 |
 | 15. Engine Enhancements | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 0/TBD | Not started | - |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 0/TBD | Not started | - |

@@ -20,8 +20,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Integration Seam (SEAM)
 
-- [ ] **SEAM-01**: Tribunal's standalone logins/orgs/UI are retired; only the intake backend can call it (server-to-server internal auth)
-- [ ] **SEAM-02**: Intake spaces map 1:1 onto Tribunal orgs; every run is space-scoped end-to-end (cross-tenant denial suite extended to Tribunal data)
+- [x] **SEAM-01**: Tribunal's standalone logins/orgs/UI are retired; only the intake backend can call it (server-to-server internal auth)
+- [x] **SEAM-02**: Intake spaces map 1:1 onto Tribunal orgs; every run is space-scoped end-to-end (cross-tenant denial suite extended to Tribunal data)
 - [ ] **SEAM-03**: Superadmin can trigger a research run on a `decomposed` intake (status → `in_research`), with the brief assembled from the intake's validated context pack
 - [ ] **SEAM-04**: Runs auto-proceed through Tribunal's interactive pauses (`needs_input` / `needs_report_spec`) with sensible defaults (zero-touch)
 
@@ -86,8 +86,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENGINE-02 | Phase 13 | Complete |
 | ENGINE-04 | Phase 13 | Complete |
 | ENGINE-08 | Phase 13 | Complete |
-| SEAM-01 | Phase 14 | Pending |
-| SEAM-02 | Phase 14 | Pending |
+| SEAM-01 | Phase 14 | Complete |
+| SEAM-02 | Phase 14 | Complete |
 | ENGINE-05 | Phase 15 | Pending |
 | ENGINE-06 | Phase 15 | Pending |
 | SEAM-03 | Phase 16 | Pending |
