@@ -36,11 +36,9 @@ steps:
   - id: pytest
     name: "python:3.11-slim"
     entrypoint: "bash"
-    # Mount the Cloud Build host Docker socket so testcontainers (running inside this step)
-    # can start sibling containers on the host daemon.
-    volumes:
-      - name: docker-sock
-        path: /var/run/docker.sock
+    # NOTE: no explicit volumes block — Cloud Build REJECTS "/var/run/docker.sock" as a
+    # reserved volume path AND already mounts the host Docker socket into every step by
+    # default, so testcontainers can reach the daemon without any declaration.
     env:
       # testcontainers needs the docker CLI/daemon; point Ryuk + the client at the host socket.
       - "DOCKER_HOST=unix:///var/run/docker.sock"
