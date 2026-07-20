@@ -95,7 +95,7 @@ from nestor_pulse_sdk.citations import router as sources_router
 from nestor_pulse_sdk.uploads.api import router as uploads_router  # Plan 10 Task 2
 from nestor_pulse_sdk.auth.middleware import RequestIDMiddleware, auth_exception_handler
 from nestor_pulse_sdk.auth.provider import AuthError
-from nestor_pulse_sdk.auth.deps import set_auth_provider  # noqa: F401
+from nestor_pulse_sdk.auth.deps import set_auth_provider
 
 app.add_middleware(RequestIDMiddleware)
 app.add_exception_handler(AuthError, auth_exception_handler)
