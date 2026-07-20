@@ -135,4 +135,16 @@ async def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # Normal path (migrate Job, CLI): no loop is running.
+        asyncio.run(run_migrations_online())
+    else:
+        # Programmatic invocation from inside an async test: asyncio.run() would
+        # raise "cannot be called from a running event loop", so run the
+        # migration on its own loop in a worker thread.
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            _ex.submit(asyncio.run, run_migrations_online()).result()
