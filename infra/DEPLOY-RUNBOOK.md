@@ -1090,26 +1090,41 @@ gcloud run services describe tribunal-worker --region="$REGION" --project="$GOOG
 > deploy surfaces (intake `nestor-api` AND the Tribunal services) and confirmed no reader remains.
 > If unproven, leave the entry and record it as a documented later cleanup (T-14-15 disposition=accept).
 
-### Step 14.g — Run the two-suite CI denial gate (D-08)
+### Step 14.g — Run the SEAM-02 denial gate (D-08)
 
-Both Cloud Build suites must be GREEN — together they are the SEAM-02 gate. The intake seam
-denial suite runs under `cloudbuild.test.yaml` (real pgvector Postgres, `-m integration`); the
-`tribunal.*` RLS denial runs under `tribunal/cloudbuild.test.yaml` (the FULL testcontainers
-`postgres:15` suite as a non-superuser — the critical subset EXCLUDES RLS, per 14-03-SUMMARY):
+**The gate is `tribunal/cloudbuild.seam-gate.yaml` — and ONLY that build.** It exists precisely
+so the denial tests EXECUTE (it stands up a real `postgres:15`, creates the NON-superuser
+`app_user`/`worker_user` roles, migrates as `app_user`, and runs the seam denial + RLS denial
+suites as a non-superuser). Its anti-false-green check fails the build on ANY skip — a
+silently-skipped denial test can never fake a green gate. THIS build green == the SEAM-02
+denial gate green (proven green as build `25b8f9eb`).
 
 ```bash
-# Intake seam denial (backend/tests/test_tribunal_seam_denial.py).
-# -k selectors (14-03): missing_tenant (=EXACTLY 400) / wrong_sa (403) / unauth (401) / guc_leak.
-gcloud builds submit backend --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
-
-# tribunal.* cross-tenant RLS denial (tribunal/nestor_pulse_sdk/tests/test_seam_rls_denial.py).
-# -k selectors (14-03): cross_tenant_denied / no_tenant_context_denied (non-superuser only).
-gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+# From the repo root. The SEAM-02 denial gate: all seam-gate tests
+# (nestor_pulse_sdk/tests/test_seam_denial.py + test_seam_rls_denial.py) must
+# EXECUTE and pass as non-superuser — skips FAIL the gate.
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.seam-gate.yaml \
+  --project="$GOOGLE_PROJECT"
 ```
 
-> Both configs FAIL the build on a non-zero pytest exit. Record both build ids for the SUMMARY.
-> After both are green, proceed to the Task-3 D-07 live proof (positive server-to-server run +
-> the three negative proofs).
+Optional context run — the full intake suite (NOT part of the gate):
+
+```bash
+# From the repo root — the source MUST be `.` (repo root), never `backend`:
+# cloudbuild.test.yaml step 3 does a repo-root-relative `cd backend`, and
+# .gcloudignore's header requires the repo root as the upload context.
+gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+```
+
+> **Do NOT count the intake build as the seam gate.** `.gcloudignore` excludes `tribunal/` from
+> repo-root uploads, so `nestor_pulse_sdk.*` is not importable in that image and the intake-side
+> copy (`backend/tests/test_tribunal_seam_denial.py`) SKIPS all its seam denial cases by design
+> (D-DEF-1). The FULL `tribunal/cloudbuild.test.yaml` suite is also NOT the gate: it carries
+> pre-existing non-Phase-14 failures (D-DEF-3, deferred to Phase 20 / CLOSE-02).
+>
+> Record the seam-gate build id for the SUMMARY. After it is green, proceed to the Task-3 D-07
+> live proof (positive server-to-server run + the three negative proofs).
 
 ---
 
@@ -1156,5 +1171,5 @@ gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="
 - [ ] Step 14.d — seam env set live: `TRIBUNAL_SERVICE_URL`+`INTAKE_RUNTIME_SA_EMAIL` on tribunal-api, `TRIBUNAL_SERVICE_URL` on nestor-api (same captured URL — the OIDC audience; the `main.tf` edits alone are inert per drift)
 - [ ] Step 14.e — `run.invoker` on tribunal-api bound to ONLY `nestor-run` (D-04 outer gate); any `allUsers` invoker stripped; service stays `--no-allow-unauthenticated` (T-14-12)
 - [ ] Step 14.f — retired-secret cleanup CONSERVATIVE: verified no `IDENTITY_PLATFORM_*` env on the live Tribunal services; NO Secret Manager entry deleted without a no-other-reader check (T-14-15)
-- [ ] Step 14.g — two-suite CI denial gate GREEN: intake `cloudbuild.test.yaml` (seam denial — missing_tenant=400/wrong_sa/unauth/guc_leak) + `tribunal/cloudbuild.test.yaml` (`tribunal.*` RLS, non-superuser) (D-08); both build ids recorded
+- [ ] Step 14.g — SEAM-02 denial gate GREEN via `gcloud builds submit tribunal --config=tribunal/cloudbuild.seam-gate.yaml` (all seam denial + RLS denial tests EXECUTE and pass as non-superuser; skips fail the gate) (D-08); build id recorded. The intake `cloudbuild.test.yaml` run is optional context only — its seam denial copy SKIPS by design (D-DEF-1) and must NOT be counted as the gate
 - [ ] Step 14 (Task 3) — CHECKPOINT: D-07 live proof — one real server-to-server run completed-green with D-05 acting-user attribution + `verify_chain` green, and the three negative proofs (unauthenticated 401/403, wrong-SA, cross-tenant) all reject; ABSORBS the Phase-13 deferred queue-path proof (strike it from Phase 16's backlog)
