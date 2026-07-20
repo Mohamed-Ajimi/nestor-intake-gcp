@@ -42,7 +42,9 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   itself and the poll had stopped, leaving new runs invisible), unusable review output now
   toasts instead of silently dead-ending, and NEW "Heranalyseer" secondary button in the
   awaiting_review banner re-dispatches apply-intake-skill on the same intake (manual redo
-  without a new intake). Judge intake-detail UAT items against THIS chrome.)
+  without a new intake). Rev **00010-ndr** (`frontend:20260720-102153`, commit `c83fdaf`) is the
+  current live build — first deploy carrying `a710e8e` client validation-diff fix; supersedes
+  00009-4r4. Judge intake-detail UAT items against THIS chrome.)
 - **Backend:** https://nestor-api-1055853212188.europe-west1.run.app (`nestor-api` rev **00024-67b**,
   image `backend:20260716-142214`, alembic 0010, CORS + `APP_BASE_URL` wired, `RESEND_API_KEY` live,
   `/readyz` 200. Rev 00024 adds quick 260716-ji9: draft-only intake-invite mail type
@@ -56,11 +58,15 @@ criteria — it inherits each source-phase item verbatim so nothing slips (Pitfa
   Task 2 — the only open work in the phase. After ticking boxes, resume with
   `/gsd-execute-phase 12` (or tell the orchestrating session "parity green" / list failures)
   to write the 12-05 SUMMARY, run phase verification, and close the phase + milestone.
-- **⚠ PENDING DEPLOY (2026-07-16 session end):** commit `a710e8e` (client validation diff —
-  applied question refinements patched into the `research_questions` answer + diff cards show
-  applied text) is on master but NOT live. Rebuild + deploy the frontend BEFORE resuming the
-  validation UAT items. Retest: Heranalyseer → redo review (incl. research questions) → send
-  validation → client link must show ALL changed cards (intakes validated pre-fix won't).
+- **✓ DEPLOYED (resolves 2026-07-16 PENDING DEPLOY):** commit `a710e8e` (client validation diff —
+  applied question refinements patched into the `research_questions` answer by `original_index` +
+  diff cards show applied text) is now LIVE. Frontend rev **00010-ndr** deployed to Cloud Run
+  2026-07-20 (~10:25 CEST), serving 100% traffic; image `frontend:20260720-102153`
+  (Cloud Build 69381baa, 1m49s, SUCCESS); built from commit `c83fdaf` — the first deployed build
+  containing `a710e8e`. Smoke: `/auth/login` HTTP 200, no Supabase signature in the SSR output.
+  The validation UAT items are now testable (no longer blocked on deploy). Retest:
+  Heranalyseer → redo review (incl. research questions) → send validation → client link shows
+  ALL changed cards (intakes validated pre-fix won't).
 - **Session log 2026-07-16:** 8 defects found in UAT rounds 1-3, all fixed same-day (revs
   00004→00009 frontend, 00024 backend — details in the rev block above). Suite run in Cloud
   Build still pending after the ji9 backend change (fold into 11-UAT #6). Open decisions:
@@ -191,6 +197,15 @@ Both runs MUST stop at `decomposed` — `run-research` / Tribunal must NOT be re
 ---
 
 ## Gate status
+
+**2026-07-20 — PARITY ACCEPTED WITH DEFERRALS (operator decision).** The operator ran a partial
+UAT on 2026-07-20 (against live frontend rev **00010-ndr** carrying the `a710e8e` validation-diff
+fix), is satisfied with the current state, and ACCEPTED phase-12 parity **WITH DEFERRALS**. This is
+explicitly NOT full PARITY GREEN. All remaining unchecked checklist items above are DEFERRED until
+after the **Tribunal milestone** — they are to be revisited in/after that milestone. They remain
+listed and unchecked so nothing is lost, and they MUST NOT gate phase-12 closure.
+
+- Gate: [x] PARITY ACCEPTED WITH DEFERRALS (operator decision, 2026-07-20)
 
 **PARITY GREEN** — set to GREEN only when ALL boxes above are ticked (every inherited 07–11 item
 AND both roles of the two-role E2E). Any unchecked box means parity is NOT proven and the cutover
