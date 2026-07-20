@@ -372,8 +372,12 @@ async def _seed_queued_run(sessionmaker) -> dict:
         async with session.begin():
             await session.execute(text("SET search_path TO tribunal"))
             await session.execute(
-                text("INSERT INTO org (id, name) VALUES (:id, :n)"),
-                {"id": str(tenant_id), "n": f"org-{tenant_id}"},
+                text("INSERT INTO org (id, name, slug) VALUES (:id, :n, :s)"),
+                {
+                    "id": str(tenant_id),
+                    "n": f"org-{tenant_id}",
+                    "s": f"org-{tenant_id}",
+                },
             )
             await session.execute(
                 text(
