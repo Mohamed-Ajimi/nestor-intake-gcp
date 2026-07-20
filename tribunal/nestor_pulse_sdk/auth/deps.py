@@ -50,20 +50,24 @@ def set_auth_provider(provider: AuthProvider) -> None:
 
 def get_auth_provider() -> AuthProvider:
     """
-    Lazily resolve the active AuthProvider.
+    Resolve the active AuthProvider installed via `set_auth_provider`.
 
-    Falls back to constructing `IdentityPlatformProvider()` on first use
-    if nobody has called `set_auth_provider`. The lazy import here is
-    deliberate so unit tests that mock the provider never need to have
-    firebase-admin's runtime deps available.
+    Phase 14 (SEAM-01): there is NO silent fallback. The standalone
+    Identity-Platform surface (`IdentityPlatformProvider` / firebase-admin)
+    is retired in the `tribunal/` copy, and the Tribunal API is now a
+    strictly-internal engine — the sole provider is `InternalCallerProvider`,
+    installed once at app startup in `server.py`.
+
+    If nobody has installed a provider, FAIL LOUD rather than falling back
+    to a Firebase path (T-14-05): a missing install is a boot-time
+    configuration error, never a silent auth downgrade.
     """
     if _PROVIDER is None:
-        # Lazy import -- avoids loading firebase_admin in test runs that
-        # only exercise the FakeAuthProvider path.
-        from nestor_pulse_sdk.auth.identity_platform import (  # noqa: WPS433
-            IdentityPlatformProvider,
+        raise RuntimeError(
+            "no AuthProvider installed -- call set_auth_provider() at app "
+            "startup (Phase 14: InternalCallerProvider). The Identity-Platform "
+            "fallback was removed with the standalone auth surface (SEAM-01)."
         )
-        return IdentityPlatformProvider()
     return _PROVIDER
 
 
