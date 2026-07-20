@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: GCS Storage** - Signed-URL upload/download via attached-SA `signBlob`, space-scoped, replacing `nestor-uploads` (completed 2026-07-13)
 - [x] **Phase 10: Notifications** - Notification-only transactional email (no tokens) for invite/validation-ready/results-ready/reminders (completed 2026-07-13)
 - [x] **Phase 11: Internationalization (NL/FR/EN)** - react-i18next with all hardcoded Dutch strings externalized and a working language switcher (completed 2026-07-14)
-- [ ] **Phase 12: Frontend Deploy, Cutover & Supabase Retirement** - SSR frontend on Cloud Run, end-to-end validated for both roles, Supabase paused then retired
+- [x] **Phase 12: Frontend Deploy, Cutover & Supabase Retirement** - SSR frontend on Cloud Run, end-to-end validated for both roles, Supabase paused then retired (completed 2026-07-20)
 
 ## Phase Details
 
@@ -233,7 +233,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   - [x] 12-02-PLAN.md -- Frontend containerization: node-server preset + Dockerfile + cloudbuild + hide sales nav (Wave 2)
   - [x] 12-03-PLAN.md -- D-12 residual closure: sources-read endpoint + transcribe CTA wiring (Wave 1)
   - [x] 12-04-PLAN.md -- IaC frontend service by construction + Phase-12 DEPLOY-RUNBOOK (Wave 1)
-  - [ ] 12-05-PLAN.md -- Live deploy + two-role parity gate execution (checkpoint) (Wave 3)
+  - [x] 12-05-PLAN.md -- Live deploy + two-role parity gate execution (checkpoint) (Wave 3)
 **UI hint**: yes
 
 ## Progress
@@ -254,4 +254,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. GCS Storage | 4/4 | Complete   | 2026-07-13 |
 | 10. Notifications | 5/5 | Complete    | 2026-07-13 |
 | 11. Internationalization (NL/FR/EN) | 9/9 | Complete    | 2026-07-14 |
-| 12. Frontend Deploy, Cutover & Supabase Retirement | 4/5 | In Progress|  |
+| 12. Frontend Deploy, Cutover & Supabase Retirement | 5/5 | Complete    | 2026-07-20 |

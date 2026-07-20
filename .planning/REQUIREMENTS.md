@@ -13,7 +13,7 @@ Requirements for the cutover milestone. Each maps to roadmap phases. "Done" bar 
 - [x] **INFRA-02**: The full `nestor` schema is created via Alembic migrations on an empty database, including `findings`/`deliverables` tables (left empty as Tribunal handoff contract)
 - [ ] **INFRA-03**: A GCS bucket replaces `nestor-uploads`; backend has IAM permission to mint signed URLs via `signBlob`
 - [x] **INFRA-04**: The FastAPI backend is deployed and serving on Cloud Run gen2
-- [ ] **INFRA-05**: The TanStack Start SSR frontend is deployed on Cloud Run (container), pointed at the new backend
+- [x] **INFRA-05**: The TanStack Start SSR frontend is deployed on Cloud Run (container), pointed at the new backend
 
 ### Backend & API Layer
 
@@ -82,7 +82,7 @@ Requirements for the cutover milestone. Each maps to roadmap phases. "Done" bar 
 - [x] **QA-02**: A CI check fails the build on any `USING (true)` / `WITH CHECK (true)` in a migration
 - [ ] **QA-03**: Characterization tests cover the phase machine; contract tests cover the ported AI endpoints
 - [ ] **QA-04**: A basic audit trail logs security-relevant events (auth, invitations, role/space assignment, downloads, status transitions) with actor + space
-- [ ] **QA-05**: The end-to-end flow is validated on GCP for both superadmin and user roles, and the legacy Supabase project is retired (paused/recoverable until parity is green, then decommissioned)
+- [x] **QA-05**: The end-to-end flow is validated on GCP for both superadmin and user roles, and the legacy Supabase project is retired (paused/recoverable until parity is green, then decommissioned)
 
 ## v2 Requirements
 
@@ -120,7 +120,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | INFRA-02 | Phase 1 | Complete |
 | INFRA-03 | Phase 9 | Pending |
 | INFRA-04 | Phase 2 | Complete |
-| INFRA-05 | Phase 12 | Pending |
+| INFRA-05 | Phase 12 | Complete |
 | API-01 | Phase 2 | Complete |
 | API-02 | Phase 4 | Pending |
 | API-03 | Phase 6 | Pending |
@@ -159,7 +159,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | QA-02 | Phase 1 | Complete |
 | QA-03 | Phase 6 | Pending |
 | QA-04 | Phase 5 | Pending |
-| QA-05 | Phase 12 | Pending |
+| QA-05 | Phase 12 | Complete |
 
 **Coverage:**
 - v1 requirements: 44 total
