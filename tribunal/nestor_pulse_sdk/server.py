@@ -16,6 +16,7 @@ Both coexist per D-01 (parallel pipeline period through Phase 1 A/B).
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -109,7 +110,6 @@ if LOCAL_DEV_AUTH:
     from nestor_pulse_sdk.auth.local_dev import dev_claims
 
     app.dependency_overrides[get_current_user] = dev_claims
-    import warnings
     warnings.warn(
         "LOCAL_DEV_AUTH=1: auth is bypassed with a fixed dev identity. "
         "NEVER enable this in a deployed environment.",
@@ -128,10 +128,29 @@ else:
         get_internal_claims,
     )
 
-    set_auth_provider(InternalCallerProvider(
-        service_url=os.environ["TRIBUNAL_SERVICE_URL"],
-        allowed_caller_email=os.environ["INTAKE_RUNTIME_SA_EMAIL"],
-    ))
-    app.dependency_overrides[get_current_user] = get_internal_claims
+    # Read the two NON-secret seam env vars WITHOUT crashing at import when they
+    # are absent (e.g. the CI test image, which imports `server` to exercise the
+    # health/RLS suites and never sets production env). Fail-CLOSED at request
+    # time rather than at collection: if either is unset we do NOT install the
+    # provider, so get_auth_provider() raises the deps.py RuntimeError on any real
+    # request (T-14-05) instead of masking a mis-provisioned deploy with a 200.
+    _seam_service_url = os.environ.get("TRIBUNAL_SERVICE_URL")
+    _seam_caller_email = os.environ.get("INTAKE_RUNTIME_SA_EMAIL")
+    if _seam_service_url and _seam_caller_email:
+        set_auth_provider(InternalCallerProvider(
+            service_url=_seam_service_url,
+            allowed_caller_email=_seam_caller_email,
+        ))
+        app.dependency_overrides[get_current_user] = get_internal_claims
+    else:
+        # No seam env → provider intentionally left uninstalled. Any authenticated
+        # route will 500 via get_auth_provider()'s RuntimeError (fail-closed). The
+        # unauthenticated health routes (/healthz, /readyz) still import + serve.
+        warnings.warn(
+            "TRIBUNAL_SERVICE_URL / INTAKE_RUNTIME_SA_EMAIL unset in deployed mode: "
+            "the InternalCaller seam provider is NOT installed. Authenticated routes "
+            "will fail closed. Set both env vars on the tribunal-api service.",
+            stacklevel=2,
+        )
 
 # Run with: uvicorn nestor_pulse_sdk.server:app --host 0.0.0.0 --port 8081
