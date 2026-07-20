@@ -91,15 +91,21 @@ app.include_router(sources_router)
 # Plan 10: GCS presigned-URL + Cloud Function extract proxy (replaces AWS Lambda path)
 app.include_router(uploads_router)
 
-# NOTE (Phase 14 Task 3): the InternalCallerProvider install + the orgs /ensure
-# seam router include are wired here in Task 3 of this plan.
+# Phase 14 (SEAM-02): the internal-seam provisioning endpoints
+# (POST /api/orgs/ensure + POST /api/projects/ensure) replace the retired
+# user-facing /api/orgs/bootstrap. Driven ONLY by the intake backend.
+from nestor_pulse_sdk.orgs import router as orgs_router
+app.include_router(orgs_router)
+
+# Phase 14 (SEAM-01): install the auth provider. get_current_user is overridden
+# so every route (incl. get_db_session's RLS SET LOCAL) reads verified claims.
+from nestor_pulse_sdk.auth.deps import get_current_user
 
 if LOCAL_DEV_AUTH:
     # Local clean-room: replace token verification with a fixed dev identity.
     # The override propagates into get_db_session (sets app.tenant_id to the
     # dev tenant) and every route depending on the current user. Real DB,
     # real RLS context, real engines -- just no service-to-service seam required.
-    from nestor_pulse_sdk.auth.deps import get_current_user
     from nestor_pulse_sdk.auth.local_dev import dev_claims
 
     app.dependency_overrides[get_current_user] = dev_claims
@@ -109,5 +115,23 @@ if LOCAL_DEV_AUTH:
         "NEVER enable this in a deployed environment.",
         stacklevel=2,
     )
+else:
+    # Deployed mode: the intake backend is the sole authenticated caller.
+    # InternalCallerProvider re-verifies the Google-signed OIDC token (aud ==
+    # this Tribunal service URL, caller email == intake runtime SA -- D-04 inner
+    # gate), and get_internal_claims threads the tenant + acting-user headers
+    # into the frozen AuthClaims shape (D-05). Both env vars are NON-secret
+    # (a service URL + an SA email) -- Plan 04 sets them on the tribunal-api
+    # service: TRIBUNAL_SERVICE_URL, INTAKE_RUNTIME_SA_EMAIL.
+    from nestor_pulse_sdk.auth.internal_caller import (
+        InternalCallerProvider,
+        get_internal_claims,
+    )
+
+    set_auth_provider(InternalCallerProvider(
+        service_url=os.environ["TRIBUNAL_SERVICE_URL"],
+        allowed_caller_email=os.environ["INTAKE_RUNTIME_SA_EMAIL"],
+    ))
+    app.dependency_overrides[get_current_user] = get_internal_claims
 
 # Run with: uvicorn nestor_pulse_sdk.server:app --host 0.0.0.0 --port 8081
