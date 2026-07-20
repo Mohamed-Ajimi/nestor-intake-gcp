@@ -92,8 +92,8 @@ trail intact.
   2. Every intake space maps 1:1 onto a Tribunal org/project (identity `space_id` → `tenant_id`, lazy project provisioning), so each run is space-scoped from trigger to storage.
   3. The CI-gated cross-tenant denial suite is extended to cover Tribunal tables and passes (GUC-name mismatch cannot leak across the HTTP boundary).
 **Plans**: 4 plans
-  - [ ] 14-01-PLAN.md — Retire Tribunal auth surface + install InternalCallerProvider; salvage ensure_org/ensure_project + /ensure endpoints (SEAM-01/02)
-  - [ ] 14-02-PLAN.md — Intake seam client: OIDC minting + ensure_org/ensure_project HTTP client (SEAM-02)
+  - [x] 14-01-PLAN.md — Retire Tribunal auth surface + install InternalCallerProvider; salvage ensure_org/ensure_project + /ensure endpoints (SEAM-01/02)
+  - [x] 14-02-PLAN.md — Intake seam client: OIDC minting + ensure_org/ensure_project HTTP client (SEAM-02)
   - [ ] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
   - [ ] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
@@ -172,7 +172,7 @@ Phases execute in numeric order: 13 → 14 → 15 → 16 → 17 → 18 → 19 �
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 14. Auth Retirement + Integration Seam | v1.1 | 0/TBD | Not started | - |
+| 14. Auth Retirement + Integration Seam | v1.1 | 2/4 | In Progress|  |
 | 15. Engine Enhancements | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 0/TBD | Not started | - |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 0/TBD | Not started | - |
