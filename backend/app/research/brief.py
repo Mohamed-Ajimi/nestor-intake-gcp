@@ -60,8 +60,11 @@ _GOALS_FIELD_KEYS = ("goals", "goal", "doelen", "doel", "objectives", "objective
 _CLIENT_QUESTIONS_KEYS = ("research_questions", "questions")
 _PROPOSED_QUESTIONS_KEY = "extra_questions_proposed"
 
-#: Bound on the context-pack excerpt folded into the brief (characters).
-_CONTEXT_EXCERPT_CHARS = 4000
+#: Label under which the FULL context pack is folded into the brief. The engine's
+#: intake stage is a DELEGATOR now (quick task 260721-twy) — it never re-judges an
+#: operator-validated brief as vague — so the brief carries the full context pack
+#: verbatim under this header (no truncation, no clarification framing).
+_CONTEXT_PACK_HEADER = "[CONTEXT PACK]"
 
 
 def _answers_map(intake: Any) -> dict[str, Any]:
@@ -231,12 +234,22 @@ def assemble_brief(
        blank);
     2. an ``Onderzoeksvragen:`` header followed by the research questions
        ENUMERATED in ascending ``priority`` order (``1. ...`` / ``2. ...``);
-    3. the :func:`derive_report_hint` PROSE tail.
+    3. the :func:`derive_report_hint` PROSE tail;
+    4. a labeled :data:`_CONTEXT_PACK_HEADER` Context section carrying the FULL
+       ``context_pack_text`` verbatim (untruncated) — or, when no context pack is
+       supplied, a compact entity-bits fallback (title / sector / goals) under the
+       same header.
 
     The returned brief NEVER contains :data:`INTERACTIVE_REPORT_MARKER` — the seam
     run cannot opt into the interactive-report pause gate (D-01b). Enumerating the
     concrete questions keeps the brief non-vague so the composition pause gate does
     not fire either (T-16-04).
+
+    There is no force-proceed / clarification-answers machinery here anymore
+    (quick task 260721-twy): the engine's intake stage is a delegator that always
+    produces a research plan, so the brief simply carries the full validated
+    context instead of clarification-shaped filler. The empty-questions 422 guard
+    lives in the trigger route (:func:`validated_questions`) and is untouched.
     """
     # 1) Opening line — summary or a deterministic project-title fallback.
     summary = getattr(decomposition, "summary", None)
@@ -262,32 +275,24 @@ def assemble_brief(
 
     sections = [opening, "", *question_lines, "", hint]
 
-    # 4) Force-proceed contract (operator decision 2026-07-21): intake-originated
-    # briefs are ALREADY human-validated — the entire pre-research flow exists to
-    # produce vetted questions — so the engine's adaptive-intake must never
-    # re-judge them as vague and park the run. The engine force-proceeds when the
-    # brief carries >= 2 ``[CLARIFICATION ANSWERS]`` sections (TribunalPipeline
-    # ``_CLAR_CAP``); both sections here carry REAL intake substance, not filler.
-    if ordered:
-        context_section = (context_pack_text or "").strip()[:_CONTEXT_EXCERPT_CHARS]
-        if not context_section:
-            answers = _answers_map(intake)
-            entity_bits = [
-                _project_title(intake),
-                _first_nonempty(answers, _SECTOR_FIELD_KEYS) or "",
-                _first_nonempty(answers, _GOALS_FIELD_KEYS) or "",
-            ]
-            context_section = " — ".join(b for b in entity_bits if b)
-        sections += [
-            "",
-            "[CLARIFICATION ANSWERS] — context uit de gevalideerde intake:",
-            context_section,
-            "",
-            "[CLARIFICATION ANSWERS] — validatie:",
-            "Bovenstaande onderzoeksvragen en context zijn tijdens de intake-flow "
-            "door een operator gevalideerd. Geen verdere verduidelijking nodig; "
-            "start het onderzoek met deze vragen als focus.",
+    # 4) Context section (quick task 260721-twy): fold the FULL context pack into
+    # the brief verbatim under a labeled header — no truncation, no clarification
+    # framing. The engine's intake stage is a delegator that always produces a
+    # research plan, so it consumes this context to write self-contained research
+    # assignments rather than re-judging the brief as vague. When no context pack
+    # is supplied, fall back to a compact entity-bits line under the SAME header.
+    context_section = (context_pack_text or "").strip()
+    if not context_section:
+        answers = _answers_map(intake)
+        entity_bits = [
+            _project_title(intake),
+            _first_nonempty(answers, _SECTOR_FIELD_KEYS) or "",
+            _first_nonempty(answers, _GOALS_FIELD_KEYS) or "",
         ]
+        context_section = " — ".join(b for b in entity_bits if b)
+
+    if context_section:
+        sections += ["", _CONTEXT_PACK_HEADER, context_section]
 
     return "\n".join(sections)
 

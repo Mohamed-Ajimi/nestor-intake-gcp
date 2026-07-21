@@ -131,11 +131,19 @@ def test_report_hint_is_appended_to_brief():
 
 
 # ---------------------------------------------------------------------------
-# Answers-derived questions + force-proceed sections (live finding 2026-07-21):
+# Answers-derived questions + Context section (quick task 260721-twy):
 # the GCP flow stores validated questions in the intake ANSWERS, not in the
-# legacy research_questions table — and the engine force-proceeds only when the
-# brief carries >= 2 [CLARIFICATION ANSWERS] sections (TribunalPipeline _CLAR_CAP).
+# legacy research_questions table. The brief now folds the FULL context pack in
+# under a [CONTEXT PACK] header (no truncation) and carries NO [CLARIFICATION
+# ANSWERS] force-proceed sections — the engine's intake stage is a delegator that
+# always produces a research plan, so the clarification-loop machinery is gone.
 # ---------------------------------------------------------------------------
+
+# The context-pack section header the brief folds the full context under.
+_CONTEXT_PACK_HEADER = "[CONTEXT PACK]"
+
+# The removed force-proceed / clarification marker — must NEVER reappear.
+_CLARIFICATION_MARKER = "[CLARIFICATION ANSWERS]"
 
 
 def test_questions_fall_back_to_intake_answers():
@@ -158,21 +166,45 @@ def test_questions_fall_back_to_intake_answers():
     assert _INTERACTIVE_MARKER not in result
 
 
-def test_force_proceed_sections_present_with_questions():
-    """A question-bearing brief carries >= 2 [CLARIFICATION ANSWERS] sections."""
+def test_full_context_pack_folded_untruncated():
+    """The FULL context pack text is folded into the brief under [CONTEXT PACK], untruncated.
+
+    A >4000-char context pack must appear in full — the old 4000-char excerpt cap
+    (``_CONTEXT_EXCERPT_CHARS``) is gone. A sentinel near the very END of the long
+    context proves nothing was truncated. No clarification markers appear.
+    """
     intake = _intake(answers={"questions": [{"text": "Eén concrete vraag."}]})
-    result = brief_mod.assemble_brief(
-        intake, None, [], context_pack_text="Bedrijf: Acme NV. Markt: logistiek Benelux."
-    )
-    assert result.count("[CLARIFICATION ANSWERS]") >= 2
-    assert "Acme NV" in result
+    # Build a context pack well over 4000 chars with a distinctive end sentinel.
+    long_body = "Acme NV opereert in logistiek Benelux. " * 200  # ~7800 chars
+    end_sentinel = "ZZZ_EINDE_VAN_DE_CONTEXT_PACK_MARKER"
+    context = long_body + end_sentinel
+
+    result = brief_mod.assemble_brief(intake, None, [], context_pack_text=context)
+
+    # The labeled Context section is present and carries the FULL text (end sentinel
+    # survives -> nothing truncated at 4000 chars).
+    assert _CONTEXT_PACK_HEADER in result
+    assert end_sentinel in result
+    assert "Acme NV opereert in logistiek Benelux." in result
+    # No leftover clarification / force-proceed machinery.
+    assert _CLARIFICATION_MARKER not in result
     assert _INTERACTIVE_MARKER not in result
 
 
-def test_no_questions_yields_no_force_proceed_sections():
-    """An empty brief must NOT carry force-proceed sections (the 422 guard's domain)."""
-    result = brief_mod.assemble_brief(_intake(), None, [])
-    assert "[CLARIFICATION ANSWERS]" not in result
+def test_no_clarification_marker_ever_present():
+    """[CLARIFICATION ANSWERS] must never appear — with or without questions."""
+    # With questions + a context pack.
+    with_q = brief_mod.assemble_brief(
+        _intake(answers={"questions": [{"text": "Eén concrete vraag."}]}),
+        None,
+        [],
+        context_pack_text="Bedrijf: Acme NV. Markt: logistiek Benelux.",
+    )
+    assert _CLARIFICATION_MARKER not in with_q
+
+    # Without any questions.
+    without_q = brief_mod.assemble_brief(_intake(), None, [])
+    assert _CLARIFICATION_MARKER not in without_q
 
 
 def test_validated_questions_prefers_db_rows_over_answers():
