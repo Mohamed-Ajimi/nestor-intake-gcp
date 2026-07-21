@@ -22,15 +22,12 @@ Return dict shape:
         "verification_report": dict,     # AUDIT-ONLY (no UI change in Phase 1)
     }
 
-Vague-brief early return:
-    {
-        "output_text":            str,   # summary of clarifying questions
-        "needs_clarification":    True,
-        "clarifying_questions":   list[str],
-        "claim_count":            0,
-        "verdict":                None,
-        "verification_report":    {},
-    }
+Intake is a DELEGATOR (quick task 260721-twy): the brief is operator-validated, so
+adaptive_intake always produces a research plan and never asks clarifying questions.
+The old vague-brief clarification-cap / force-proceed / early-return machinery is
+gone. The ``needs_clarification`` / ``clarifying_questions`` keys survive only as
+vestigial shape (the ``/answer`` endpoint + worker parking still exist), never
+populated by this pipeline.
 
 T-15-03 mitigation: dispatch_runner fails safe — any NESTOR_SDK_ORCHESTRATOR value
 other than exactly 'tribunal' returns the thin SDKPipeline control; this pipeline
@@ -179,63 +176,19 @@ class TribunalPipeline:
             )
 
         # ------------------------------------------------------------------
-        # Stage 1: Adaptive intake — sharpen brief or request clarification
+        # Stage 1: Adaptive intake — DELEGATE (always produce a research plan)
         # ------------------------------------------------------------------
+        # The brief is operator-validated (the intake backend is the only caller),
+        # so adaptive_intake is a delegator now: it always returns a real plan and
+        # never asks clarifying questions. The old clarification-cap / force-proceed
+        # / early-return machinery is gone (quick task 260721-twy).
         await set_stage(run_id, tenant_id, "intake")
-        # Clarification cap: allow at most 2 rounds of questions, then force research
-        # with whatever we have. Round count = number of answer blocks the user has
-        # added so far (0 = original brief, 1 = after one answer, ...).
-        _CLAR_CAP = 2
-        clar_rounds = brief.count("[CLARIFICATION ANSWERS]")
-        force_proceed = clar_rounds >= _CLAR_CAP
         mission_brief = await adaptive_intake(
             brief=brief,
             audited=audited,
             run_id=run_id,
             tenant_id=tenant_id,
-            allow_clarification=not force_proceed,
         )
-
-        if mission_brief.get("needs_clarification") and force_proceed:
-            # Cap reached but the model still asked. Proceed anyway with a minimal
-            # single-focus mission_brief rather than ever asking a 3rd time.
-            log.warning(
-                "tribunal_pipeline: clarification cap (%d) reached -> forcing proceed",
-                _CLAR_CAP,
-            )
-            base = brief.split("[CLARIFICATION ANSWERS]")[0].strip()
-            mission_brief = {
-                "deep_research_prompt": (base or brief)[:500],
-                "language": "",  # not detected on the forced-proceed path -> infer downstream
-                "focus_areas": [
-                    {"focus_area": "Overall research question", "taxonomy": "D", "stakes": "high"}
-                ],
-                "needs_clarification": False,
-                "clarifying_questions": [],
-            }
-
-        if mission_brief.get("needs_clarification"):
-            questions = mission_brief.get("clarifying_questions", [])
-            # Surface the clarification ask in the UI before returning.
-            await set_stage(
-                run_id, tenant_id, "intake", detail=_intake_detail(mission_brief)
-            )
-            log.info(
-                "tribunal_pipeline: vague brief -> early return with %d clarifying questions",
-                len(questions),
-            )
-            return {
-                "output_text": (
-                    "The brief requires clarification before research can begin. "
-                    "Please answer the following questions:\n\n"
-                    + "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
-                ),
-                "needs_clarification": True,
-                "clarifying_questions": questions,
-                "claim_count": 0,
-                "verdict": None,
-                "verification_report": {},
-            }
 
         # Surface the adaptive-intake RESULT (focus areas + taxonomy + stakes) so it
         # stays visible for the whole run and afterwards — the research plan the

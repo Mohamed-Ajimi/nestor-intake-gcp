@@ -1,19 +1,21 @@
-"""Tests for tribunal package: adaptive_intake + taxonomy.
+"""Tests for tribunal package: adaptive_intake DELEGATOR + taxonomy.
 
-Plan 01-13 Task 1 — TDD RED/GREEN cycle.
+Quick task 260721-twy — intake is now a delegator (no vague/clarification path).
 
 All tests use a FAKE audited client — no real LLM, no Cloud SQL, no network.
-The fake returns pre-canned LLM responses so we can drive both the
-clear-brief and vague-brief paths deterministically.
+The fake returns pre-canned Anthropic-shaped responses so we can drive the
+clear-brief delegator path deterministically.
 
 Coverage:
-  1. clear-brief path: needs_clarification=False, >=1 stakes-tagged focus area,
-     taxonomy in {A,B,C,D}, stakes in {low,med,high}.
-  2. vague-brief path: needs_clarification=True, 2-3 clarifying questions emitted,
-     no fabricated focus_areas.
-  3. backward-compat: every focus_area dict has a 'focus_area' str key so
+  1. clear-brief path: needs_clarification always False, >=1 stakes-tagged focus
+     area, taxonomy in {A,B,C,D}, stakes in {low,med,high}.
+  2. audited egress: the call goes through anthropic_messages (NOT gemini_generate),
+     model == "claude-sonnet-4-6".
+  3. multi-line fenced RESEARCH_PROMPT: RESEARCH_PROMPT_START/END blocks parse into
+     research_prompt strings with inner newlines preserved.
+  4. backward-compat: every focus_area dict has a 'focus_area' str key so
      extract_focus_areas() from synthesis.steps returns non-empty strings.
-  4. taxonomy constants: TAXONOMY and STAKES_TIERS are importable from
+  5. taxonomy constants: TAXONOMY and STAKES_TIERS are importable from
      nestor_pulse_sdk.pipeline.tribunal.taxonomy.
 """
 from __future__ import annotations
@@ -29,14 +31,27 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import extract_focus_areas
 
 
 # ---------------------------------------------------------------------------
-# Fake LLM response objects
+# Fake Anthropic response objects
 # ---------------------------------------------------------------------------
 
-class _FakeResponse:
-    """Minimal object that mirrors the google-genai response shape."""
+class _FakeTextBlock:
+    """A single Anthropic content block of type 'text'."""
 
     def __init__(self, text: str) -> None:
+        self.type = "text"
         self.text = text
+
+
+class _FakeAnthropicResponse:
+    """Minimal object mirroring the Anthropic Messages response shape.
+
+    ``.content`` is a list of blocks; the delegator joins the ``.text`` of the
+    text-typed blocks.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.content = [_FakeTextBlock(text)]
+        self.stop_reason = "end_turn"
 
 
 # ---------------------------------------------------------------------------
@@ -50,11 +65,11 @@ class FakeAudited:
         self._canned_text = canned_text
         self.calls: list[dict] = []
 
-    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+    async def anthropic_messages(self, *, run_id, tenant_id, model, messages, **kwargs):
         self.calls.append(
-            {"run_id": run_id, "model": model, "contents": contents, "kwargs": kwargs}
+            {"run_id": run_id, "model": model, "messages": messages, "kwargs": kwargs}
         )
-        return _FakeResponse(self._canned_text)
+        return _FakeAnthropicResponse(self._canned_text)
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +83,6 @@ DEEP_RESEARCH_PROMPT: Analyse Cronos Group's competitive positioning in the Belg
 FOCUS_AREA: Belgian IT market share trends | TAXONOMY: C | STAKES: high
 FOCUS_AREA: Key competitor strategies | TAXONOMY: B | STAKES: high
 FOCUS_AREA: Emerging tech adoption 2025-2026 | TAXONOMY: A | STAKES: med
-"""
-
-# Vague-brief response: underspecified → questions, no focus_areas
-VAGUE_BRIEF_RESPONSE = """\
-BRIEF_VAGUE
-CLARIFYING_QUESTION: Which specific geographic markets or client segments are most important to your analysis?
-CLARIFYING_QUESTION: Are you focused on a particular technology domain (cloud, AI, cybersecurity) or the full-service portfolio?
-CLARIFYING_QUESTION: What is the primary use case for this research — competitive bid, strategic planning, or M&A due diligence?
 """
 
 
@@ -171,66 +178,15 @@ class TestClearBrief:
             "Clear brief should not return clarifying_questions"
         )
 
-    def test_audited_gemini_generate_called_once(self):
+    def test_audited_anthropic_messages_called_once(self):
+        """The single LLM egress is anthropic_messages on claude-sonnet-4-6."""
         self._call()
         assert len(self.audited.calls) == 1
         call = self.audited.calls[0]
-        assert call["model"] == "gemini-2.5-flash"
-
-    def test_thinking_disabled_in_kwargs(self):
-        """The call must pass config that disables thinking."""
-        self._call()
-        call = self.audited.calls[0]
-        # The config kwarg must be present (passed via **kwargs to gemini_generate)
-        assert "config" in call["kwargs"], (
-            "gemini_generate must receive a 'config' kwarg to disable thinking"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Vague-brief path
-# ---------------------------------------------------------------------------
-
-class TestVagueBrief:
-    def setup_method(self):
-        self.run_id = uuid.uuid4()
-        self.tenant_id = uuid.uuid4()
-        self.audited = FakeAudited(VAGUE_BRIEF_RESPONSE)
-        self.brief = "Tell me about technology."  # underspecified
-
-    def _call(self):
-        return _run(
-            adaptive_intake(
-                brief=self.brief,
-                audited=self.audited,
-                run_id=self.run_id,
-                tenant_id=self.tenant_id,
-            )
-        )
-
-    def test_needs_clarification_true(self):
-        result = self._call()
-        assert result["needs_clarification"] is True
-
-    def test_has_clarifying_questions(self):
-        result = self._call()
-        qs = result.get("clarifying_questions") or []
-        assert 2 <= len(qs) <= 3, (
-            f"Expected 2-3 clarifying questions, got {len(qs)}: {qs}"
-        )
-
-    def test_clarifying_questions_are_strings(self):
-        result = self._call()
-        for q in result["clarifying_questions"]:
-            assert isinstance(q, str)
-            assert len(q) >= 10
-
-    def test_no_fabricated_focus_areas(self):
-        result = self._call()
-        fas = result.get("focus_areas") or []
-        assert len(fas) == 0, (
-            f"Vague-brief path must not fabricate focus_areas; got: {fas}"
-        )
+        assert call["model"] == "claude-sonnet-4-6"
+        # anthropic_messages receives a messages list, not gemini `contents`.
+        assert isinstance(call["messages"], list)
+        assert call["messages"][0]["role"] == "user"
 
 
 # ---------------------------------------------------------------------------
@@ -302,10 +258,13 @@ class FakeAuditedSequence:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
-    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+    async def anthropic_messages(self, *, run_id, tenant_id, model, messages, **kwargs):
+        # The prompt text lives in the first user block — surface it as `contents`
+        # so coverage-retry assertions can inspect it uniformly.
+        contents = messages[0]["content"][0]["text"] if messages else ""
         self.calls.append({"model": model, "contents": contents})
         idx = min(len(self.calls) - 1, len(self._responses) - 1)
-        return _FakeResponse(self._responses[idx])
+        return _FakeAnthropicResponse(self._responses[idx])
 
 
 class TestQuestionDetection:
@@ -373,34 +332,30 @@ class TestCoverageRetry:
         assert len(audited.calls) == 2
         assert len(result["focus_areas"]) == 4  # best available, exactly one retry
 
-    def test_vague_brief_skips_coverage_check(self):
-        audited = FakeAuditedSequence([VAGUE_BRIEF_RESPONSE])
-        result = _run(
-            adaptive_intake(
-                brief=FIVE_QUESTION_BRIEF,
-                audited=audited,
-                run_id=uuid.uuid4(),
-                tenant_id=uuid.uuid4(),
-            )
-        )
-        assert result["needs_clarification"] is True
-        assert len(audited.calls) == 1
-
 
 # ---------------------------------------------------------------------------
 # Per-angle RESEARCH_PROMPT (plan item 1.1 — answer-enriched, scoped queries)
 # ---------------------------------------------------------------------------
 
-# Clear-brief response that includes a self-contained RESEARCH_PROMPT after each
-# FOCUS_AREA. The labels stay verbatim (coverage key); the research_prompt is the
-# rewritten, answer-enriched brief the researcher actually receives.
+# Clear-brief response that includes a self-contained, MULTI-LINE fenced
+# RESEARCH_PROMPT block after each FOCUS_AREA. The labels stay verbatim (coverage
+# key); the research_prompt is the rewritten, answer-enriched multi-line brief the
+# researcher actually receives.
 CLEAR_BRIEF_WITH_RESEARCH_PROMPTS = """\
 BRIEF_CLEAR
 DEEP_RESEARCH_PROMPT: Cronos Group Belgian IT services competitive positioning, 2025-2026.
 FOCUS_AREA: Belgian IT market share trends | TAXONOMY: C | STAKES: high
-RESEARCH_PROMPT: Research Belgian IT services market share trends for 2025-2026, focused on cloud and managed services for mid-market clients (per the client's clarification). Research ONLY market share dynamics; competitor strategy is covered separately.
+RESEARCH_PROMPT_START
+Entity: Cronos Group. Geography: Belgium. Time frame: 2025-2026.
+Research Belgian IT services market share trends, focused on cloud and managed
+services for mid-market clients (per the validated context).
+Research ONLY market share dynamics; competitor strategy is covered separately.
+RESEARCH_PROMPT_END
 FOCUS_AREA: Key competitor strategies | TAXONOMY: B | STAKES: med
-RESEARCH_PROMPT: Research the go-to-market and pricing strategies of Cronos Group's top Belgian competitors in IT services. Research ONLY competitor strategy.
+RESEARCH_PROMPT_START
+Research the go-to-market and pricing strategies of Cronos Group's top Belgian
+competitors in IT services. Research ONLY competitor strategy.
+RESEARCH_PROMPT_END
 """
 
 
@@ -422,9 +377,19 @@ class TestResearchPromptParsing:
     def test_research_prompt_attached_to_each_focus_area(self):
         fas = self._call()["focus_areas"]
         assert len(fas) == 2
-        assert fas[0]["research_prompt"].startswith("Research Belgian IT services market share")
+        assert fas[0]["research_prompt"].startswith("Entity: Cronos Group.")
         assert "mid-market" in fas[0]["research_prompt"]
         assert fas[1]["research_prompt"].startswith("Research the go-to-market")
+
+    def test_multi_line_research_prompt_preserves_newlines(self):
+        """The fenced block is captured verbatim — inner newlines survive."""
+        fas = self._call()["focus_areas"]
+        # The first block spans several lines; the joined block keeps the newlines.
+        assert "\n" in fas[0]["research_prompt"]
+        assert "Research ONLY market share dynamics" in fas[0]["research_prompt"]
+        # The fence markers themselves are stripped out.
+        assert "RESEARCH_PROMPT_START" not in fas[0]["research_prompt"]
+        assert "RESEARCH_PROMPT_END" not in fas[0]["research_prompt"]
 
     def test_label_stays_verbatim_not_overwritten_by_prompt(self):
         fas = self._call()["focus_areas"]
@@ -433,7 +398,7 @@ class TestResearchPromptParsing:
         assert fas[0]["research_prompt"] != fas[0]["focus_area"]
 
     def test_missing_research_prompt_defaults_to_empty(self):
-        # The legacy response (no RESEARCH_PROMPT lines) must still parse, with
+        # A response with no RESEARCH_PROMPT block must still parse, with
         # research_prompt == "" so divide() falls back gracefully.
         audited = FakeAudited(CLEAR_BRIEF_RESPONSE)
         fas = _run(
@@ -507,9 +472,13 @@ BRIEF_CLEAR
 LANGUAGE: Dutch
 DEEP_RESEARCH_PROMPT: Onderzoek de concurrentiepositie van Cronos Group in 2026.
 FOCUS_AREA: Marktaandeel-trends | TAXONOMY: C | STAKES: high
-RESEARCH_PROMPT: Onderzoek de marktaandeel-trends. Onderzoek ALLEEN deze vraag.
+RESEARCH_PROMPT_START
+Onderzoek de marktaandeel-trends. Onderzoek ALLEEN deze vraag.
+RESEARCH_PROMPT_END
 FOCUS_AREA: Concurrentstrategieën | TAXONOMY: B | STAKES: high
-RESEARCH_PROMPT: Onderzoek de concurrentstrategieën. Onderzoek ALLEEN deze vraag.
+RESEARCH_PROMPT_START
+Onderzoek de concurrentstrategieën. Onderzoek ALLEEN deze vraag.
+RESEARCH_PROMPT_END
 """
 
 
