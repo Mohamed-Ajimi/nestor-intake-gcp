@@ -292,9 +292,13 @@ def run_poll_driver(
         tribunal_client.ensure_org(**seam_kwargs)
         project_id = tribunal_client.ensure_project(**seam_kwargs)
 
-        # D-04 deterministic idempotency key: a retried trigger returns the existing
-        # run (no double-charge); the 3-attempt cap is natural.
-        idem = str(uuid.uuid5(uuid.UUID(str(intake_id)), f"attempt-{attempt}"))
+        # D-04 deterministic idempotency key, keyed on the MIRROR ROW id (not the
+        # attempt number — live finding 2026-07-21): an attempt-number key survives
+        # row cleanup, so a replayed attempt number idempotently returns a DEAD
+        # engine run from a previous cycle (the burned-key insta-fail loop). The
+        # research_run_id is unique per trigger and stable across create_run HTTP
+        # retries within this driver — the double-charge protection D-04 wants.
+        idem = str(uuid.uuid5(uuid.UUID(str(intake_id)), str(research_run_id)))
         run = tribunal_client.create_run(
             project_id=project_id,
             brief=brief,
