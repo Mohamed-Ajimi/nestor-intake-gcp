@@ -327,6 +327,72 @@ def test_trigger_no_questions_422(engine, set_space, monkeypatch, fake_tribunal_
         _cleanup(engine, space)
 
 
+def test_retrigger_after_dead_run_202(
+    engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
+):
+    """POST on an in_research intake whose latest run is parked/dead → 202 (retry path).
+
+    Live finding 2026-07-21: the 16-04 failure-card retry was unreachable — the
+    transition map 409'd everything but ``decomposed``. A retry is allowed when
+    the latest run is ``failed``/``cancelled``/``needs_input``.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+    _seed_research_run(
+        engine, set_space, space, intake_id, uuid.uuid4(), "needs_input", attempt=1
+    )
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    try:
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert resp.status_code == 202, f"expected 202, got {resp.status_code} ({resp.text!r})"
+        assert resp.json()["status"] == "queued"
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+        assert fake_tribunal_client["create_run"], "the retry must reach create_run"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_retrigger_while_running_409(engine, set_space, monkeypatch, fake_tribunal_client):
+    """POST on an in_research intake with an ACTIVE run → 409, no second run."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+    _seed_research_run(
+        engine, set_space, space, intake_id, uuid.uuid4(), "running", attempt=1
+    )
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    try:
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 1
+        assert not fake_tribunal_client["create_run"], "an active run must block create_run"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
 def test_brief_never_opts_into_gates(
     engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
 ):

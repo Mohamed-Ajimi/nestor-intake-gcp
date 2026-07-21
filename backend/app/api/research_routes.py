@@ -78,6 +78,16 @@ research_router = APIRouter(prefix="/intakes", tags=["research"])
 # mirrors intake_routes._SUBMIT_TRANSITIONS / _next_submit_status.
 _RESEARCH_TRANSITIONS: dict[str, str] = {"decomposed": "in_research"}
 
+#: Latest-run statuses that permit a RE-trigger while the intake is already
+#: ``in_research`` (live finding 2026-07-21): ``failed`` / ``cancelled`` are the
+#: mirror's terminal failure states (the 16-04 failure card's retry path — which
+#: was previously unreachable because the transition map 409'd everything but
+#: ``decomposed``), and ``needs_input`` is the engine's parked clarification
+#: state, which the intake side has no surface for — a re-trigger with the
+#: repaired brief supersedes the parked run (the old engine run stays parked and
+#: consumes nothing). An actively ``queued``/``running`` run still 409s.
+_RETRYABLE_RUN_STATUSES = {"failed", "cancelled", "needs_input"}
+
 #: The 3-attempt cap (D-04): a 4th trigger for an intake returns needs_investigation and
 #: makes NO seam call / schedules NO driver (a runaway retrigger must not re-charge Tribunal).
 _MAX_ATTEMPTS = 3
@@ -140,7 +150,18 @@ def trigger_research(
         }
 
     old_status = intake.status
-    new_status = _next_research_status(old_status)  # 409 if not decomposed
+    if old_status == "in_research":
+        # Retry path: allowed ONLY when the latest run is dead (failed/cancelled)
+        # or parked (needs_input). list_for_intake orders newest-first.
+        latest = prior[0] if prior else None
+        if latest is None or latest.status not in _RETRYABLE_RUN_STATUSES:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Research is already running for this intake",
+            )
+        new_status = "in_research"
+    else:
+        new_status = _next_research_status(old_status)  # 409 otherwise
     attempt = len(prior) + 1
 
     # Compose the brief BEFORE the flip so a brief-input read failure never leaves a
