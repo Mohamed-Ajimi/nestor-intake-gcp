@@ -172,7 +172,14 @@ def read_brief_inputs(identity: Identity, intake_id: Any) -> dict | None:
             if artifact is not None:
                 context_pack_text = artifact.text_content
 
-        answers = {a.field_key: a.value for a in intake.answers}
+        # An answer's payload lives in ONE of two columns: ``value_json`` (JSONB —
+        # list/object fields like the research questions) or ``value`` (Text —
+        # scalar fields). Reading only ``value`` made every list field look empty
+        # (live finding 2026-07-21: rich intakes produced zero-question briefs).
+        answers = {
+            a.field_key: (a.value_json if a.value_json is not None else a.value)
+            for a in intake.answers
+        }
         return {
             "intake": {
                 "project_title": intake.client_name,

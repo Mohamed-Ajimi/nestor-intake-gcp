@@ -185,3 +185,23 @@ def test_validated_questions_prefers_db_rows_over_answers():
         for q in final
     ]
     assert texts == ["DB-vraag."]
+
+
+def test_refined_research_questions_key_takes_precedence():
+    """AI-review-refined 'research_questions' wins over the raw 'questions' field."""
+    intake = _intake(
+        answers={
+            "research_questions": [{"text": "Verfijnde vraag na review."}],
+            "questions": [{"text": "Ruwe klantvraag."}],
+        }
+    )
+    result = brief_mod.assemble_brief(intake, None, [])
+    assert "Verfijnde vraag na review." in result
+    assert "Ruwe klantvraag." not in result
+
+
+def test_string_entries_in_question_lists_are_supported():
+    """research_questions entries may be plain strings (AIReviewPanel patches both shapes)."""
+    intake = _intake(answers={"research_questions": ["Vraag als platte string?"]})
+    result = brief_mod.assemble_brief(intake, None, [])
+    assert "Vraag als platte string?" in result

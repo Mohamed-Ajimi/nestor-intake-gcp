@@ -49,12 +49,15 @@ _SECTOR_FIELD_KEYS = ("sector", "industry", "market", "markt", "branche")
 _GOALS_FIELD_KEYS = ("goals", "goal", "doelen", "doel", "objectives", "objective")
 
 #: Answer field keys carrying the validated research questions. The GCP flow
-#: stores questions in the intake ANSWERS — the client's own ``questions`` list
-#: field and the operator-approved ``extra_questions_proposed`` proposal_list —
-#: NOT in the legacy ``nestor.research_questions`` table, which nothing in the
-#: new stack ever writes (live finding 2026-07-21: reading only that table sent
-#: the engine an empty brief and parked the run as ``needs_input``).
-_CLIENT_QUESTIONS_KEY = "questions"
+#: stores questions in the intake ANSWERS — NOT in the legacy
+#: ``nestor.research_questions`` table, which nothing in the new stack ever
+#: writes (live finding 2026-07-21: reading only that table sent the engine an
+#: empty brief and parked the run as ``needs_input``). Keys in precedence order:
+#: ``research_questions`` is the AI-review-refined list the operator validated
+#: (AIReviewPanel writes it back under that key); ``questions`` is the client's
+#: original form field (pre-review fallback). ``extra_questions_proposed`` is
+#: Nestor's proposal list — only ``approved`` entries count.
+_CLIENT_QUESTIONS_KEYS = ("research_questions", "questions")
 _PROPOSED_QUESTIONS_KEY = "extra_questions_proposed"
 
 #: Bound on the context-pack excerpt folded into the brief (characters).
@@ -175,12 +178,18 @@ def questions_from_answers(intake: Any) -> list[dict]:
     answers = _answers_map(intake)
     out: list[dict] = []
 
-    raw = answers.get(_CLIENT_QUESTIONS_KEY)
-    if isinstance(raw, (list, tuple)):
-        for item in raw:
-            text = _item_text(item)
-            if text:
-                out.append({"question_text": text, "priority": 1})
+    # First non-empty client-question source wins (refined list over raw form list).
+    for key in _CLIENT_QUESTIONS_KEYS:
+        raw = answers.get(key)
+        if isinstance(raw, (list, tuple)):
+            found = False
+            for item in raw:
+                text = _item_text(item)
+                if text:
+                    out.append({"question_text": text, "priority": 1})
+                    found = True
+            if found:
+                break
 
     raw = answers.get(_PROPOSED_QUESTIONS_KEY)
     if isinstance(raw, (list, tuple)):
