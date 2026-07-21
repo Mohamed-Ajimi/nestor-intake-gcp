@@ -21,8 +21,8 @@ AI-06 release contract, :func:`app.db.ai_session.run_with_session_release`):
 
 Terminal-set discipline (16-RESEARCH Pitfall 3): the loop breaks on the RESEARCH
 terminal set ``{"completed", "failed", "cancelled"}`` — NEVER the skill-run
-``{"succeeded", "failed"}`` vocabulary. A successful Tribunal run is ``completed``,
-carried verbatim (D-05 boundary).
+success/failed vocabulary. A successful Tribunal run is ``completed``, carried
+verbatim (D-05 boundary), and is never remapped to the skill-run success literal.
 
 5xx tolerance (16-RESEARCH Pitfall 1): a 5xx from ``get_metrics`` (e.g. the residual
 ``needs_report_spec`` response-Literal gap) is retried a bounded number of times,
