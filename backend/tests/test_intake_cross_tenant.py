@@ -84,6 +84,9 @@ get_current_identity = dependencies.get_current_identity
 Identity = identity_mod.Identity
 get_tenant_repo = session_mod.get_tenant_repo
 IntakeRepository = repository.IntakeRepository
+# Phase-16 research surface: prove the new tenant-owned research_runs table denies
+# cross-tenant reads at the repo layer too (the two-suite CI gate covers the new surface).
+ResearchRunRepository = repository.ResearchRunRepository
 
 SCHEMA = "nestor"
 
@@ -693,4 +696,61 @@ def test_user_space_id_param_is_inert(engine, set_space, two_spaces, monkeypatch
         )
     finally:
         app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: research_runs_cross_tenant — space-A repo can't read space-B's research_runs
+# ===========================================================================
+
+
+def _insert_research_run(conn, set_space, space_id, intake_id, run_id) -> None:
+    """Insert one research_runs row under the OWNING space GUC (0011 WITH CHECK passes)."""
+    from sqlalchemy import text
+
+    set_space(conn, space_id)
+    conn.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.research_runs (id, space_id, intake_id, status, attempt) "
+            "VALUES (:id, :space_id, :intake_id, 'queued', 1)"
+        ),
+        {"id": run_id, "space_id": space_id, "intake_id": intake_id},
+    )
+
+
+def test_research_runs_cross_tenant_read_denied(engine, set_space, two_spaces):
+    """A space-A-scoped ResearchRunRepository cannot see space-B's research_runs (T-16-08).
+
+    Repo-level twin of the HTTP denial in ``test_research_cross_tenant.py``: the new
+    tenant-owned ``research_runs`` table is space-walled by both the explicit ``_scope``
+    ``WHERE`` and 0011 RLS. A space-A user reading space-B's intake research runs gets an
+    empty list + ``latest_for_intake`` ``None`` — the cross-tenant row is invisible, so the
+    trigger's attempt-cap count and the SSE read are both confined to the caller's space.
+    """
+    from sqlalchemy.orm import Session
+
+    space_a, space_b = two_spaces
+    intake_b = uuid.uuid4()
+    run_b = uuid.uuid4()
+
+    with engine.begin() as conn:
+        _create_space(conn, space_a, "Space A (research_runs denial)")
+        _create_space(conn, space_b, "Space B (research_runs denial)")
+    with engine.begin() as conn:
+        _insert_intake(conn, set_space, space_b, intake_b)
+    with engine.begin() as conn:
+        _insert_research_run(conn, set_space, space_b, intake_b, run_b)
+
+    try:
+        # A space-A user session (GUC set to space-A) reading space-B's intake runs.
+        with Session(engine) as session:
+            set_space(session, space_a)
+            repo = ResearchRunRepository(session, _user(space_a))
+            assert repo.latest_for_intake(intake_b) is None, (
+                "T-16-08 LEAK: space-A repo read space-B's latest research_run."
+            )
+            assert repo.list_for_intake(intake_b) == [], (
+                "T-16-08 LEAK: space-A repo listed space-B's research_runs."
+            )
+    finally:
         _cleanup_spaces(engine, space_a, space_b)
