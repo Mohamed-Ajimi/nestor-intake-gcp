@@ -130,3 +130,104 @@ def ensure_project(
     )
     resp.raise_for_status()
     return resp.json()["project_id"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 run lifecycle (SEAM-04): create_run / get_metrics / get_report.
+#
+# Same keyword-only + blocking-httpx + raise_for_status + JSON-return shape as
+# ensure_org / ensure_project — they REUSE _headers / _mint_id_token (no new OIDC
+# code, audience stays the path-less service_url per Pitfall 4). These persist
+# NOTHING; the poll driver (run_task.py) mirrors the returned state into
+# ``research_runs``.
+# ---------------------------------------------------------------------------
+
+
+def create_run(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    project_id: str,
+    brief: str,
+    idempotency_key: str,
+) -> dict:
+    """Queue a Tribunal run for ``project_id`` with ``brief``; return the RunResponse dict.
+
+    POSTs to ``{service_url}/api/runs`` with the minted OIDC token + the D-05
+    acting-user headers + the tenant header. The ``engine`` is PINNED to
+    ``"tribunal"`` and ``uploaded_documents`` is always ``[]`` (Pitfall 15 — never
+    let the caller pick the engine). ``brief`` is passed VERBATIM and NEVER carries
+    the ``[INTERACTIVE_REPORT]`` marker (the brief is composed pause-gate-safe in
+    :mod:`app.research.brief`, D-01b). ``idempotency_key`` is a deterministic
+    ``uuid5`` (D-04) so a retried trigger returns the existing run (no double-charge).
+
+    Raises ``httpx.HTTPStatusError`` on any non-2xx; on success returns the parsed
+    ``RunResponse`` JSON (``{id, status, ...}``).
+    """
+    resp = httpx.post(
+        f"{service_url}/api/runs",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        json={
+            "project_id": project_id,
+            "brief": brief,
+            "engine": "tribunal",  # PINNED — never caller-chosen.
+            "idempotency_key": idempotency_key,
+            "uploaded_documents": [],
+        },
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_metrics(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Fetch a run's metrics/progress; return the RunMetrics dict.
+
+    GETs ``{service_url}/api/runs/{run_id}/metrics`` with the same headers as
+    :func:`create_run`. Returns ``{status, cost_usd_total, elapsed_seconds,
+    stages[], current_stage, stage_detail}`` — the shape the poll driver mirrors
+    per tick. Raises ``httpx.HTTPStatusError`` on any non-2xx (the poll driver
+    treats a 5xx as transient and finalizes as ``failed`` after bounded retries —
+    16-RESEARCH Pitfall 1).
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/metrics",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_report(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Fetch a COMPLETED run's report; return the report dict (``{markdown, sources}``).
+
+    GETs ``{service_url}/api/runs/{run_id}/report`` with the same headers. Called
+    ONLY after :func:`get_metrics` reports ``status == "completed"``. The poll
+    driver persists the raw ``markdown`` onto ``research_runs.output_markdown`` (A4)
+    so Phase 17's raw-output surface is a pure UI add. Raises
+    ``httpx.HTTPStatusError`` on any non-2xx.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/report",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
