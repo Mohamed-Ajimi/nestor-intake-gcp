@@ -44,6 +44,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
+import { ResearchRunProgress } from "@/components/intake/ResearchRunProgress";
+import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
@@ -713,10 +715,38 @@ function IntakeDetailPage() {
     }
   };
 
+  // Phase 16 (RUN-01/SEAM-03): fire the deep-research trigger. The confirm dialog lives in
+  // NextStepBanner — this handler is only reached AFTER the operator confirms, so it POSTs
+  // the 202 directly (D-03). Return-no-throw: `triggerResearch` surfaces failures as
+  // `{success,error}`; on success the backend has flipped the intake to `in_research`, so
+  // a `load()` re-fetch swaps the banner for the live ResearchRunProgress panel below.
   const onStartAutoResearch = async () => {
-    // Deep-research is out of milestone scope — the flow stops at decomposed (INTAKE-05).
-    // No invoke and no transition past decomposed is reachable from this surface.
-    toast.message(t("intakeDetail.toast.autoResearchOutOfScope"));
+    setBusyKey("startResearch", true);
+    try {
+      const res = await triggerResearch(id);
+      if (!res.success) {
+        const codeKey = resolveErrorKey(res.code);
+        toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchStartFailed"));
+        return;
+      }
+      toast.success(t("intakeDetail.toast.researchStarted"));
+      await load();
+    } finally {
+      setBusyKey("startResearch", false);
+    }
+  };
+
+  // Re-trigger from the failure card in ResearchRunProgress. The 3-attempt cap (D-04) is
+  // enforced server-side; an over-cap retry is rejected by the backend and surfaced here.
+  const onRetryResearch = async () => {
+    const res = await triggerResearch(id);
+    if (!res.success) {
+      const codeKey = resolveErrorKey(res.code);
+      toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchStartFailed"));
+      return;
+    }
+    toast.success(t("intakeDetail.toast.researchStarted"));
+    await load();
   };
 
   const onStartManualResearch = async () => {
@@ -1071,6 +1101,13 @@ function IntakeDetailPage() {
          onCopyResultsLink={onCopyResultsLink}
          onArchive={onArchive}
        />
+
+       {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
+           on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
+           Renders the stage list dynamically from the mirrored research_runs row. */}
+       {intake.status === "in_research" && (
+         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
+       )}
 
        {showSemanticSearch && (
          <section className="border-t border-ink/10 bg-paperLight p-4">
