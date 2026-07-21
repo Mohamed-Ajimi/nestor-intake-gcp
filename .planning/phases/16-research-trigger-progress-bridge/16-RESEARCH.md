@@ -421,7 +421,7 @@ def render_research_complete(*, project_title, duration_min, cost_usd, cta_url,
 
 **If this table is empty:** it is not — but every assumption is LOW risk and self-correcting on the first live run (which also closes the deferred Phase-14 seam HTTP UAT).
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does the report-spec ever need the real Tribunal `/report-spec` endpoint, or is prose-in-brief sufficient?**
    - What we know: `/report-spec` only applies via the `[INTERACTIVE_REPORT]` resume path the seam bypasses; zero-touch synthesis honors brief instructions (`pipeline.py:795`).
