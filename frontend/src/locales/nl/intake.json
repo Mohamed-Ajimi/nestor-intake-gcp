@@ -481,5 +481,30 @@
     "revert": "Zet terug naar origineel",
     "keep": "Houd Nestor's voorstel",
     "questionLabel": "Vraag {{index}}"
+  },
+  "research": {
+    "panelTitle": "Deep research loopt",
+    "panelBody": "Nestor's onderzoeker doorloopt de fases hieronder. Dit duurt doorgaans enkele minuten — je mag deze tab open laten.",
+    "startingBody": "Research wordt gestart…",
+    "elapsed": "Verstreken",
+    "cost": "Kosten",
+    "currentStage": "Huidige fase: {{stage}}",
+    "stageDone": "klaar",
+    "stageRunning": "loopt",
+    "stagePending": "wacht",
+    "stagesTitle": "Fases",
+    "completedTitle": "Research voltooid",
+    "completedBody": "De deep research is afgerond. Alle fases zijn doorlopen.",
+    "completedAt": "Voltooid op {{date}}",
+    "totalCost": "Totale kosten: {{cost}}",
+    "duration": "Duur: {{duration}}",
+    "failedTitle": "Research mislukt",
+    "failedBody": "De research is voortijdig gestopt. Bekijk de foutmelding hieronder en probeer opnieuw.",
+    "cancelledTitle": "Research geannuleerd",
+    "cancelledBody": "De research is geannuleerd voordat ze kon afronden.",
+    "errorLabel": "Foutmelding",
+    "retry": "Opnieuw proberen",
+    "costFallback": "—",
+    "dateFallback": "—"
   }
 }
