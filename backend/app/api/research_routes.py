@@ -47,6 +47,7 @@ from fastapi.responses import StreamingResponse
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
 from app.db import audit
+from app.db.ai_session import tenant_session
 from app.db.repository import IntakeRepository, ResearchRunRepository
 from app.db.session import get_tenant_repo
 
@@ -190,26 +191,40 @@ def trigger_research(
         context_pack_text=inputs.get("context_pack_text"),
     )
 
-    # Flip status + audit in the SAME tx (Pitfall 2 — one-tx).
-    repo.patch(intake_id, status=new_status)
-    audit.log(
-        repo.session,
-        actor_uid=identity.uid,
-        event_type="intake.status_changed",
-        target=str(intake_id),
-        space_id=intake.space_id,
-        metadata={"from": old_status, "to": new_status},
-    )
-
-    # Insert the queued research_runs row (attempt=n). The superadmin path (no own space)
-    # writes into the intake's OWN space via create_in_space; the user path uses create()
-    # (space_id injected from the Identity). space_id is NEVER a request input (TENANT-02).
+    # COMMITTED-BEFORE-SCHEDULE (root cause of the 16-05 silent driver, live finding
+    # 2026-07-21): the BackgroundTask driver runs BEFORE the request dependency's
+    # transaction commits, so a driver scheduled against the REQUEST session's
+    # uncommitted writes (a) finds no research_runs row — every mirror/finalize
+    # patch matched 0 rows and the panel froze at "queued"; (b) leaves the intake
+    # row lock held for the driver's whole lifetime — the observed 900s concurrent-
+    # trigger hang; and (c) loses the entire trigger on instance death (rollback —
+    # the 18:08 vanished rows). The flip + audit + run-row insert therefore run in
+    # their OWN short tenant_session that COMMITS on block exit — strictly before
+    # add_task — mirroring create_running_skill_run (AI-06), which is why the AI
+    # skill routes never exhibited this failure mode.
+    #
+    # The superadmin path (no own space) writes into the intake's OWN space via
+    # create_in_space; the user path uses create() (space_id injected from the
+    # Identity). space_id is NEVER a request input (TENANT-02).
+    intake_space_id = intake.space_id
     values = dict(intake_id=intake_id, status="queued", attempt=attempt)
-    if identity.role == "superadmin":
-        run = run_repo.create_in_space(intake.space_id, **values)
-    else:
-        run = run_repo.create(**values)
-    research_run_id = str(run.id)
+    with tenant_session(identity) as txs:
+        IntakeRepository(txs, identity).patch(intake_id, status=new_status)
+        audit.log(
+            txs,
+            actor_uid=identity.uid,
+            event_type="intake.status_changed",
+            target=str(intake_id),
+            space_id=intake_space_id,
+            metadata={"from": old_status, "to": new_status},
+        )
+        tx_runs = ResearchRunRepository(txs, identity)
+        if identity.role == "superadmin":
+            run = tx_runs.create_in_space(intake_space_id, **values)
+        else:
+            run = tx_runs.create(**values)
+        # Captured INSIDE the tx: expire_on_commit detaches `run` at block exit.
+        research_run_id = str(run.id)
 
     # Schedule the pool-safe poll driver AFTER the 202 (the ~19-min drive holds no
     # request connection). It mirrors each tick into research_runs and mails on terminal.
