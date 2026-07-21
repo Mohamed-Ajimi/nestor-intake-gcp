@@ -7,7 +7,8 @@ Tests use fully mocked I/O (no Cloud SQL, no real LLM calls):
 
 Asserts:
   (a) A clear brief flows through to a non-empty output_text with verification_report present.
-  (b) A vague brief short-circuits with needs_clarification (no research fan-out called).
+  (b) DELEGATOR (260721-twy): even a legacy vague-style intake response never parks the
+      run — research fan-out always runs and needs_clarification is never True.
   (c) dispatch_runner('sdk') returns TribunalPipeline when NESTOR_SDK_ORCHESTRATOR=tribunal.
   (d) dispatch_runner('sdk') returns SDKPipeline when NESTOR_SDK_ORCHESTRATOR is unset.
   (e) Final synthesis is called with survivors only (dropped claim absent from synthesis input).
@@ -37,6 +38,20 @@ class FakeResponse:
         self.candidates = []
 
 
+class FakeTextBlock:
+    type = "text"
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class FakeAnthropicResponse:
+    """Anthropic Messages response shape: .content is a list of text blocks."""
+
+    def __init__(self, text: str = ""):
+        self.content = [FakeTextBlock(text)]
+
+
 class FakeAuditedClient:
     """Records calls; returns canned responses — no DB/GCS/network."""
 
@@ -53,8 +68,22 @@ class FakeAuditedClient:
             return FakeResponse(self._distill_text)
         return FakeResponse(self._intake_text)
 
-    async def anthropic_messages(self, *, run_id, tenant_id, model, messages, tools, **kwargs):
+    async def anthropic_messages(self, *, run_id, tenant_id, model, messages, tools=None, **kwargs):
         self.anthropic_calls.append({"model": model, "n_messages": len(messages)})
+        # The delegator intake (260721-twy) is the only anthropic_messages caller in
+        # pipeline tests (skeptic/synthesis are monkeypatched) — serve the canned
+        # intake text for its prompt; anything else is a wiring bug.
+        prompt_text = ""
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str):
+                prompt_text += content
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        prompt_text += block.get("text", "")
+        if "CLIENT BRIEF" in prompt_text:
+            return FakeAnthropicResponse(self._intake_text)
         raise RuntimeError("anthropic_messages should not be called in pipeline tests (use monkeypatch)")
 
 
@@ -163,12 +192,21 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
     run_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
 
-    # Build intake text that signals a clear brief
+    # Build intake text in the delegator format (fenced multi-line RESEARCH_PROMPT blocks)
     intake_text = (
         "BRIEF_CLEAR\n"
+        "LANGUAGE: English\n"
         "DEEP_RESEARCH_PROMPT: What are the competitive dynamics in AI infrastructure?\n"
         "FOCUS_AREA: Infrastructure providers | TAXONOMY: B | STAKES: high\n"
+        "RESEARCH_PROMPT_START\n"
+        "Research the AI infrastructure provider landscape (AWS, Azure, GCP, CoreWeave).\n"
+        "Cover market share, positioning, and pricing strategy for 2024-2026.\n"
+        "Research ONLY this question; sibling focus areas are handled separately.\n"
+        "RESEARCH_PROMPT_END\n"
         "FOCUS_AREA: Cost trends | TAXONOMY: C | STAKES: med\n"
+        "RESEARCH_PROMPT_START\n"
+        "Research GPU and inference cost trends for AI infrastructure, 2024-2026.\n"
+        "RESEARCH_PROMPT_END\n"
     )
     fake_audited = FakeAuditedClient(intake_text=intake_text, distill_text="")
 
@@ -296,14 +334,18 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tribunal_pipeline_vague_brief_short_circuits(monkeypatch):
-    """A vague brief causes early return with needs_clarification; no research fan-out."""
+async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
+    """DELEGATOR contract (260721-twy): even a legacy gatekeeper-style vague response
+    must NOT park the run — the pipeline proceeds to research (broadcast-angle
+    fallback) and never returns needs_clarification=True."""
     from nestor_pulse_sdk.pipeline.tribunal.pipeline import TribunalPipeline
 
     run_id = uuid.uuid4()
     tenant_id = uuid.uuid4()
 
-    # Intake text that signals a vague brief
+    # Old gatekeeper-style output: no BRIEF_CLEAR sentinel, zero focus areas.
+    # The delegator parser treats it as a degenerate clear-brief attempt;
+    # divide() falls back to a single broadcast angle.
     intake_text = (
         "BRIEF_VAGUE\n"
         "CLARIFYING_QUESTION: Which market segment are you targeting?\n"
@@ -311,7 +353,7 @@ async def test_tribunal_pipeline_vague_brief_short_circuits(monkeypatch):
     )
     fake_audited = FakeAuditedClient(intake_text=intake_text)
 
-    # Track if run_angles is called (it must NOT be)
+    # Research fan-out MUST be reached (the old contract forbade it).
     run_angles_called = {"called": False}
     async def spy_run_angles(**kwargs):
         run_angles_called["called"] = True
@@ -322,14 +364,57 @@ async def test_tribunal_pipeline_vague_brief_short_circuits(monkeypatch):
         spy_run_angles,
     )
 
+    # Stub the rest of the flow after research (same fakes as the clear-path test).
+    distiller_mock = AsyncMock(return_value=list(CLAIMS))
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.claim_distiller",
+        distiller_mock,
+    )
+    verdict_support = {"verdict": "support", "confidence": 0.9, "evidence_refs": ["https://a.com"], "citations": [], "has_independent_source": True}
+    async def fake_run_skeptic(*, claim, sources, audited, run_id, tenant_id, model, max_turns=4):
+        return verdict_support
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.run_skeptic",
+        fake_run_skeptic,
+    )
+    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session):
+        return {"claim_ids": [uuid.uuid4() for _ in claims], "source_ids": []}
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.persist_tribunal_claims",
+        fake_persist,
+    )
+    async def fake_conflict_detector(*, claims, audited, run_id, tenant_id):
+        return []
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.conflict_detector",
+        fake_conflict_detector,
+    )
+    async def fake_scrub(*, provider_reports, removed_claims, audited, run_id, tenant_id):
+        return provider_reports
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.scrub_research",
+        fake_scrub,
+    )
+    async def fake_synthesis(*, mission_brief, provider_reports, audited, run_id, tenant_id, contested_notes=None, report_spec=None):
+        return "Final synthesis text."
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.synthesize_report",
+        fake_synthesis,
+    )
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.get_sessionmaker",
+        lambda: fake_sessionmaker,
+    )
+
     pipeline = TribunalPipeline(audited=fake_audited)
     result = await pipeline.run(brief="tell me about stuff", run_id=run_id, tenant_id=tenant_id)
 
-    # (b) vague brief short-circuits — needs_clarification in return
-    assert result.get("needs_clarification") is True, \
-        f"Expected needs_clarification=True in result, got: {result}"
-    assert result["output_text"], "output_text should summarise the clarifying questions"
-    assert not run_angles_called["called"], "run_angles must NOT be called for vague briefs"
+    # The delegator never asks questions and never parks the run.
+    assert not result.get("needs_clarification"), \
+        f"Delegator must never return needs_clarification=True, got: {result}"
+    assert run_angles_called["called"], \
+        "run_angles MUST be called — the delegator always proceeds to research"
+    assert result["output_text"], "the run must complete with a report, not park"
 
 
 # ---------------------------------------------------------------------------

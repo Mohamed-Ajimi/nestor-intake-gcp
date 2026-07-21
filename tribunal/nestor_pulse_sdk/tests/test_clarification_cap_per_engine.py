@@ -1,6 +1,9 @@
-"""Per-engine clarification cap contract (decision 2026-06-10).
+"""Per-engine clarification contract (updated 2026-07-21, quick task 260721-twy).
 
-Tribunal: capped at 2 rounds — it CAN force-proceed past the cap (intake override).
+Tribunal: NO clarification loop — the intake stage is a delegator; briefs arrive
+          operator-validated from the intake backend (the engine's only caller), so
+          the pipeline must never ask questions, park as needs_input from intake,
+          or carry a round cap / force-proceed path.
 ADK:      uncapped — it CANNOT be forced (D-01 read-only) and asks one question per
           turn plus a competitor-confirmation checkpoint, so any small cap fails
           virtually every competitive brief. Every ADK pause parks the run as
@@ -25,10 +28,15 @@ def test_adk_adapter_has_no_clarification_cap():
     assert "needs_clarification" in src
 
 
-def test_tribunal_keeps_two_round_cap_with_force_proceed():
+def test_tribunal_delegator_has_no_clarification_loop():
+    """The delegator intake (260721-twy) removed the clarification loop for good —
+    a reintroduced cap/force-proceed path would mean the gatekeeper crept back in."""
     src = (_SDK / "pipeline" / "tribunal" / "pipeline.py").read_text(encoding="utf-8")
-    assert "_CLAR_CAP = 2" in src, "Tribunal must keep its 2-round clarification cap"
-    assert "force_proceed" in src, "Tribunal's cap requires the force-proceed path"
+    assert "_CLAR_CAP" not in src, "clarification cap must stay removed (delegator intake)"
+    assert "force_proceed" not in src, "force-proceed path must stay removed (delegator intake)"
+    assert "needs_clarification=True" not in src.replace(" ", ""), (
+        "tribunal pipeline must never park a run for clarification"
+    )
 
 
 # ---------------------------------------------------------------------------

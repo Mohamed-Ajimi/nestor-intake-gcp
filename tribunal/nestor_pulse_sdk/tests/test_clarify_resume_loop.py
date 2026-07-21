@@ -4,9 +4,12 @@ Mirrors the skip/opt-in pattern of test_tribunal_e2e.py — skipped unless
 NESTOR_CLARIFY_E2E=1 is set AND a live server URL + tester JWT are provided.
 Default `pytest` run (offline / CI) stays green: the test is skipped cleanly.
 
-What this test asserts (Plan 01-18 D-17 mandate):
-  1. For tribunal: posting a vague brief -> needs_input -> answer -> resumed run
-     reaches a terminal status within MAX_TRIBUNAL_ROUNDS rounds (cap=2).
+What this test asserts (Plan 01-18 D-17 mandate; updated 260721-twy):
+  1. For tribunal: the intake stage is a DELEGATOR since 2026-07-21 — a vague brief
+     no longer parks as needs_input; the run goes straight to a terminal status
+     (0 clarification rounds). The lifecycle helper tolerates this (cap kept as an
+     upper bound only; any needs_input round from tribunal would now be a regression
+     caught by the <= max_rounds assertion staying at 0).
   2. For adk: same lifecycle, but rounds are bounded only by the smoke guard
      (MAX_ADK_ROUNDS=4); each round MUST produce needs_input + clarifying_questions.
   3. Per-engine cap contract from test_clarification_cap_per_engine.py is not
@@ -269,12 +272,12 @@ def _drive_clarify_lifecycle(
 # ---------------------------------------------------------------------------
 
 def test_tribunal_clarify_resume(live_config, clarify_engine):
-    """Tribunal: vague brief -> needs_input -> answer -> force-proceed (cap=2).
+    """Tribunal (delegator since 260721-twy): vague brief -> straight to terminal.
 
     Asserts:
-      - The run parks as needs_input with non-empty clarifying_questions.
-      - POST /answer queues a new run.
-      - The resumed run reaches a terminal status within MAX_TRIBUNAL_ROUNDS rounds.
+      - The run reaches a terminal status WITHOUT parking as needs_input
+        (0 clarification rounds expected; the lifecycle helper tolerates and
+        bounds any unexpected needs_input rounds at MAX_TRIBUNAL_ROUNDS).
     """
     if clarify_engine not in ("tribunal", "both"):
         pytest.skip(
