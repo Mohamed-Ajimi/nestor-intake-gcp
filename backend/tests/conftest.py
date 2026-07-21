@@ -799,3 +799,113 @@ def fake_resend(monkeypatch):
     monkeypatch.setattr(mail_pkg, "send", _fake_send, raising=False)
 
     return calls
+
+
+# ===========================================================================
+# Phase 16 — fake_tribunal_client: the internal Tribunal seam faked (no network)
+# ===========================================================================
+#
+# Clones the fake_resend discipline for the Tribunal integration seam: the
+# Phase-16 trigger/poll/stream suites monkeypatch the ``app.research.tribunal_client``
+# call surface with capture-only fakes, so NO test ever reaches the real internal
+# Tribunal API (no OIDC mint, no httpx.post). The fixture imports the seam module
+# LAZILY (``importorskip`` inside the body), so conftest itself stays importable on
+# a box without httpx/google-auth installed.
+#
+# Seam surface faked:
+#   - create_run / get_metrics / get_report — the Phase-16 run lifecycle methods.
+#     These DO NOT EXIST on the module yet (Plan 02 adds them); the fixture patches
+#     them by NAME against the agreed signatures with ``raising=False`` so it is
+#     written now and simply attaches the fakes when the real methods land.
+#   - ensure_org / ensure_project — the Phase-14 provisioning methods that DO exist.
+#
+# Metrics scripting: ``get_metrics`` walks a status sequence ending in a terminal
+# state. The DEFAULT script ends in ``completed``; a failure-path test overrides
+# ``capture["metrics_script"]`` (e.g. to end in ``failed``) BEFORE driving the poll
+# so the same fixture drives both the happy and the failure terminal (D-05 verbatim
+# literals — ``completed`` / ``failed``, never the skill-run ``succeeded``).
+
+
+@pytest.fixture
+def fake_tribunal_client(monkeypatch):
+    """Monkeypatch ``app.research.tribunal_client``'s seam surface; return the capture dict.
+
+    Usage::
+
+        def test_trigger(fake_tribunal_client, ...):
+            ...  # drive the run-trigger endpoint
+            assert fake_tribunal_client["create_run"][0]["brief"]
+
+        def test_failure(fake_tribunal_client, ...):
+            fake_tribunal_client["metrics_script"] = [
+                {"status": "running"}, {"status": "failed"},
+            ]
+            ...  # drive the poll -> asserts the failed terminal is mirrored
+
+    Captures:
+      - ``create_run``: list of ``{brief, idempotency_key, project_id}`` per call.
+      - ``get_metrics_calls``: int count of poll calls served.
+      - ``metrics_script``: the OVERRIDABLE status sequence get_metrics walks; the
+        LAST entry is returned once the script is exhausted (so a terminal state
+        sticks). Defaults to ``running`` -> ``completed``.
+
+    The fakes perform NO network I/O and mint NO token. ``create_run`` returns the
+    Tribunal-verbatim ``{"id": "fake-run-id", "status": "queued"}``; ``get_report``
+    returns ``{"markdown": "fake report", "sources": []}``; ``ensure_org`` returns
+    None; ``ensure_project`` returns ``"fake-project-id"``.
+    """
+    tc = pytest.importorskip("app.research.tribunal_client")
+
+    capture: dict[str, Any] = {
+        "create_run": [],
+        "get_metrics_calls": 0,
+        # Default happy path: one running poll then the completed terminal. A
+        # failure-path test reassigns this list BEFORE driving the poll.
+        "metrics_script": [
+            {"status": "running", "current_stage": "delegation"},
+            {"status": "completed", "current_stage": "report"},
+        ],
+    }
+
+    def _fake_create_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Accept the agreed keyword surface without pinning to a not-yet-final
+        # signature — record the load-bearing fields the trigger passes.
+        capture["create_run"].append(
+            {
+                "brief": kwargs.get("brief"),
+                "idempotency_key": kwargs.get("idempotency_key"),
+                "project_id": kwargs.get("project_id"),
+            }
+        )
+        return {"id": "fake-run-id", "status": "queued"}
+
+    def _fake_get_metrics(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Walk the script; once exhausted, keep returning the terminal entry so a
+        # completed/failed state sticks across further polls.
+        script = capture["metrics_script"]
+        idx = min(capture["get_metrics_calls"], len(script) - 1)
+        capture["get_metrics_calls"] += 1
+        return dict(script[idx])
+
+    def _fake_get_report(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"markdown": "fake report", "sources": []}
+
+    def _fake_ensure_org(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    def _fake_ensure_project(*args: Any, **kwargs: Any) -> str:
+        return "fake-project-id"
+
+    # create_run / get_metrics / get_report do NOT exist on the module until Plan
+    # 02 — patch with raising=False so this fixture is written now and binds the
+    # fakes once the real methods land. ensure_org / ensure_project already exist.
+    for name, fake in (
+        ("create_run", _fake_create_run),
+        ("get_metrics", _fake_get_metrics),
+        ("get_report", _fake_get_report),
+        ("ensure_org", _fake_ensure_org),
+        ("ensure_project", _fake_ensure_project),
+    ):
+        monkeypatch.setattr(tc, name, fake, raising=False)
+
+    return capture
