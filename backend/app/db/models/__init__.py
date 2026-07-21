@@ -12,7 +12,8 @@ The 18 tables (D-03 + Phase 5 audit_log + Phase 7 AI ports):
     products, intakes, intake_answers, intake_templates, skill_runs,
     decompositions, research_questions, research_artifacts, findings,
     deliverables, artifact_embeddings, search_index,
-    intake_sources, transcripts, extracted_insights (Phase 7 AI ports)
+    intake_sources, transcripts, extracted_insights (Phase 7 AI ports),
+    research_runs (Phase 16 Tribunal run mirror)
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from app.db.models.research import (
     ResearchQuestion,
     ResearchArtifact,
 )
+from app.db.models.research_runs import ResearchRun
 from app.db.models.findings import Finding, Deliverable
 from app.db.models.embeddings import ArtifactEmbedding, SearchIndex
 from app.db.models.sources import IntakeSource
@@ -53,4 +55,5 @@ __all__ = [
     "IntakeSource",
     "Transcript",
     "ExtractedInsight",
+    "ResearchRun",
 ]

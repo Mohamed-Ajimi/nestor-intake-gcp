@@ -45,6 +45,7 @@ from app.auth.identity import Identity
 from app.db.base import Base
 from app.db.models.intake import Intake, IntakeAnswer, IntakeTemplate
 from app.db.models.research import ResearchArtifact
+from app.db.models.research_runs import ResearchRun
 from app.db.models.skill_run import SkillRun
 from app.db.models.sources import IntakeSource
 from app.db.models.transcripts import Transcript
@@ -449,6 +450,56 @@ class SkillRunRepository(TenantRepository[SkillRun]):
 
     def latest_for_intake(self, intake_id):
         """Return the most recent skill run for this intake within scope, or ``None``."""
+        return self._s.execute(
+            self._scope(
+                select(self.model)
+                .where(self.model.intake_id == intake_id)
+                .order_by(self.model.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+
+class ResearchRunRepository(TenantRepository[ResearchRun]):
+    """Tenant-scoped repository over ``nestor.research_runs`` (Phase 16 trigger/poll seam).
+
+    Thin subclass — list/get/patch/create/create_in_space come from
+    :class:`TenantRepository`, all space-walled by ``_scope`` for free (D-01). The
+    ``space_id`` is derived ONLY from the verified Identity (user path via
+    :meth:`create`) or set explicitly against the intake's OWN space by the superadmin
+    path (via :meth:`create_in_space`) — it is NEVER a method parameter (TENANT-02).
+    Because the research trigger is a superadmin action against a chosen client's
+    intake, the trigger endpoint (Plan 02) uses ``create_in_space`` against the
+    intake's resolved space; the poll driver PATCHes the mirrored status/stage fields
+    on the in-scope row. Adds the per-intake "latest run" read the trigger (dedup /
+    stale-window check) and the SSE stream endpoint (Plan 04) consume.
+
+    Status literals are carried VERBATIM here too — this repo NEVER remaps
+    ``completed`` to ``succeeded`` (D-05 boundary; the model owns that contract).
+    """
+
+    model = ResearchRun
+
+    def list_for_intake(self, intake_id):
+        """Return this intake's research runs within scope (newest first)."""
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(self.model.intake_id == intake_id)
+                    .order_by(self.model.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    def latest_for_intake(self, intake_id):
+        """Return the most recent research run for this intake within scope, or ``None``.
+
+        A cross-tenant / missing intake matches the scoped ``WHERE`` against nothing →
+        ``None`` (the handler renders that as an existence-hidden empty read, D-07).
+        """
         return self._s.execute(
             self._scope(
                 select(self.model)
