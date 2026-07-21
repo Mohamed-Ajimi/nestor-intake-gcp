@@ -46,6 +46,7 @@ from app.api.auth_routes import auth_router, protected_router
 from app.api.errors import CodedError
 from app.api.intake_routes import intake_router
 from app.api.me_routes import me_router
+from app.api.research_routes import research_router
 from app.api.storage_routes import storage_router
 from app.core.config import get_settings
 from app.core.firebase import init_firebase
@@ -141,6 +142,14 @@ protected_router.include_router(admin_router)
 #   tenant-scoped data access. (The Phase-4 throwaway scaffold router was removed in plan
 #   04 once this real surface and its cross-tenant denial suite landed.)
 protected_router.include_router(intake_router)
+# - research_router: the Phase-16 research seam surface — the trigger verb
+#   (POST /intakes/{id}/research: decomposed→in_research, insert research_runs, schedule the
+#   pool-safe poll driver — SEAM-03) + the SSE progress stream (GET
+#   /intakes/{id}/research/stream, RUN-01). Mounted UNDER protected_router so it inherits
+#   get_current_identity; the trigger additionally Depends(get_tenant_repo) for its
+#   tenant-scoped data access and the SSE pre-flight uses the space-scoped stream_session
+#   reads. No second app.include_router for it — it rides the single protected_router include.
+protected_router.include_router(research_router)
 # - ai_router: the Phase-7 AI feature surface (apply / context-pack / structure-answers /
 #   extract-insights / embeddings / transcribe / semantic search — AI-01..05). Mounted
 #   UNDER protected_router so it inherits get_current_identity; each handler depends on

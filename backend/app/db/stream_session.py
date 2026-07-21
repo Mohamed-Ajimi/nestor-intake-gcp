@@ -32,11 +32,19 @@ terminal-set check see the exact DB literal.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
+
+from sqlalchemy import select
 
 from app.auth.identity import Identity
 from app.db.ai_session import tenant_session
-from app.db.repository import IntakeRepository, SkillRunRepository
+from app.db.models.research import Decomposition, ResearchQuestion
+from app.db.repository import (
+    IntakeRepository,
+    ResearchRunRepository,
+    SkillRunRepository,
+)
 
 
 def check_intake_in_scope(identity: Identity, intake_id: Any) -> bool:
@@ -70,3 +78,112 @@ def read_latest_run_dict(identity: Identity, intake_id: Any) -> dict | None:
             "applied_at": run.applied_at.isoformat() if run.applied_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         }
+
+
+def read_latest_research_run_dict(identity: Identity, intake_id: Any) -> dict | None:
+    """One short scoped tx per tick → the latest research run as a PLAIN dict (RUN-01).
+
+    The research-stream twin of :func:`read_latest_run_dict`: the Plan-04 SSE handler
+    (``research_routes.stream_research_run``) drives this once per tick so any Cloud Run
+    instance serving a reconnecting client re-reads the mirrored ``research_runs`` row
+    fresh (statelessness). Returns a PLAIN dict (NEVER a live ORM row — a row from tick N's
+    session is detached in tick N+1, ``DetachedInstanceError``) whose keys ARE the wire
+    shape the frontend renders the dynamic stage trace from.
+
+    ``status`` is carried VERBATIM (D-05 boundary): the Tribunal literal
+    ``{queued, running, completed, failed, cancelled}`` is never remapped to the skill-run
+    ``{succeeded, failed}`` vocabulary. ``current_stage`` + ``stage_detail`` carry the
+    dynamic stage list (no hardcoded 9-stage assumption); ``cost_usd_total`` is stringified
+    (a ``Decimal`` is not JSON-serializable). Returns ``None`` when the intake has no
+    research runs yet (the stream then emits ``data: null``). The connection returns to the
+    pool on block exit — nothing held between ticks.
+    """
+    with tenant_session(identity) as session:
+        run = ResearchRunRepository(session, identity).latest_for_intake(intake_id)
+        if run is None:
+            return None
+        return {
+            "id": str(run.id),
+            "status": run.status,  # verbatim (D-05 boundary)
+            "current_stage": run.current_stage,
+            "stage_detail": run.stage_detail,
+            "cost_usd_total": (
+                str(run.cost_usd_total) if run.cost_usd_total is not None else None
+            ),
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "error_message": run.error_message,
+        }
+
+
+def read_brief_inputs(identity: Identity, intake_id: Any) -> dict | None:
+    """Read the intake + its decomposition + validated questions as PLAIN dicts (SEAM-04).
+
+    The synchronous scoped read the research trigger performs to compose the Tribunal
+    brief (:func:`app.research.brief.assemble_brief`). Returns PLAIN dicts (never live ORM
+    rows) so nothing detaches once this short tx closes — the trigger then holds only data,
+    not a session. Returns ``None`` when the intake is missing / out of scope (the trigger
+    renders that as an existence-hidden 404, D-07).
+
+    The shapes match what ``assemble_brief`` reads: the ``intake`` dict carries
+    ``project_title`` / ``client_name`` + an ``answers`` map (so the report hint is
+    field-driven); ``decomposition`` carries ``summary``; ``questions`` is a list of
+    ``{question_text, priority}`` in DB order (``assemble_brief`` re-sorts by priority).
+    The read is space-scoped: a user sees only their own space's rows; a superadmin reaches
+    the intake's own space via the 0011 bypass.
+    """
+    with tenant_session(identity) as session:
+        intake = IntakeRepository(session, identity).get(intake_id)
+        if intake is None:
+            return None
+
+        # The latest decomposition for this intake (scoped). ``_scope`` walls a user to
+        # their space and is a no-op for the superadmin (bypass policy reaches the row).
+        decomposition = session.execute(
+            _scoped(identity, select(Decomposition))
+            .where(Decomposition.intake_id == intake_id)
+            .order_by(Decomposition.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        questions = (
+            session.execute(
+                _scoped(identity, select(ResearchQuestion))
+                .where(ResearchQuestion.intake_id == intake_id)
+                .order_by(ResearchQuestion.priority.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+        answers = {a.field_key: a.value for a in intake.answers}
+        return {
+            "intake": {
+                "project_title": intake.client_name,
+                "client_name": intake.client_name,
+                "answers": answers,
+            },
+            "decomposition": (
+                {"summary": decomposition.summary} if decomposition is not None else None
+            ),
+            "questions": [
+                {"question_text": q.question_text, "priority": q.priority}
+                for q in questions
+            ],
+        }
+
+
+def _scoped(identity: Identity, stmt):
+    """Apply the tenant space filter for a user; leave a superadmin statement unchanged.
+
+    Mirrors :meth:`app.db.repository.TenantRepository._scope` for the two ad-hoc brief-input
+    reads above (which query ``Decomposition`` / ``ResearchQuestion`` — models with no
+    dedicated repository). A ``user`` gets an explicit ``WHERE space_id = <own space>`` (the
+    un-omittable D-01 wall); a ``superadmin`` (``space_id is None``) gets the statement
+    unchanged (the 0011 bypass policy admits the cross-space read).
+    """
+    if identity.role == "superadmin" or not identity.space_id:
+        return stmt
+    model = stmt.column_descriptions[0]["entity"]
+    # Coerce str -> uuid.UUID for the explicit WHERE (pg8000; mirrors _space_id in the repo).
+    return stmt.where(model.space_id == uuid.UUID(identity.space_id))
