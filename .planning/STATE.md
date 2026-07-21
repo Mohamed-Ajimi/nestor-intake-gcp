@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: ready_to_plan
-stopped_at: Phase 14 complete (4/4) — ready to discuss Phase 15
-last_updated: 2026-07-20T22:06:59.178Z
+status: planning
+stopped_at: Phase 16 context gathered
+last_updated: "2026-07-21T12:10:37.354Z"
 last_activity: 2026-07-20
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 8
-  completed_plans: 78
+  completed_plans: 8
   percent: 25
 ---
 
@@ -21,11 +21,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15 — engine enhancements (plan critique + draft tournament)
+**Current focus:** Phase 16 — research trigger + progress bridge (Phase 15 deferred after Phase 19, operator decision 2026-07-21)
 
 ## Current Position
 
-Phase: 15 of 4 (engine enhancements (plan critique + draft tournament))
+Phase: 16 (research trigger + progress bridge) — execution order now 16 → 17 → 18 → 19 → 15 → 20
 Plan: Not started
 Status: Ready to plan
 Last activity: 2026-07-20
@@ -67,6 +67,10 @@ Progress: [██████████] 100%
 | Phase 14 P04 | 150 | 3 tasks | 10 files |
 
 ## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 15 edited: Deferred after Phase 19 (operator decision 2026-07-21): spine 16-19 ships on engine as-is; Phase 16 dep on 15 removed (dynamic stage-list contract added); Phase 20 now also depends on 15
 
 ### Decisions
 
@@ -153,12 +157,12 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-20T21:04:57.414Z
-Stopped at: Completed 14-04-PLAN.md — Phase 14 done (D-07 proven live)
-Resume file: None
+Last session: 2026-07-21T12:10:37.343Z
+Stopped at: Phase 16 context gathered
+Resume file: .planning/phases/16-research-trigger-progress-bridge/16-CONTEXT.md
 
 ## Operator Next Steps
 
-- Review the v1.1 roadmap (.planning/ROADMAP.md — Phases 13-20).
-- Plan the first phase with /gsd-plan-phase 13 (Tribunal Re-home + Infra Baseline).
-- NOTE: Phase 13 carries the EU AI Act Art. 12 audit-chain gate (deadline 2026-08-02) — prioritize.
+- Next: /gsd-discuss-phase 16 (or /gsd-plan-phase 16) — Research Trigger + Progress Bridge.
+- Execution order is now 16 → 17 → 18 → 19 → 15 → 20 (Phase 15 deferred 2026-07-21 — enhancements land on the complete proven flow).
+- Phase 16 reminders: first real trigger call closes the deferred Phase-14 seam UAT; progress UI must render the stage list dynamically (no hardcoded 9); flip `NESTOR_TRIBUNAL_UNCAPPED` off; top up Anthropic credits before live runs.
