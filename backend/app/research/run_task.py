@@ -40,6 +40,7 @@ Authoritative references:
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any
@@ -54,6 +55,11 @@ from app.db.repository import IntakeRepository, ResearchRunRepository
 from app.mail import resend
 from app.mail.render import render_research_complete, render_research_failed
 from app.research import tribunal_client
+
+# WARNING level on purpose: uvicorn's default logging config drops INFO from app
+# loggers (no root handler — only the WARNING+ lastResort stderr handler), and this
+# driver runs headless where silence has already cost a full UAT day (16-05).
+log = logging.getLogger(__name__)
 
 #: Poll cadence in seconds between ``get_metrics`` ticks (~3s per 16-RESEARCH).
 POLL_SECONDS = 3.0
@@ -130,7 +136,14 @@ def mirror_tick(
         values["cost_usd_total"] = metrics["cost_usd_total"]
 
     with tenant_session(identity) as session:
-        ResearchRunRepository(session, identity).patch(research_run_id, **values)
+        rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)
+    if rowcount == 0:
+        # The mirror write matched NOTHING — the panel will show a run frozen at
+        # "queued" while the driver works invisibly. Loud, every tick, on purpose.
+        log.error(
+            "mirror_tick matched 0 rows: research_run_id=%s tribunal_run_id=%s status=%s",
+            research_run_id, tribunal_run_id, metrics.get("status"),
+        )
 
 
 def finalize_completed(
@@ -198,7 +211,17 @@ def _patch_run(session: Any, research_run_id: Any, **values: Any) -> None:
     binding so the repo constructs correctly.
     """
     identity = identity_of(session)
-    ResearchRunRepository(session, identity).patch(research_run_id, **values)
+    rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)
+    if rowcount == 0:
+        log.error(
+            "finalize patch matched 0 rows: research_run_id=%s values=%s",
+            research_run_id, {k: v for k, v in values.items() if k != "output_markdown"},
+        )
+    else:
+        log.warning(
+            "finalize patched research_run_id=%s status=%s",
+            research_run_id, values.get("status"),
+        )
 
 
 # The driving identity is threaded to the write helpers via a module-level slot set
@@ -249,6 +272,13 @@ def run_poll_driver(
     global _ACTIVE_IDENTITY
     _ACTIVE_IDENTITY = identity
 
+    # WARNING on purpose — see the module logger note. This line is the difference
+    # between "the task never ran" and "the task died at X" in the next incident.
+    log.warning(
+        "run_poll_driver START: intake=%s research_run_id=%s attempt=%s",
+        intake_id, research_run_id, attempt,
+    )
+
     def read_fn(session: Any) -> dict[str, Any]:
         return load_trigger_context(session, identity, intake_id)
 
@@ -272,6 +302,12 @@ def run_poll_driver(
             **seam_kwargs,
         )
         rid = run["id"]
+        log.warning(
+            "run_poll_driver create_run: research_run_id=%s tribunal_run_id=%s "
+            "engine_status=%s (an idempotent return of an old run shows here as a "
+            "non-queued engine_status)",
+            research_run_id, rid, run.get("status"),
+        )
 
         metrics: dict[str, Any] = {"status": run.get("status", "queued")}
         consecutive_5xx = 0
@@ -298,6 +334,10 @@ def run_poll_driver(
 
             mirror_tick(identity, research_run_id, rid, metrics)
             if metrics.get("status") in _RESEARCH_TERMINAL:
+                log.warning(
+                    "run_poll_driver terminal: research_run_id=%s tribunal_run_id=%s "
+                    "status=%s", research_run_id, rid, metrics.get("status"),
+                )
                 return rid, metrics
             time.sleep(POLL_SECONDS)
 
@@ -364,9 +404,19 @@ def run_poll_driver(
             except Exception:  # noqa: BLE001 - mail is best-effort on the error path
                 pass
 
-    run_with_session_release(
-        identity, read_fn, call_fn, write_fn, on_error=on_error
-    )
+    try:
+        run_with_session_release(
+            identity, read_fn, call_fn, write_fn, on_error=on_error
+        )
+        log.warning("run_poll_driver DONE: research_run_id=%s", research_run_id)
+    except BaseException:
+        # Belt-and-braces: on_error already finalizes, but if IT fails (or the read
+        # phase dies before any context exists) this task must never end silently
+        # again — that silence cost the 16-05 UAT a full day.
+        log.exception(
+            "run_poll_driver CRASHED: research_run_id=%s intake=%s attempt=%s",
+            research_run_id, intake_id, attempt,
+        )
 
 
 def _admin_cta(ctx: dict[str, Any]) -> str:

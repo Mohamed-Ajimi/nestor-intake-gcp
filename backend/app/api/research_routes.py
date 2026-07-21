@@ -216,6 +216,12 @@ def trigger_research(
     background.add_task(
         run_poll_driver, identity, intake_id, research_run_id, brief, attempt
     )
+    # WARNING level: pairs with run_poll_driver's START line — "scheduled but no
+    # START" isolates a BackgroundTask that never executed (the 16-05 silent-driver
+    # failure mode) without needing DB forensics.
+    _log.warning(
+        "research driver scheduled: research_run_id=%s attempt=%s", research_run_id, attempt
+    )
     return {"research_run_id": research_run_id, "status": "queued"}
 
 
