@@ -128,3 +128,60 @@ def test_report_hint_is_appended_to_brief():
 
     # A thin intake -> the fallback hint prose is present in the brief tail.
     assert _FALLBACK_HINT in result
+
+
+# ---------------------------------------------------------------------------
+# Answers-derived questions + force-proceed sections (live finding 2026-07-21):
+# the GCP flow stores validated questions in the intake ANSWERS, not in the
+# legacy research_questions table — and the engine force-proceeds only when the
+# brief carries >= 2 [CLARIFICATION ANSWERS] sections (TribunalPipeline _CLAR_CAP).
+# ---------------------------------------------------------------------------
+
+
+def test_questions_fall_back_to_intake_answers():
+    """No DB question rows -> questions come from the intake ANSWERS (GCP source)."""
+    intake = _intake(
+        answers={
+            "questions": [
+                {"text": "Wat is de marktomvang van Acme in de Benelux?", "kind": "decision"}
+            ],
+            "extra_questions_proposed": [
+                {"text": "Welke concurrenten winnen terrein?", "approved": True},
+                {"text": "Afgekeurde vraag mag niet meegaan.", "approved": False},
+            ],
+        }
+    )
+    result = brief_mod.assemble_brief(intake, None, [])
+    assert "Wat is de marktomvang van Acme in de Benelux?" in result
+    assert "Welke concurrenten winnen terrein?" in result
+    assert "Afgekeurde vraag mag niet meegaan." not in result
+    assert _INTERACTIVE_MARKER not in result
+
+
+def test_force_proceed_sections_present_with_questions():
+    """A question-bearing brief carries >= 2 [CLARIFICATION ANSWERS] sections."""
+    intake = _intake(answers={"questions": [{"text": "Eén concrete vraag."}]})
+    result = brief_mod.assemble_brief(
+        intake, None, [], context_pack_text="Bedrijf: Acme NV. Markt: logistiek Benelux."
+    )
+    assert result.count("[CLARIFICATION ANSWERS]") >= 2
+    assert "Acme NV" in result
+    assert _INTERACTIVE_MARKER not in result
+
+
+def test_no_questions_yields_no_force_proceed_sections():
+    """An empty brief must NOT carry force-proceed sections (the 422 guard's domain)."""
+    result = brief_mod.assemble_brief(_intake(), None, [])
+    assert "[CLARIFICATION ANSWERS]" not in result
+
+
+def test_validated_questions_prefers_db_rows_over_answers():
+    """Legacy DB rows (when present) win over the answers-derived list."""
+    intake = _intake(answers={"questions": [{"text": "Antwoord-vraag."}]})
+    rows = [_question("DB-vraag.", 1)]
+    final = brief_mod.validated_questions(intake, rows)
+    texts = [
+        getattr(q, "question_text", None) or (q.get("question_text") if isinstance(q, dict) else None)
+        for q in final
+    ]
+    assert texts == ["DB-vraag."]

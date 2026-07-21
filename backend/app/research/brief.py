@@ -48,6 +48,18 @@ _SECTOR_FIELD_KEYS = ("sector", "industry", "market", "markt", "branche")
 #: Intake answer field keys that carry stated research goals / objectives.
 _GOALS_FIELD_KEYS = ("goals", "goal", "doelen", "doel", "objectives", "objective")
 
+#: Answer field keys carrying the validated research questions. The GCP flow
+#: stores questions in the intake ANSWERS — the client's own ``questions`` list
+#: field and the operator-approved ``extra_questions_proposed`` proposal_list —
+#: NOT in the legacy ``nestor.research_questions`` table, which nothing in the
+#: new stack ever writes (live finding 2026-07-21: reading only that table sent
+#: the engine an empty brief and parked the run as ``needs_input``).
+_CLIENT_QUESTIONS_KEY = "questions"
+_PROPOSED_QUESTIONS_KEY = "extra_questions_proposed"
+
+#: Bound on the context-pack excerpt folded into the brief (characters).
+_CONTEXT_EXCERPT_CHARS = 4000
+
 
 def _answers_map(intake: Any) -> dict[str, Any]:
     """Best-effort ``{field_key: value}`` map from an intake-like object.
@@ -139,7 +151,68 @@ def derive_report_hint(intake: Any, question_count: int = 0) -> str:
     return _FALLBACK_HINT
 
 
-def assemble_brief(intake: Any, decomposition: Any, questions: Any) -> str:
+def _item_text(item: Any) -> str:
+    """Best-effort question text from a list/proposal_list entry (never raises)."""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return str(item.get("text") or "").strip()
+    return str(getattr(item, "text", "") or "").strip()
+
+
+def questions_from_answers(intake: Any) -> list[dict]:
+    """Derive the validated question list from the intake's ANSWERS (the real source).
+
+    * ``questions`` — the client's own list-field entries (``{text, kind}``),
+      validated by submission → priority 1;
+    * ``extra_questions_proposed`` — Nestor's AI-proposed extras reviewed by the
+      operator (``{text, rationale, approved}``) → only ``approved`` entries
+      count → priority 2.
+
+    Returns ``[{question_text, priority}]`` dicts compatible with
+    :func:`assemble_brief`. Unrecognized shapes contribute nothing (never raises).
+    """
+    answers = _answers_map(intake)
+    out: list[dict] = []
+
+    raw = answers.get(_CLIENT_QUESTIONS_KEY)
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            text = _item_text(item)
+            if text:
+                out.append({"question_text": text, "priority": 1})
+
+    raw = answers.get(_PROPOSED_QUESTIONS_KEY)
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            if isinstance(item, dict) and not item.get("approved"):
+                continue
+            text = _item_text(item)
+            if text:
+                out.append({"question_text": text, "priority": 2})
+
+    return out
+
+
+def validated_questions(intake: Any, questions: Any) -> list[Any]:
+    """The final list a brief enumerates: DB rows when present, else answer-derived.
+
+    The trigger route uses this for its empty-brief guard (a research run must
+    never start on zero questions — the engine would park it as ``needs_input``).
+    """
+    ordered = _ordered_questions(questions)
+    if ordered:
+        return ordered
+    return _ordered_questions(questions_from_answers(intake))
+
+
+def assemble_brief(
+    intake: Any,
+    decomposition: Any,
+    questions: Any,
+    *,
+    context_pack_text: str | None = None,
+) -> str:
     """Compose the Tribunal run brief from the validated context pack (SEAM-04).
 
     Structure (the composition-gate-safe shape):
@@ -165,8 +238,9 @@ def assemble_brief(intake: Any, decomposition: Any, questions: Any) -> str:
         project_title = _project_title(intake)
         opening = f"Deep research for {project_title}."
 
-    # 2) Enumerated questions in ascending priority order.
-    ordered = _ordered_questions(questions)
+    # 2) Enumerated questions in ascending priority order. Falls back to the
+    # answer-derived list when no DB rows exist (the normal GCP-flow case).
+    ordered = validated_questions(intake, questions)
     question_lines = ["Onderzoeksvragen:"]
     for index, q in enumerate(ordered, start=1):
         text = getattr(q, "question_text", None)
@@ -177,7 +251,36 @@ def assemble_brief(intake: Any, decomposition: Any, questions: Any) -> str:
     # 3) Report-spec hint prose (never the marker).
     hint = derive_report_hint(intake, question_count=len(ordered))
 
-    return "\n".join([opening, "", *question_lines, "", hint])
+    sections = [opening, "", *question_lines, "", hint]
+
+    # 4) Force-proceed contract (operator decision 2026-07-21): intake-originated
+    # briefs are ALREADY human-validated — the entire pre-research flow exists to
+    # produce vetted questions — so the engine's adaptive-intake must never
+    # re-judge them as vague and park the run. The engine force-proceeds when the
+    # brief carries >= 2 ``[CLARIFICATION ANSWERS]`` sections (TribunalPipeline
+    # ``_CLAR_CAP``); both sections here carry REAL intake substance, not filler.
+    if ordered:
+        context_section = (context_pack_text or "").strip()[:_CONTEXT_EXCERPT_CHARS]
+        if not context_section:
+            answers = _answers_map(intake)
+            entity_bits = [
+                _project_title(intake),
+                _first_nonempty(answers, _SECTOR_FIELD_KEYS) or "",
+                _first_nonempty(answers, _GOALS_FIELD_KEYS) or "",
+            ]
+            context_section = " — ".join(b for b in entity_bits if b)
+        sections += [
+            "",
+            "[CLARIFICATION ANSWERS] — context uit de gevalideerde intake:",
+            context_section,
+            "",
+            "[CLARIFICATION ANSWERS] — validatie:",
+            "Bovenstaande onderzoeksvragen en context zijn tijdens de intake-flow "
+            "door een operator gevalideerd. Geen verdere verduidelijking nodig; "
+            "start het onderzoek met deze vragen als focus.",
+        ]
+
+    return "\n".join(sections)
 
 
 def _ordered_questions(questions: Any) -> list[Any]:

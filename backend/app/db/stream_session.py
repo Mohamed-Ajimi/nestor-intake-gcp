@@ -39,7 +39,7 @@ from sqlalchemy import select
 
 from app.auth.identity import Identity
 from app.db.ai_session import tenant_session
-from app.db.models.research import Decomposition, ResearchQuestion
+from app.db.models.research import Decomposition, ResearchArtifact, ResearchQuestion
 from app.db.repository import (
     IntakeRepository,
     ResearchRunRepository,
@@ -156,6 +156,22 @@ def read_brief_inputs(identity: Identity, intake_id: Any) -> dict | None:
             .all()
         )
 
+        # The validated context pack (the artifact the decompose step wrote and the
+        # operator reviewed). The brief folds a bounded excerpt in so the engine
+        # receives the company/market context the intake flow already produced —
+        # without it the engine's adaptive-intake judges the brief VAGUE and parks
+        # the run as needs_input (live finding, 2026-07-21).
+        context_pack_text: str | None = None
+        artifact_id = getattr(intake, "context_pack_artifact_id", None)
+        if artifact_id is not None:
+            artifact = session.execute(
+                _scoped(identity, select(ResearchArtifact))
+                .where(ResearchArtifact.id == artifact_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if artifact is not None:
+                context_pack_text = artifact.text_content
+
         answers = {a.field_key: a.value for a in intake.answers}
         return {
             "intake": {
@@ -170,6 +186,7 @@ def read_brief_inputs(identity: Identity, intake_id: Any) -> dict | None:
                 {"question_text": q.question_text, "priority": q.priority}
                 for q in questions
             ],
+            "context_pack_text": context_pack_text,
         }
 
 

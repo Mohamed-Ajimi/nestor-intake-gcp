@@ -148,8 +148,25 @@ def trigger_research(
     inputs = read_brief_inputs(identity, intake_id)
     if inputs is None:  # pragma: no cover - intake was in-scope above (race)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    # Empty-brief guard (live finding 2026-07-21): a brief with zero validated
+    # questions makes the engine park the run as ``needs_input`` — a state the
+    # intake side has no surface for. Refuse BEFORE any status flip or seam call.
+    final_questions = brief_mod.validated_questions(
+        inputs["intake"], inputs["questions"]
+    )
+    if not final_questions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Intake has no validated research questions — cannot start research "
+            "on an empty brief",
+        )
+
     brief = brief_mod.assemble_brief(
-        inputs["intake"], inputs["decomposition"], inputs["questions"]
+        inputs["intake"],
+        inputs["decomposition"],
+        final_questions,
+        context_pack_text=inputs.get("context_pack_text"),
     )
 
     # Flip status + audit in the SAME tx (Pitfall 2 — one-tx).

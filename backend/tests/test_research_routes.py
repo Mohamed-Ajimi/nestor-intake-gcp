@@ -294,6 +294,39 @@ def test_trigger_wrong_status_409(engine, set_space, monkeypatch, fake_tribunal_
         _cleanup(engine, space)
 
 
+def test_trigger_no_questions_422(engine, set_space, monkeypatch, fake_tribunal_client):
+    """POST on a decomposed intake with ZERO validated questions → 422 (empty-brief guard).
+
+    Live finding 2026-07-21: an empty brief makes the engine park the run as
+    ``needs_input`` — a state the intake side has no surface for. The guard
+    refuses before any status flip, run insert, or seam call.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status="decomposed")
+    # Deliberately NO _seed_decomposition_and_questions and no question answers.
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    try:
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code} ({resp.text!r})"
+        # No half-transition: status unchanged, no run row, no seam call.
+        assert _read_intake_status(engine, set_space, space, intake_id) == "decomposed"
+        assert _count_runs(engine, set_space, space, intake_id) == 0
+        assert not fake_tribunal_client["create_run"], "a 422 must make no create_run call"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
 def test_brief_never_opts_into_gates(
     engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
 ):
