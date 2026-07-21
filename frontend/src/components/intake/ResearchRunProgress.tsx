@@ -169,7 +169,11 @@ export function ResearchRunProgress({
   const { run } = useActiveResearchRun(intakeId);
 
   const status = run?.status ?? "queued";
-  const isTerminal = RESEARCH_TERMINAL.has(status);
+  // `needs_input` is the engine's parked clarification state. The intake side has
+  // no answer surface (by design — briefs are pre-validated), so the panel renders
+  // it as the failure card with the re-trigger affordance: a retry supersedes the
+  // parked run with a repaired brief (allowed server-side since the 2026-07-21 fix).
+  const isTerminal = RESEARCH_TERMINAL.has(status) || status === "needs_input";
   const stageRows = toStageRows(run);
   const elapsed = useElapsed(run?.started_at ?? null, !isTerminal);
   const costFallback = t("research.costFallback");
