@@ -1,0 +1,16 @@
+{#
+  Research-complete notification (NL, canonical) — RUN-02 / D-10 / D-11.
+  Short body: "onderzoek is klaar" + duur + kost + ÉÉN CTA naar de admin-route.
+  NOTIF-01: cta_url is {app_base_url}/admin/pulse/intakes/{intake_id} — geen token.
+  autoescape ON (T-16-05); geen `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Onderzoek{% endblock %}
+{% block content %}
+<h1>Het onderzoek is klaar</h1>
+<p>Het onderzoek voor <strong>{{ project_title }}</strong> is afgerond.</p>
+<ul>
+  {% if duration_min is not none %}<li>Duur: {{ duration_min }} min</li>{% endif %}
+  {% if cost_usd is not none %}<li>Kost: ${{ cost_usd }}</li>{% endif %}
+</ul>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open onderzoek in admin →</a></p>
+{% endblock %}

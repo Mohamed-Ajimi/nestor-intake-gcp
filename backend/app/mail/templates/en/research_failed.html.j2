@@ -1,0 +1,13 @@
+{#
+  Research-failed notification (EN) — RUN-02 / D-10 / D-11.
+  Short body: what failed (error_summary) + ONE admin CTA.
+  NOTIF-01: cta_url = {app_base_url}/admin/pulse/intakes/{intake_id} — no token.
+  autoescape ON (T-16-05); never `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Research{% endblock %}
+{% block content %}
+<h1>The research failed</h1>
+<p>The research for <strong>{{ project_title }}</strong> did not complete.</p>
+<p>Reason: {{ error_summary }}</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open research in admin →</a></p>
+{% endblock %}

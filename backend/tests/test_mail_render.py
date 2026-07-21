@@ -143,6 +143,96 @@ def test_logo_rendered_when_app_base_url_set():
     assert f"{_BASE}/agenic-logo.png" in html
 
 
+def test_research_complete_body_has_duration_cost_and_cta():
+    """render_research_complete renders duration, cost, and the admin CTA (RUN-02/D-11)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_complete(
+        project_title="Project Phoenix",
+        duration_min=19,
+        cost_usd="1.60",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "19" in html          # duration_min
+    assert "1.60" in html        # cost_usd
+    assert cta in html           # admin-route CTA (no token)
+    assert "/admin/pulse/intakes/" in html
+    for token in _TOKEN_SUBSTRINGS:
+        assert token not in html
+
+
+def test_research_complete_autoescapes_hostile_title():
+    """A <script> in project_title is HTML-escaped by autoescape (T-16-05)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_complete(
+        project_title="<script>alert('x')</script>",
+        duration_min=5,
+        cost_usd="0.50",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_research_complete_tolerates_missing_metrics():
+    """None duration/cost render without a broken 'None' body (metrics may be absent)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_complete(
+        project_title="Project Phoenix",
+        duration_min=None,
+        cost_usd=None,
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    # The optional metric lines are omitted rather than rendering literal "None".
+    assert "None" not in html
+    assert cta in html
+
+
+def test_research_failed_body_has_error_and_cta():
+    """render_research_failed renders the error summary + admin CTA (RUN-02)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_failed(
+        project_title="Project Phoenix",
+        error_summary="tribunal timed out",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "tribunal timed out" in html
+    assert cta in html
+    for token in _TOKEN_SUBSTRINGS:
+        assert token not in html
+
+
+def test_research_failed_autoescapes_hostile_error():
+    """A <script> in error_summary is HTML-escaped by autoescape (T-16-05)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_failed(
+        project_title="Project Phoenix",
+        error_summary="<script>alert('x')</script>",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_research_unknown_locale_falls_back_to_nl():
+    """An unknown locale resolves to the nl variant (D-07 fallback chain)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_complete(
+        project_title="Project Phoenix",
+        duration_min=10,
+        cost_usd="1.00",
+        cta_url=cta,
+        app_base_url=_BASE,
+        locale="xx",
+    )
+    # The nl heading proves the fallback resolved to a real template.
+    assert "Het onderzoek is klaar" in html
+
+
 def test_fake_resend_captures_and_returns_fake_id(fake_resend):
     """fake_resend records {to, subject, html} and returns a deterministic id."""
     import app.mail.resend as resend_mod
