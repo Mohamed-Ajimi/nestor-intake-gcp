@@ -1128,6 +1128,167 @@ gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
 
 ---
 
+## Phase 16 — Research trigger + progress bridge (nestor-api REBUILD + 0011 + first live run)
+
+This section is the enumerated source of truth for the Plan-05 operator live session that ships
+the research trigger/progress spine to production. Phase 16 added NEW intake-backend modules
+(`app/api/research_routes.py`, `app/research/run_task.py`, `app/research/brief.py`,
+`app/research/tribunal_client.py` run-lifecycle methods, the `research_runs` ORM model, and six
+`research_complete`/`research_failed` mail templates) plus migration **0011** (`nestor.research_runs`
++ FORCE RLS + both policies). None of that is in the running `nestor-api` container until the image
+is **rebuilt** — a config-only env flip on the stale image would 500 with `ModuleNotFoundError`
+or 404 the new route while CI is green. The live session then triggers ONE real research run on a
+decomposed smoke intake, which is ALSO the first real intake-originated seam call and closes the
+deferred Phase-14 HTTP UAT.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is FORBIDDEN on this project (it would rotate the BUILT_IN DB
+> passwords and take down all services). Every step below is a manual gcloud reconciliation run in
+> Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **The recurring deploy-gap (READ FIRST — Steps 8/9/10/12 all hit it).** "Nothing is real until it
+> is deployed, and a config-only env flip ships a STALE image." Phase 16 adds new Python modules +
+> a migration — a `gcloud run services update --update-env-vars` on the current revision does NOT
+> ship them. Step 16.a is a mandatory Cloud Build **image REBUILD**, not an env flip.
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13/14).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+### Step 16.a — REBUILD the `nestor-api` image via Cloud Build (new research modules + 0011 must ship)
+
+The running container predates the Phase-16 research modules and migration 0011. A config-only
+env flip on the stale image is the **recurring deploy-gap** (Pitfall 2/3; Steps 10.4 / 12.1) — it
+produces a live `ModuleNotFoundError: app.research.run_task` or a 404 on `POST
+/intakes/{id}/research` while CI is green. Reuse the Step-3/8.1/9.4/10.4 Cloud Build idiom (never a
+local `docker build` — downloads are blocked on the dev box), then repoint the service:
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build (bakes the new app/research/* + app/api/research_routes.py +
+# app/db/models/research_runs.py + the six research_* mail templates into the image), then repoint.
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"
+```
+
+> **Run the intake backend suite in Cloud Build against the freshly-built image BEFORE the live
+> run.** 16-01/16-02/16-03 authored their pytest suites by-construction and deferred the run to
+> Cloud Build (the dev box has no Python). Run the full intake suite so the new research tests
+> (`test_research_runs_migration.py`, `test_research_brief.py`, `test_research_run_task.py`,
+> `test_research_routes.py`, `test_research_cross_tenant.py`) execute green before you spend on a
+> real run:
+>
+> ```bash
+> # From the repo root — source MUST be `.` (repo root), never `backend` (Step 14.g note).
+> gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+> ```
+
+### Step 16.b — Run the `nestor-migrate` Job to apply migration 0011 (alembic upgrade head)
+
+The `nestor-migrate` Cloud Run Job runs `alembic upgrade head` (same pattern as the 0009/0010
+intake migrations — Step 12.1 sub-step 5). Execute it AFTER the Step-16.a image rebuild so the Job
+image carries the 0011 revision:
+
+```bash
+gcloud run jobs execute nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+Then confirm `nestor.research_runs` + its two RLS policies exist (the migration logs the applied
+head; verify the schema landed):
+
+```bash
+# Read-only confirm via the migrate Job's connection or a Cloud SQL psql session:
+#   \dt  nestor.research_runs                       -> the table exists
+#   SELECT policyname FROM pg_policies
+#     WHERE tablename='research_runs';              -> research_runs_space_isolation
+#                                                      research_runs_superadmin_all  (both present)
+#   SELECT relforcerowsecurity FROM pg_class
+#     WHERE relname='research_runs';                -> t  (FORCE RLS on)
+```
+
+Alembic still below `0011` after this → the Job in this step did not run (or ran on the pre-rebuild
+image); re-run Step 16.a then this step.
+
+### Step 16.c — Confirm `TRIBUNAL_SERVICE_URL` on `nestor-api` (READ-ONLY — already set in Phase 14)
+
+`TRIBUNAL_SERVICE_URL` was set on `nestor-api` in Phase 14 Step 14.d and verified pass in
+14-HUMAN-UAT item 2 (`https://tribunal-api-ybkr7metoq-ew.a.run.app`). This is a **confirm-only**
+read, NOT a re-set — do not re-run the update (it is the OIDC audience; a wrong value breaks the
+seam, Pitfall 4):
+
+```bash
+gcloud run services describe nestor-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep TRIBUNAL_SERVICE_URL
+# expect: TRIBUNAL_SERVICE_URL=https://tribunal-api-ybkr7metoq-ew.a.run.app
+```
+
+If it is absent (should not happen post-Phase-14), re-apply Phase 14 Step 14.d before proceeding.
+
+### Step 16.d — Set `NESTOR_WORKER_STALE_MINUTES=90` on `tribunal-worker` (ENGINE-03 partial — no double-runs)
+
+The worker's stale-run reclaim window defaults to **60** min (`deploy-worker.sh:74`,
+`NESTOR_WORKER_STALE_MINUTES=60`). The measured max Tribunal run length is **17–19 min** (A2), but
+60 min is uncomfortably close to a long-tail run — set it to **90** to guarantee the reclaim window
+sits well above the max so a still-running job is never stale-reclaimed and double-dispatched
+(T-16-16). This is a **config-only env update on the UNCHANGED worker image** — no worker rebuild:
+
+```bash
+gcloud run services update tribunal-worker \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --update-env-vars="NESTOR_WORKER_STALE_MINUTES=90"
+
+# Verify it landed:
+gcloud run services describe tribunal-worker \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep NESTOR_WORKER_STALE_MINUTES
+# expect: NESTOR_WORKER_STALE_MINUTES=90
+```
+
+> **`NESTOR_TRIBUNAL_UNCAPPED` STAYS ON (D-02).** The operator explicitly deferred the cap flip-on
+> during the Phase-16 discussion (2026-07-21) — "uncapped for now". Do NOT flip
+> `NESTOR_TRIBUNAL_UNCAPPED` off in this phase; the cap decision + flip is Phase 20 at the latest
+> (T-16-17 accepted, mitigated meanwhile by superadmin-only trigger + server-composed brief).
+
+### Step 16.e — Top up Anthropic credits BEFORE the live run
+
+Anthropic credits are LOW (MEMORY: phase-14). A real Tribunal run consumes Claude tokens across
+its stages — top up the Anthropic account **before** triggering the run so it does not fail
+mid-flight on a credit exhaustion. (The `Nestor_Claude` secret already carries a valid key — this
+is an account-balance top-up, not a secret change.)
+
+### Step 16.f — Live trigger / progress / mail UAT (points to 16-HUMAN-UAT.md)
+
+With the image rebuilt, 0011 applied, the stale window at 90, and credits topped up, run the
+operator live session per `.planning/phases/16-research-trigger-progress-bridge/16-HUMAN-UAT.md`:
+
+1. On a **DECOMPOSED** smoke intake in a smoke space, open the admin intake detail and click
+   **Start research** → confirm the AlertDialog (the 202 fires only on confirm, D-03).
+2. Observe: status flips `decomposed → in_research`; the progress panel renders the stage list
+   **dynamically** (one row per mirrored `research_runs` stage — no hardcoded count) with a ticking
+   cost + elapsed clock, in the intake design language.
+3. The run reaches `completed` (~17–19 min) and the completion email arrives at your address.
+4. Confirm a **client** login shows NO research surface during `in_research` (D-08 / T-16-18).
+5. Record the run id, total cost, duration, and `verify_chain` result.
+6. Update `.planning/phases/14-auth-retirement-integration-seam/14-HUMAN-UAT.md` item 1 to PASS
+   (this is the first real intake-originated seam call), referencing this Phase-16 run.
+7. Record all results in `16-HUMAN-UAT.md`.
+
+Failure triage: `POST /intakes/{id}/research` **404** → Step-16.a rebuild was skipped (stale image,
+recurring deploy-gap). A 500 `ModuleNotFoundError: app.research.*` → same (rebuild not shipped). The
+trigger 202s but the run never leaves `queued` → the worker is not picking it up (check
+`tribunal-worker` logs; a double-dispatch symptom means the stale window in Step 16.d was left at
+60). Progress panel blank but the run advances → the SSE `/research/stream` route 404s (stale image,
+Step 16.a). Run fails mid-flight with a credit error → Step 16.e top-up was skipped.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -1173,3 +1334,9 @@ gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
 - [ ] Step 14.f — retired-secret cleanup CONSERVATIVE: verified no `IDENTITY_PLATFORM_*` env on the live Tribunal services; NO Secret Manager entry deleted without a no-other-reader check (T-14-15)
 - [ ] Step 14.g — SEAM-02 denial gate GREEN via `gcloud builds submit tribunal --config=tribunal/cloudbuild.seam-gate.yaml` (all seam denial + RLS denial tests EXECUTE and pass as non-superuser; skips fail the gate) (D-08); build id recorded. The intake `cloudbuild.test.yaml` run is optional context only — its seam denial copy SKIPS by design (D-DEF-1) and must NOT be counted as the gate
 - [ ] Step 14 (Task 3) — CHECKPOINT: D-07 live proof — one real server-to-server run completed-green with D-05 acting-user attribution + `verify_chain` green, and the three negative proofs (unauthenticated 401/403, wrong-SA, cross-tenant) all reject; ABSORBS the Phase-13 deferred queue-path proof (strike it from Phase 16's backlog)
+- [ ] Step 16.a — `nestor-api` image REBUILT via Cloud Build with the new research modules (`app/research/*`, `app/api/research_routes.py`, `app/db/models/research_runs.py`, six `research_*` mail templates) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap, Pitfall 2/3); intake full suite green in Cloud Build against the fresh image
+- [ ] Step 16.b — `nestor-migrate` Job executed `--wait` (alembic → 0011); `nestor.research_runs` + both RLS policies (`research_runs_space_isolation` / `research_runs_superadmin_all`) + FORCE RLS confirmed
+- [ ] Step 16.c — `TRIBUNAL_SERVICE_URL` on `nestor-api` CONFIRMED read-only (already set + verified Phase 14; NOT re-set — Pitfall 4)
+- [ ] Step 16.d — `NESTOR_WORKER_STALE_MINUTES=90` set on `tribunal-worker` (config-only env update on the unchanged worker image; above the measured 17–19 min max, T-16-16) + verified via describe; `NESTOR_TRIBUNAL_UNCAPPED` LEFT ON (D-02, T-16-17)
+- [ ] Step 16.e — Anthropic credits topped up BEFORE the live run (MEMORY: LOW)
+- [ ] Step 16.f — CHECKPOINT: live trigger on a DECOMPOSED smoke intake → dynamic progress panel + ticking cost → run `completed` (~17–19 min) → completion email; client login shows NO research surface (D-08/T-16-18); run id / cost / duration / `verify_chain` recorded; 14-HUMAN-UAT item 1 closed to PASS + results in 16-HUMAN-UAT.md
