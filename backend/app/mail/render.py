@@ -167,3 +167,56 @@ def render_invite(
         cta_url=cta_url,
         app_base_url=app_base_url,
     )
+
+
+def render_research_complete(
+    *,
+    project_title: str,
+    duration_min: int | None,
+    cost_usd: object = None,
+    cta_url: str,
+    app_base_url: str | None = None,
+    locale: str = "nl",
+) -> str:
+    """Render the "research complete" notification body in ``locale`` (nl fallback, RUN-02).
+
+    Short body per D-11: "research for {project_title} is done" + duration + cost +
+    ONE CTA button to the admin intake route. ``cta_url`` is
+    ``{app_base_url}/admin/pulse/intakes/{intake_id}`` — an admin app route, NEVER a
+    token (NOTIF-01). Sent to the triggering superadmin (D-10). ``locale`` selects
+    ``templates/{locale}/research_complete.html.j2`` — an unknown locale falls back to
+    ``nl``. autoescape stays ON, so a hostile ``project_title`` cannot inject markup
+    (T-16-05).
+    """
+    return _localized_template("research_complete", locale).render(
+        project_title=project_title,
+        duration_min=duration_min,
+        cost_usd=cost_usd,
+        cta_url=cta_url,
+        app_base_url=app_base_url,
+    )
+
+
+def render_research_failed(
+    *,
+    project_title: str,
+    error_summary: str,
+    cta_url: str,
+    app_base_url: str | None = None,
+    locale: str = "nl",
+) -> str:
+    """Render the "research failed" notification body in ``locale`` (nl fallback, RUN-02).
+
+    Short body per D-11: what failed (``error_summary``) + ONE CTA button to the admin
+    intake route. ``cta_url`` is ``{app_base_url}/admin/pulse/intakes/{intake_id}`` — an
+    admin app route, NEVER a token (NOTIF-01). Sent to the triggering superadmin (D-10).
+    ``locale`` selects ``templates/{locale}/research_failed.html.j2`` — an unknown locale
+    falls back to ``nl``. autoescape stays ON, so a hostile ``project_title`` /
+    ``error_summary`` cannot inject markup (T-16-05).
+    """
+    return _localized_template("research_failed", locale).render(
+        project_title=project_title,
+        error_summary=error_summary,
+        cta_url=cta_url,
+        app_base_url=app_base_url,
+    )

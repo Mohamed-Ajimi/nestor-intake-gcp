@@ -1,0 +1,13 @@
+{#
+  Research-failed notification (NL, canonical) — RUN-02 / D-10 / D-11.
+  Short body: wat mislukte (error_summary) + ÉÉN CTA naar de admin-route.
+  NOTIF-01: cta_url is {app_base_url}/admin/pulse/intakes/{intake_id} — geen token.
+  autoescape ON (T-16-05); geen `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Onderzoek{% endblock %}
+{% block content %}
+<h1>Het onderzoek is mislukt</h1>
+<p>Het onderzoek voor <strong>{{ project_title }}</strong> is niet afgerond.</p>
+<p>Reden: {{ error_summary }}</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open onderzoek in admin →</a></p>
+{% endblock %}

@@ -1,0 +1,13 @@
+{#
+  Research-failed notification (FR) — RUN-02 / D-10 / D-11.
+  Corps court : ce qui a échoué (error_summary) + UN SEUL CTA admin.
+  NOTIF-01 : cta_url = {app_base_url}/admin/pulse/intakes/{intake_id} — sans token.
+  autoescape ON (T-16-05) ; jamais `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Recherche{% endblock %}
+{% block content %}
+<h1>La recherche a échoué</h1>
+<p>La recherche pour <strong>{{ project_title }}</strong> ne s'est pas terminée.</p>
+<p>Raison : {{ error_summary }}</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Ouvrir la recherche dans l'admin →</a></p>
+{% endblock %}

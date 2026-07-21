@@ -1,0 +1,16 @@
+{#
+  Research-complete notification (FR) — RUN-02 / D-10 / D-11.
+  Corps court : "la recherche est terminée" + durée + coût + UN SEUL CTA admin.
+  NOTIF-01 : cta_url = {app_base_url}/admin/pulse/intakes/{intake_id} — sans token.
+  autoescape ON (T-16-05) ; jamais `| safe`.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Recherche{% endblock %}
+{% block content %}
+<h1>La recherche est terminée</h1>
+<p>La recherche pour <strong>{{ project_title }}</strong> est terminée.</p>
+<ul>
+  {% if duration_min is not none %}<li>Durée : {{ duration_min }} min</li>{% endif %}
+  {% if cost_usd is not none %}<li>Coût : ${{ cost_usd }}</li>{% endif %}
+</ul>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Ouvrir la recherche dans l'admin →</a></p>
+{% endblock %}
