@@ -1,8 +1,8 @@
 ---
 phase: 16
 slug: research-trigger-progress-bridge
-status: draft
-nyquist_compliant: false
+status: planned
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-21
 ---
@@ -38,29 +38,35 @@ created: 2026-07-21
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | SEAM-03 | — | Trigger flips `decomposed`→`in_research`, assembles brief, calls seam | unit+integration | `pytest backend/tests/test_research_routes.py::test_trigger_decomposed_ok -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SEAM-03 | — | Trigger on non-`decomposed` → 409 | unit | `...::test_trigger_wrong_status_409 -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SEAM-03 | cross-tenant ID | Cross-tenant trigger → existence-hidden 404 | denial | `...::test_trigger_cross_tenant_404 -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | SEAM-04 | stray marker | Assembled brief contains NO `[INTERACTIVE_REPORT]` + enumerated questions | unit | `...::test_brief_never_opts_into_gates -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | RUN-01 | — | SSE emits research-run frames; closes on `{completed,failed,cancelled}` | integration | `...::test_research_stream_terminal_set -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | RUN-01 | cross-tenant ID | Cross-tenant SSE pre-flight → 404; null-space → 403 | denial | `...::test_research_stream_denial -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | RUN-02 | — | Terminal state mails the acting superadmin (fake_resend asserts recipient) | unit | `...::test_completion_mail_to_trigger_user -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | D-04 | — | 4th trigger attempt → "needs investigation" (no seam call) | unit | `...::test_attempt_cap_3 -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | ENGINE-07/RUN-01 | pool exhaustion | Poll driver holds no DB connection across CALL phase | integration | `...::test_poll_driver_releases_pool -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | ENGINE-03 | — | Migration creates `research_runs` + RLS policy | migration test | existing migration-apply harness | ❌ W0 | ⬜ pending |
+| 16-01-T2 | 16-01 | 1 | ENGINE-03 | T-16-01/02 | Migration 0011 creates `research_runs` + both RLS policies + 3 indexes | migration test | `pytest backend/tests/test_research_runs_migration.py -x` | ✅ 16-01 T2 | ⬜ pending |
+| 16-01-T3 | 16-01 | 1 | (infra) | — | `fake_tribunal_client` fixture exists (no test hits the real API) | fixture | `pytest backend/tests/ -k research -x` (collection) | ✅ 16-01 T3 | ⬜ pending |
+| 16-02-T1 | 16-02 | 2 | SEAM-04 | T-16-04 | Assembled brief has NO `[INTERACTIVE_REPORT]` + enumerated questions | unit | `pytest backend/tests/test_research_brief.py::test_brief_never_opts_into_gates -x` | ✅ 16-02 T1 | ⬜ pending |
+| 16-02-T2 | 16-02 | 2 | ENGINE-07 | T-16-06 | Poll driver holds no DB connection across CALL phase (`checkedout()==0`) | integration | `pytest backend/tests/test_research_run_task.py::test_poll_driver_releases_pool -x` | ✅ 16-02 T2 | ⬜ pending |
+| 16-02-T2b | 16-02 | 2 | RUN-02 | — | On terminal, mail sent to acting superadmin; on_error finalizes row `failed` | unit | `pytest backend/tests/test_research_run_task.py -x` | ✅ 16-02 T2 | ⬜ pending |
+| 16-02-T3 | 16-02 | 2 | RUN-02 | T-16-05 | Completion/failure templates render short+link; autoescape ON | unit | `pytest backend/tests/ -k research_complete -x` | ✅ 16-02 T3 | ⬜ pending |
+| 16-03-T1 | 16-03 | 3 | SEAM-03 | — | Trigger flips `decomposed`→`in_research`, inserts run, schedules driver, 202 | unit+integration | `pytest backend/tests/test_research_routes.py::test_trigger_decomposed_ok -x` | ✅ 16-03 T1 | ⬜ pending |
+| 16-03-T1b | 16-03 | 3 | SEAM-03 | — | Trigger on non-`decomposed` → 409 | unit | `pytest backend/tests/test_research_routes.py::test_trigger_wrong_status_409 -x` | ✅ 16-03 T1 | ⬜ pending |
+| 16-03-T1c | 16-03 | 3 | SEAM-03/D-04 | — | 4th trigger attempt → needs-investigation (no seam call) | unit | `pytest backend/tests/test_research_routes.py::test_attempt_cap_3 -x` | ✅ 16-03 T3 | ⬜ pending |
+| 16-03-T2 | 16-03 | 3 | RUN-01 | T-16-14 | SSE emits frames; closes on `{completed,failed,cancelled}` (dynamic stages) | integration | `pytest backend/tests/test_research_routes.py::test_research_stream_terminal_set -x` | ✅ 16-03 T2 | ⬜ pending |
+| 16-03-T3 | 16-03 | 3 | SEAM-03/RUN-01 | T-16-08 | Cross-tenant trigger + SSE → existence-hidden 404; null-space → 403 | denial | `pytest backend/tests/test_research_cross_tenant.py -x` | ✅ 16-03 T3 | ⬜ pending |
+| 16-03-T3b | 16-03 | 3 | RUN-02 | — | Completion mail recipient == acting superadmin (fake_resend) | unit | `pytest backend/tests/test_research_routes.py::test_completion_mail_to_trigger_user -x` | ✅ 16-03 T3 | ⬜ pending |
+| 16-04-T1 | 16-04 | 3 | RUN-01 | T-16-13 | research.ts trigger + SSE reader typecheck clean (research terminal set) | typecheck | `cd frontend && npx tsc --noEmit` | ✅ 16-04 T1 | ⬜ pending |
+| 16-04-T2 | 16-04 | 3 | RUN-01 | T-16-14 | Progress panel renders stage list dynamically (no hardcoded count) | typecheck+UAT | `cd frontend && npx tsc --noEmit` | ✅ 16-04 T2 | ⬜ pending |
+| 16-04-T3 | 16-04 | 3 | SEAM-03/D-08 | T-16-12 | Confirm-dialog trigger; additive derivePhase; NO client research surface | typecheck+UAT | `cd frontend && npx tsc --noEmit` | ✅ 16-04 T3 | ⬜ pending |
+| 16-05-live | 16-05 | 4 | ENGINE-03/SEAM-03/RUN-01/RUN-02 | T-16-15/16/18 | Live run: trigger→dynamic panel→completed→email; stale window=90; closes 14-UAT | manual UAT | operator live session (16-HUMAN-UAT.md) | ✅ 16-05 T2 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-*(Planner fills Task ID / Plan / Wave columns when PLAN.md files are created.)*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `backend/tests/test_research_routes.py` — trigger + SSE + denial + attempt-cap tests (fake seam client + fake_resend)
-- [ ] `backend/tests/test_research_run_task.py` — poll driver pool-safety + terminal mail + on_error finalize-as-failed
-- [ ] `backend/tests/conftest.py` (extend) — `fake_tribunal_client` fixture (mirror `fake_anthropic`/`fake_gcs`/`fake_resend`)
-- [ ] Migration-apply test for the `research_runs` migration (+ RLS policy) in the existing migration harness
-- [ ] Cross-tenant denial suite (intake pg8000 side) extended with `research_runs` cases
+Wave 0 test infrastructure is folded into the plans (author-by-construction; no separate scaffold plan):
+
+- [x] Plan 16-01 T3 — `backend/tests/conftest.py` `fake_tribunal_client` fixture (mirror `fake_resend`)
+- [x] Plan 16-01 T2 — migration-apply test for `research_runs` (+ RLS policy)
+- [x] Plan 16-02 T1/T2 — `backend/tests/test_research_brief.py` + `test_research_run_task.py` (pool-safety, terminal mail, on_error finalize-as-failed)
+- [x] Plan 16-03 T1-T3 — `backend/tests/test_research_routes.py` (trigger + SSE + attempt-cap + mail) + `test_research_cross_tenant.py` (denial suite extension)
 
 ---
 
@@ -68,19 +74,19 @@ created: 2026-07-21
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| First live intake-originated seam trigger (closes Phase-14 deferred HTTP UAT) | SEAM-03 | Real Cloud Run + real Tribunal run costs money; operator live session | Runbook: trigger on a decomposed smoke intake, watch progress panel, verify run completes + email arrives; record in `14-HUMAN-UAT.md` |
+| First live intake-originated seam trigger (closes Phase-14 deferred HTTP UAT) | SEAM-03 | Real Cloud Run + real Tribunal run costs money; operator live session | Runbook § Phase 16: trigger on a decomposed smoke intake, watch progress panel, verify run completes + email arrives; record in `14-HUMAN-UAT.md` + `16-HUMAN-UAT.md` |
 | Progress panel visual (intake design language, dynamic stage list) | RUN-01 | Visual/UAT judgment | Open intake detail during a live run; stages render from trace, cost ticks |
-| Stale-window setting live (`NESTOR_WORKER_STALE_MINUTES=90`) | ENGINE-03 | Deploy-env change, verified by inspection | Runbook step; `gcloud run services describe tribunal-worker` shows the env |
+| Stale-window setting live (`NESTOR_WORKER_STALE_MINUTES=90`) | ENGINE-03 | Deploy-env change, verified by inspection | Runbook step 16.d; `gcloud run services describe tribunal-worker` shows the env |
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 600s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (backend tasks are TDD/author-by-construction; live UAT is operator-gated)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (folded into 16-01/16-02/16-03)
+- [x] No watch-mode flags
+- [x] Feedback latency < 600s (Cloud Build)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** planned 2026-07-21

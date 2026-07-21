@@ -10,13 +10,14 @@
 v1.1 absorbs the existing, working Tribunal deep-research engine (`MOELD/Nestor/nestor_pulse_sdk`)
 into the live intake GCP platform — one project, one login, one UI. The journey: re-home Tribunal as
 two Cloud Run services with an isolated `tribunal` schema and a verified-intact legal audit chain
-(Phase 13) → retire its standalone auth and prove the server-to-server seam (Phase 14) → land the two
-new engine enhancements, plan-critique and draft-tournament, while the pipeline is being touched
-(Phase 15) → build the milestone spine: research trigger + live progress bridge into the admin UI
+(Phase 13) → retire its standalone auth and prove the server-to-server seam (Phase 14) → build the
+milestone spine on the engine as-is: research trigger + live progress bridge into the admin UI
 (Phase 16) → secure the raw output behind a superadmin-only, audit-guarded download (Phase 17) →
 human-crafted report upload and client delivery (Phase 18) → Q&A chat over indexed findings via
-Voyage + Haiku (Phase 19) → close out deferred v1.0 chores and the parity UAT ledger (Phase 20). The
-flow extends from `decomposed` through `in_research` to `delivered`.
+Voyage + Haiku (Phase 19) → land the two engine enhancements, plan-critique and draft-tournament, on
+the complete proven flow (Phase 15, deferred by operator decision 2026-07-21) → close out deferred
+v1.0 chores and the parity UAT ledger (Phase 20). The flow extends from `decomposed` through
+`in_research` to `delivered`.
 
 ## Phases
 
@@ -59,8 +60,8 @@ trail intact.
 
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
-- [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - Plan-critique pass and pairwise draft tournament added to the pipeline before the trigger builds on the report contract
-- [ ] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live 9-stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled
+- [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - DEFERRED (operator decision 2026-07-21): runs after Phase 19, before Phase 20 — plan-critique pass and pairwise draft tournament land on the complete proven A-to-Z flow
+- [ ] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled
 - [ ] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path
 - [ ] **Phase 18: Human Report Upload + Client Delivery** - Superadmin uploads the final PDF (status → `delivered`); client sees/downloads it + delivery email
 - [ ] **Phase 19: Q&A Chat (Voyage + Haiku RAG)** - Findings indexed on completion; client + superadmin ask grounded questions post-delivery, space-scoped
@@ -97,28 +98,34 @@ trail intact.
   - [x] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
   - [x] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
-### Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)
-**Goal**: The two new frontier engine enhancements are added to the Tribunal pipeline while it is already being touched during re-home — before the trigger integration builds on the run's report contract.
-**Depends on**: Phase 13 (re-homed engine proven green); can proceed alongside Phase 14
+### Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament) — DEFERRED after Phase 19
+**Goal**: The two new frontier engine enhancements are added to the Tribunal pipeline on the complete, proven A-to-Z flow — after the full intake → research → delivery → Q&A spine is live and UAT'd on the engine as it stands today.
+**Depends on**: Phase 19 (complete spine live; enhancements land on and are UAT'd against the full flow). Original dep — Phase 13 (re-homed engine proven green) — remains satisfied.
 **Requirements**: ENGINE-05, ENGINE-06
 **Success Criteria** (what must be TRUE):
   1. A plan-critique pass reviews the research plan before the multi-provider fan-out launches, and its effect is observable in a run's stage trace (frontier idea A2).
   2. Competing report drafts are ranked pairwise in a tournament and the winner becomes the run's final report (frontier idea A1).
   3. A real research run completes green with both enhancements active, and the audit hash-chain still verifies (`verify_chain` green — no frozen payload field renamed).
+  4. The Phase 16 progress UI renders the enhanced run's stage trace (including any added pass) without code changes — confirming the dynamic-stage-list contract held.
 **Plans**: TBD
-**Note on ordering**: Placed after re-home (ENGINE-02 proven) so the enhancements land on a known-green engine, and before Phase 16 so the trigger + progress bridge integrate against the final report/stage shape these passes produce — avoiding a re-wire of the audited payload after the spine is built.
+**Note on ordering**: DEFERRED by operator decision 2026-07-21 — originally placed before Phase 16 so the trigger + progress bridge would integrate against the final report/stage shape. Deferral is safe because (a) Phase 16 renders the stage list dynamically from the run's stage trace (no hardcoded stage count), (b) the final report is treated as an opaque artifact downstream, and (c) SC3 already forbids renaming frozen payload fields, protecting the audit chain and Phases 17/19 consumers regardless of when the enhancements land.
 
 ### Phase 16: Research Trigger + Progress Bridge
-**Goal**: A superadmin can trigger a research run on a `decomposed` intake and watch live 9-stage progress with running cost in the intake admin UI, receiving an email when it finishes — the milestone spine.
-**Depends on**: Phases 14 (proven seam) and 15 (final engine shape)
+**Goal**: A superadmin can trigger a research run on a `decomposed` intake and watch live stage-by-stage progress with running cost in the intake admin UI, receiving an email when it finishes — the milestone spine.
+**Depends on**: Phase 14 (proven seam). Phase 15 dependency REMOVED (deferred after Phase 19) — integrates against the engine as it runs today; the progress UI MUST render the stage list dynamically from the run's stage trace (9 stages today, no hardcoded count) so Phase 15's added pass costs nothing later.
 **Requirements**: SEAM-03, SEAM-04, RUN-01, RUN-02, ENGINE-03, ENGINE-07
 **Success Criteria** (what must be TRUE):
   1. Superadmin triggers a run on a `decomposed` intake (status → `in_research`, immediate 202), with the brief assembled from the intake's validated context pack.
-  2. Live run progress (9 stages + running cost) renders on the intake detail page in the intake design language, fed by a background poll → `research_runs` → SSE bridge.
-  3. The run auto-proceeds through Tribunal's interactive pauses (`needs_input` / `needs_report_spec`) with sensible defaults (zero-touch), executing on the always-on worker so no run is bounded by a Cloud Run request timeout.
-  4. Superadmin receives an email when the run completes or fails.
-  5. The per-run cost cap is enforced for client runs (`NESTOR_TRIBUNAL_UNCAPPED` off) and the stale-run reclaim window is set above the real max run length (no double-runs).
-**Plans**: TBD
+  2. Live run progress (stage trace rendered dynamically — 9 stages today — + running cost) renders on the intake detail page in the intake design language, fed by a background poll → `research_runs` → SSE bridge.
+  3. Tribunal's interactive pause gates (`needs_input` / `needs_report_spec`) NEVER fire for seam runs (16-CONTEXT D-01/D-01b: the validated intake IS the brief; report spec auto-derived from intake answers), and runs execute on the always-on worker so no run is bounded by a Cloud Run request timeout.
+  4. The triggering superadmin receives an email when the run completes or fails.
+  5. The stale-run reclaim window is set above the real max run length (no double-runs). NOTE: cost-cap flip-on (`NESTOR_TRIBUNAL_UNCAPPED` off) is DEFERRED by operator decision 2026-07-21 (16-CONTEXT D-02) — before client-billed runs, Phase 20 at the latest.
+**Plans**: 5 plans
+  - [ ] 16-01-PLAN.md — research_runs table (migration 0011 + RLS) + model/repo + fake_tribunal_client fixture (foundation)
+  - [ ] 16-02-PLAN.md — seam client (create_run/get_metrics/get_report) + brief assembly (no [INTERACTIVE_REPORT]) + pool-safe poll driver + NL/FR/EN completion/failure mail
+  - [ ] 16-03-PLAN.md — trigger verb (decomposed→in_research, attempt cap) + SSE stream (research terminal set) + cross-tenant denial tests
+  - [ ] 16-04-PLAN.md — frontend: research.ts + dynamic-stage ResearchRunProgress panel + confirm-dialog trigger + additive derivePhase (client UI untouched)
+  - [ ] 16-05-PLAN.md — runbook Phase 16 (REBUILD + 0011 migrate + stale-window=90) + operator live run (closes deferred Phase-14 seam UAT)
 **UI hint**: yes
 
 ### Phase 17: Raw Output + Audit Chain Guard
@@ -155,7 +162,7 @@ trail intact.
 
 ### Phase 20: Deferred Chores + v1.0 UAT Closure
 **Goal**: Carry-over v1.0 items are closed on the now-extended, stable flow — no new features.
-**Depends on**: Phases 16-19 (extended flow live and stable)
+**Depends on**: Phases 16-19 (extended flow live and stable) + Phase 15 (deferred enhancements landed)
 **Requirements**: CLOSE-01, CLOSE-02, CLOSE-03
 **Success Criteria** (what must be TRUE):
   1. The 21-item deferred v1.0 UAT ledger is re-run against the extended flow and its results recorded.
@@ -166,15 +173,15 @@ trail intact.
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 13 → 14 → 15 → 16 → 17 → 18 → 19 → 20
+13 → 14 → 16 → 17 → 18 → 19 → 15 → 20 (Phase 15 deferred after Phase 19 by operator decision 2026-07-21 — spine ships on the engine as-is, enhancements land on the complete proven flow)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 15. Engine Enhancements | v1.1 | 0/TBD | Not started | - |
-| 16. Research Trigger + Progress Bridge | v1.1 | 0/TBD | Not started | - |
+| 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
+| 16. Research Trigger + Progress Bridge | v1.1 | 0/5 | Planned (next up) | - |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 0/TBD | Not started | - |
 | 18. Human Report Upload + Client Delivery | v1.1 | 0/TBD | Not started | - |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
