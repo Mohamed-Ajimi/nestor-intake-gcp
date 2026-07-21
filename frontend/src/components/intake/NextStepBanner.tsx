@@ -6,6 +6,16 @@ import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import type { Phase } from "@/lib/intake-phase";
 import type { ActiveSkillRun } from "./SkillRunProgress";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type Props = {
   phase: Phase;
@@ -132,6 +142,9 @@ function RunningClock({ triggeredAt }: { triggeredAt: string }) {
 
 export function NextStepBanner(props: Props) {
   const { t } = useTranslation("intake");
+  // Phase 16 (D-03): the Start-research CTA opens a confirm dialog; the trigger fires ONLY
+  // on the AlertDialogAction (confirm), never on the initial click.
+  const [researchConfirmOpen, setResearchConfirmOpen] = useState(false);
   const {
     phase,
     validationLinkSentAt,
@@ -269,7 +282,7 @@ export function NextStepBanner(props: Props) {
         </>
       );
       actions = (
-        <PrimaryBtn onClick={props.onStartAutoResearch} busy={busy.startResearch}>
+        <PrimaryBtn onClick={() => setResearchConfirmOpen(true)} busy={busy.startResearch}>
           {busy.startResearch
             ? t("nextStep.researchRunning")
             : t("nextStep.startAutoResearch")}
@@ -355,6 +368,25 @@ export function NextStepBanner(props: Props) {
         {body}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+
+      {/* Phase 16 (D-03): confirm gate for the deep-research trigger. The 202 fires ONLY
+          when the operator clicks the confirm action — Cancel is a no-op. */}
+      <AlertDialog open={researchConfirmOpen} onOpenChange={setResearchConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("nextStep.researchConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("nextStep.researchConfirmBody")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("nextStep.researchConfirmCancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={props.onStartAutoResearch}>
+              {t("nextStep.researchConfirmConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -136,6 +136,8 @@
       "contextPackStarted": "Context Pack-generatie gestart — dit duurt ± 1–2 minuten.",
       "autoResearchOutOfScope": "Automatische research valt buiten deze fase (stopt bij decomposed).",
       "researchOutOfScope": "Onderzoek valt buiten deze fase (stopt bij decomposed).",
+      "researchStarted": "Deep research gestart — de voortgang verschijnt hieronder.",
+      "researchStartFailed": "Research starten mislukt",
       "scrollToContextPack": "Scroll naar Context Pack hieronder.",
       "scrollToFinalReport": "Scroll naar het klant-rapport blok hieronder.",
       "searchFailed": "Zoeken mislukt",
