@@ -1,4 +1,4 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, redirect, useMatches, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
@@ -34,8 +34,19 @@ export const Route = createFileRoute("/intake/$id")({
       throw redirect({ to: "/auth/login" });
     }
   },
-  component: UserIntakeFillPage,
+  component: UserIntakeRouteShell,
 });
+
+// Phase 18 fix: `/intake/$id/report` and `/intake/$id/results` are file-route CHILDREN of
+// this route, but the fill page never rendered an <Outlet/> — so child pages could never
+// appear (the router silently rendered the parent form instead). When a child route is
+// matched, render only the Outlet; otherwise render the fill page as before.
+function UserIntakeRouteShell() {
+  const matches = useMatches();
+  const childMatched = matches.some((m) => m.routeId.startsWith("/intake/$id/"));
+  if (childMatched) return <Outlet />;
+  return <UserIntakeFillPage />;
+}
 
 function UserIntakeFillPage() {
   const { id } = Route.useParams();
