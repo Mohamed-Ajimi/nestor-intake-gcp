@@ -103,7 +103,8 @@
     "dash": "—",
     "ctaFill": "Fill in request",
     "ctaView": "View answers",
-    "ctaResult": "View result"
+    "ctaResult": "View result",
+    "ctaReport": "View report"
   },
   "results": {
     "heading": "Research results",
@@ -173,6 +174,20 @@
     "logout": "Log out",
     "overview": "← Overview",
     "titleFallback": "result"
+  },
+  "reportPage": {
+    "heading": "Your report",
+    "loading": "Loading…",
+    "deliveredOn": "Delivered on {{date}}",
+    "size": "Size",
+    "download": "Download report",
+    "downloading": "Downloading…",
+    "loadFailed": "Failed to load report",
+    "notAvailable": "Report not available yet",
+    "backToOverview": "Back to overview",
+    "brand": "Agenic",
+    "logout": "Log out",
+    "chatComingSoon": "Questions about this report? Coming soon."
   },
   "aiReview": {
     "applied": "Applied",

@@ -59,15 +59,18 @@ export const Route = createFileRoute("/intake/")({
 // so the list renders whatever the projection provides without widening the seam type.
 type IntakeListRow = Intake & { title?: string | null; updated_at?: string | null };
 
-type RowCta = { label: string; target: "fill" | "results" };
+type RowCta = { label: string; target: "fill" | "results" | "report" };
 
 // Status → contextual CTA (06-UI-SPEC § Net-New 2). draft fills; submitted/reviewed view
-// answers read-only (still /intake/$id); validated/decomposed view the result set.
+// answers read-only (still /intake/$id); delivered opens the report page (D-09);
+// validated/decomposed view the result set.
 // `t` is threaded in from the component (this pure helper cannot call hooks).
 function rowCta(status: string | null, t: TFunction): RowCta {
   if (status === "draft") return { label: t("list.ctaFill"), target: "fill" };
   if (status === "submitted" || status === "reviewed")
     return { label: t("list.ctaView"), target: "fill" };
+  // Delivered → the client-facing report page (D-09), not the generic result CTA.
+  if (status === "delivered") return { label: t("list.ctaReport"), target: "report" };
   return { label: t("list.ctaResult"), target: "results" };
 }
 
@@ -104,6 +107,10 @@ function UserIntakeListPage() {
 
   const openRow = (row: IntakeListRow) => {
     const cta = rowCta(row.status, t);
+    if (cta.target === "report") {
+      navigate({ to: "/intake/$id/report", params: { id: row.id } });
+      return;
+    }
     if (cta.target === "results") {
       navigate({ to: "/intake/$id/results", params: { id: row.id } });
     } else {

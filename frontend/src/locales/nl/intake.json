@@ -103,7 +103,8 @@
     "dash": "—",
     "ctaFill": "Aanvraag invullen",
     "ctaView": "Antwoorden bekijken",
-    "ctaResult": "Bekijk resultaat"
+    "ctaResult": "Bekijk resultaat",
+    "ctaReport": "Bekijk rapport"
   },
   "results": {
     "heading": "Research resultaten",
@@ -173,6 +174,20 @@
     "logout": "Uitloggen",
     "overview": "← Overzicht",
     "titleFallback": "resultaat"
+  },
+  "reportPage": {
+    "heading": "Jouw rapport",
+    "loading": "Laden…",
+    "deliveredOn": "Bezorgd op {{date}}",
+    "size": "Grootte",
+    "download": "Download rapport",
+    "downloading": "Downloaden…",
+    "loadFailed": "Rapport laden mislukt",
+    "notAvailable": "Rapport nog niet beschikbaar",
+    "backToOverview": "Terug naar overzicht",
+    "brand": "Agenic",
+    "logout": "Uitloggen",
+    "chatComingSoon": "Vragen over dit rapport? Binnenkort beschikbaar."
   },
   "aiReview": {
     "applied": "Toegepast",
