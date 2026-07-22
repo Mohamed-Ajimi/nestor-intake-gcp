@@ -63,7 +63,7 @@ trail intact.
 - [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - DEFERRED (operator decision 2026-07-21): runs after Phase 19, before Phase 20 — plan-critique pass and pairwise draft tournament land on the complete proven A-to-Z flow
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
 - [x] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path (completed 2026-07-22)
-- [ ] **Phase 18: Human Report Upload + Client Delivery** - Superadmin uploads the final PDF (status → `delivered`); client sees/downloads it + delivery email
+- [x] **Phase 18: Human Report Upload + Client Delivery** - Superadmin uploads the final PDF (status → `delivered`); client sees/downloads it + delivery email (completed 2026-07-22)
 - [ ] **Phase 19: Q&A Chat (Voyage + Haiku RAG)** - Findings indexed on completion; client + superadmin ask grounded questions post-delivery, space-scoped
 - [ ] **Phase 20: Deferred Chores + v1.0 UAT Closure** - The 21-item deferred UAT ledger re-run, carried-over chores done, 3 open product decisions decided + implemented
 
@@ -154,7 +154,7 @@ trail intact.
   - [x] 18-01-PLAN.md — Backend deliver/replace/report verbs (in_research→delivered, PDF-only, forged-key guard, status-gated client read) + report-delivery & cross-tenant denial tests
   - [x] 18-02-PLAN.md — Frontend admin: repair FinalReportBlock (staged upload + explicit Deliver dialog + Replace + PDF-only) + seam verbs + phase-machine wiring + admin reload + NL/FR/EN
   - [x] 18-03-PLAN.md — Frontend client: new delivered-only report route (download-only, chat space reserved) + list "View report" CTA + report-page i18n
-  - [ ] 18-04-PLAN.md — § Phase 18 runbook (nestor-api + frontend rebuild, no migrate, no new secret) + operator live deploy / stage-deliver-download-mail UAT
+  - [x] 18-04-PLAN.md — § Phase 18 runbook (nestor-api + frontend rebuild, no migrate, no new secret) + operator live deploy / stage-deliver-download-mail UAT
 **UI hint**: yes
 
 ### Phase 19: Q&A Chat (Voyage + Haiku RAG)
@@ -191,6 +191,6 @@ trail intact.
 | 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
-| 18. Human Report Upload + Client Delivery | v1.1 | 3/4 | In Progress|  |
+| 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete   | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
