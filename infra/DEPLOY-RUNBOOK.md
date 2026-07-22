@@ -1529,6 +1529,193 @@ this is a REPORT-02 breach — do not accept the phase.
 
 ---
 
+## Phase 18 — Human report upload + client delivery (nestor-api REBUILD + frontend deploy, NO migrate, NO new secret)
+
+This section is the enumerated source of truth for the Plan-04 operator live session that ships the
+human-report delivery surface to production. Phase 18 adds surface to BOTH deployables — but SIMPLER
+than Phase 17: there is only ONE backend deployable (`nestor-api`) and the frontend; the Tribunal
+images (`tribunal-api`/`tribunal-worker`) are **UNCHANGED** this phase (no Tribunal rebuild), and
+**there is NO migration** and **NO new secret/env**.
+
+1. **`nestor-api`** gains three NEW report-delivery verbs (`app/api/intake_routes.py`):
+   `POST /intakes/{id}/deliver` (the sole `in_research -> delivered` transition), `POST
+   /intakes/{id}/report/replace` (post-delivery repoint, status stays `delivered`), and the
+   status-gated `GET /intakes/{id}/report` (client report read, 404 for any status other than
+   exactly `delivered` — REPORT-02). These are new Python verbs baked into the image (18-01).
+2. **`nestor-frontend`** gains a NEW authenticated client route `/intake/$id/report` (delivered-only,
+   download-only) + a delivered-only "View report" list CTA (18-03), and REPAIRS the previously
+   gated-off admin `FinalReportBlock` into the real staged-upload → explicit-Deliver → post-delivery-
+   Replace flow with `phaseShowsFinalReport` extended to include `in_research` (18-02). Both need the
+   image REBUILT (new route + `routeTree.gen.ts` regeneration).
+
+> **NO migration this phase — the schema is untouched (RESEARCH § Runtime State Inventory).** Every
+> column and enum the delivery surface reads/writes ALREADY EXISTS from migration 0001:
+> `intakes.final_report_artifact_id`, `intakes.results_link_sent_at` (reused as the delivered-mail
+> timestamp — no new `delivered_at` column, 18-01 D), the `delivered` intake-status enum value, and
+> the `research_artifacts` table (the report row is `source='human-report'`/`type='report'`). The
+> `nestor-migrate` Job need **NOT** run this phase — there is no new revision to apply.
+
+> **NO new secret/env this phase (RESEARCH § Runtime State Inventory).** The delivery mail reuses the
+> Phase-10 mail stack already live on `nestor-api`: `RESEND_API_KEY` (secret), `APP_BASE_URL` (the
+> mail CTA deep-links to `/intake/{id}/report`), and `NESTOR_ADMIN_EMAIL`. The delivery mail obeys the
+> SAME refuse-send guard as every other results-family mail — it will NOT send if `APP_BASE_URL` is
+> unset (Step 18.d is confirm-only). No new Voyage/chat env lands here (that is Phase 19).
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is FORBIDDEN on this project (it would rotate the BUILT_IN DB
+> passwords and take down all services). Every step below is a manual gcloud reconciliation run in
+> Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **The recurring deploy-gap (READ FIRST — Steps 18.a AND 18.c both hit it).** "Nothing is real until
+> it is deployed, and a config-only env flip ships a STALE image." Phase 18 adds new Python verbs to
+> `nestor-api` AND new frontend routes/UI — a `gcloud run services update --update-env-vars` on the
+> current revisions ships NEITHER. Steps 18.a and 18.c are mandatory Cloud Build **image REBUILDs**,
+> not env flips. Because there is no migration and no new secret this phase, the rebuild+deploy of
+> the two images is the ENTIRE deploy surface — do not mistake the "no migration/no secret" simplicity
+> for "no rebuild needed": a config-only flip ships stale verbs/routes.
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13/14/16/17).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be / tools@epicimpact.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+### Step 18.a — REBUILD + deploy the `nestor-api` image via Cloud Build (deliver/replace/report verbs must ship)
+
+The running `nestor-api` container predates the Phase-18 report-delivery verbs. A config-only env
+flip on the stale image is the **recurring deploy-gap** — it produces a live 404 on `POST
+/intakes/{id}/deliver` (or a 500 `AttributeError`/`ModuleNotFoundError` on the new helpers) while CI
+is green, and the client `GET /intakes/{id}/report` never resolves. Reuse the § Phase 16 Step-16.a /
+§ Phase 17 Step-17.b backend Cloud Build idiom verbatim (the same `backend` build context; never a
+local `docker build` — downloads are blocked on the dev box), then repoint the service:
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build (bakes the deliver/replace/report verbs + DeliverBody/ReportView models
+# + the _assert_report_key/_create_report_artifact/_send_report_mail helpers into the image), then
+# repoint. No new pip dependency this phase (reuses the in-image storage/mail/transition seams).
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"
+```
+
+### Step 18.b — Run the intake backend suite in Cloud Build against the fresh image BEFORE the live proof
+
+18-01 authored its pytest suite by-construction and deferred the run to Cloud Build (the dev box has
+no Python). Run the full intake suite so the new Phase-18 tests execute green before you spend on the
+live proof — the new `test_report_delivery.py` (deliver transition, wrong-status 409, PDF-only 422,
+forged-key 404, deliver-mail stamp, mail-failure recovery, replace, report read delivered/pre-delivery)
+plus the extended `test_intake_cross_tenant.py` deliver/report denial cases (deliver_cross_tenant 404,
+report_cross_tenant 404, report_read_pre_delivery REPORT-02 404):
+
+```bash
+# From the repo root — source MUST be `.` (repo root), never `backend` (§ Phase 14.g / 16.a note).
+gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+```
+
+### Step 18.c — Deploy the frontend image (new `/intake/$id/report` route + repaired FinalReportBlock)
+
+The frontend gains the authenticated delivered-only client report route `/intake/$id/report`
+(`frontend/src/routes/intake.$id.report.tsx` + the regenerated `routeTree.gen.ts`), the delivered-only
+"View report" list CTA (`frontend/src/routes/intake.index.tsx`), and the repaired admin
+`FinalReportBlock` (staged-upload → Deliver → Replace, `phaseShowsFinalReport` includes `in_research`)
+plus the `deliverReport`/`replaceReport`/`getReport` seam transport and NL/FR/EN copy. Rebuild + deploy
+per the standard § Phase 12 Step-12.3 / § Phase 17 Step-17.d frontend flow (Cloud Build image REBUILD;
+`--build-arg VITE_*` from substitutions; NO `VITE_SUPABASE_*` — the in-image bundle guard fails the
+build if a Supabase signature leaks). Reuse the SAME `_API_BASE_URL` + Firebase substitutions captured
+at Phase 12 Step 12.3 (unchanged — no URL re-wiring, no new env/secret):
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:$(date +%Y%m%d-%H%M%S)"
+
+# Reuse the SAME _API_BASE_URL / _FB_* substitutions from Phase 12 Step 12.3 (unchanged).
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<hash>-ew.a.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" \
+  --region "$REGION" \
+  --allow-unauthenticated \
+  --port 8080 \
+  --project="$GOOGLE_PROJECT"
+```
+
+> **NO `nestor-migrate` Job run this phase.** Unlike § Phase 16 (0011) and § Phase 17 (0012), Phase 18
+> lands NO migration — every column/enum/table the delivery surface reads pre-exists from migration
+> 0001 (`final_report_artifact_id`, `results_link_sent_at`, the `delivered` enum, `research_artifacts`).
+> Do NOT execute `nestor-migrate` here: there is no new revision, so the Job would connect, find itself
+> already "at head", and exit a silent no-op. The two image rebuilds above are the entire deploy.
+
+### Step 18.d — Confirm the mail env is present (READ-ONLY — `APP_BASE_URL` / `NESTOR_ADMIN_EMAIL` / `RESEND_API_KEY` already set)
+
+Phase 18 introduces **no new env var and no new secret** — the delivery mail reuses the Phase-10 mail
+stack already live on `nestor-api` (§ Phase 10 Steps 10.1–10.3, finalized in § Phase 12 Step 12.4).
+The delivery mail obeys the SAME refuse-send guard as every results-family mail: it will NOT send if
+`APP_BASE_URL` is unset (the intake is still flipped to `delivered`, but `results_link_sent_at` stays
+NULL — recoverable, 18-01 T-18-05). Confirm both plain envs are present + the Resend secret is bound
+(confirm-only — do NOT re-set; a wrong `APP_BASE_URL` breaks the mail CTA deep-link, Pitfall 4):
+
+```bash
+gcloud run services describe nestor-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep -E 'APP_BASE_URL|NESTOR_ADMIN_EMAIL|RESEND_API_KEY'
+# expect: APP_BASE_URL=https://nestor-frontend-<hash>-ew.a.run.app   (the captured FRONTEND_URL, Phase 12)
+#         NESTOR_ADMIN_EMAIL=<the ops address>
+#         RESEND_API_KEY=nestor-resend-api-key:latest                (native secret reference, never the value)
+```
+
+> **CHORE (CLOSE-02, do NOT do here): rotate the Resend key post-UAT.** The Resend key transited an
+> assistant chat and is scheduled for rotation to version 2 of `nestor-resend-api-key` (STATE.md
+> Deferred Items → Phase 20 CLOSE-02). Do NOT rotate it during this UAT — a mid-UAT rotation would
+> break the delivery mail. Rotate AFTER the Phase-18 live proof is green.
+
+### Step 18.e — Live stage/deliver/download/mail UAT (points to 18-HUMAN-UAT.md — see Task 2 checkpoint)
+
+With `nestor-api` rebuilt (deliver/replace/report verbs live), the intake suite green in Cloud Build,
+the frontend deployed (report route + repaired admin block), and the mail env confirmed, run the
+operator live session per
+`.planning/phases/18-human-report-upload-client-delivery/18-HUMAN-UAT.md`:
+
+1. On an **`in_research`** smoke intake (a completed research run from § Phase 16/17, OR an intake set
+   to `in_research` directly for this UAT — the report flow does not require a real run), open the
+   **admin** intake detail → the `FinalReportBlock` shows the staged-upload UI (it mounts during
+   `in_research` via `phaseShowsFinalReport`).
+2. **Stage (REPORT-02 pre-delivery invisibility):** upload a real PDF (crafted in Claude Design from
+   the § Phase-17 bundle's `report.md`) → it STAGES locally; confirm the intake status STAYS
+   `in_research` and a **CLIENT** login shows **NO report** (the `/intake/$id/report` route redirects
+   and the list shows no "View report" CTA). This is the T-18-15 blocking check.
+3. **Deliver (REPORT-01):** click **Deliver** → the `RecipientPicker` (results copy family) opens →
+   confirm → status flips to `delivered`; the delivery email arrives at the recipient inbox — check the
+   locale is correct for the recipient (**NL / FR / EN** per the recipient's language); the CTA
+   deep-links to `/intake/{id}/report`.
+4. **Client download (REPORT-02):** log in as a **CLIENT** member of that space → the intake list now
+   shows **"View report"** → open the page → **download and open the PDF** (signed-URL attachment,
+   download-only, no inline viewer). The Phase-19 chat placeholder shows but has no chat surface (D-07).
+5. **Replace (REPORT-03):** replace the report with a corrected PDF (status STAYS `delivered`); verify
+   the client gets the NEWEST file; test both the **silent replace** (no re-notify) and the optional
+   **re-notify** (RecipientPicker → new mail) paths.
+6. Record the intake id, recipient(s), locales seen (NL/FR/EN), download success, and PASS/FAIL per
+   **REPORT-01/02/03** (plus any defects) in `18-HUMAN-UAT.md`.
+
+Failure triage:
+- `POST /intakes/{id}/deliver` **404** → Step-18.a rebuild was skipped (stale image, recurring
+  deploy-gap). A 500 `AttributeError` / `ModuleNotFound` on deliver → same (the new helpers/verbs did
+  not ship).
+- The `/intake/{id}/report` route **404s in the browser** → Step-18.c frontend deploy was skipped OR
+  `routeTree.gen.ts` was not regenerated (the route is unregistered in the shipped bundle).
+- **A client sees the report BEFORE delivery** → the front status gate (`status !== "delivered"`
+  redirect) or the backend status-gate (`GET /report` exact-equality 404) regressed → **STOP, this is
+  a REPORT-02 breach — do not accept the phase** (T-18-15 blocking).
+- **Mail never arrives** → check `APP_BASE_URL` / `RESEND_API_KEY` (Step 18.d) and the `nestor-api`
+  logs for the refuse-send warning (a delivered intake with `results_link_sent_at` NULL = the mail
+  was refused/failed; the flip is still recoverable, re-send by replacing with re-notify).
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -1586,3 +1773,8 @@ this is a REPORT-02 breach — do not accept the phase.
 - [ ] Step 17.d — `nestor-frontend` image REBUILT via Cloud Build (download button + locked/re-verify UI) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green)
 - [ ] Step 17.e — CONFIRM-ONLY read: `STORAGE_BUCKET` (the app bucket — bundle target, D-05) + `TRIBUNAL_SERVICE_URL` (the seam audience) present on `nestor-api`; NO new env/secret; explicitly NO `AUDIT_GCS_BUCKET` on the download path (D-05 — app bucket, never the audit bucket)
 - [ ] Step 17.f — CHECKPOINT: top up Anthropic credits + complete the parked Phase-16 run FIRST (produces the real `completed` run); then on that run's card confirm chain state VERIFIED + Download → zip contains `report.md` + `research/*.md` + `sources.json` with NO rejected claims (D-01/D-03); `chain_status=verified` from the completion-path gate (optional scratch-tenant tamper → locked + Re-verify, D-06); a CLIENT login sees NO raw-output/research surface (REPORT-02); run id / zip contents / `verify_chain` recorded in 17-HUMAN-UAT.md
+- [ ] Step 18.a — `nestor-api` image REBUILT via Cloud Build with the deliver/replace/report verbs (`POST /intakes/{id}/deliver` / `POST /intakes/{id}/report/replace` / `GET /intakes/{id}/report` + DeliverBody/ReportView + the report helpers) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap); Tribunal images UNCHANGED
+- [ ] Step 18.b — intake full suite green in Cloud Build against the fresh image (`test_report_delivery.py` + the extended `test_intake_cross_tenant.py` deliver/report denial cases); `gcloud builds submit . --config=cloudbuild.test.yaml`
+- [ ] Step 18.c — `nestor-frontend` image REBUILT via Cloud Build (new `/intake/$id/report` route + regenerated `routeTree.gen.ts` + repaired `FinalReportBlock` + list "View report" CTA) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `nestor-migrate` Job run (no migration landed)
+- [ ] Step 18.d — CONFIRM-ONLY read: `APP_BASE_URL` + `NESTOR_ADMIN_EMAIL` + `RESEND_API_KEY` present on `nestor-api` (Phase-10 mail stack reused; the delivery mail refuse-sends if `APP_BASE_URL` unset); NO new env/secret; Resend-key rotation LEFT for Phase 20 CLOSE-02 (do NOT rotate mid-UAT)
+- [ ] Step 18.e — CHECKPOINT: live UAT on an `in_research` smoke intake — stage a PDF (status stays `in_research`, CLIENT sees nothing — REPORT-02 blocking) → Deliver (status → `delivered`, mail arrives in the recipient's NL/FR/EN locale, CTA → `/intake/{id}/report`) → CLIENT sees "View report" + downloads/opens the PDF (REPORT-02) → Replace silent + re-notify (status stays `delivered`, newest file served — REPORT-03); intake id / recipients / locales / download result / PASS-FAIL per REPORT-01/02/03 recorded in 18-HUMAN-UAT.md
