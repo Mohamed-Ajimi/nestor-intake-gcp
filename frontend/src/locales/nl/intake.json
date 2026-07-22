@@ -509,6 +509,13 @@
     "errorLabel": "Foutmelding",
     "retry": "Opnieuw proberen",
     "costFallback": "—",
-    "dateFallback": "—"
+    "dateFallback": "—",
+    "download": "Ruwe output downloaden",
+    "downloadError": "Downloadlink kon niet worden aangemaakt. Probeer opnieuw.",
+    "lockedTitle": "Audit-keten gebroken — download vergrendeld",
+    "lockedBody": "De audit-hashketen van deze run verifieerde niet, dus de ruwe output is vergrendeld. Verifieer de keten opnieuw om de vergrendeling op te heffen.",
+    "reverify": "Keten opnieuw verifiëren",
+    "reverifyError": "Herverifiëren is mislukt. Probeer opnieuw.",
+    "reverifyStillBroken": "De keten is nog steeds gebroken — de download blijft vergrendeld."
   }
 }

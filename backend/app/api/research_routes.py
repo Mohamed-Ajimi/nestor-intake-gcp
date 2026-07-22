@@ -46,6 +46,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
+from app.core.config import get_settings
 from app.db import audit
 from app.db.ai_session import tenant_session
 from app.db.repository import IntakeRepository, ResearchRunRepository
@@ -59,7 +60,11 @@ from app.db.stream_session import (
     read_latest_research_run_dict,
 )
 from app.research import brief as brief_mod
+from app.research import tribunal_client
+from app.research.bundle import build_bundle_zip
 from app.research.run_task import run_poll_driver
+from app.storage import gcs
+from app.storage.keys import build_object_key
 
 _log = logging.getLogger(__name__)
 
@@ -238,6 +243,198 @@ def trigger_research(
         "research driver scheduled: research_run_id=%s attempt=%s", research_run_id, attempt
     )
     return {"research_run_id": research_run_id, "status": "queued"}
+
+
+# ---------------------------------------------------------------------------
+# Raw-output download + audit-chain re-verify (superadmin-only, space-scoped)
+# ---------------------------------------------------------------------------
+#
+# Two sync-``def`` handlers realizing RUN-03 SC1 (superadmin download) + SC2
+# (client / cross-space denial). Both inherit ``get_current_identity`` from
+# protected_router (no own auth dep) and reach the DB ONLY through the injected
+# ``get_tenant_repo`` + ``tenant_session`` — D-03's ci_no_raw_db_access grep-guard
+# stays green (NO ``get_engine`` / ``sessionmaker`` import).
+#
+# DENIAL DISCIPLINE (Pitfall 5 / T-17-10 / T-17-11): a non-superadmin caller and a
+# cross-tenant / missing run are BOTH existence-hidden 404 — never 403, never
+# 200-with-data — because RUN-03 says a client can NEVER reach the raw output and a
+# 403 would leak that the resource exists. The superadmin role-check fires FIRST,
+# so a null-space user hits the role gate → 404 (not the null-space 403).
+
+
+def _build_and_store_bundle(
+    identity: Identity,
+    intake,
+    run,
+) -> str:
+    """Driver-death recovery: rebuild the raw-output zip + persist ``bundle_key`` (Pattern 2).
+
+    The normal completion path (Plan 02 :func:`app.research.run_task.build_completion`)
+    materializes the bundle ONCE on the verified terminal. When that never ran (the
+    BackgroundTask driver died after finalize but before the build — or on a pre-Phase-17
+    row) a verified run carries ``bundle_key IS NULL``. This helper lazily rebuilds it.
+
+    POOL SAFETY (T-17-14, mirrors Plan 02): all seam + GCS I/O runs with NO DB connection
+    held — the injected request repo's session is NOT used here. A fresh ``tenant_session``
+    is opened ONLY to patch ``research_runs.bundle_key`` after the upload. Returns the new key.
+    """
+    settings = get_settings()
+    space_id = str(intake.space_id)
+    seam_kwargs = dict(
+        service_url=settings.tribunal_service_url,
+        space_id=space_id,
+        acting_user_id=identity.uid,
+        acting_email=identity.email,
+    )
+    rid = run.tribunal_run_id
+
+    # Seam + build + upload — connection-free window (no session held).
+    report = tribunal_client.get_report(run_id=rid, **seam_kwargs)
+    bundle = tribunal_client.get_research_bundle(run_id=rid, **seam_kwargs)
+    report_for_zip = dict(report)
+    if not report_for_zip.get("markdown"):
+        # Prefer the persisted output_markdown (the live report endpoint returns
+        # ``sections`` not ``markdown`` — Open Q1 / A1), else empty.
+        report_for_zip["markdown"] = report.get("markdown") or run.output_markdown or ""
+    zip_bytes = build_bundle_zip(report_for_zip, bundle, report.get("sources") or [])
+    key = build_object_key(
+        space_id,
+        str(intake.id),
+        "artifacts",
+        f"raw-output-{run.id}.zip",
+    )
+    gcs.upload_object(key, zip_bytes, content_type="application/zip")
+
+    # WRITE: open a fresh scoped session ONLY to patch the key (no I/O here).
+    with tenant_session(identity) as txs:
+        ResearchRunRepository(txs, identity).patch(run.id, bundle_key=key)
+
+    _log.warning(
+        "bundle lazily rebuilt on download: research_run_id=%s key=%s", run.id, key
+    )
+    return key
+
+
+@research_router.get("/{intake_id}/research/{run_id}/bundle-url")
+def get_bundle_url(
+    intake_id: str,
+    run_id: str,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Mint a signed download URL for a verified completed run's raw-output bundle (RUN-03 SC1).
+
+    Superadmin-only + space-scoped, existence-hidden throughout:
+
+    * ``identity.role != "superadmin"`` → 404 (Open Q2 defense-in-depth; a client is
+      user-role and RUN-03 says it can NEVER reach the download — Pitfall 5, NOT 403).
+    * a cross-tenant / missing intake or run → 404 (existence hidden, D-07).
+    * ``status != "completed"`` or ``chain_status != "verified"`` → 409 (the D-06/D-09
+      complete-but-locked availability gate).
+    * ``bundle_key IS NULL`` on a verified run → driver-death recovery: build + upload the
+      bundle lazily (:func:`_build_and_store_bundle`), then mint against the new key.
+
+    Returns ``{"url", "expires_in"}`` — TTL 300s clamped ≤900s, forced attachment
+    disposition (T-17-12 / T-17-13, emitted inside the GCS seam).
+    """
+    # Superadmin gate FIRST (existence-hidden — a client / user-role caller sees 404).
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # Availability gate (D-06/D-09): only a completed + verified run may be downloaded.
+    if run.status != "completed" or run.chain_status != "verified":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Raw output is not available"
+        )
+
+    key = run.bundle_key
+    if key is None:
+        # Driver-death recovery (Pattern 2): build + upload + persist the key lazily.
+        key = _build_and_store_bundle(identity, intake, run)
+
+    url = gcs.signed_download_url(
+        key,
+        ttl_seconds=300,
+        filename=f"raw-output-{run_id}.zip",
+        content_type="application/zip",
+    )
+    # Advertise the SAME clamped ceiling the seam actually signed (D-10).
+    return {"url": url, "expires_in": gcs._clamp_ttl(300)}
+
+
+@research_router.post("/{intake_id}/research/{run_id}/verify-chain")
+def reverify_chain(
+    intake_id: str,
+    run_id: str,
+    repo: IntakeRepository = Depends(get_tenant_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> dict:
+    """Re-run ``verify_chain`` and lift the lock on a now-passing audit chain (RUN-03 / D-08).
+
+    Same superadmin-only + space-scoped existence-hidden discipline as
+    :func:`get_bundle_url`. Runs the ENGINE-04 legal gate again OUTSIDE any DB session (seam
+    I/O holds no connection, T-17-14), then patches the lock state in a fresh
+    ``tenant_session``:
+
+    * verdict ``ok`` → ``chain_status="verified"``, ``chain_broken_at=None`` (lock lifts);
+    * else → ``chain_status="broken"``, ``chain_broken_at=<broken_at>`` (lock stays).
+
+    LOCK-STATE ONLY (D-08): a now-verified re-verify does NOT auto-build the bundle here — the
+    next download click does the build-on-download-if-missing. The re-verify action is audited
+    in the SAME tx as the patch. Returns ``{"chain_status": <new status>}``.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # Re-run the D-06 gate OUTSIDE any DB session (seam I/O holds no connection, T-17-14).
+    settings = get_settings()
+    intake_space_id = intake.space_id
+    verdict = tribunal_client.verify_chain(
+        run_id=run.tribunal_run_id,
+        service_url=settings.tribunal_service_url,
+        space_id=str(intake_space_id),
+        acting_user_id=identity.uid,
+        acting_email=identity.email,
+    )
+
+    if verdict.get("ok"):
+        new_status = "verified"
+        new_broken_at = None
+    else:
+        new_status = "broken"
+        new_broken_at = verdict.get("broken_at")
+
+    # WRITE: patch the lock state + audit the re-verify in ONE short tx.
+    with tenant_session(identity) as txs:
+        ResearchRunRepository(txs, identity).patch(
+            run_id, chain_status=new_status, chain_broken_at=new_broken_at
+        )
+        audit.log(
+            txs,
+            actor_uid=identity.uid,
+            event_type="research.chain_reverified",
+            target=str(run_id),
+            space_id=intake_space_id,
+            metadata={"chain_status": new_status},
+        )
+
+    return {"chain_status": new_status}
 
 
 # ---------------------------------------------------------------------------

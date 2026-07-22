@@ -55,6 +55,14 @@ export type ResearchRun = {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  // Phase-17 chain-guard / bundle lock state (RUN-03). The SSE frame carries these
+  // once the backend dict emits them (read_latest_research_run_dict, Plan 01):
+  //   chain_status    "verified" | "broken" | null  (null until finalize)
+  //   chain_broken_at first divergent audit row index (null when verified)
+  //   bundle_key      GCS key of the materialized zip (null until built)
+  chain_status: string | null;
+  chain_broken_at: number | null;
+  bundle_key: string | null;
 };
 
 /** Handle returned to the caller; `close()` aborts the fetch and stops all retries. */
@@ -78,6 +86,40 @@ export function triggerResearch(
   return apiFetch<{ research_run_id: string }>(`/intakes/${intakeId}/research`, {
     method: "POST",
   });
+}
+
+/**
+ * Mint a signed download URL for a verified completed run's raw-output bundle (RUN-03 SC1).
+ * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
+ * method GET. Superadmin-only + space-scoped server-side; a client / cross-space caller is
+ * existence-hidden as 404, and a not-yet-verified run is 409. Returns `{url, expires_in}` on
+ * success. Returns `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function getBundleUrl(
+  intakeId: string,
+  runId: string,
+): Promise<ApiResult<{ url: string; expires_in: number }>> {
+  return apiFetch<{ url: string; expires_in: number }>(
+    `/intakes/${intakeId}/research/${runId}/bundle-url`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Re-run the audit-chain verification for a run and lift the lock on a now-passing chain
+ * (RUN-03 / D-08). A one-shot `apiFetch` (never fork the transport), method POST.
+ * Superadmin-only + space-scoped; returns the new `{chain_status}`. On success a
+ * now-verified chain lets the next `getBundleUrl` build-on-download the bundle. Returns
+ * `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function reVerifyChain(
+  intakeId: string,
+  runId: string,
+): Promise<ApiResult<{ chain_status: string }>> {
+  return apiFetch<{ chain_status: string }>(
+    `/intakes/${intakeId}/research/${runId}/verify-chain`,
+    { method: "POST" },
+  );
 }
 
 /**

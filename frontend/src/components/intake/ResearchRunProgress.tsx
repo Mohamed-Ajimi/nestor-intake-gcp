@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Download,
+  Loader2,
+  Lock,
+  XCircle,
+} from "lucide-react";
 import { format } from "date-fns";
+import { toast } from "sonner";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import {
+  getBundleUrl,
   openResearchStream,
+  reVerifyChain,
   triggerResearch,
   type ResearchRun,
 } from "@/lib/api/research";
@@ -151,6 +162,98 @@ function StageIcon({ status }: { status: string }) {
 }
 
 /**
+ * The raw-output affordance on the completed summary card (RUN-03 / D-06 / D-07).
+ *
+ * A VERIFIED chain renders a `[Download]` button: `getBundleUrl` mints a short-lived signed
+ * URL server-side and the browser navigates to it (the seam forces `attachment` disposition,
+ * so it downloads rather than renders — T-17-13). A BROKEN chain renders a distinct locked
+ * state with a `[Re-verify]` button (`reVerifyChain`); on a now-passing re-verify the SSE
+ * stream pushes the new `chain_status`, flipping this back to the download affordance. Every
+ * error path is a toast — never a throw (CLAUDE.md return-no-throw). Admin-only by placement
+ * (T-16-12 / T-17-15): this component is imported only by the admin intake detail route.
+ */
+function RawOutputControls({
+  intakeId,
+  run,
+}: {
+  intakeId: string;
+  run: ResearchRun;
+}) {
+  const { t } = useTranslation("intake");
+  const [busy, setBusy] = useState(false);
+
+  const btnClass =
+    "inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-60";
+
+  const handleDownload = async () => {
+    if (busy) return;
+    setBusy(true);
+    const res = await getBundleUrl(intakeId, run.id);
+    setBusy(false);
+    if (res.success && res.data?.url) {
+      // The signed URL forces attachment disposition server-side → the browser downloads.
+      window.location.href = res.data.url;
+    } else {
+      toast.error(t("research.downloadError"));
+    }
+  };
+
+  const handleReverify = async () => {
+    if (busy) return;
+    setBusy(true);
+    const res = await reVerifyChain(intakeId, run.id);
+    setBusy(false);
+    if (!res.success) {
+      toast.error(t("research.reverifyError"));
+      return;
+    }
+    if (res.data?.chain_status !== "verified") {
+      // Still broken — the lock stays; the SSE stream keeps the locked card as-is.
+      toast.error(t("research.reverifyStillBroken"));
+    }
+    // On success the SSE stream pushes the new chain_status → the card re-renders to the
+    // download affordance; no local state to flip.
+  };
+
+  if (run.chain_status === "broken") {
+    return (
+      <div className="mt-4 border-l-4 bg-paper px-4 py-3" style={{ borderLeftColor: "#DC2626" }}>
+        <div className="mb-1 flex items-center gap-2">
+          <Lock className="h-4 w-4 text-red-600" />
+          <span
+            className="font-mono text-[11px] uppercase tracking-wider"
+            style={{ color: "#DC2626" }}
+          >
+            {t("research.lockedTitle")}
+          </span>
+        </div>
+        <div className="mb-3 font-sans text-[14px] leading-relaxed text-ink">
+          {t("research.lockedBody")}
+        </div>
+        <button type="button" onClick={handleReverify} disabled={busy} className={btnClass}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-4 w-4" />}
+          {t("research.reverify")}
+        </button>
+      </div>
+    );
+  }
+
+  if (run.chain_status === "verified") {
+    return (
+      <div className="mt-4">
+        <button type="button" onClick={handleDownload} disabled={busy} className={btnClass}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {t("research.download")}
+        </button>
+      </div>
+    );
+  }
+
+  // chain_status null (pre-Phase-17 row / not yet finalized): no affordance.
+  return null;
+}
+
+/**
  * The live research-progress panel. While the run is active it renders the dynamic stage
  * list + running cost + elapsed clock. On a terminal status it collapses to a summary card
  * (completed → timestamp/cost/duration; failed/cancelled → error + a re-trigger affordance).
@@ -206,6 +309,8 @@ export function ResearchRunProgress({
             <span>{t("research.totalCost", { cost: fmtCost(run?.cost_usd_total ?? null, costFallback) })}</span>
             <span>{t("research.duration", { duration: fmtDuration(run?.started_at ?? null, run?.completed_at ?? null) })}</span>
           </div>
+          {/* Raw-output download (verified) or locked+re-verify (broken) — RUN-03. */}
+          {run && <RawOutputControls intakeId={intakeId} run={run} />}
         </div>
       );
     }
