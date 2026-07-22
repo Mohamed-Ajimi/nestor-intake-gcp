@@ -136,6 +136,11 @@ None — no new security surface beyond the plan's `<threat_model>`. All three e
 - Deploy: the backend needs a Cloud Run image rebuild + redeploy (no migration, no new secret) before live UAT — follow the `infra/DEPLOY-RUNBOOK.md` backend image path.
 - No known blockers.
 
+## Self-Check: PASSED
+
+- Files verified present: `intake_routes.py`, `test_report_delivery.py`, `test_intake_cross_tenant.py`, `18-01-SUMMARY.md`.
+- Commits verified in git log: `7cc5096` (feat), `ef4c779` (test), `ac93166` (docs deferred), `12c7e41` (docs summary).
+
 ---
 *Phase: 18-human-report-upload-client-delivery*
 *Completed: 2026-07-22*
