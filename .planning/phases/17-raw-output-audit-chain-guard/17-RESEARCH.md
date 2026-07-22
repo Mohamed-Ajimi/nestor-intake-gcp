@@ -398,7 +398,7 @@ def get_bundle_url(
 
 **No other assumptions.** All architecture, endpoints, models, and pitfalls were verified by direct file reads this session.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **report.md source of truth (A1).**
    - What we know: the driver persists `report.get("markdown")` to `research_runs.output_markdown`; the fixture returns `{"markdown": ...}`; the live report endpoint returns `sections`.

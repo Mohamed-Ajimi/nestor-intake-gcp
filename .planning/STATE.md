@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 16 context gathered
-last_updated: "2026-07-21T13:29:32.634Z"
-last_activity: 2026-07-21 -- Phase 16 planning complete
+stopped_at: Phase 17 context gathered
+last_updated: "2026-07-22T08:23:16.718Z"
+last_activity: 2026-07-22 -- Phase 17 execution started
 progress:
   total_phases: 8
   completed_phases: 2
-  total_plans: 13
-  completed_plans: 8
+  total_plans: 17
+  completed_plans: 12
   percent: 25
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 16 — research trigger + progress bridge (Phase 15 deferred after Phase 19, operator decision 2026-07-21)
+**Current focus:** Phase 17 — raw-output-audit-chain-guard
 
 ## Current Position
 
-Phase: 16 (research trigger + progress bridge) — execution order now 16 → 17 → 18 → 19 → 15 → 20
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-07-21 -- Phase 16 planning complete
+Phase: 17 (raw-output-audit-chain-guard) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 17
+Last activity: 2026-07-22 -- Phase 17 execution started
 
 Progress: [██████████] 100%
 
@@ -135,6 +135,7 @@ Recent decisions affecting current work (v1.1):
 | fast | Fix phase machine consuming enrichment skill runs (fake "analysis ready" after structure-answers) | 2026-07-16 | d2f335b | — |
 | fast | Restart skill-run safety poll on new dispatch (stuck 7-min timer) + toast on unusable review output | 2026-07-16 | 4eb1c6e | — |
 | fast | Heranalyseer re-run button in awaiting_review banner | 2026-07-16 | acf1ba4 | — |
+| 260721-twy | Convert Tribunal intake gatekeeper into a delegator (sonnet-4-6, multi-line research assignments) + full context pack in brief, clarification rubberbands removed | 2026-07-21 | d0032c4 | [260721-twy-convert-tribunal-intake-gatekeeper-into-](./quick/260721-twy-convert-tribunal-intake-gatekeeper-into-/) |
 | fast | Client validation diff: patch applied refinements into research_questions + show applied text | 2026-07-16 | a710e8e | — |
 | 260720-eh4 | Record rev 00010-ndr deploy (a710e8e live) + operator UAT-deferral decision in 12-UAT.md | 2026-07-20 | 7731421 | [260720-eh4-record-rev-00010-ndr-deploy-defer-remain](./quick/260720-eh4-record-rev-00010-ndr-deploy-defer-remain/) |
 
@@ -157,9 +158,9 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-21T12:10:37.343Z
-Stopped at: Phase 16 context gathered
-Resume file: .planning/phases/16-research-trigger-progress-bridge/16-CONTEXT.md
+Last session: 2026-07-22T07:34:56.278Z
+Stopped at: Phase 17 context gathered
+Resume file: .planning/phases/17-raw-output-audit-chain-guard/17-CONTEXT.md
 
 ## Operator Next Steps
 
