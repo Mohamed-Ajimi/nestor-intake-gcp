@@ -315,12 +315,25 @@ def _build_and_store_bundle(
     return key
 
 
+def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Identity:
+    """Superadmin role gate as a DEPENDENCY (existence-hidden 404, Pitfall 5).
+
+    Declared BEFORE ``get_tenant_repo`` in the download/re-verify signatures so it
+    resolves first: a non-superadmin caller — including a null-space user — hits this
+    404 before ``get_tenant_repo`` can raise its null-space default-deny 403 (which
+    would leak that the endpoint exists; the denial suite pins EXACTLY 404).
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    return identity
+
+
 @research_router.get("/{intake_id}/research/{run_id}/bundle-url")
 def get_bundle_url(
     intake_id: str,
     run_id: str,
+    identity: Identity = Depends(_superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Mint a signed download URL for a verified completed run's raw-output bundle (RUN-03 SC1).
 
@@ -374,8 +387,8 @@ def get_bundle_url(
 def reverify_chain(
     intake_id: str,
     run_id: str,
+    identity: Identity = Depends(_superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Re-run ``verify_chain`` and lift the lock on a now-passing audit chain (RUN-03 / D-08).
 
