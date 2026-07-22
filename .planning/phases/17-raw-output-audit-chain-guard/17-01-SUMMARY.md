@@ -116,6 +116,12 @@ The plan's per-task verification is `MISSING — runs in Cloud Build at wave bou
 ## Threat Surface Scan
 - New surface `GET /api/runs/{run_id}/research-bundle` is explicitly in the plan's `<threat_model>` (T-17-01 info-disclosure of rejected_claims → mitigated by returning cleaned_reports only + test; T-17-02 cross-tenant read → RLS-scoped via `Depends(get_db_session)` + cross-tenant test). No new out-of-model surface introduced. No packages installed (T-17-SC N/A).
 
+## Self-Check: PASSED
+- All 8 claimed files exist on disk.
+- All task commits present: `7e3383c` (test), `cea6607`, `357a363`, `bbbf6c9` (feat).
+- SUMMARY.md tracked (force-added; `.planning/` is gitignored).
+- Working tree clean.
+
 ---
 *Phase: 17-raw-output-audit-chain-guard*
 *Completed: 2026-07-22*
