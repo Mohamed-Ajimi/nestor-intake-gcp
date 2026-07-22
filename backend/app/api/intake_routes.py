@@ -59,6 +59,7 @@ from app.intake_canonical import (
     CANONICAL_TEMPLATE_SCHEMA,
 )
 from app.db import audit
+from app.db.ai_session import tenant_session
 from app.db.models.membership import OrganizationMembership
 from app.db.models.organization import Organization
 from app.db.repository import (
@@ -274,6 +275,44 @@ class MailRecipients(BaseModel):
     model_config = {"extra": "forbid"}
 
     recipients: list[str]
+
+
+class DeliverBody(BaseModel):
+    """Deliver / replace body — the staged report key + membership-id recipients (D-06 / D-10).
+
+    Extends the :class:`MailRecipients` shape with the staged ``storage_path`` (the
+    server-authored key the report PDF was uploaded under). ``model_config`` forbids extra
+    fields for the SAME reason ``MailRecipients`` does — no smuggled ``to``/``email`` free
+    address (D-06 no-free-address) and no smuggled ``space_id`` / ``status`` (TENANT-02): the
+    tenant scope comes from the verified Identity, the status transition from the discrete
+    verb, never the body. ``recipients`` are ``organization_memberships`` ids ONLY; the
+    server resolves emails + per-recipient locale. On ``/report/replace`` ``recipients`` may
+    be empty (a silent replace — D-05); on ``/deliver`` the picker supplies at least one.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    storage_path: str
+    recipients: list[str] = []
+
+
+class ReportView(BaseModel):
+    """Read-shaped view of the delivered report artifact (REPORT-02 — client read).
+
+    The projection ``GET /intakes/{id}/report`` returns once (and ONLY once) the intake is
+    exactly ``delivered``. ``delivered_at`` mirrors ``results_link_sent_at`` (the delivery
+    mail stamp — no separate delivered-at column; the phase machine reads
+    delivered + results_link_sent_at == completed). ``storage_path`` IS surfaced here
+    (unlike the context-pack view) because the client download flow feeds it back to the
+    existing ``GET /intakes/{id}/storage/signed-url?path=...`` seam, whose own prefix-assert
+    walls a forged key — and the client only ever receives its OWN report's key.
+    """
+
+    filename: str | None = None
+    delivered_at: str | None = None
+    byte_size: int | None = None
+    mime_type: str | None = None
+    storage_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1227,11 @@ _SUBMIT_TRANSITIONS: dict[str, str] = {
 _REVIEW_TRANSITIONS: dict[str, str] = {
     "submitted": "reviewed",
 }
+# The SOLE in_research -> delivered transition (REPORT-01 / D-01). Run `completed` NEVER
+# auto-delivers — the explicit Deliver verb owns this flip (PROJECT.md v1.1 / 16-CONTEXT).
+# A jump from any other status raises 409, so the delivery wall is structural, not merely
+# gated by CI (mirrors _SUBMIT_TRANSITIONS / _REVIEW_TRANSITIONS).
+_DELIVER_TRANSITIONS: dict[str, str] = {"in_research": "delivered"}
 
 
 def _next_submit_status(current: str) -> str:
@@ -1323,3 +1367,315 @@ def review_intake(
     if updated is None:  # pragma: no cover - patched row is in-scope by construction
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
     return _view(updated)
+
+
+# ---------------------------------------------------------------------------
+# Human-report delivery lifecycle (REPORT-01/02/03 / D-01..D-11) — Phase 18
+# ---------------------------------------------------------------------------
+#
+# The superadmin stages the externally-crafted final report PDF through the existing storage
+# seam (server-authored key {space_id}/{intake_id}/reports/{uuid}-{name}.pdf), then explicitly
+# DELIVERS: a single verb that (1) links the staged file as a research_artifacts `report` row,
+# (2) flips the SOLE in_research -> delivered transition, (3) audits in the SAME tx, and only
+# THEN (4) sends the client the results-family mail deep-linking to the client report page.
+# Replace repoints the report post-delivery without changing status (D-04/D-05); the client
+# read is invisible (404) for every status other than exactly `delivered` (REPORT-02, absolute).
+
+
+def _report_filename(storage_path: str) -> str:
+    """Recover a human download filename from a server-authored report object key.
+
+    Copies :func:`app.api.storage_routes._filename_from_key` verbatim so this module imports
+    NO route-module symbol. ``build_object_key`` produces ``.../{uuid4}-{sanitized_name}``;
+    strip the trailing path segment and drop the ``{uuid4}-`` prefix. Falls back to the last
+    path segment (or ``"download"``).
+    """
+    tail = storage_path.rsplit("/", 1)[-1] or "download"
+    # The uuid4 prefix is 36 chars + a single '-'; split once past it if present.
+    if len(tail) > 37 and tail[36] == "-":
+        candidate = tail[37:]
+        if candidate:
+            return candidate
+    return tail
+
+
+def _assert_report_key(intake, storage_path: str) -> None:
+    """Reject a non-PDF (422, D-10) or a forged / cross-prefix report key (404, D-08).
+
+    Server-side PDF-only enforcement (``storage_path.lower().endswith(".pdf")``) — not just
+    the file input — is the D-10 wall a crafted request cannot bypass. The prefix-assert
+    (``{space_id}/{intake_id}/reports/``) denies a storage_path aimed at another tenant's
+    tree (or another intake's) with an existence-hidden 404 BEFORE any artifact row is linked
+    (D-08 — the storage-route prefix-assert idiom applied at the write).
+    """
+    if not storage_path.lower().endswith(".pdf"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Report must be a PDF"
+        )
+    prefix = f"{intake.space_id}/{intake.id}/reports/"
+    if not storage_path.startswith(prefix):
+        # A forged / cross-tenant / cross-intake key on an owned intake — existence hidden.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
+
+
+def _create_report_artifact(session, identity: Identity, intake, storage_path: str):
+    """Create the report ``research_artifacts`` row in the intake's OWN space; return it.
+
+    Superadmin-safe (Pitfall 4 / T-18-06): a superadmin has a null-space repo, so a plain
+    ``create()`` would hit the ``RuntimeError`` guard (repository.py:167) -> 500; it must use
+    ``create_in_space(intake.space_id, ...)``. A user writes via ``create()`` (space_id
+    injected from the verified Identity, TENANT-02). Mirrors the role-branch every other
+    create site uses (``storage_routes`` audio row, ``create_running_skill_run``,
+    ``research_routes`` run row). The row carries ``artifact_type="report"`` /
+    ``source="human-report"`` (distinct from the context-pack ``source`` so the two never
+    collide, D-11 single-report) and ``mime_type="application/pdf"``.
+    """
+    values = dict(
+        intake_id=intake.id,
+        artifact_type="report",
+        source="human-report",
+        storage_path=storage_path,
+        filename=_report_filename(storage_path),
+        mime_type="application/pdf",
+    )
+    artifact_repo = ResearchArtifactRepository(session, identity)
+    if identity.role == "superadmin":
+        # No own space — write into the intake's OWN space (audited superadmin path).
+        return artifact_repo.create_in_space(intake.space_id, **values)
+    return artifact_repo.create(**values)  # space_id injected from Identity
+
+
+def _send_report_mail(session, identity: Identity, intake, recipient_ids: list[str]) -> bool:
+    """Send the results-family delivery mail with a ``/report`` CTA; return the sent flag.
+
+    Reuses the ``_run_intake_send`` mail body, changing ONLY the CTA path
+    (``/intake/{id}/report``, NOT ``/results`` — the client report page, D-07). Recipients are
+    resolved SERVER-SIDE from ACTIVE memberships of the intake's OWN space (D-06); a
+    foreign/deactivated/email-less id 422s the whole batch (the resolver raises). With
+    ``APP_BASE_URL`` unset the send is refused (WR-01 — never a dead-link mail). A transport
+    failure returns ``False`` (the caller leaves the delivery committed + ``results_link_sent_at``
+    NULL — recoverable, T-18-05). On a 2xx send a ``mail.sent`` audit row is written on the
+    SAME ``session``.
+    """
+    recipients = _resolve_recipient_locales(session, intake.space_id, recipient_ids)
+    emails_by_locale: dict[str, list[str]] = {}
+    for email, locale in recipients:
+        emails_by_locale.setdefault(locale, []).append(email)
+    total_recipients = len(recipients)
+
+    settings = get_settings()
+    if not settings.app_base_url:
+        _log.warning(
+            "APP_BASE_URL unset — refusing report delivery mail for intake %s", intake.id
+        )
+        return False
+    base = settings.app_base_url.rstrip("/")
+    client = intake.client_name or "team"
+    cta_url = f"{base}/intake/{intake.id}/report"  # /report (client report page), NOT /results
+
+    try:
+        for locale in sorted(emails_by_locale):
+            subject = _subject_for(locale, "results", client)
+            html = mail_render.render_results(
+                first_name=client,
+                project_title=client,
+                cta_url=cta_url,
+                app_base_url=settings.app_base_url,
+                locale=locale,
+            )
+            mail_resend.send(to=emails_by_locale[locale], subject=subject, html=html)
+    except Exception:  # noqa: BLE001 -- any transport failure is a non-send (recoverable).
+        _log.warning("report delivery mail failed for intake %s", intake.id)
+        return False
+
+    audit.log(
+        session,
+        actor_uid=identity.uid,
+        event_type="mail.sent",
+        target=str(intake.id),
+        space_id=intake.space_id,
+        metadata={"type": "results", "recipient_count": total_recipients},
+    )
+    return True
+
+
+@intake_router.post("/{intake_id}/deliver")
+def deliver_report(
+    intake_id: str,
+    body: DeliverBody,
+    identity: Identity = Depends(get_current_identity),
+) -> IntakeView:
+    """Deliver the staged report: link it, flip in_research -> delivered, mail the client.
+
+    REPORT-01 / D-01: the SOLE ``in_research -> delivered`` transition (run ``completed``
+    never auto-delivers). 404 on a cross-space/unknown intake (existence-hidden, D-07); 409 on
+    any status other than ``in_research``; 422 on a non-PDF key (D-10); 404 on a forged /
+    cross-prefix key (D-08).
+
+    ORDERING (RESEARCH A3 / Pitfall 3 — the delivery is the primary effect): the artifact
+    create + status flip + audit run in ONE committed tenant transaction FIRST; the mail is
+    sent LAST and ``results_link_sent_at`` is stamped only on a 2xx send. A mail failure leaves
+    the intake ``delivered`` with ``results_link_sent_at`` NULL — a recoverable
+    ``awaiting_results_send`` the phase machine surfaces (T-18-05). Because the send runs after
+    the commit, a bad recipient id 422s AFTER the report is already delivered (the operator
+    simply re-sends) — the report reaching the client is never held hostage to the mail.
+
+    The flip+link+audit and the mail run in SEPARATE ``tenant_session`` transactions on
+    purpose: the artifact write + the intake patch must commit TOGETHER (one tx) BEFORE the
+    mail is attempted. This mirrors ``research_routes.trigger`` (committed-before-schedule) and
+    is why a request-injected repo (its own separate tx) is NOT used for the write here.
+    """
+    # (1) Flip + link + audit — ONE committed tenant tx (the primary delivery effect).
+    with tenant_session(identity) as txs:
+        intake = IntakeRepository(txs, identity).get(intake_id)
+        if intake is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        if intake.status not in _DELIVER_TRANSITIONS:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Cannot deliver in status {intake.status!r}",
+            )
+        _assert_report_key(intake, body.storage_path)
+
+        old_status = intake.status
+        new_status = _DELIVER_TRANSITIONS[old_status]
+        artifact = _create_report_artifact(txs, identity, intake, body.storage_path)
+        IntakeRepository(txs, identity).patch(
+            intake_id, status=new_status, final_report_artifact_id=artifact.id
+        )
+        audit.log(
+            txs,
+            actor_uid=identity.uid,
+            event_type="intake.status_changed",
+            target=str(intake_id),
+            space_id=intake.space_id,
+            metadata={"from": old_status, "to": new_status},
+        )
+
+    # (2) Mail LAST — in its OWN tx, after the delivery is committed. A failure here leaves the
+    # intake delivered + results_link_sent_at NULL (recoverable). The mail.sent audit + the
+    # results_link_sent_at stamp are written only on a 2xx send, in the send tx.
+    with tenant_session(identity) as txs:
+        intake = IntakeRepository(txs, identity).get(intake_id)
+        if intake is None:  # pragma: no cover - just-committed row is in-scope
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        if _send_report_mail(txs, identity, intake, body.recipients):
+            IntakeRepository(txs, identity).patch(
+                intake_id, results_link_sent_at=datetime.now(timezone.utc)
+            )
+
+    # (3) Re-read the now-delivered intake for the response projection.
+    with tenant_session(identity) as txs:
+        updated = IntakeRepository(txs, identity).get(intake_id)
+        if updated is None:  # pragma: no cover - delivered row is in-scope by construction
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        return _view(updated)
+
+
+@intake_router.post("/{intake_id}/report/replace")
+def replace_report(
+    intake_id: str,
+    body: DeliverBody,
+    identity: Identity = Depends(get_current_identity),
+) -> IntakeView:
+    """Repoint the delivered report to a NEW file; status stays ``delivered`` (D-04/D-05).
+
+    404 on a cross-space/unknown intake (D-07); 409 unless the current status is exactly
+    ``delivered`` (there is nothing to replace before delivery); 422 on a non-PDF key (D-10);
+    404 on a forged / cross-prefix key (D-08). A NEW ``research_artifacts`` row is created and
+    ``final_report_artifact_id`` is repointed to it — the OLD artifact row + its GCS object are
+    kept (D-04 / A7 audit posture, no delete). ``status`` is UNTOUCHED (no transition verb).
+
+    Re-notify (D-05): if ``recipients`` is non-empty the SAME results-family mail is re-sent
+    (``/report`` CTA) and ``results_link_sent_at`` re-stamped on a 2xx; an empty
+    ``recipients`` is a SILENT replace (the default path — the client gets the newest file with
+    no fresh mail). A mail failure leaves the (already committed) new link intact.
+    """
+    # (1) Repoint + audit — ONE committed tenant tx (status stays delivered).
+    with tenant_session(identity) as txs:
+        intake = IntakeRepository(txs, identity).get(intake_id)
+        if intake is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        if intake.status != "delivered":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Cannot replace in status {intake.status!r}",
+            )
+        _assert_report_key(intake, body.storage_path)
+
+        artifact = _create_report_artifact(txs, identity, intake, body.storage_path)
+        IntakeRepository(txs, identity).patch(
+            intake_id, final_report_artifact_id=artifact.id
+        )
+        audit.log(
+            txs,
+            actor_uid=identity.uid,
+            event_type="report.replaced",
+            target=str(intake_id),
+            space_id=intake.space_id,
+            metadata={"artifact_id": str(artifact.id)},
+        )
+
+    # (2) Optional re-notify (D-05) — only when recipients were supplied.
+    if body.recipients:
+        with tenant_session(identity) as txs:
+            intake = IntakeRepository(txs, identity).get(intake_id)
+            if intake is None:  # pragma: no cover - just-committed row is in-scope
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+            if _send_report_mail(txs, identity, intake, body.recipients):
+                IntakeRepository(txs, identity).patch(
+                    intake_id, results_link_sent_at=datetime.now(timezone.utc)
+                )
+
+    with tenant_session(identity) as txs:
+        updated = IntakeRepository(txs, identity).get(intake_id)
+        if updated is None:  # pragma: no cover - delivered row is in-scope by construction
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        return _view(updated)
+
+
+@intake_router.get("/{intake_id}/report")
+def get_report(
+    intake_id: str,
+    repo: ResearchArtifactRepository = Depends(get_research_artifact_repo),
+    identity: Identity = Depends(get_current_identity),
+) -> ReportView:
+    """Return the delivered report's metadata — 404 unless status is EXACTLY ``delivered``.
+
+    REPORT-02 (absolute invisibility gate, Pitfall 2 / T-18-01): the report is 404 for EVERY
+    status other than exactly ``delivered`` — an EQUALITY check, NEVER a rank/``>=`` comparison
+    that would leak the report at an earlier lifecycle stage. The intake is read through a
+    scoped ``IntakeRepository`` sharing the artifact repo's session, so a cross-space/unknown
+    intake is an existence-hidden 404 too (T-18-02). A ``delivered`` intake with no linked
+    artifact (``final_report_artifact_id`` NULL) is also 404 (no report to show). The linked
+    artifact is fetched within the SAME scoped repo (its ``_scope`` walls a cross-tenant
+    artifact id); ``delivered_at`` mirrors ``results_link_sent_at`` (the delivery-mail stamp).
+
+    ``storage_path`` IS returned (unlike the context-pack view) because the client download
+    flow feeds it back to ``GET /intakes/{id}/storage/signed-url?path=...``, whose own
+    prefix-assert walls a forged key — and the client only ever receives its OWN report's key.
+    """
+    # Read the intake through a scoped IntakeRepository on the SAME session the artifact repo
+    # already holds (its space GUC / superadmin routing is set). One scoped tx for the read.
+    intake = IntakeRepository(repo.session, identity).get(intake_id)
+    if intake is None or intake.status != "delivered":
+        # Existence-hidden AND pre-delivery invisible — one code for both (REPORT-02).
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+    if intake.final_report_artifact_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+
+    artifact = repo.get(intake.final_report_artifact_id)
+    if artifact is None:  # a linked-but-missing artifact row — hide it (D-07)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+
+    return ReportView(
+        filename=artifact.filename,
+        delivered_at=(
+            intake.results_link_sent_at.isoformat()
+            if intake.results_link_sent_at
+            else None
+        ),
+        byte_size=artifact.byte_size,
+        mime_type=artifact.mime_type,
+        storage_path=artifact.storage_path,
+    )
