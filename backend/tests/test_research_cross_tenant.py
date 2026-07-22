@@ -128,6 +128,46 @@ def _count_runs(engine, set_space, space_id, intake_id) -> int:
         ).scalar_one()
 
 
+def _seed_run(
+    engine,
+    set_space,
+    space_id,
+    intake_id,
+    run_id,
+    *,
+    status="completed",
+    chain_status="verified",
+    bundle_key=None,
+) -> None:
+    """Seed a ``research_runs`` row so the availability gate is not what produces a 404.
+
+    The bundle-url / verify-chain denial cases must fail on the SCOPE / ROLE wall, not on
+    a missing run or the 409 availability gate — so seed a completed + chain-verified run.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.research_runs "
+                "(id, space_id, intake_id, status, chain_status, bundle_key, "
+                " tribunal_run_id, attempt) "
+                "VALUES (:id, :space_id, :intake_id, :status, :chain_status, "
+                " :bundle_key, :trid, 1)"
+            ),
+            {
+                "id": run_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "status": status,
+                "chain_status": chain_status,
+                "bundle_key": bundle_key or f"{space_id}/{intake_id}/artifacts/x-raw.zip",
+                "trid": f"trib-{run_id}",
+            },
+        )
+
+
 def _cleanup(engine, *space_ids) -> None:
     from sqlalchemy import text
 
@@ -137,6 +177,10 @@ def _cleanup(engine, *space_ids) -> None:
                 text(f"DELETE FROM {SCHEMA}.organizations WHERE id = :id"),
                 {"id": sid},
             )
+
+
+def _superadmin() -> "Identity":
+    return Identity(uid="sa", email="sa@x", role="superadmin", space_id=None)
 
 
 # ===========================================================================
@@ -239,6 +283,217 @@ def test_stream_null_space_403(engine, set_space, monkeypatch):
         )
         assert r.status_code == 403, (
             f"null-space user must be default-denied 403 on the pre-flight; got {r.status_code}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# bundle-url (GET) denial — RUN-03 SC2 (Plan 03 Task 1). Three cases prove the
+# raw-output download is superadmin-only + space-scoped + existence-hidden.
+# ===========================================================================
+
+
+def test_bundle_url_cross_tenant_404(engine, set_space, two_spaces, monkeypatch):
+    """space-B user GET of space-A's bundle-url → EXACTLY 404 (foreign ids not in body).
+
+    The superadmin role-check fires FIRST (a user is denied before the scope wall even
+    runs), so a space-B *user* is 404 for the same existence-hidden reason a cross-tenant
+    caller is. Seed a completed + verified run so the availability gate is NOT the cause.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (bundle-url denial)")
+    _seed_space(engine, space_b, "Space B (bundle-url denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/bundle-url",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant bundle-url must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r}); 403/200 leaks existence."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_bundle_url_user_role_404(engine, set_space, two_spaces, monkeypatch):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (superadmin-only gate).
+
+    Even a user who owns the intake's space can NEVER reach the raw output (RUN-03: clients
+    never). The role gate is existence-hidden (404, not 403). Seed a completed + verified
+    run so the 404 is the ROLE wall, not the availability gate.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (bundle-url user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/bundle-url",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(run_a) not in r.text, "404 body leaked the run id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_bundle_url_null_space_404(engine, set_space, monkeypatch):
+    """A null-space ``user`` → EXACTLY 404 (the superadmin role-check fires first, D-08).
+
+    The superadmin gate runs BEFORE any DB/scope read, so a null-space user is denied by the
+    role check (404) — NOT by the null-space default-deny 403 (which only the DB-touching
+    stream pre-flight reaches). Pins the ordering the Task-1 gate produces.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (bundle-url null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/{run_id}/bundle-url",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, got {r.status_code}."
+        )
+        assert str(run_id) not in r.text, "404 body leaked the run id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# verify-chain (POST) denial — RUN-03 SC2 (Plan 03 Task 1). Same three cases as
+# bundle-url: superadmin-only + space-scoped + existence-hidden.
+# ===========================================================================
+
+
+def test_verify_chain_cross_tenant_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """space-B user POST of space-A's verify-chain → EXACTLY 404; no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (verify-chain denial)")
+    _seed_space(engine, space_b, "Space B (verify-chain denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/{run_a}/verify-chain",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant verify-chain must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+        assert fake_tribunal_client["verify_chain_calls"] == 0, (
+            "a denied verify-chain must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_verify_chain_user_role_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """A ``user``-role caller in the correct space → EXACTLY 404 (superadmin-only); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (verify-chain user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/{run_a}/verify-chain",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code}."
+        )
+        assert str(run_a) not in r.text, "404 body leaked the run id."
+        assert fake_tribunal_client["verify_chain_calls"] == 0, (
+            "a role-denied verify-chain must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_verify_chain_null_space_404(
+    engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A null-space ``user`` → EXACTLY 404 (superadmin role-check fires first); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (verify-chain null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/{run_id}/verify-chain",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, got {r.status_code}."
+        )
+        assert fake_tribunal_client["verify_chain_calls"] == 0, (
+            "a role-denied verify-chain must make NO seam call."
         )
     finally:
         app.dependency_overrides.clear()
