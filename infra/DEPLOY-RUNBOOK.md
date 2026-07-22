@@ -1289,6 +1289,238 @@ Step 16.a). Run fails mid-flight with a credit error → Step 16.e top-up was sk
 
 ---
 
+## Phase 17 — Raw output + audit chain guard (tribunal-api + nestor-api REBUILD, ordered, + 0012 + download proof)
+
+This section is the enumerated source of truth for the Plan-04 operator live session that ships the
+raw-output download + audit-chain guard to production. Phase 17 adds surface to BOTH deployables and
+they MUST ship in order:
+
+1. **`tribunal-api`** gains a NEW read-only endpoint `GET /api/runs/{run_id}/research-bundle` (serves
+   the engine's scrubbed `cleaned_reports` only — `rejected_claims` excluded at the boundary, D-01).
+   The `tribunal-worker` image is **UNCHANGED** this phase (no worker rebuild).
+2. **`nestor-api`** gains the completion-path audit-chain gate + bundle materialization
+   (`app/research/bundle.py`, the extended `app/research/run_task.py`/`app/api/research_routes.py`,
+   the `research_runs` chain/lock/bundle columns), the superadmin-only download + re-verify routes,
+   plus the frontend download/locked/re-verify UI. Migration **0012** adds three nullable columns to
+   `nestor.research_runs` (`chain_status`, `chain_broken_at`, `bundle_key`).
+
+The intake finalize path (in `nestor-api`) calls tribunal-api's new `/research-bundle` endpoint — so
+**tribunal-api MUST be rebuilt + deployed FIRST**, or the first real completion 500s on a 404 from a
+stale tribunal image while CI is green. The live proof rides on a real `completed` run, which is still
+blocked on Anthropic credits (the same Phase-16 blocker) — so this is an operator-runbook checkpoint,
+same pattern as § Phase 16 Step 16.f.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is FORBIDDEN on this project (it would rotate the BUILT_IN DB
+> passwords and take down all services). Every step below is a manual gcloud reconciliation run in
+> Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **The recurring deploy-gap (READ FIRST — Steps 17.a AND 17.b both hit it).** "Nothing is real until
+> it is deployed, and a config-only env flip ships a STALE image." Phase 17 adds new code to BOTH
+> images plus a migration — a `gcloud run services update --update-env-vars` on the current revisions
+> ships NONE of it. Steps 17.a and 17.b are mandatory Cloud Build **image REBUILDs**, not env flips.
+> This phase introduces **NO new env var and NO new secret** (Step 17.e is confirm-only): the bundle
+> reuses the Phase-9 `STORAGE_BUCKET` (the app uploads bucket — D-05) and the Phase-14/16
+> `TRIBUNAL_SERVICE_URL` seam; there is **NO `AUDIT_GCS_BUCKET`** on the nestor-api download path
+> (D-05 — the raw-output zip lives in the app bucket, never the 7-year audit-evidence bucket).
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13/14/16).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+### Step 17.a — REBUILD + deploy the `tribunal-api` image via Cloud Build FIRST (new `/research-bundle` endpoint must ship before nestor-api calls it)
+
+The running `tribunal-api` container predates the Phase-17 `GET /api/runs/{run_id}/research-bundle`
+endpoint (`tribunal/nestor_pulse_sdk/runs/api.py`). The intake finalize path (in the rebuilt
+`nestor-api`, Step 17.b) calls this endpoint at completion, so it MUST be live first — otherwise the
+first real completion 500s on a 404 from the stale tribunal image while CI is green (the recurring
+deploy-gap). This is an **image REBUILD, not an env flip.** Reuse the § Phase 13.e / 14.b Cloud Build
+idiom (never a local `docker build` — downloads are blocked on the dev box). The **`tribunal-worker`
+image is UNCHANGED this phase — do NOT rebuild or redeploy the worker.**
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+# Rebuild ONLY tribunal-api (bakes the new /research-bundle endpoint into the image).
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+# Redeploy tribunal-api at the just-built tag (retargeted deploy script pins IMAGE_TAG=$SHA; it stays
+# tribunal-run SA + --no-allow-unauthenticated + invoker=nestor-run ONLY — the Phase-14 lockdown is
+# preserved by the script, NOT re-granted here). Do NOT run deploy-worker.sh — the worker is unchanged.
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+```
+
+> **Optional but recommended: run the Tribunal seam/bundle tests in Cloud Build against the fresh
+> image** before nestor-api calls it live. 17-01 authored `test_research_bundle_endpoint.py`
+> by-construction and deferred the run (the dev box has no Python):
+>
+> ```bash
+> gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+> ```
+
+Confirm the tribunal-api URL is UNCHANGED from Phase 14/16 (a redeploy of an existing service keeps
+its URL; capture it read-only for the Step-17.e confirm — do NOT re-set the seam env, Pitfall 4):
+
+```bash
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+echo "tribunal-api URL: $TRIBUNAL_URL"   # expect the same https://tribunal-api-...-ew.a.run.app as Phase 14/16
+```
+
+### Step 17.b — REBUILD + deploy the `nestor-api` image via Cloud Build (bundle builder + gate + download routes + 0012 must ship)
+
+The running `nestor-api` container predates the Phase-17 completion-path gate + download surface. A
+config-only env flip on the stale image is the **recurring deploy-gap** — it produces a live 404 on
+`GET /intakes/{id}/research/{run}/bundle-url` (or a 500 `ModuleNotFoundError: app.research.bundle`)
+while CI is green, and the completion path never materializes a zip. Reuse the § Phase 16 Step-16.a
+Cloud Build idiom (the same `backend` build context), then repoint the service:
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+
+# Build + push via Cloud Build (bakes app/research/bundle.py, the extended run_task.py /
+# research_routes.py, the research_runs chain/lock/bundle columns, and migration 0012 into the image),
+# then repoint. No new pip dependency this phase (stdlib zipfile/io/json + in-image gcs/httpx).
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"
+```
+
+> **Run the intake backend suite in Cloud Build against the freshly-built image BEFORE the live
+> proof.** 17-01/17-02/17-03 authored their pytest suites by-construction and deferred the run to
+> Cloud Build (the dev box has no Python). Run the full intake suite so the new Phase-17 tests
+> (`test_research_runs_migration.py` 0012 cases, `test_research_bundle.py`,
+> `test_research_run_task.py` completion-gate cases, `test_research_bundle_download.py`,
+> `test_research_cross_tenant.py` denial cases) execute green:
+>
+> ```bash
+> # From the repo root — source MUST be `.` (repo root), never `backend` (§ Phase 14.g note).
+> gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+> ```
+
+### Step 17.c — Run the `nestor-migrate` Job to apply migration 0012 (alembic upgrade head)
+
+The `nestor-migrate` Cloud Run Job runs `alembic upgrade head` (same pattern as the 0009/0010/0011
+intake migrations — § Phase 16 Step 16.b). Execute it AFTER the Step-17.b image rebuild so the Job
+image carries the 0012 revision:
+
+```bash
+gcloud run jobs execute nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+Then confirm the three new nullable columns landed on `nestor.research_runs`. Migration 0012 is a pure
+add-column — the columns inherit the table's existing 0011 FORCE-RLS row policies, so there is NO new
+policy/grant/index to verify (17-01 D):
+
+```bash
+# Read-only confirm via the migrate Job's connection or a Cloud SQL psql session:
+#   \d nestor.research_runs                          -> the three columns exist, all nullable:
+#     chain_status      text        (nullable)
+#     chain_broken_at   timestamptz (nullable)
+#     bundle_key        text        (nullable)
+#   Pre-existing rows (e.g. smoke intake e08620c5's ~3 rows) stay NULL — the completion path is the
+#   SOLE writer of these columns; no server_default backfilled them.
+```
+
+Alembic still below `0012` after this → the Job in this step did not run (or ran on the pre-rebuild
+image); re-run Step 17.b then this step.
+
+### Step 17.d — Deploy the frontend image (download button + locked/re-verify UI)
+
+The frontend gains `getBundleUrl` / `reVerifyChain` transport (`frontend/src/lib/api/research.ts`)
+and the `RawOutputControls` block on the completed summary card
+(`frontend/src/components/intake/ResearchRunProgress.tsx`) — a **[Download]** button on a
+chain-verified run, a red locked card + **[Re-verify]** button on a broken chain. Rebuild + deploy per
+the standard § Phase 12 Step-12.3 frontend flow (Cloud Build image REBUILD; `--build-arg VITE_*` from
+substitutions; NO `VITE_SUPABASE_*` — the in-image bundle guard fails the build if a Supabase
+signature leaks). No new env/secret and no URL re-wiring is needed (the `_API_BASE_URL` and Firebase
+substitutions are unchanged from Phase 12; the run.app URLs already exist):
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:$(date +%Y%m%d-%H%M%S)"
+
+# Reuse the SAME _API_BASE_URL / _FB_* substitutions captured at Phase 12 Step 12.3 (unchanged).
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<hash>-ew.a.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" \
+  --region "$REGION" \
+  --allow-unauthenticated \
+  --port 8080 \
+  --project="$GOOGLE_PROJECT"
+```
+
+### Step 17.e — Confirm NO new env/secret is needed (READ-ONLY — `STORAGE_BUCKET` + `TRIBUNAL_SERVICE_URL` already set; NO `AUDIT_GCS_BUCKET`)
+
+Phase 17 introduces **no new env var and no new secret** (17-RESEARCH Runtime State Inventory). The
+download path reuses two envs already live on `nestor-api`:
+
+- `STORAGE_BUCKET` — the Phase-9 app uploads bucket; the raw-output zip is written under the
+  space-scoped `artifacts` category here (D-05). This is the APP bucket.
+- `TRIBUNAL_SERVICE_URL` — the Phase-14/16 seam audience; the completion path calls tribunal-api's new
+  `/research-bundle` endpoint over it.
+
+Confirm both are present (confirm-only — do NOT re-set either; `TRIBUNAL_SERVICE_URL` is the OIDC
+audience and a wrong value breaks the seam, Pitfall 4):
+
+```bash
+gcloud run services describe nestor-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep -E 'STORAGE_BUCKET|TRIBUNAL_SERVICE_URL'
+# expect: STORAGE_BUCKET=<GOOGLE_PROJECT>-nestor-uploads
+#         TRIBUNAL_SERVICE_URL=https://tribunal-api-...-ew.a.run.app  (same as Step 17.a $TRIBUNAL_URL)
+```
+
+**Explicitly confirm there is NO `AUDIT_GCS_BUCKET` on the download path.** The `AUDIT_GCS_BUCKET`
+secret exists for the Tribunal engine's 7-year audit-evidence chain (§ Phase 13.c) — the raw-output
+download does NOT use it (D-05: the app bucket, never the audit bucket). No action is needed here; this
+is a confirmation that the bundle bucket is `STORAGE_BUCKET`, not the audit bucket.
+
+### Step 17.f — Top up Anthropic credits + complete the parked Phase-16 run FIRST, then run the live download/verify_chain/isolation UAT (points to 17-HUMAN-UAT.md)
+
+Anthropic credits (the `Nestor_Claude2` key) are the LIVE blocker — the deferred Phase-16 live run is
+still parked on empty credits (MEMORY: phase-16). This Phase-17 download proof RIDES ON a real
+`completed` run, so:
+
+1. **Top up Anthropic credits** and **complete the parked § Phase 16 Step-16.f live run FIRST** — that
+   produces the real `completed` + chain-verified run this download proof needs. (Do this before
+   spending any further time; the download UAT cannot run without a completed run.)
+
+With both images rebuilt (tribunal-api first), 0012 applied, the frontend deployed, and a real
+completed run in hand, run the operator live session per
+`.planning/phases/17-raw-output-audit-chain-guard/17-HUMAN-UAT.md`:
+
+2. On the completed smoke run's admin intake detail page, confirm the summary card shows chain state
+   **VERIFIED** and a **Download** button. Click **Download** → confirm the zip downloads → open it and
+   verify it contains `report.md`, at least one `research/*.md`, and `sources.json`, and that there is
+   **NO rejected-claims file or content** anywhere in the zip (D-01 / D-03 layout).
+3. Confirm the chain-verified state was produced by the **completion-path `verify_chain` gate** (the
+   run's `chain_status` is `verified`). Optionally, in a **scratch tenant**, tamper the audit chain and
+   confirm the summary card shows the **locked** state with a working **Re-verify** button (D-06 →
+   complete-but-locked).
+4. **ISOLATION (REPORT-02 absolute rule):** log in as a **CLIENT** (user-role) and confirm NO
+   raw-output download and NO research surface is visible or reachable anywhere.
+5. Record the run id, the zip contents, and the `verify_chain` result in `17-HUMAN-UAT.md`.
+
+Failure triage: `GET /intakes/{id}/research/{run}/bundle-url` **404** for a superadmin → Step-17.b
+rebuild was skipped (stale image, recurring deploy-gap). The completion path never materializes a zip
+(the summary card shows verified but Download 500s / rebuilds every click) → tribunal-api's
+`/research-bundle` is 404ing (Step-17.a rebuild skipped — the finalize seam call failed, `bundle_key`
+stayed NULL). A superadmin sees a **403** (not 404) on the download → the role gate ordering regressed
+(the denial suite pins existence-hidden 404). A **client** can reach any raw-output surface → STOP,
+this is a REPORT-02 breach — do not accept the phase.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -1340,3 +1572,9 @@ Step 16.a). Run fails mid-flight with a credit error → Step 16.e top-up was sk
 - [ ] Step 16.d — `NESTOR_WORKER_STALE_MINUTES=90` set on `tribunal-worker` (config-only env update on the unchanged worker image; above the measured 17–19 min max, T-16-16) + verified via describe; `NESTOR_TRIBUNAL_UNCAPPED` LEFT ON (D-02, T-16-17)
 - [ ] Step 16.e — Anthropic credits topped up BEFORE the live run (MEMORY: LOW)
 - [ ] Step 16.f — CHECKPOINT: live trigger on a DECOMPOSED smoke intake → dynamic progress panel + ticking cost → run `completed` (~17–19 min) → completion email; client login shows NO research surface (D-08/T-16-18); run id / cost / duration / `verify_chain` recorded; 14-HUMAN-UAT item 1 closed to PASS + results in 16-HUMAN-UAT.md
+- [ ] Step 17.a — `tribunal-api` image REBUILT via Cloud Build FIRST (new `GET /api/runs/{run_id}/research-bundle` endpoint) + redeployed at `$SHA` (MANDATORY rebuild, not an env flip — the finalize path calls it; the recurring deploy-gap); `tribunal-worker` LEFT UNCHANGED (no worker rebuild); tribunal-api URL confirmed unchanged; optional Tribunal seam/bundle tests green in Cloud Build
+- [ ] Step 17.b — `nestor-api` image REBUILT via Cloud Build (`app/research/bundle.py`, extended `run_task.py`/`research_routes.py`, `research_runs` chain/lock/bundle columns, migration 0012) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap); intake full suite green in Cloud Build against the fresh image
+- [ ] Step 17.c — `nestor-migrate` Job executed `--wait` (alembic → 0012); the three new nullable columns (`chain_status` / `chain_broken_at` / `bundle_key`) confirmed on `nestor.research_runs`; pure add-column so NO new policy/grant/index (inherits 0011 FORCE-RLS, 17-01 D)
+- [ ] Step 17.d — `nestor-frontend` image REBUILT via Cloud Build (download button + locked/re-verify UI) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green)
+- [ ] Step 17.e — CONFIRM-ONLY read: `STORAGE_BUCKET` (the app bucket — bundle target, D-05) + `TRIBUNAL_SERVICE_URL` (the seam audience) present on `nestor-api`; NO new env/secret; explicitly NO `AUDIT_GCS_BUCKET` on the download path (D-05 — app bucket, never the audit bucket)
+- [ ] Step 17.f — CHECKPOINT: top up Anthropic credits + complete the parked Phase-16 run FIRST (produces the real `completed` run); then on that run's card confirm chain state VERIFIED + Download → zip contains `report.md` + `research/*.md` + `sources.json` with NO rejected claims (D-01/D-03); `chain_status=verified` from the completion-path gate (optional scratch-tenant tamper → locked + Re-verify, D-06); a CLIENT login sees NO raw-output/research surface (REPORT-02); run id / zip contents / `verify_chain` recorded in 17-HUMAN-UAT.md
