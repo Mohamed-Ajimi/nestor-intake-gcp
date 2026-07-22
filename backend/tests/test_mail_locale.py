@@ -530,6 +530,9 @@ def test_mixed_locale_list_sends_correct_variant_per_recipient(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
+        # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
+        # assert the DELTA around the action rather than an absolute total.
+        audit_before = _count_mail_sent_audit(engine, space_a)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.post(
@@ -551,8 +554,8 @@ def test_mixed_locale_list_sends_correct_variant_per_recipient(
         # The stamp happens exactly once (not per group) and one audit row is written.
         _, res_ts = _read_intake_timestamps(engine, set_space, space_a, intake_a)
         assert res_ts is not None, "a successful results send stamps results_link_sent_at once"
-        assert _count_mail_sent_audit(engine, space_a) == 1, (
-            "a successful multi-locale send writes exactly ONE mail.sent audit row"
+        assert _count_mail_sent_audit(engine, space_a) - audit_before == 1, (
+            "a successful multi-locale send writes exactly ONE NEW mail.sent audit row"
         )
     finally:
         app.dependency_overrides.clear()
@@ -635,6 +638,9 @@ def test_locale_send_failure_preserves_d16(
 
         monkeypatch.setattr(resend_mod, "send", _raise)
 
+        # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
+        # assert the DELTA around the action rather than an absolute total.
+        audit_before = _count_mail_sent_audit(engine, space_a)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.post(
@@ -646,8 +652,8 @@ def test_locale_send_failure_preserves_d16(
         assert resp.json()["success"] is False, "a failed locale send must report success=False"
         _, res_ts = _read_intake_timestamps(engine, set_space, space_a, intake_a)
         assert res_ts is None, "D-16: a failed send must NOT stamp results_link_sent_at"
-        assert _count_mail_sent_audit(engine, space_a) == 0, (
-            "D-16: a failed send must NOT write a mail.sent audit row"
+        assert _count_mail_sent_audit(engine, space_a) - audit_before == 0, (
+            "D-16: a failed send must NOT write a NEW mail.sent audit row"
         )
     finally:
         app.dependency_overrides.clear()

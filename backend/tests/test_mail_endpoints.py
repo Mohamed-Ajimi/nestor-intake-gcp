@@ -371,6 +371,9 @@ def test_unset_app_base_url_refuses_send(
         # Explicitly ensure APP_BASE_URL is UNSET for this case.
         monkeypatch.delenv("APP_BASE_URL", raising=False)
         _patch_engine_factories(monkeypatch, engine)
+        # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
+        # assert the DELTA around the action rather than an absolute total.
+        audit_before = _count_mail_sent_audit(engine, space_a)
         app.dependency_overrides[get_current_identity] = _as(_user(space_a))
         client = TestClient(app)
         resp = client.post(
@@ -390,8 +393,8 @@ def test_unset_app_base_url_refuses_send(
         assert val_ts is None and res_ts is None, (
             "WR-01: a refused send must NOT stamp any sent-at column"
         )
-        assert _count_mail_sent_audit(engine, space_a) == 0, (
-            "WR-01: a refused send must NOT write a mail.sent audit row"
+        assert _count_mail_sent_audit(engine, space_a) - audit_before == 0, (
+            "WR-01: a refused send must NOT write a NEW mail.sent audit row"
         )
     finally:
         app.dependency_overrides.clear()
@@ -801,6 +804,20 @@ def test_invite_mail_send_failure_returns_success_false(
         app = _build_admin_app()
         app.dependency_overrides[get_current_identity] = _as(_superadmin())
 
+        # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
+        # capture the count BEFORE the action and assert the DELTA below.
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_space_id', :sid, true)"),
+                {"sid": str(space_id)},
+            )
+            count_before = conn.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.audit_log "
+                    "WHERE event_type = 'mail.sent'"
+                )
+            ).scalar_one()
+
         with patch.object(
             admin_users, "generate_set_password_link", MagicMock(return_value=action_link)
         ):
@@ -824,14 +841,14 @@ def test_invite_mail_send_failure_returns_success_false(
                 text("SELECT set_config('app.current_space_id', :sid, true)"),
                 {"sid": str(space_id)},
             )
-            count = conn.execute(
+            count_after = conn.execute(
                 text(
                     f"SELECT count(*) FROM {SCHEMA}.audit_log "
                     "WHERE event_type = 'mail.sent'"
                 )
             ).scalar_one()
-        assert count == 0, (
-            "WR-04: a failed invite send must NOT write a mail.sent audit row"
+        assert count_after - count_before == 0, (
+            "WR-04: a failed invite send must NOT write a NEW mail.sent audit row"
         )
     finally:
         app.dependency_overrides.clear()
