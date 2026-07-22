@@ -78,6 +78,79 @@ export function reviewIntake(id: string): Promise<ApiResult<Intake>> {
 }
 
 // ---------------------------------------------------------------------------
+// Report delivery — the human-report deliver / replace / read verbs (Plan 18-01)
+// ---------------------------------------------------------------------------
+//
+// The Deliver verb is the SOLE `in_research -> delivered` transition (REPORT-01):
+// uploading only STAGES a PDF (client-invisible); this call flips the status and
+// sends the results-family mail. `replaceReport` repoints the report post-delivery
+// (status stays `delivered`, D-04) with an OPTIONAL re-notify (recipients=[] = silent,
+// D-05). `getReport` reads the delivered report view (404 unless status=='delivered').
+//
+// SECURITY (D-06): `recipients` are server-issued membership ids (never addresses) —
+// the RecipientPicker's output; the backend re-validates each id. The WIRE body is
+// snake_case (`storage_path`), NOT camelCase — mirror the backend `DeliverBody`.
+
+/**
+ * The delivered-report view returned by `GET /intakes/{id}/report` (mirrors the
+ * backend `ReportView`, intake_routes.py). `delivered_at` mirrors the intake's
+ * `results_link_sent_at`. All fields are nullable per the backend contract.
+ */
+export type ReportView = {
+  filename: string | null;
+  delivered_at: string | null;
+  byte_size: number | null;
+  mime_type: string | null;
+  storage_path: string | null;
+};
+
+/**
+ * Deliver the staged report (the sole `in_research -> delivered` transition, REPORT-01).
+ * Links the staged storage key as the intake's final report, flips the status, and sends
+ * the results-family mail to the selected members. `recipients` are membership ids (D-06);
+ * the wire body is snake_case (`storage_path`).
+ */
+export function deliverReport(
+  id: string,
+  input: { storagePath: string; recipients: string[] },
+): Promise<ApiResult<Intake>> {
+  return apiFetch<Intake>(`/intakes/${id}/deliver`, {
+    method: "POST",
+    body: JSON.stringify({
+      storage_path: input.storagePath,
+      recipients: input.recipients,
+    }),
+  });
+}
+
+/**
+ * Replace an already-delivered report (status stays `delivered`, D-04). Repoints
+ * `final_report_artifact_id` to the newly staged key; `recipients` re-notifies the
+ * selected members (D-05) — pass `[]` for a silent replace (no mail). The wire body
+ * is the SAME snake_case shape as `deliverReport`.
+ */
+export function replaceReport(
+  id: string,
+  input: { storagePath: string; recipients: string[] },
+): Promise<ApiResult<Intake>> {
+  return apiFetch<Intake>(`/intakes/${id}/report/replace`, {
+    method: "POST",
+    body: JSON.stringify({
+      storage_path: input.storagePath,
+      recipients: input.recipients,
+    }),
+  });
+}
+
+/**
+ * Read the delivered report view. 404 unless the intake status is exactly `delivered`
+ * (REPORT-02 invisibility) — surfaced as `{ success: false }`.
+ */
+export function getReport(id: string): Promise<ApiResult<ReportView>> {
+  return apiFetch<ReportView>(`/intakes/${id}/report`, { method: "GET" });
+}
+
+// ---------------------------------------------------------------------------
 // Notification mail — members read + discrete send verbs (Plan 10-03/04)
 // ---------------------------------------------------------------------------
 //
