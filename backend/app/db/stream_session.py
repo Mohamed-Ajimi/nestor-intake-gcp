@@ -94,9 +94,12 @@ def read_latest_research_run_dict(identity: Identity, intake_id: Any) -> dict | 
     ``{queued, running, completed, failed, cancelled}`` is never remapped to the skill-run
     ``{succeeded, failed}`` vocabulary. ``current_stage`` + ``stage_detail`` carry the
     dynamic stage list (no hardcoded 9-stage assumption); ``cost_usd_total`` is stringified
-    (a ``Decimal`` is not JSON-serializable). Returns ``None`` when the intake has no
-    research runs yet (the stream then emits ``data: null``). The connection returns to the
-    pool on block exit — nothing held between ticks.
+    (a ``Decimal`` is not JSON-serializable). Phase-17 (RUN-03) adds three lock-state keys
+    — ``chain_status`` / ``chain_broken_at`` / ``bundle_key`` — so the summary card can
+    render the chain-verified / complete-but-locked state + the raw-output download (D-06).
+    Returns ``None`` when the intake has no research runs yet (the stream then emits
+    ``data: null``). The connection returns to the pool on block exit — nothing held between
+    ticks.
     """
     with tenant_session(identity) as session:
         run = ResearchRunRepository(session, identity).latest_for_intake(intake_id)
@@ -113,6 +116,15 @@ def read_latest_research_run_dict(identity: Identity, intake_id: Any) -> dict | 
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
             "error_message": run.error_message,
+            # Phase-17 chain-guard / bundle lock state (RUN-03). These ride the same
+            # research-run wire frame so the frontend renders the chain-verified /
+            # complete-but-locked summary card + the raw-output download (D-06/D-07):
+            #   chain_status   "verified" | "broken" | None  (None until finalize)
+            #   chain_broken_at first divergent audit row index (None when verified)
+            #   bundle_key     GCS key of the materialized zip (None until built)
+            "chain_status": run.chain_status,
+            "chain_broken_at": run.chain_broken_at,
+            "bundle_key": run.bundle_key,
         }
 
 
