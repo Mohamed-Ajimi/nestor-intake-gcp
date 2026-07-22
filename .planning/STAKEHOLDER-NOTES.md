@@ -35,3 +35,40 @@ Today the only protection is operator discipline (wait for the new pack to appea
 **Decision asked:** should the Start-research button be disabled while a context-pack
 generation is in flight (recommended, small frontend guard), or is operator discipline
 acceptable?
+
+## 2026-07-22 — OPERATOR HOLD: no Anthropic usage-limit increase until engine defects fixed
+
+**Decision (operator, 2026-07-22):** the Anthropic monthly usage cap stays where it is.
+No further live Tribunal runs until the defects found in the run-4cbb5311 forensic audit
+are fixed. Full audit: `docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md`.
+
+**Findings driving the hold (from the first green delegator run, 2026-07-22, ~48 min):**
+
+1. **[P0] Skeptic arm effectively OFF** — `group_skeptic.py:_parse_group_verdict` crashes with
+   `'str' object has no attribute 'get'` when the LLM returns `reconciliation` as a JSON string
+   (24/176 parsed groups); the rest of the tail died on the usage cap. Net: ZERO usable
+   verifications survived, though the LLM produced 76 support / 31 refute / 91 insufficient
+   raw verdicts. ~3-line isinstance/json.loads guard.
+2. **[P0] Silent failure on usage-limit wall** — 776× Anthropic 400 "reached specified API
+   usage limits" (11:58:46–11:59:41) gutted the skeptic tail, and the run still completed
+   "green". Must detect and fail/park loudly.
+3. **[P1] Honesty appendix overstates verification** — the report claims fact-checking that
+   did not happen (cannot distinguish waved-through vs crashed vs 400'd).
+4. **[P1] Cost meter massively undercounts** — panel showed ~€5; real Anthropic-side cost
+   ≈ $43–45 (8.7M cache-write tokens ≈ $33 uncounted; deep-research calls have NO usage
+   metadata recorded at all — the most expensive stage is invisible).
+5. **[P1/P3] Audit fidelity** — `seq=0` on all 228 records; gemini-pro request contents
+   truncated at 2000 chars; one empty scrub response.
+6. **[P2] Intake `max_tokens=2048`** truncated both intake calls → forced coverage retry.
+7. **[P2] 28 unresolved `[cite:]` markers stripped** — deep-research emits markers never
+   bound to URLs; worsened by dead skeptic citation recall.
+8. Pydantic serialization warnings from shallow `_content_to_serialisable` (skeptic.py:204)
+   — latent turn-2 breaker.
+
+**Cost reality for planning:** observed run ≈ $43–45 Anthropic-side (panel said €5);
+a fully-working run (skeptic fixed + no cap) is estimated $55–90+ per run. Cap raise
+decision revisits AFTER fixes land and one calibration run confirms true cost.
+
+**Not blocked by this hold:** Phase 17 deploy + download/chain UAT — it rides on the
+already-completed run 4cbb5311 and needs NO new LLM calls (verify_chain + bundle build
+are DB/GCS operations).
