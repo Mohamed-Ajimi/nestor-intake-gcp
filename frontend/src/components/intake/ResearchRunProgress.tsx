@@ -181,6 +181,10 @@ function RawOutputControls({
 }) {
   const { t } = useTranslation("intake");
   const [busy, setBusy] = useState(false);
+  // Local override so a successful (re-)verify flips the card immediately — on an old
+  // terminal run the SSE stream may already be closed and would never push the new state.
+  const [localChain, setLocalChain] = useState<"verified" | "broken" | null>(null);
+  const chainStatus = localChain ?? run.chain_status;
 
   const btnClass =
     "inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-60";
@@ -208,14 +212,17 @@ function RawOutputControls({
       return;
     }
     if (res.data?.chain_status !== "verified") {
-      // Still broken — the lock stays; the SSE stream keeps the locked card as-is.
+      // Still broken — the lock stays.
+      setLocalChain("broken");
       toast.error(t("research.reverifyStillBroken"));
+      return;
     }
-    // On success the SSE stream pushes the new chain_status → the card re-renders to the
-    // download affordance; no local state to flip.
+    // Flip to the download affordance locally — don't rely on the SSE stream, which is
+    // closed for a run that reached terminal state before this page was opened.
+    setLocalChain("verified");
   };
 
-  if (run.chain_status === "broken") {
+  if (chainStatus === "broken") {
     return (
       <div className="mt-4 border-l-4 bg-paper px-4 py-3" style={{ borderLeftColor: "#DC2626" }}>
         <div className="mb-1 flex items-center gap-2">
@@ -238,7 +245,7 @@ function RawOutputControls({
     );
   }
 
-  if (run.chain_status === "verified") {
+  if (chainStatus === "verified") {
     return (
       <div className="mt-4">
         <button type="button" onClick={handleDownload} disabled={busy} className={btnClass}>
@@ -249,8 +256,25 @@ function RawOutputControls({
     );
   }
 
-  // chain_status null (pre-Phase-17 row / not yet finalized): no affordance.
-  return null;
+  // chain_status null: the chain was simply never checked for this run (pre-Phase-17 row,
+  // or the driver died before stamping). Offer the verify action — the same re-verify
+  // endpoint runs the D-06 gate and stamps verified/broken, after which the card flips.
+  return (
+    <div className="mt-4 border-l-4 bg-paper px-4 py-3" style={{ borderLeftColor: "#FF2D87" }}>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="font-mono text-[11px] uppercase tracking-wider text-ink/70">
+          {t("research.unverifiedTitle")}
+        </span>
+      </div>
+      <div className="mb-3 font-sans text-[14px] leading-relaxed text-ink">
+        {t("research.unverifiedBody")}
+      </div>
+      <button type="button" onClick={handleReverify} disabled={busy} className={btnClass}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-4 w-4" />}
+        {t("research.verifyChain")}
+      </button>
+    </div>
+  );
 }
 
 /**

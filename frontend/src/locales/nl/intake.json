@@ -516,6 +516,9 @@
     "lockedBody": "De audit-hashketen van deze run verifieerde niet, dus de ruwe output is vergrendeld. Verifieer de keten opnieuw om de vergrendeling op te heffen.",
     "reverify": "Keten opnieuw verifiëren",
     "reverifyError": "Herverifiëren is mislukt. Probeer opnieuw.",
-    "reverifyStillBroken": "De keten is nog steeds gebroken — de download blijft vergrendeld."
+    "reverifyStillBroken": "De keten is nog steeds gebroken — de download blijft vergrendeld.",
+    "unverifiedTitle": "Audit-keten nog niet geverifieerd",
+    "unverifiedBody": "Deze run is voltooid maar de audit-hashketen is nog niet gecontroleerd. Verifieer de keten om de ruwe output te ontgrendelen.",
+    "verifyChain": "Keten verifiëren"
   }
 }
