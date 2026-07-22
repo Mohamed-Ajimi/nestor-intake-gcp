@@ -400,7 +400,16 @@
     "view": "View",
     "remove": "Remove",
     "dragDrop": "or drag & drop here",
-    "noReport": "No report uploaded yet"
+    "noReport": "No report uploaded yet",
+    "deliver": "Deliver to client",
+    "delivering": "Delivering…",
+    "delivered": "Report delivered",
+    "deliverFailed": "Delivery failed: {{error}}",
+    "staged": "Staged — not yet delivered",
+    "stagedHint": "Check the file and click Deliver to email the client.",
+    "replaceConfirm": "Replace the report with this file?",
+    "reNotify": "Notify the client again",
+    "silentReplace": "Replace without email"
   },
   "contextPack": {
     "dateFallback": "—",

@@ -400,7 +400,16 @@
     "view": "Voir",
     "remove": "Supprimer",
     "dragDrop": "ou glisser-déposer ici",
-    "noReport": "Aucun rapport téléversé pour l'instant"
+    "noReport": "Aucun rapport téléversé pour l'instant",
+    "deliver": "Livrer au client",
+    "delivering": "Livraison…",
+    "delivered": "Rapport livré",
+    "deliverFailed": "Échec de la livraison : {{error}}",
+    "staged": "Préparé — pas encore livré",
+    "stagedHint": "Vérifiez le fichier et cliquez sur Livrer pour envoyer le mail au client.",
+    "replaceConfirm": "Remplacer le rapport par ce fichier ?",
+    "reNotify": "Notifier à nouveau le client",
+    "silentReplace": "Remplacer sans mail"
   },
   "contextPack": {
     "dateFallback": "—",
