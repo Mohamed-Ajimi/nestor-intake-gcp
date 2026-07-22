@@ -924,6 +924,54 @@ async def get_run_report(
     }
 
 
+@router.get("/{run_id}/research-bundle")
+async def get_run_research_bundle(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict:
+    """Serve a completed run's SCRUBBED per-provider research (Phase-17 D-01).
+
+    The intake seam (``tribunal_client.get_research_bundle``) calls this at the
+    Phase-16 poll driver's finalize step to materialize the raw-output bundle. It
+    returns ONLY the engine's ``cleaned_reports`` — the subtractive-verification
+    scrub where passages supporting dropped claims are already physically removed.
+
+    D-01 CRITICAL: the ``synthesis_cache`` body ALSO contains ``rejected_claims``
+    (the discredited-content ledger), ``contested_notes``, and ``verification``.
+    Those are DELIBERATELY EXCLUDED — the raw-output download never exposes
+    discredited content. This handler returns EXACTLY ``{"cleaned_reports": [...]}``.
+
+    Gate discipline mirrors ``get_run_report``: 404 on an unknown run, 409 until the
+    run is ``completed``, 409 when no ``synthesis_cache`` Output exists yet. All
+    reads are RLS-scoped via ``Depends(get_db_session)`` (the seam's
+    ``X-Nestor-Tenant-Id`` sets the tenant GUC, so a cross-tenant run is invisible).
+
+    READ-only: writes NO Output row, touches NO audit chain, and does NOT alter the
+    frozen ``canonical_json`` payload (14 D-05).
+    """
+    import json as _json
+
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    if run.status != "completed":
+        raise HTTPException(409, "bundle not available yet")
+
+    body = (await session.execute(
+        select(Output.body)
+        .where(Output.run_id == run_id, Output.format == "synthesis_cache")
+        .order_by(Output.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if body is None:
+        raise HTTPException(409, "no cached research for this run")
+
+    bundle = _json.loads(body)
+    # ONLY cleaned_reports — rejected_claims / contested_notes / verification are
+    # NEVER returned (D-01). Default to [] if the cache predates cleaned_reports.
+    return {"cleaned_reports": bundle.get("cleaned_reports") or []}
+
+
 @router.get("/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: uuid.UUID,
