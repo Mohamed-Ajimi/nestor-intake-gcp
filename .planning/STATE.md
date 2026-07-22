@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 18 context gathered
-last_updated: "2026-07-22T15:24:37.280Z"
-last_activity: 2026-07-22 -- Phase 18 planning complete
+last_updated: "2026-07-22T15:26:55.826Z"
+last_activity: 2026-07-22 -- Phase 18 execution started
 progress:
   total_phases: 8
   completed_phases: 4
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 17 — raw-output-audit-chain-guard
+**Current focus:** Phase 18 — human-report-upload-client-delivery
 
 ## Current Position
 
-Phase: 17 (raw-output-audit-chain-guard) — COMPLETE (4/4 plans, UAT 3/3, fully deployed 2026-07-22)
-Plan: done — next phase: 18 (Human Report Upload + Client Delivery)
-Status: Ready to execute
+Phase: 18 (human-report-upload-client-delivery) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 18
   live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
-Last activity: 2026-07-22 -- Phase 18 planning complete
+Last activity: 2026-07-22 -- Phase 18 execution started
   0012/frontend 00016-qmr), UAT passed on run 4cbb5311, 3 fix commits during UAT
 
 Progress: [██████████] 100%
