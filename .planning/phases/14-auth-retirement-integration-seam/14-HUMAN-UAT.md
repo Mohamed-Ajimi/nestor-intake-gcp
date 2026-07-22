@@ -32,9 +32,12 @@ One-liner (Cloud Shell or this repo's shell — writes one idempotent row at mos
 note: If impersonation is denied (no serviceAccountTokenCreator on nestor-run), this item
 defers to Phase 16's trigger route — the admit path is already proven by-construction
 (invoker binding verified live + seam gate 8/8 green + unauthenticated 403 proven live).
-result: deferred — operator decision 2026-07-21 ("defer uat"); closes naturally via Phase 16's
-trigger route (first real intake-originated seam call). Admit path already proven
-by-construction: invoker binding verified live + seam gate 8/8 green + unauthenticated 403 live.
+result: PASS 2026-07-22 — closed by Phase 16's first real intake-originated seam call:
+research run 4cbb5311-9f5f-4504-84bb-b0dda2aedf48 (tribunal run 9c84e5a9-1bb9-4b6e-a3ce-2351eda9df63)
+on intake e08620c5. The live trigger minted a real nestor-run identity token, POSTed create_run
+through the seam (engine_status=queued), polled /metrics every ~3s (all 200), and the run reached
+`completed` (~48 min). Negative proof same day: a direct call with an operator identity token was
+rejected with "invalid internal caller token" — the seam admits only nestor-api.
 
 ### 2. TRIBUNAL_SERVICE_URL present on live nestor-api
 expected: `gcloud run services describe nestor-api` shows env
@@ -45,10 +48,10 @@ result: pass — verified 2026-07-21 by orchestrator via read-only gcloud descri
 ## Summary
 
 total: 2
-passed: 1
+passed: 2
 issues: 0
 pending: 0
-skipped: 1 (deferred → Phase 16 trigger route)
+skipped: 0
 blocked: 0
 
 ## Gaps
