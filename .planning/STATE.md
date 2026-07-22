@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 17 wave 4 checkpoint — awaiting operator live UAT (17-04 Task 2)
+stopped_at: Phase 17 COMPLETE (4/4, UAT 3/3 pass, all deployed) — next /gsd-plan-phase 18
 last_updated: "2026-07-22T08:23:16.718Z"
-last_activity: 2026-07-22 -- Phase 17 waves 1-3 merged; 17-04 artifacts authored, paused at operator live-UAT checkpoint
+last_activity: 2026-07-22 -- Phase 17 complete + deployed + UAT passed; Phase 16 also closed same day (green run 4cbb5311)
 progress:
   total_phases: 8
   completed_phases: 2
@@ -25,10 +25,12 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 17 (raw-output-audit-chain-guard) — EXECUTING (paused at checkpoint)
-Plan: 4 of 4 (17-01/02/03 complete + merged; 17-04 Task 1 done, Task 2 = operator live UAT)
-Status: Awaiting operator live-UAT (blocked on Anthropic credits top-up + parked Phase-16 run)
-Last activity: 2026-07-22 -- Phase 17 waves 1-3 merged; 17-04 paused at operator live-UAT checkpoint
+Phase: 17 (raw-output-audit-chain-guard) — COMPLETE (4/4 plans, UAT 3/3, fully deployed 2026-07-22)
+Plan: done — next phase: 18 (Human Report Upload + Client Delivery)
+Status: Phase 16 AND 17 both closed 2026-07-22. OPERATOR HOLD: no Anthropic cap raise / no new
+  live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
+Last activity: 2026-07-22 -- Phase 17 complete: deployed (tribunal-api 155342/nestor-api 00037-k7t/
+  0012/frontend 00016-qmr), UAT passed on run 4cbb5311, 3 fix commits during UAT
 
 Progress: [██████████] 100%
 
