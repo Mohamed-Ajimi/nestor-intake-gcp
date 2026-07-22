@@ -191,6 +191,6 @@ trail intact.
 | 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
-| 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete   | 2026-07-22 |
+| 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |

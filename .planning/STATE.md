@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Phase 18 context gathered
-last_updated: "2026-07-22T15:26:55.826Z"
+status: ready_to_plan
+stopped_at: Phase 18 complete (4/4) — ready to discuss Phase 19
+last_updated: 2026-07-22T18:08:17.236Z
 last_activity: 2026-07-22 -- Phase 18 execution started
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 21
-  completed_plans: 17
+  completed_plans: 91
   percent: 50
 ---
 
@@ -21,15 +21,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 18 — human-report-upload-client-delivery
+**Current focus:** Phase 19 — q&a chat (voyage + haiku rag)
 
 ## Current Position
 
-Phase: 18 (human-report-upload-client-delivery) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 18
+Phase: 19
+Plan: Not started
+Status: Ready to plan
   live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
-Last activity: 2026-07-22 -- Phase 18 execution started
+Last activity: 2026-07-22
   0012/frontend 00016-qmr), UAT passed on run 4cbb5311, 3 fix commits during UAT
 
 Progress: [██████████] 100%
@@ -38,7 +38,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 78 (v1.0, shipped)
+- Total plans completed: 82 (v1.0, shipped)
 - Average duration: — min
 - Total execution time: 0.0 hours (v1.1)
 
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 | 12 | 5 | - | - |
 | 13 | 4 | - | - |
 | 14 | 4 | - | - |
+| 18 | 4 | - | - |
 
 **Recent Trend:**
 

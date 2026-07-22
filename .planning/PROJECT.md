@@ -173,6 +173,7 @@ through research, human-crafted report delivery, and a client Q&A chat over the 
   as of 2026-06-15).
 
 ---
-*Last updated: 2026-07-21 (Phase 14 complete — Tribunal auth retired, intake is sole caller via
-OIDC seam, tribunal-run SA + invoker lockdown live, 8/8 denial gate green; live seam HTTP UAT
-deferred to Phase 16 trigger route)
+*Last updated: 2026-07-22 (Phase 18 complete — human report delivery live: staged upload +
+explicit Deliver verb (`in_research → delivered`), client report page + download, delivery mail;
+api rev 00038-7jp / frontend rev 00018-m6x; verification passed 17/17; replace click-through
+operator-accepted, re-verify at next delivery)

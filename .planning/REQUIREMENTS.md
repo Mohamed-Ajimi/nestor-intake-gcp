@@ -33,9 +33,9 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Report Delivery (REPORT)
 
-- [ ] **REPORT-01**: Superadmin can upload the final report PDF (crafted externally in Claude Design) → status `delivered`
-- [ ] **REPORT-02**: Client sees and downloads the final report in their UI; nothing research-related is client-visible before delivery
-- [ ] **REPORT-03**: Client receives an email notification when the report is delivered
+- [x] **REPORT-01**: Superadmin can upload the final report PDF (crafted externally in Claude Design) → status `delivered`
+- [x] **REPORT-02**: Client sees and downloads the final report in their UI; nothing research-related is client-visible before delivery
+- [x] **REPORT-03**: Client receives an email notification when the report is delivered
 
 ### Q&A Chat (CHAT)
 
@@ -97,9 +97,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENGINE-03 | Phase 16 | Pending |
 | ENGINE-07 | Phase 16 | Pending |
 | RUN-03 | Phase 17 | Pending |
-| REPORT-01 | Phase 18 | Pending |
-| REPORT-02 | Phase 18 | Pending |
-| REPORT-03 | Phase 18 | Pending |
+| REPORT-01 | Phase 18 | Complete |
+| REPORT-02 | Phase 18 | Complete |
+| REPORT-03 | Phase 18 | Complete |
 | CHAT-01 | Phase 19 | Pending |
 | CHAT-02 | Phase 19 | Pending |
 | CHAT-03 | Phase 19 | Pending |
