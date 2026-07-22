@@ -853,6 +853,14 @@ def fake_tribunal_client(monkeypatch):
     Tribunal-verbatim ``{"id": "fake-run-id", "status": "queued"}``; ``get_report``
     returns ``{"markdown": "fake report", "sources": []}``; ``ensure_org`` returns
     None; ``ensure_project`` returns ``"fake-project-id"``.
+
+    Phase-17 additions (RUN-03): ``get_research_bundle`` returns a one-provider
+    ``{"cleaned_reports": [["angle-a", {"report": "x"}]]}`` and ``verify_chain``
+    returns ``capture["verify_verdict"]`` — default ``{"ok": True, "broken_at":
+    None}`` (verified). A broken-chain test sets ``capture["verify_verdict"] =
+    {"ok": False, "broken_at": 3}`` BEFORE driving the poll to exercise the
+    complete-but-locked path (D-06). Both fakes record their calls in
+    ``capture["get_research_bundle_calls"]`` / ``capture["verify_chain_calls"]``.
     """
     tc = pytest.importorskip("app.research.tribunal_client")
 
@@ -865,6 +873,11 @@ def fake_tribunal_client(monkeypatch):
             {"status": "running", "current_stage": "delegation"},
             {"status": "completed", "current_stage": "report"},
         ],
+        # Phase-17: the OVERRIDABLE verify_chain verdict. Default = verified. A
+        # broken-chain test reassigns this BEFORE driving the poll.
+        "verify_verdict": {"ok": True, "broken_at": None},
+        "get_research_bundle_calls": 0,
+        "verify_chain_calls": 0,
     }
 
     def _fake_create_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -890,19 +903,33 @@ def fake_tribunal_client(monkeypatch):
     def _fake_get_report(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"markdown": "fake report", "sources": []}
 
+    def _fake_get_research_bundle(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # cleaned_reports ONLY (D-01) — never rejected_claims.
+        capture["get_research_bundle_calls"] += 1
+        return {"cleaned_reports": [["angle-a", {"report": "x"}]]}
+
+    def _fake_verify_chain(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Return the OVERRIDABLE verdict so one fixture drives both the verified
+        # and the broken-chain (complete-but-locked) terminals (D-06).
+        capture["verify_chain_calls"] += 1
+        return dict(capture["verify_verdict"])
+
     def _fake_ensure_org(*args: Any, **kwargs: Any) -> None:
         return None
 
     def _fake_ensure_project(*args: Any, **kwargs: Any) -> str:
         return "fake-project-id"
 
-    # create_run / get_metrics / get_report do NOT exist on the module until Plan
-    # 02 — patch with raising=False so this fixture is written now and binds the
-    # fakes once the real methods land. ensure_org / ensure_project already exist.
+    # create_run / get_metrics / get_report / get_research_bundle / verify_chain do
+    # NOT all exist on the module until their owning plans land — patch with
+    # raising=False so this fixture is written now and binds the fakes once the real
+    # methods land. ensure_org / ensure_project already exist.
     for name, fake in (
         ("create_run", _fake_create_run),
         ("get_metrics", _fake_get_metrics),
         ("get_report", _fake_get_report),
+        ("get_research_bundle", _fake_get_research_bundle),
+        ("verify_chain", _fake_verify_chain),
         ("ensure_org", _fake_ensure_org),
         ("ensure_project", _fake_ensure_project),
     ):

@@ -231,3 +231,74 @@ def get_report(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 raw-output + audit-chain guard (RUN-03): get_research_bundle /
+# verify_chain.
+#
+# Same keyword-only + blocking-httpx + raise_for_status + JSON-return shape as
+# get_report — they REUSE _headers / _mint_id_token (no new OIDC code, audience
+# stays the path-less service_url per Pitfall 4). These persist NOTHING; the poll
+# driver's finalize step (run_task.py, Plan 02) materializes the bundle to GCS and
+# writes the chain verdict onto ``research_runs``.
+# ---------------------------------------------------------------------------
+
+
+def get_research_bundle(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Fetch a COMPLETED run's SCRUBBED per-provider research; return ``{cleaned_reports}``.
+
+    GETs ``{service_url}/api/runs/{run_id}/research-bundle`` with the same headers as
+    :func:`get_report`. The response carries ONLY ``cleaned_reports`` — a list of
+    ``[provider_name, {report: ...}]`` — the subtractive-verification scrub. The
+    Tribunal endpoint DELIBERATELY excludes ``rejected_claims`` (the discredited-
+    content ledger) per D-01, so nothing this seam returns can leak dropped claims.
+    Called by the finalize step to build the raw-output zip (D-03/D-04). Raises
+    ``httpx.HTTPStatusError`` on any non-2xx (404 unknown run, 409 not completed / no
+    cached research). Persists NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/research-bundle",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def verify_chain(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Re-verify the run's audit hash-chain; return ``{ok: bool, broken_at: int | None}``.
+
+    GETs ``{service_url}/api/audit/verify/{run_id}`` with the same headers as
+    :func:`get_report`. The verdict is the ENGINE-04 legal gate (D-06): a broken
+    chain records the run as completed-but-LOCKED (raw-output download blocked) and
+    surfaces ``broken_at`` (the first divergent row index). Called at the finalize
+    step (Plan 02) and re-run by the re-verify action (D-08).
+
+    EMPTY-CHAIN TRAP: ``ok: true`` on ZERO visible audit rows is trivially valid —
+    the verdict is only meaningful with the correct tenant header, which
+    :func:`_headers` already sends (``X-Nestor-Tenant-Id`` = space_id). Do NOT treat
+    a bare ``ok: true`` as proof without the tenant-scoped rows behind it. Raises
+    ``httpx.HTTPStatusError`` on any non-2xx. Persists NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/audit/verify/{run_id}",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()

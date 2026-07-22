@@ -25,6 +25,12 @@ is ``queued`` to mirror the run's birth state.
 Index shape mirrors ``SkillRun`` (space-LEADING composite indexes) so the
 space_id predicate is index-served for the per-intake poll/read paths. The three
 index names MUST match migration 0011 1:1 (``alembic check`` gate).
+
+Phase 17 (RUN-03) adds three NULLABLE chain-guard / bundle columns via migration
+0012 — ``chain_status`` / ``chain_broken_at`` / ``bundle_key`` — written by the
+completion path (Plan 02) and read by the SSE dict + download/re-verify routes
+(Plan 03). They inherit ``research_runs``' existing FORCE-RLS row policy; 0012
+adds NO new policy, grant, or index.
 """
 
 from __future__ import annotations
@@ -84,6 +90,19 @@ class ResearchRun(Base):
     #: The raw research output markdown, persisted on ``completed`` (A4) so the
     #: Phase 17 raw-output surface is a pure UI add — no re-fetch from Tribunal.
     output_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- Phase 17 chain-guard / bundle columns (RUN-03). All NULLABLE, NO
+    #      server_default — pre-existing live rows (smoke intake e08620c5 has 3)
+    #      carry NULL until the completion path (Plan 02) writes the verdict + key.
+    #: The audit-chain verdict at completion: ``"verified"`` | ``"broken"``.
+    #: NULL until the completion path runs verify_chain (D-06). A ``"broken"``
+    #: value locks the raw-output download until a re-verify lifts it (D-08).
+    chain_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: The broken row index ``verify_chain`` returns on a broken chain; NULL when
+    #: verified or unrun (the audit chain's first divergent hash position).
+    chain_broken_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: The GCS object key of the materialized raw-output zip (D-04/D-05); NULL
+    #: until the completion path builds and uploads the bundle.
+    bundle_key: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
