@@ -161,7 +161,7 @@ def _capture_finalize(monkeypatch) -> dict:
 
 
 def test_poll_driver_releases_pool(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """engine.pool.checkedout() == 0 during the CALL phase (T-16-06 pool safety)."""
     pool_observed: list = []
@@ -194,7 +194,7 @@ def test_poll_driver_releases_pool(
 
 
 def test_completion_mail_to_trigger_user(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """On a completed run the completion mail recipient is the acting superadmin (D-10)."""
     patches: list = []
@@ -214,7 +214,7 @@ def test_completion_mail_to_trigger_user(
 
 
 def test_loop_stops_on_completed_terminal(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """The poll loop breaks on the completed terminal and finalizes completed."""
     patches: list = []
@@ -281,10 +281,16 @@ def test_on_error_finalizes_row_failed(monkeypatch, fake_tribunal_client, fake_r
     assert sink["final"][-1][0] == "failed"
 
 
-def test_idempotency_key_is_uuid5_of_intake_and_attempt(
-    monkeypatch, fake_tribunal_client, fake_resend
+def test_idempotency_key_is_uuid5_of_intake_and_research_run_id(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
-    """create_run's idempotency_key is uuid5(intake_id, attempt-N) (D-04 deterministic)."""
+    """create_run's idempotency_key is uuid5(intake_id, research_run_id) (D-04 / 721086d).
+
+    The key is keyed on the MIRROR ROW id, NOT the attempt number (live finding
+    2026-07-21, commit 721086d): an attempt-number key survives row cleanup, so a
+    replayed attempt idempotently returns a DEAD engine run from a previous cycle
+    (the burned-key insta-fail loop). This is a MUST-NOT-REGRESS invariant.
+    """
     patches: list = []
     _install_context(monkeypatch)
     _capture_mirror(monkeypatch)
@@ -292,12 +298,12 @@ def test_idempotency_key_is_uuid5_of_intake_and_attempt(
     _patch_release(monkeypatch, pool_observed=[], patches=patches)
 
     intake_id = uuid.uuid4()
-    attempt = 2
+    research_run_id = uuid.uuid4()
     run_task.run_poll_driver(
-        _superadmin(), intake_id, uuid.uuid4(), "brief text", attempt
+        _superadmin(), intake_id, research_run_id, "brief text", 2
     )
 
-    expected = str(uuid.uuid5(intake_id, f"attempt-{attempt}"))
+    expected = str(uuid.uuid5(intake_id, str(research_run_id)))
     assert fake_tribunal_client["create_run"], "create_run must be called"
     assert fake_tribunal_client["create_run"][0]["idempotency_key"] == expected
 
