@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 17 context gathered
+stopped_at: Phase 17 wave 4 checkpoint — awaiting operator live UAT (17-04 Task 2)
 last_updated: "2026-07-22T08:23:16.718Z"
-last_activity: 2026-07-22 -- Phase 17 execution started
+last_activity: 2026-07-22 -- Phase 17 waves 1-3 merged; 17-04 artifacts authored, paused at operator live-UAT checkpoint
 progress:
   total_phases: 8
   completed_phases: 2
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 17 (raw-output-audit-chain-guard) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 17
-Last activity: 2026-07-22 -- Phase 17 execution started
+Phase: 17 (raw-output-audit-chain-guard) — EXECUTING (paused at checkpoint)
+Plan: 4 of 4 (17-01/02/03 complete + merged; 17-04 Task 1 done, Task 2 = operator live UAT)
+Status: Awaiting operator live-UAT (blocked on Anthropic credits top-up + parked Phase-16 run)
+Last activity: 2026-07-22 -- Phase 17 waves 1-3 merged; 17-04 paused at operator live-UAT checkpoint
 
 Progress: [██████████] 100%
 

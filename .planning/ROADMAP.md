@@ -139,7 +139,7 @@ trail intact.
 **Plans**: 4 plans
   - [x] 17-01-PLAN.md — research_runs chain/bundle columns (migration 0012) + Tribunal /research-bundle endpoint + seam methods + fixtures (foundation)
   - [x] 17-02-PLAN.md — pure bundle builder + completion-path verify_chain gate + materialize zip to GCS (pool-safe)
-  - [ ] 17-03-PLAN.md — superadmin-only bundle-url + re-verify routes + denial suite + download/locked/re-verify UI
+  - [x] 17-03-PLAN.md — superadmin-only bundle-url + re-verify routes + denial suite + download/locked/re-verify UI
   - [ ] 17-04-PLAN.md — runbook Phase 17 (ordered dual REBUILD + 0012 migrate) + operator live download / verify_chain proof
 
 ### Phase 18: Human Report Upload + Client Delivery
@@ -186,7 +186,7 @@ trail intact.
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 4/5 | In Progress|  |
-| 17. Raw Output + Audit Chain Guard | v1.1 | 2/4 | In Progress|  |
+| 17. Raw Output + Audit Chain Guard | v1.1 | 3/4 | In Progress|  |
 | 18. Human Report Upload + Client Delivery | v1.1 | 0/TBD | Not started | - |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
