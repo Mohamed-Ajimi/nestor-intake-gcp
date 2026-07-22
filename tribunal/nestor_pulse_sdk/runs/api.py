@@ -920,6 +920,11 @@ async def get_run_report(
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "cost_usd_total": str(run.cost_usd_total) if run.cost_usd_total is not None else None,
         "sections": _markdown_to_sections(output.body),
+        # The RAW synthesized markdown (Output.body). The intake side persists this as
+        # research_runs.output_markdown and writes it as report.md in the raw-output
+        # bundle (D-03) — without it both fall back to empty (A1 shape mismatch: this
+        # endpoint historically returned only the parsed ``sections``).
+        "markdown": output.body,
         "sources": sources,
     }
 
