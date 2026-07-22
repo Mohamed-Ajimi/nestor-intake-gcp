@@ -27,6 +27,13 @@ What each case proves (D-07 / Pitfall 4):
 | ``null_space_403``            | a user Identity with space_id=None -> EXACTLY 403 on a     |
 |                               | data route (the ONLY data-route 403, D-04); no session is  |
 |                               | opened for it.                                             |
+| ``deliver_cross_tenant``      | user-A POST /intakes/{B}/deliver (well-formed B-prefixed   |
+|                               | body) -> EXACTLY 404 AND space-B's intake is UNCHANGED     |
+|                               | (still not delivered) on owner re-read — D-07/T-18-02.     |
+| ``report_cross_tenant``       | user-A GET /intakes/{B}/report -> EXACTLY 404 (BOLA on the |
+|                               | client report read is existence-hidden) — T-18-02.        |
+| ``report_read_pre_delivery``  | user reads their OWN-space non-delivered intake's /report  |
+|                               | -> 404 (REPORT-02 invisibility gate — T-18-01).           |
 
 DESIGN — driving the REAL ``get_tenant_repo`` against the testcontainer (CR-01 fix):
 The production ``get_tenant_repo`` (``app/db/session.py``) routes through
@@ -140,6 +147,18 @@ def _patch_engine_factories(monkeypatch, user_engine, sa_engine=None) -> None:
     ``get_sessionmaker`` is left real (it accepts any engine).
     """
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
+    # The Phase-18 deliver/replace verbs write through app.db.ai_session.tenant_session,
+    # which resolves the engine via its OWN get_engine import — patch that namespace too so
+    # the write tx runs against the testcontainer (harmless for the read-only cases).
+    try:
+        ai_session = pytest.importorskip("app.db.ai_session")
+        monkeypatch.setattr(ai_session, "get_engine", lambda *a, **k: user_engine)
+        if sa_engine is not None:
+            monkeypatch.setattr(
+                ai_session, "get_superadmin_engine", lambda *a, **k: sa_engine
+            )
+    except Exception:  # pragma: no cover - ai_session always importable with the app deps
+        pass
     if sa_engine is not None:
         monkeypatch.setattr(
             session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
@@ -204,6 +223,27 @@ def _insert_intake(conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID) -
             "VALUES (:id, :space_id, 'draft')"
         ),
         {"id": intake_id, "space_id": space_id},
+    )
+
+
+def _insert_intake_status(
+    conn, set_space, space_id: uuid.UUID, intake_id: uuid.UUID, status: str
+) -> None:
+    """Insert one intake at an EXPLICIT status (GUC set so the 0002 WITH CHECK passes).
+
+    Mirrors :func:`_insert_intake` but takes a ``status`` arg so the Phase-18 deliver /
+    report cases can seed a space-B ``in_research`` intake (the deliverable precondition) or
+    an own-space non-``delivered`` intake (the REPORT-02 invisibility precondition).
+    """
+    from sqlalchemy import text
+
+    set_space(conn, space_id)
+    conn.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
+            "VALUES (:id, :space_id, :status)"
+        ),
+        {"id": intake_id, "space_id": space_id, "status": status},
     )
 
 
@@ -754,3 +794,164 @@ def test_research_runs_cross_tenant_read_denied(engine, set_space, two_spaces):
             )
     finally:
         _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: deliver_cross_tenant — user-A POST /intakes/{B}/deliver -> 404, B unchanged
+# ===========================================================================
+
+
+def test_deliver_cross_tenant_returns_404_intake_unchanged(
+    engine, set_space, two_spaces, monkeypatch, fake_resend
+):
+    """user-A POST /intakes/{B}/deliver -> EXACTLY 404, and the space-B intake is unchanged.
+
+    The deliver verb's ``repo.get`` (scoped WHERE + RLS) excludes space-B's intake from
+    space-A's scope, so it is an existence-hidden 404 BEFORE any status flip / artifact link
+    (D-07 / T-18-02) — never a 403, never a silent success. The body is a WELL-FORMED
+    B-prefixed report key, proving the denial is the ownership gate, not the prefix-assert. The
+    space-B intake is re-read as its OWNER (space_b GUC) and asserted STILL ``in_research`` (not
+    ``delivered``) — the cross-tenant deliver did not leak through.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_a, space_b = two_spaces
+    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "Deliver X-Tenant Space A")
+            _create_space(conn, space_b, "Deliver X-Tenant Space B")
+        with engine.begin() as conn:
+            _insert_intake(conn, set_space, space_a, intake_a)
+        with engine.begin() as conn:
+            _insert_intake_status(conn, set_space, space_b, intake_b, "in_research")
+
+        monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        # A well-formed key under space-B's OWN reports/ prefix (so the denial is the
+        # ownership 404, not the D-08 prefix-assert).
+        forged_body = {
+            "storage_path": f"{space_b}/{intake_b}/reports/{uuid.uuid4()}-report.pdf",
+            "recipients": [],
+        }
+        resp = client.post(
+            f"/intakes/{intake_b}/deliver",
+            json=forged_body,
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        # EXACT 404 — never `in (403, 404)` (D-07 / T-18-02).
+        assert resp.status_code == 404, (
+            f"cross-tenant deliver must be EXACTLY 404, got {resp.status_code} "
+            f"(body={resp.text!r}). 403/200 would leak existence or deliver through."
+        )
+        # The foreign intake must be UNTOUCHED — re-read as the owner (space_b GUC).
+        with engine.begin() as conn:
+            set_space(conn, space_b)
+            status_b = conn.execute(
+                text(f"SELECT status FROM {SCHEMA}.intakes WHERE id = :id"),
+                {"id": intake_b},
+            ).scalar_one()
+        assert status_b == "in_research", (
+            f"cross-tenant deliver leaked through: space_b intake status={status_b!r} "
+            "(expected unchanged — 'in_research')."
+        )
+        assert fake_resend["calls"] == [], (
+            "a cross-tenant deliver must never reach the mail seam"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: report_cross_tenant — user-A GET /intakes/{B}/report -> 404
+# ===========================================================================
+
+
+def test_report_cross_tenant_returns_404(engine, set_space, two_spaces, monkeypatch):
+    """user-A GET /intakes/{B}/report -> EXACTLY 404 (the client report read is BOLA-walled).
+
+    Even for a space-B intake that IS ``delivered`` with a linked report, space-A's scoped
+    ``repo.get`` returns ``None`` -> the handler's existence-hidden 404 (T-18-02). Never a
+    403, never a 200 leaking the foreign report's filename / storage_path.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, intake_b = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "Report X-Tenant Space A")
+            _create_space(conn, space_b, "Report X-Tenant Space B")
+        with engine.begin() as conn:
+            _insert_intake(conn, set_space, space_a, intake_a)
+        with engine.begin() as conn:
+            # A DELIVERED space-B intake with a linked report — still invisible cross-tenant.
+            _insert_intake_status(conn, set_space, space_b, intake_b, "delivered")
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.get(
+            f"/intakes/{intake_b}/report",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        assert resp.status_code == 404, (
+            f"cross-tenant GET /report must be EXACTLY 404, got {resp.status_code} "
+            f"(body={resp.text!r})."
+        )
+        assert str(intake_b) not in resp.text, "the 404 body leaked the foreign intake id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a, space_b)
+
+
+# ===========================================================================
+# Case: report_read_pre_delivery — own-space non-delivered /report -> 404 (REPORT-02)
+# ===========================================================================
+
+
+def test_report_read_pre_delivery_returns_404(engine, set_space, two_spaces, monkeypatch):
+    """A user reading their OWN-space non-delivered intake's /report -> 404 (REPORT-02).
+
+    The report is invisible for EVERY status other than exactly ``delivered`` — the gate is an
+    equality check, not a ``>=`` rank, so even an ``in_research`` intake (a LATER lifecycle
+    stage than most) returns 404. This is the client-side invisibility wall (T-18-01): nothing
+    research-related is client-visible before the explicit Deliver act.
+    """
+    from fastapi.testclient import TestClient
+
+    space_a, _space_b = two_spaces
+    intake_a = uuid.uuid4()
+
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_a, "Pre-Delivery Invisibility Space")
+        with engine.begin() as conn:
+            _insert_intake_status(conn, set_space, space_a, intake_a, "in_research")
+
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        client = TestClient(app)
+        resp = client.get(
+            f"/intakes/{intake_a}/report",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+
+        assert resp.status_code == 404, (
+            "REPORT-02: GET /report on an own-space non-delivered intake must be EXACTLY 404, "
+            f"got {resp.status_code} ({resp.text!r})."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_spaces(engine, space_a)
