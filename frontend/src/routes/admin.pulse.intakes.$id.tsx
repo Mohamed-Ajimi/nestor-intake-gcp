@@ -1461,14 +1461,17 @@ function IntakeDetailPage() {
           finalReportArtifactId={intake.final_report_artifact_id}
           intakeStatus={intake.status}
           hasResultsToken={!!intake.client_results_token}
-          onChange={async (artifactId) => {
+          onChange={async () => {
+            // The Deliver/Replace verb owns the transition (18-01) — reload the intake
+            // from the backend view so the phase machine advances from the AUTHORITATIVE
+            // status/final_report_artifact_id/results_link_sent_at, never a client-side fake.
+            const res = await getIntake(intake.id);
+            if (!res.success) return;
             setIntake({
               ...intake,
-              final_report_artifact_id: artifactId,
-              status:
-                artifactId && intake.client_results_token && intake.status === "in_research"
-                  ? "delivered"
-                  : intake.status,
+              status: res.data.status,
+              final_report_artifact_id: res.data.final_report_artifact_id,
+              results_link_sent_at: res.data.results_link_sent_at,
             });
           }}
         />

@@ -404,7 +404,16 @@
     "view": "Bekijk",
     "remove": "Verwijder",
     "dragDrop": "of sleep & drop hier",
-    "noReport": "Nog geen rapport geüpload"
+    "noReport": "Nog geen rapport geüpload",
+    "deliver": "Bezorg aan klant",
+    "delivering": "Bezorgen…",
+    "delivered": "Rapport bezorgd",
+    "deliverFailed": "Bezorgen mislukt: {{error}}",
+    "staged": "Klaargezet — nog niet bezorgd",
+    "stagedHint": "Controleer het bestand en klik Bezorg om de klant te mailen.",
+    "replaceConfirm": "Rapport vervangen door dit bestand?",
+    "reNotify": "Klant opnieuw op de hoogte brengen",
+    "silentReplace": "Vervang zonder mail"
   },
   "contextPack": {
     "dateFallback": "—",

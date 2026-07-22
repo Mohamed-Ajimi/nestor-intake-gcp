@@ -63,14 +63,18 @@ export function derivePhase(
   }
 
   if (status === "in_research") {
-    // Phase 16 (RUN-01, Pitfall 6/10): the `in_research` visibility is now driven by the
-    // intake STATUS alone — the mirrored `research_runs` row (not `research_artifacts`) is
-    // this flow's progress source, and there is NO artifact writer this milestone, so
-    // `hasResearchArtifacts` stays false and this branch returns `in_research`. This change
-    // is ADDITIVE: the `final_report_artifact_id` and `hasResearchArtifacts` branches below
-    // are retained for the later (Phase 18+) report-upload flow. A merely-COMPLETED research
-    // run does NOT auto-advance to `awaiting_report_upload` — that transition is owned by the
-    // report-upload phase, not by run completion.
+    // Phase 16 (RUN-01, Pitfall 6/10): the `in_research` visibility is driven by the intake
+    // STATUS alone — the mirrored `research_runs` row (not `research_artifacts`) is this flow's
+    // progress source, and there is NO artifact writer, so `hasResearchArtifacts` stays false
+    // and (absent a report) this branch returns `in_research`.
+    //
+    // Phase 18 (REPORT-01): the report-delivery UI now lives in this phase. The `FinalReportBlock`
+    // stages a PDF and, on the explicit Deliver verb, the BACKEND writes `final_report_artifact_id`
+    // (the linked report artifact) and stamps `results_link_sent_at` (the delivered-mail timestamp).
+    // Because the Deliver verb ALSO flips the status to `delivered`, the `final_report_artifact_id`
+    // branch here is a transient state (set while still `in_research` only if a caller pre-sets it);
+    // in practice the block is visible throughout `in_research` (see phaseShowsFinalReport below).
+    // A merely-COMPLETED research run does NOT auto-advance — delivery is an explicit operator act.
     if (intake.final_report_artifact_id) return "awaiting_results_send";
     if (hasResearchArtifacts) return "awaiting_report_upload";
     return "in_research";
@@ -110,7 +114,10 @@ export function phaseShowsResearch(phase: Phase): boolean {
   ].includes(phase);
 }
 export function phaseShowsFinalReport(phase: Phase): boolean {
+  // Phase 18: `in_research` is now a report-delivery-visible phase — the operator stages
+  // and explicitly Delivers the human report from here (REPORT-01).
   return [
+    "in_research",
     "awaiting_report_upload",
     "awaiting_results_send",
     "completed",
