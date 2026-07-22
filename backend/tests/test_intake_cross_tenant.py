@@ -954,4 +954,4 @@ def test_report_read_pre_delivery_returns_404(engine, set_space, two_spaces, mon
         )
     finally:
         app.dependency_overrides.clear()
-        _cleanup_spaces(engine, space_a)
+        _cleanup_spaces(engine, space_a, space_a)
