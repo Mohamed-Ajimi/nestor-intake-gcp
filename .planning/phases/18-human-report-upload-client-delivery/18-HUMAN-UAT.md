@@ -1,9 +1,9 @@
 ---
-status: partial
+status: complete
 phase: 18-human-report-upload-client-delivery
 source: [18-04-PLAN.md Task 2 checkpoint, DEPLOY-RUNBOOK.md § Phase 18]
 started: 2026-07-22T17:00:00Z
-updated: 2026-07-22T17:00:00Z
+updated: 2026-07-22T18:00:00Z
 ---
 
 ## Deploy record (executed 2026-07-22 by Claude session, operator-authorized "DO IT")
@@ -21,42 +21,47 @@ updated: 2026-07-22T17:00:00Z
 
 ## Current Test
 
-[awaiting operator browser/mail session — Step 18.e]
+[session closed 2026-07-22 — operator UAT on intake e08620c5-2ccf-4006-8bce-ae45f47f8c88]
 
 ## Tests
 
 ### 1. Stage — pre-delivery invisibility (REPORT-02, BLOCKING)
 On an `in_research` smoke intake, admin uploads a real PDF in FinalReportBlock.
 expected: file stages (open/check/swap possible), status STAYS `in_research`; a CLIENT login sees NO report — `/intake/{id}/report` redirects to /intake, no "View report" CTA on the list.
-result: [pending]
+result: PASS — upload 201 @17:15:11Z, status stayed in_research; client saw nothing pre-delivery.
 
 ### 2. Deliver (REPORT-01)
 Admin clicks Deliver → RecipientPicker (results family) → confirm.
 expected: status flips to `delivered`; delivery mail arrives in the recipient's locale (NL/FR/EN); CTA deep-links to `/intake/{id}/report`.
-result: [pending]
+result: PASS — POST /deliver 200 @17:15:19Z; mail received by operator; CTA deep-link correct.
 
 ### 3. Client download (REPORT-02)
 Log in as a CLIENT member of the space.
 expected: intake list shows "View report" → page shows filename/date/size + download button only (no inline viewer); downloaded PDF opens; Phase-19 chat placeholder visible but inert.
-result: [pending]
+result: PASS (after fix `285f050`) — client GET /report 200 + signed-url 200 @17:27Z; PDF downloaded. First attempt failed: parent route missing <Outlet/> (see Gaps).
 
-### 4. Replace — silent + re-notify (REPORT-03)
+### 4. Replace — silent + re-notify (REPORT-03/D-04/D-05)
 Admin replaces the PDF post-delivery, once silent, once with re-notify.
 expected: status STAYS `delivered`; client gets the NEWEST file; re-notify sends a fresh mail.
-result: [pending]
+result: ACCEPTED (operator decision, 2026-07-22) — operator reported both paths worked in the UI, but backend logs show NO /report/replace call and no second upload, so there is no server-side confirmation. The replace verb's behavior is covered green in Cloud Build (`test_report_delivery.py` replace cases, build b0365150). Operator chose to close the phase ("just mark it as done"). Residual risk: the live Replace click-through remains unexercised.
 
 ## Summary
 
 total: 4
-passed: 0
+passed: 3
 issues: 0
-pending: 4
+pending: 0
 skipped: 0
 blocked: 0
+accepted-without-live-evidence: 1 (test 4)
 
 ## Gaps
 
-[none recorded yet]
+- **RESOLVED during UAT** — `/intake/$id/report` (and latent `/intake/$id/results`) could never
+  render: the `intake.$id.tsx` parent route had no `<Outlet/>`, so the router silently rendered
+  the fill form. Fixed in `285f050` (UserIntakeRouteShell), deployed nestor-frontend-00018-m6x.
+- **OPEN (accepted)** — live Replace click-through (test 4) closed on operator acceptance without
+  backend log evidence; re-verify opportunistically at the next delivery or in Phase 20 close-out.
 
 ## Failure triage (from runbook § Phase 18)
 
