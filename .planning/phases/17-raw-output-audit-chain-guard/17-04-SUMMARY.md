@@ -187,3 +187,32 @@ after the Anthropic-credits top-up.
 ---
 *Phase: 17-raw-output-audit-chain-guard*
 *Completed: 2026-07-22 (Task 1 authored; Task 2 = operator checkpoint returned)*
+
+## Task 2 (operator checkpoint) — COMPLETED 2026-07-22
+
+The live session ran the same day (credits blocker resolved that morning; Phase-16 run 4cbb5311
+completed green and served as the proof run). All runbook steps executed by the orchestrator:
+
+| Step | Result |
+|------|--------|
+| 17.a tribunal-api | rebuilt + deployed rev `20260722-152057-152339` (then again `-1552xx` with the report-markdown fix); worker untouched |
+| 17.b nestor-api | rebuilt + deployed rev `00036-pss` → `00037-k7t` (with the null-space 404 fix) |
+| 17.c migration 0012 | applied (`0011 -> 0012`) — AFTER repinning the migrate Job image (silent no-op lesson, now in the runbook) |
+| 17.d frontend | rev `00015-kb9` → `00016-qmr` (with the NULL-chain-state verify affordance) |
+| 17.e env confirms | STORAGE_BUCKET + TRIBUNAL_SERVICE_URL present; NO AUDIT_GCS_BUCKET (D-05) |
+| Suites | tribunal 316 passed/1 pre-existing env-dependent failure; intake 163 passed/4 known mail defects — both Phase-17 test sets green |
+
+UAT: 3/3 PASS (see 17-HUMAN-UAT.md) — download + D-01/D-03 zip proven live on run 4cbb5311;
+verify_chain ran green against the engine (NULL → verified via the re-verify path); isolation
+proven by the CI denial suite (6/6 EXACTLY-404).
+
+### Fix cycle during UAT (all committed + deployed)
+- `3ecbba6` fix(17-03): superadmin gate as dependency — null-space user 404, not repo 403
+- `0ff2565` fix(17-03): verify-chain affordance for NULL chain_status + local card flip
+- `05b0e96` fix(17-01): report seam endpoint exposes raw markdown (report.md was empty)
+
+### Deferred (operator, minor → Phase-20 ledger)
+- Re-download run 4cbb5311's bundle post-fix and confirm report.md non-empty (reset script staged);
+  or let the next real completed run prove it end-to-end.
+- Completed card shows `Duur: "—"` (duration not rendered).
+- Visual client-login spot-check (denial suite already pins the API surface).

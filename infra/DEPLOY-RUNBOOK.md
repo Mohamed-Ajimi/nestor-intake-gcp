@@ -1411,8 +1411,16 @@ The `nestor-migrate` Cloud Run Job runs `alembic upgrade head` (same pattern as 
 intake migrations — § Phase 16 Step 16.b). Execute it AFTER the Step-17.b image rebuild so the Job
 image carries the 0012 revision:
 
+> ⚠️ **LESSON (hit live 2026-07-22): the Job does NOT track the service image.** Updating
+> `nestor-api` with `gcloud run services update --image` leaves the `nestor-migrate` Job pinned to
+> its OLD image — executing it then is a **silent no-op** (alembic connects, finds itself "at head"
+> on the stale revision set, exits 0, logs no `Running upgrade` line). ALWAYS repin the Job first:
+
 ```bash
+gcloud run jobs update nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"   # the SAME image tag deployed in Step 17.b
 gcloud run jobs execute nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+# CONFIRM the log shows "Running upgrade 0011 -> 0012" — no upgrade line = stale-image no-op.
 ```
 
 Then confirm the three new nullable columns landed on `nestor.research_runs`. Migration 0012 is a pure
