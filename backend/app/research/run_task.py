@@ -55,6 +55,9 @@ from app.db.repository import IntakeRepository, ResearchRunRepository
 from app.mail import resend
 from app.mail.render import render_research_complete, render_research_failed
 from app.research import tribunal_client
+from app.research.bundle import build_bundle_zip
+from app.storage import gcs
+from app.storage.keys import build_object_key
 
 # WARNING level on purpose: uvicorn's default logging config drops INFO from app
 # loggers (no root handler — only the WARNING+ lastResort stderr handler), and this
@@ -151,13 +154,24 @@ def finalize_completed(
     research_run_id: Any,
     metrics: dict[str, Any],
     report: dict[str, Any],
+    *,
+    chain_status: str | None = None,
+    chain_broken_at: int | None = None,
+    bundle_key: str | None = None,
 ) -> None:
-    """WRITE (completed): persist the raw report + final mirror fields (A4).
+    """WRITE (completed): persist the raw report + final mirror + Phase-17 chain state.
 
     Runs in the fresh WRITE :func:`tenant_session` opened by the release contract.
     Persists ``output_markdown`` (A4 — Phase 17 raw-output is then a pure UI add),
     the terminal ``status`` VERBATIM, and the final cost/stage. Uses ``func.now()``
     for ``completed_at``.
+
+    Phase 17 (RUN-03 / D-06): the audit-chain verdict is a HARD GATE computed in the
+    connection-free CALL window (no seam or GCS I/O happens here — this write only
+    records the RESULT). ``chain_status`` is ``"verified"`` (bundle materialized,
+    ``bundle_key`` set) or ``"broken"`` (complete-but-LOCKED — ``chain_broken_at``
+    set, ``bundle_key`` stays NULL, no bundle written). All three are written even
+    when None so a re-verify can reset them.
     """
     from sqlalchemy import func
 
@@ -168,6 +182,9 @@ def finalize_completed(
         current_stage=metrics.get("current_stage"),
         cost_usd_total=metrics.get("cost_usd_total"),
         output_markdown=report.get("markdown"),
+        chain_status=chain_status,
+        chain_broken_at=chain_broken_at,
+        bundle_key=bundle_key,
         completed_at=func.now(),
     )
 
@@ -244,6 +261,93 @@ def _default_error(metrics: dict[str, Any] | None) -> str:
     return f"research run ended with status {metrics.get('status', 'failed')}"
 
 
+def build_completion(
+    ctx: dict[str, Any],
+    research_run_id: Any,
+    rid: str,
+) -> dict[str, Any]:
+    """CALL-phase (NO DB conn held) audit-chain gate + bundle materialization (RUN-03).
+
+    Invoked from the tail of :func:`run_poll_driver`'s ``call_fn`` — i.e. while the
+    release contract holds NO pooled DB connection (``engine.pool.checkedout() == 0``,
+    T-17-07). Runs the D-06 hard gate and, ONLY on a verified chain, builds + uploads
+    the immutable zip ONCE. Returns a plain dict of the values the WRITE phase then
+    patches onto ``research_runs`` (the WRITE opens the tenant_session; NO I/O there).
+
+    Steps (all connection-free):
+
+    1. ``get_report`` — the synthesized report (already fetched today; the persisted
+       ``output_markdown`` is the reliable report.md body when the live seam returns
+       ``sections`` not ``markdown`` — Open Q1 / A1).
+    2. ``get_research_bundle`` — the D-01-scrubbed per-provider ``cleaned_reports``.
+    3. ``verify_chain`` — the D-06 gate verdict ``{ok, broken_at}``.
+    4a. VERIFIED → build the zip, upload it ONCE under the server-authored
+        space-scoped ``artifacts`` key (D-05 app bucket, NOT the audit bucket), and
+        return ``chain_status="verified"`` + ``bundle_key``.
+    4b. BROKEN → build NOTHING, upload NOTHING (complete-but-LOCKED, EU AI Act Art.
+        12 posture); return ``chain_status="broken"`` + ``chain_broken_at``.
+
+    ``report`` is threaded back so the WRITE persists ``output_markdown`` from the
+    SAME fetch (no second seam call in the connected window).
+    """
+    seam_kwargs = dict(
+        service_url=ctx["service_url"],
+        space_id=ctx["space_id"],
+        acting_user_id=ctx["acting_user_id"],
+        acting_email=ctx["acting_email"],
+    )
+
+    report = tribunal_client.get_report(run_id=rid, **seam_kwargs)
+    bundle = tribunal_client.get_research_bundle(run_id=rid, **seam_kwargs)
+    verdict = tribunal_client.verify_chain(run_id=rid, **seam_kwargs)  # D-06 gate.
+
+    completion: dict[str, Any] = {
+        "report": report,
+        "chain_status": None,
+        "chain_broken_at": None,
+        "bundle_key": None,
+    }
+
+    if verdict.get("ok"):
+        # report.md must never be empty: prefer the seam markdown, else the
+        # persisted output_markdown (the live report endpoint returns `sections`,
+        # not `markdown` — Open Q1 / A1). Pass a report dict the pure builder reads.
+        report_for_zip = dict(report)
+        if not report_for_zip.get("markdown"):
+            report_for_zip["markdown"] = report.get("markdown") or ""
+        zip_bytes = build_bundle_zip(
+            report_for_zip, bundle, report.get("sources") or []
+        )
+        # Server-authored, space-scoped key in the "artifacts" app bucket (D-05).
+        # The deterministic per-run filename keeps the object 1:1 with the run; the
+        # shared key builder adds its uuid4 uniqueness prefix (Pattern 2 idempotency
+        # is by the run's single materialization, not by key reuse).
+        key = build_object_key(
+            ctx["space_id"],
+            ctx["intake_id"],
+            "artifacts",
+            f"raw-output-{research_run_id}.zip",
+        )
+        gcs.upload_object(key, zip_bytes, content_type="application/zip")
+        completion["chain_status"] = "verified"
+        completion["bundle_key"] = key
+        log.warning(
+            "run_poll_driver bundle materialized: research_run_id=%s key=%s",
+            research_run_id, key,
+        )
+    else:
+        completion["chain_status"] = "broken"
+        completion["chain_broken_at"] = verdict.get("broken_at")
+        # Loud on purpose: a broken chain is a legal-posture event (complete-but-locked).
+        log.error(
+            "run_poll_driver chain BROKEN (complete-but-locked, no bundle): "
+            "research_run_id=%s broken_at=%s",
+            research_run_id, verdict.get("broken_at"),
+        )
+
+    return completion
+
+
 def run_poll_driver(
     identity: Identity,
     intake_id: Any,
@@ -261,9 +365,15 @@ def run_poll_driver(
       ``create_run`` (deterministic ``uuid5`` idempotency key, D-04) → poll loop
       (``get_metrics`` → :func:`mirror_tick` per tick → break on the RESEARCH terminal
       set) with bounded 5xx retries on ``get_metrics`` (Pitfall 1);
-    * **WRITE** (a fresh ``tenant_session``): on ``completed`` fetch ``get_report``,
-      persist ``output_markdown`` (A4) + finalize + mail the completion variant to the
-      acting superadmin (D-10); else finalize failed + mail the failure variant;
+    * **CALL tail (completed)** — :func:`build_completion` runs the D-06 audit-chain
+      gate + the D-01-scrubbed bundle fetch + zip build + GCS upload, ALL in the
+      connection-free window (T-17-07); it returns the report + chain verdict +
+      ``bundle_key`` as the 3rd result element;
+    * **WRITE** (a fresh ``tenant_session``): on ``completed`` persist
+      ``output_markdown`` (A4) + the chain/bundle state + finalize + mail the
+      completion variant to the acting superadmin (D-10, on BOTH verified and broken
+      — no broken-chain variant, D-07); else finalize failed + mail the failure
+      variant;
     * **on_error** finalizes the row to EXACTLY ``failed`` on ANY exception (D-04).
 
     Never returns a value (a BackgroundTask); never raises out of the task (``on_error``
@@ -325,13 +435,17 @@ def run_poll_driver(
                 if status_code >= 500:
                     consecutive_5xx += 1
                     if consecutive_5xx > _MAX_METRICS_5XX_RETRIES:
-                        return rid, {
-                            "status": "failed",
-                            "error_message": (
-                                f"metrics 5xx after {_MAX_METRICS_5XX_RETRIES} "
-                                "retries"
-                            ),
-                        }
+                        return (
+                            rid,
+                            {
+                                "status": "failed",
+                                "error_message": (
+                                    f"metrics 5xx after {_MAX_METRICS_5XX_RETRIES} "
+                                    "retries"
+                                ),
+                            },
+                            None,  # failed terminal → no completion bundle.
+                        )
                     time.sleep(POLL_SECONDS)
                     continue
                 raise  # a 4xx is a real error → on_error finalizes failed.
@@ -342,23 +456,44 @@ def run_poll_driver(
                     "run_poll_driver terminal: research_run_id=%s tribunal_run_id=%s "
                     "status=%s", research_run_id, rid, metrics.get("status"),
                 )
-                return rid, metrics
+                # Phase 17 (RUN-03): the completion I/O — the D-06 audit-chain gate,
+                # the D-01-scrubbed bundle fetch, the zip build, and the GCS upload —
+                # runs HERE, in the connection-free CALL window (T-17-07: no pooled DB
+                # connection is held across seam/GCS I/O). The WRITE phase only patches
+                # the row. Non-completed terminals carry completion=None (no bundle).
+                completion = None
+                if metrics.get("status") == "completed":
+                    completion = build_completion(ctx, research_run_id, rid)
+                return rid, metrics, completion
             time.sleep(POLL_SECONDS)
 
-    def write_fn(session: Any, ctx: dict[str, Any], result: tuple[str, dict]) -> None:
-        rid, metrics = result
+    def write_fn(
+        session: Any, ctx: dict[str, Any], result: tuple[str, dict, dict | None]
+    ) -> None:
+        # Phase 17: the CALL phase now returns a THIRD element — the completion dict
+        # (report + chain verdict + bundle_key) computed in the connection-free
+        # window — or None for a non-completed terminal. The report is NO LONGER
+        # fetched here (that seam call moved to the pool-safe CALL window, T-17-07).
+        rid, metrics, completion = result
         to = [ctx["acting_email"]] if ctx.get("acting_email") else []
         cta_url = _admin_cta(ctx)
 
         if metrics.get("status") == "completed":
-            report = tribunal_client.get_report(
-                run_id=rid,
-                service_url=ctx["service_url"],
-                space_id=ctx["space_id"],
-                acting_user_id=ctx["acting_user_id"],
-                acting_email=ctx["acting_email"],
+            # completion is always present for a completed terminal (build_completion).
+            completion = completion or {}
+            report = completion.get("report") or {}
+            finalize_completed(
+                session,
+                research_run_id,
+                metrics,
+                report,
+                chain_status=completion.get("chain_status"),
+                chain_broken_at=completion.get("chain_broken_at"),
+                bundle_key=completion.get("bundle_key"),
             )
-            finalize_completed(session, research_run_id, metrics, report)
+            # D-07: the NORMAL completion mail sends on BOTH the verified and the
+            # broken-chain path — there is NO broken-chain email variant. Do NOT gate
+            # the mail on chain_status.
             if to:
                 html = render_research_complete(
                     project_title=ctx["project_title"],

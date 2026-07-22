@@ -100,7 +100,12 @@ def _install_context(monkeypatch):
         "space_id": str(uuid.uuid4()),
         "acting_user_id": "sa-1",
         "acting_email": "ops@agenic.be",
+        # intake_id is load-bearing for the Phase-17 completion path — it is one of
+        # the two space-scoped segments of the server-authored bundle object key.
+        "intake_id": str(uuid.uuid4()),
+        "project_title": "dit intake",
         "service_url": "https://tribunal.example",
+        "app_base_url": "https://app.example",
         "attempt": 1,
     }
     monkeypatch.setattr(
@@ -121,11 +126,31 @@ def _capture_mirror(monkeypatch) -> list:
 
 
 def _capture_finalize(monkeypatch) -> dict:
-    """Record the finalize_* writer calls (status the driver commits)."""
-    sink: dict = {"final": []}
+    """Record the finalize_* writer calls (status + Phase-17 chain/bundle values).
 
-    def _fake_completed(session, research_run_id, metrics, report):
+    ``finalize_completed`` grew Phase-17 keyword args (chain_status /
+    chain_broken_at / bundle_key) — the fake accepts them and records the last
+    completed patch so the verified/broken assertions can read the persisted
+    lock-state without a DB.
+    """
+    sink: dict = {"final": [], "completed_kwargs": None}
+
+    def _fake_completed(
+        session,
+        research_run_id,
+        metrics,
+        report,
+        *,
+        chain_status=None,
+        chain_broken_at=None,
+        bundle_key=None,
+    ):
         sink["final"].append(("completed", report.get("markdown")))
+        sink["completed_kwargs"] = {
+            "chain_status": chain_status,
+            "chain_broken_at": chain_broken_at,
+            "bundle_key": bundle_key,
+        }
 
     def _fake_failed(session, research_run_id, metrics, error_message=None):
         sink["final"].append(("failed", error_message))
@@ -136,7 +161,7 @@ def _capture_finalize(monkeypatch) -> dict:
 
 
 def test_poll_driver_releases_pool(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """engine.pool.checkedout() == 0 during the CALL phase (T-16-06 pool safety)."""
     pool_observed: list = []
@@ -169,7 +194,7 @@ def test_poll_driver_releases_pool(
 
 
 def test_completion_mail_to_trigger_user(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """On a completed run the completion mail recipient is the acting superadmin (D-10)."""
     patches: list = []
@@ -189,7 +214,7 @@ def test_completion_mail_to_trigger_user(
 
 
 def test_loop_stops_on_completed_terminal(
-    monkeypatch, fake_tribunal_client, fake_resend
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
     """The poll loop breaks on the completed terminal and finalizes completed."""
     patches: list = []
@@ -256,10 +281,16 @@ def test_on_error_finalizes_row_failed(monkeypatch, fake_tribunal_client, fake_r
     assert sink["final"][-1][0] == "failed"
 
 
-def test_idempotency_key_is_uuid5_of_intake_and_attempt(
-    monkeypatch, fake_tribunal_client, fake_resend
+def test_idempotency_key_is_uuid5_of_intake_and_research_run_id(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
-    """create_run's idempotency_key is uuid5(intake_id, attempt-N) (D-04 deterministic)."""
+    """create_run's idempotency_key is uuid5(intake_id, research_run_id) (D-04 / 721086d).
+
+    The key is keyed on the MIRROR ROW id, NOT the attempt number (live finding
+    2026-07-21, commit 721086d): an attempt-number key survives row cleanup, so a
+    replayed attempt idempotently returns a DEAD engine run from a previous cycle
+    (the burned-key insta-fail loop). This is a MUST-NOT-REGRESS invariant.
+    """
     patches: list = []
     _install_context(monkeypatch)
     _capture_mirror(monkeypatch)
@@ -267,11 +298,149 @@ def test_idempotency_key_is_uuid5_of_intake_and_attempt(
     _patch_release(monkeypatch, pool_observed=[], patches=patches)
 
     intake_id = uuid.uuid4()
-    attempt = 2
+    research_run_id = uuid.uuid4()
     run_task.run_poll_driver(
-        _superadmin(), intake_id, uuid.uuid4(), "brief text", attempt
+        _superadmin(), intake_id, research_run_id, "brief text", 2
     )
 
-    expected = str(uuid.uuid5(intake_id, f"attempt-{attempt}"))
+    expected = str(uuid.uuid5(intake_id, str(research_run_id)))
     assert fake_tribunal_client["create_run"], "create_run must be called"
     assert fake_tribunal_client["create_run"][0]["idempotency_key"] == expected
+
+
+# ===========================================================================
+# Phase 17 (RUN-03) — completion-path audit-chain gate + bundle materialization.
+# ===========================================================================
+
+
+def test_verified_path_builds_and_uploads_bundle_once(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A completed + verified run builds the zip and uploads it to GCS exactly once."""
+    patches: list = []
+    ctx = _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    # Default verify_verdict is {ok: True} (verified).
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    # The D-06 gate + the D-01-scrubbed bundle fetch both ran.
+    assert fake_tribunal_client["verify_chain_calls"] == 1
+    assert fake_tribunal_client["get_research_bundle_calls"] == 1
+
+    # Exactly one upload, under the space-scoped "artifacts" key, ending .zip.
+    uploads = fake_gcs["uploads"]
+    assert len(uploads) == 1, uploads
+    key = uploads[0]["key"]
+    assert key.startswith(f"{ctx['space_id']}/{ctx['intake_id']}/artifacts/")
+    assert key.endswith(".zip")
+    assert uploads[0]["content_type"] == "application/zip"
+    assert isinstance(uploads[0]["data"], (bytes, bytearray))
+
+    # The row was patched verified with the bundle_key set.
+    kw = sink["completed_kwargs"]
+    assert kw["chain_status"] == "verified"
+    assert kw["chain_broken_at"] is None
+    assert kw["bundle_key"] == key
+
+
+def test_broken_chain_records_locked_no_upload(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A completed + broken-chain run records complete-but-locked with NO bundle (D-06)."""
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    # Drive the broken verdict BEFORE the poll reaches the completed terminal.
+    fake_tribunal_client["verify_verdict"] = {"ok": False, "broken_at": 3}
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    # The gate ran, but NOTHING was built or uploaded (complete-but-locked).
+    assert fake_tribunal_client["verify_chain_calls"] == 1
+    assert fake_gcs["uploads"] == [], "a broken chain must NOT write a bundle"
+
+    # Status is still the completed terminal; chain is recorded broken + broken_at.
+    assert sink["final"][-1][0] == "completed"
+    kw = sink["completed_kwargs"]
+    assert kw["chain_status"] == "broken"
+    assert kw["chain_broken_at"] == 3
+    assert kw["bundle_key"] is None
+
+
+def test_pool_released_across_build_and_upload(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """engine.pool.checkedout() == 0 across the verify + fetch + build + upload (T-17-07)."""
+    pool_observed: list = []
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_finalize(monkeypatch)
+    monkeypatch.setattr(run_task, "get_engine_for_pool_check", lambda: _FakeEngine())
+
+    # Observe the pool INSIDE the seam/build/upload window: spy on gcs.upload_object
+    # (the last I/O step of the connection-free window) and record checkedout() at
+    # the moment it fires — it must be 0 (no tenant_session open yet).
+    def _spy_upload(key, data, content_type=None):
+        pool_observed.append(run_task.get_engine_for_pool_check().pool.checkedout())
+        fake_gcs["uploads"].append(
+            {"key": key, "data": data, "content_type": content_type}
+        )
+
+    monkeypatch.setattr(run_task.gcs, "upload_object", _spy_upload, raising=False)
+
+    # A fake release that also samples the pool at the call boundary.
+    def _fake_release(identity, read_fn, call_fn, write_fn, *, on_error=None):
+        session = _StubSession(patches)
+        dto = read_fn(session)
+        result = call_fn(dto)
+        return write_fn(session, dto, result)
+
+    monkeypatch.setattr(run_task, "run_with_session_release", _fake_release)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert pool_observed == [0], (
+        f"T-17-07: no pooled DB connection may be held across the bundle "
+        f"build+upload; checkedout() was {pool_observed} (expected [0])."
+    )
+
+
+def test_completion_mail_sends_on_both_verified_and_broken(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """The normal completion mail sends on BOTH the verified and broken paths (D-07)."""
+    # Verified path.
+    patches_v: list = []
+    ctx_v = _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches_v)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+    assert fake_resend["calls"], "verified completion must send the completion mail"
+    assert fake_resend["calls"][-1]["to"] == [ctx_v["acting_email"]]
+    verified_subject = fake_resend["calls"][-1]["subject"]
+
+    # Broken path — same completion mail (no broken-chain variant, D-07).
+    fake_tribunal_client["verify_verdict"] = {"ok": False, "broken_at": 2}
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+    assert len(fake_resend["calls"]) >= 2, "broken completion must ALSO send a mail"
+    # The subject is the SAME completion subject on both paths (unchanged D-07).
+    assert fake_resend["calls"][-1]["subject"] == verified_subject
