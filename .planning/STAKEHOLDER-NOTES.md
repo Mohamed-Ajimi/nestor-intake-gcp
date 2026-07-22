@@ -40,7 +40,14 @@ acceptable?
 
 **Decision (operator, 2026-07-22):** the Anthropic monthly usage cap stays where it is.
 No further live Tribunal runs until the defects found in the run-4cbb5311 forensic audit
-are fixed. Full audit: `docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md`.
+are fixed. Sequencing (operator, same day): engine fixes come LAST — after Phases 17 → 18 → 19.
+
+**📄 The full forensic deep-research report (every step, every LLM call, claims/groups/verdicts):**
+- Master report: [`docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md`](../docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md)
+- Groups & claims inventory (176 groups): `docs/tribunal-run-reports/run-20260722-4cbb5311/GROUPS.md`
+- Per-call extracts (all 228 LLM calls, full input+output): `docs/tribunal-run-reports/run-20260722-4cbb5311/calls/`
+- Machine-readable index: `docs/tribunal-run-reports/run-20260722-4cbb5311/index.json`
+- Raw audit records (146 MB, permanent): `gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/runs/9c84e5a9-1bb9-4b6e-a3ce-2351eda9df63/`
 
 **Findings driving the hold (from the first green delegator run, 2026-07-22, ~48 min):**
 
