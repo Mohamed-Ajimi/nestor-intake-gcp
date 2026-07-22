@@ -103,7 +103,8 @@
     "dash": "—",
     "ctaFill": "Remplir la demande",
     "ctaView": "Voir les réponses",
-    "ctaResult": "Voir le résultat"
+    "ctaResult": "Voir le résultat",
+    "ctaReport": "Voir le rapport"
   },
   "results": {
     "heading": "Résultats de recherche",
@@ -173,6 +174,20 @@
     "logout": "Se déconnecter",
     "overview": "← Aperçu",
     "titleFallback": "résultat"
+  },
+  "reportPage": {
+    "heading": "Votre rapport",
+    "loading": "Chargement…",
+    "deliveredOn": "Livré le {{date}}",
+    "size": "Taille",
+    "download": "Télécharger le rapport",
+    "downloading": "Téléchargement…",
+    "loadFailed": "Échec du chargement du rapport",
+    "notAvailable": "Rapport pas encore disponible",
+    "backToOverview": "Retour à l'aperçu",
+    "brand": "Agenic",
+    "logout": "Se déconnecter",
+    "chatComingSoon": "Des questions sur ce rapport ? Bientôt disponible."
   },
   "aiReview": {
     "applied": "Appliqué",

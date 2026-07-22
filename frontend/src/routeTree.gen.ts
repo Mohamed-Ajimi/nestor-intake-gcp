@@ -29,6 +29,7 @@ import { Route as AdminSalesIndexRouteImport } from './routes/admin.sales.index'
 import { Route as AdminPulseIndexRouteImport } from './routes/admin.pulse.index'
 import { Route as AdminIntakesIndexRouteImport } from './routes/admin.intakes.index'
 import { Route as IntakeIdResultsRouteImport } from './routes/intake.$id.results'
+import { Route as IntakeIdReportRouteImport } from './routes/intake.$id.report'
 import { Route as AdminPulseSearchRouteImport } from './routes/admin.pulse.search'
 import { Route as AdminPulseClientsRouteImport } from './routes/admin.pulse.clients'
 import { Route as AdminIntakesNewRouteImport } from './routes/admin.intakes.new'
@@ -145,6 +146,11 @@ const IntakeIdResultsRoute = IntakeIdResultsRouteImport.update({
   path: '/results',
   getParentRoute: () => IntakeIdRoute,
 } as any)
+const IntakeIdReportRoute = IntakeIdReportRouteImport.update({
+  id: '/report',
+  path: '/report',
+  getParentRoute: () => IntakeIdRoute,
+} as any)
 const AdminPulseSearchRoute = AdminPulseSearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -246,6 +252,7 @@ export interface FileRoutesByFullPath {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/report': typeof IntakeIdReportRoute
   '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
@@ -280,6 +287,7 @@ export interface FileRoutesByTo {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/report': typeof IntakeIdReportRoute
   '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes': typeof AdminIntakesIndexRoute
   '/admin/pulse': typeof AdminPulseIndexRoute
@@ -318,6 +326,7 @@ export interface FileRoutesById {
   '/admin/intakes/new': typeof AdminIntakesNewRoute
   '/admin/pulse/clients': typeof AdminPulseClientsRouteWithChildren
   '/admin/pulse/search': typeof AdminPulseSearchRoute
+  '/intake/$id/report': typeof IntakeIdReportRoute
   '/intake/$id/results': typeof IntakeIdResultsRoute
   '/admin/intakes/': typeof AdminIntakesIndexRoute
   '/admin/pulse/': typeof AdminPulseIndexRoute
@@ -357,6 +366,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/report'
     | '/intake/$id/results'
     | '/admin/intakes/'
     | '/admin/pulse/'
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/report'
     | '/intake/$id/results'
     | '/admin/intakes'
     | '/admin/pulse'
@@ -428,6 +439,7 @@ export interface FileRouteTypes {
     | '/admin/intakes/new'
     | '/admin/pulse/clients'
     | '/admin/pulse/search'
+    | '/intake/$id/report'
     | '/intake/$id/results'
     | '/admin/intakes/'
     | '/admin/pulse/'
@@ -590,6 +602,13 @@ declare module '@tanstack/react-router' {
       path: '/results'
       fullPath: '/intake/$id/results'
       preLoaderRoute: typeof IntakeIdResultsRouteImport
+      parentRoute: typeof IntakeIdRoute
+    }
+    '/intake/$id/report': {
+      id: '/intake/$id/report'
+      path: '/report'
+      fullPath: '/intake/$id/report'
+      preLoaderRoute: typeof IntakeIdReportRouteImport
       parentRoute: typeof IntakeIdRoute
     }
     '/admin/pulse/search': {
@@ -804,10 +823,12 @@ const AdminRouteChildren: AdminRouteChildren = {
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface IntakeIdRouteChildren {
+  IntakeIdReportRoute: typeof IntakeIdReportRoute
   IntakeIdResultsRoute: typeof IntakeIdResultsRoute
 }
 
 const IntakeIdRouteChildren: IntakeIdRouteChildren = {
+  IntakeIdReportRoute: IntakeIdReportRoute,
   IntakeIdResultsRoute: IntakeIdResultsRoute,
 }
 
@@ -826,12 +847,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}
