@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Phase 17 COMPLETE (4/4, UAT 3/3 pass, all deployed) — next /gsd-plan-phase 18
-last_updated: "2026-07-22T08:23:16.718Z"
-last_activity: 2026-07-22 -- Phase 17 complete + deployed + UAT passed; Phase 16 also closed same day (green run 4cbb5311)
+status: "Phase 16 AND 17 both closed 2026-07-22. OPERATOR HOLD: no Anthropic cap raise / no new"
+stopped_at: Phase 18 context gathered
+last_updated: "2026-07-22T14:47:02.442Z"
+last_activity: "2026-07-22 -- Phase 17 complete: deployed (tribunal-api 155342/nestor-api 00037-k7t/"
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 12
-  percent: 25
+  completed_plans: 17
+  percent: 50
 ---
 
 # Project State
@@ -160,9 +160,9 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-22T07:34:56.278Z
-Stopped at: Phase 17 context gathered
-Resume file: .planning/phases/17-raw-output-audit-chain-guard/17-CONTEXT.md
+Last session: 2026-07-22T14:47:02.421Z
+Stopped at: Phase 18 context gathered
+Resume file: .planning/phases/18-human-report-upload-client-delivery/18-CONTEXT.md
 
 ## Operator Next Steps
 
