@@ -150,7 +150,11 @@ trail intact.
   1. Superadmin can upload the final report PDF (crafted externally in Claude Design), which sets status → `delivered` (run `completed` does NOT auto-deliver — the upload does).
   2. Client sees and downloads the final report in their own UI, and nothing research-related is client-visible before delivery.
   3. Client receives an email notification when the report is delivered.
-**Plans**: TBD
+**Plans**: 4 plans
+  - [ ] 18-01-PLAN.md — Backend deliver/replace/report verbs (in_research→delivered, PDF-only, forged-key guard, status-gated client read) + report-delivery & cross-tenant denial tests
+  - [ ] 18-02-PLAN.md — Frontend admin: repair FinalReportBlock (staged upload + explicit Deliver dialog + Replace + PDF-only) + seam verbs + phase-machine wiring + admin reload + NL/FR/EN
+  - [ ] 18-03-PLAN.md — Frontend client: new delivered-only report route (download-only, chat space reserved) + list "View report" CTA + report-page i18n
+  - [ ] 18-04-PLAN.md — § Phase 18 runbook (nestor-api + frontend rebuild, no migrate, no new secret) + operator live deploy / stage-deliver-download-mail UAT
 **UI hint**: yes
 
 ### Phase 19: Q&A Chat (Voyage + Haiku RAG)
@@ -187,6 +191,6 @@ trail intact.
 | 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
-| 18. Human Report Upload + Client Delivery | v1.1 | 0/TBD | Not started | - |
+| 18. Human Report Upload + Client Delivery | v1.1 | 0/4 | Planned | - |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
