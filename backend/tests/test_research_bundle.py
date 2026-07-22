@@ -88,7 +88,9 @@ def test_provider_name_is_sanitized_into_entry_path():
     # No raw whitespace, no em-dash, no path-traversal separators in the name.
     assert " " not in entry
     assert "—" not in entry
-    assert entry == "research/Angle_One-Two_Three.md"
+    # sanitize_filename: em-dash -> '-', whitespace runs -> '_' (the surrounding
+    # spaces around the dash become '_', so "One — Two" -> "One_-_Two").
+    assert entry == "research/Angle_One_-_Two_Three.md"
     assert zf.read(entry).decode("utf-8") == "X"
 
 
