@@ -576,3 +576,41 @@ class TestRunSkeptic:
             model="claude-opus-4-8",
         ))
         assert fake._call_idx >= 1, "anthropic_messages was never called"
+
+
+# ---------------------------------------------------------------------------
+# _parse_verdict hardening (F-01 — JSON-string-valued tool input fields)
+# ---------------------------------------------------------------------------
+
+
+class TestParseVerdictJsonStringHardening:
+    """F-01 regression (live run 4cbb5311, 2026-07-22): the model may return
+    tool input (or fields of it) as JSON-encoded STRINGS instead of objects.
+    The group-skeptic parser crashed on this; _parse_verdict shares the same
+    pattern and must tolerate it too."""
+
+    def test_whole_input_as_json_string_parsed(self):
+        from nestor_pulse_sdk.pipeline.tribunal.skeptic import _parse_verdict
+        block = {"input": '{"verdict": "support", "confidence": 0.7, "evidence_refs": ["ref"]}'}
+        result = _parse_verdict(block, ["https://src"])
+        assert result["verdict"] == "support"
+        assert result["evidence_refs"] == ["ref"]
+        assert result["citations"] == ["https://src"]
+
+    def test_evidence_refs_as_json_string_parsed(self):
+        from nestor_pulse_sdk.pipeline.tribunal.skeptic import _parse_verdict
+        block = {"input": {
+            "verdict": "refute",
+            "confidence": 0.9,
+            "evidence_refs": '["https://example.com/a"]',
+        }}
+        result = _parse_verdict(block, [])
+        assert result["verdict"] == "refute"
+        assert result["evidence_refs"] == ["https://example.com/a"]
+
+    def test_garbage_string_input_falls_back_insufficient(self):
+        from nestor_pulse_sdk.pipeline.tribunal.skeptic import _parse_verdict
+        block = {"input": "not json {{"}
+        result = _parse_verdict(block, [])
+        assert result["verdict"] == "insufficient"
+        assert result["evidence_refs"] == []

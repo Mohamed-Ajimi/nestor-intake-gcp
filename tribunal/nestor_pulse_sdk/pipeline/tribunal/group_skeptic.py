@@ -39,6 +39,7 @@ from nestor_pulse_sdk.pipeline.tribunal.skeptic import (
     _collect_citation_urls,
     _content_to_serialisable,
     _block_get,
+    _coerce_json,
 )
 
 if TYPE_CHECKING:
@@ -87,10 +88,14 @@ def _parse_group_verdict(block: Any, n_claims: int, citations: list[str]) -> dic
     any claim without an explicit verdict defaults to 'insufficient' (survives
     adjudication — we never silently drop a claim on a parsing miss)."""
     inp = block.get("input") if isinstance(block, dict) else getattr(block, "input", {})
-    inp = inp or {}
-    recon = inp.get("reconciliation") or {}
-    raw_verdicts = inp.get("verdicts") or []
-    evidence = list(inp.get("evidence_refs") or [])
+    # F-01 hardening (run 4cbb5311): the model may return `input` itself, or its
+    # reconciliation / verdicts / evidence_refs fields, as JSON-encoded STRINGS
+    # instead of objects — coerce each before any .get access, falling back to
+    # the existing defaults (so claims still default to 'insufficient').
+    inp = _coerce_json(inp, dict) or {}
+    recon = _coerce_json(inp.get("reconciliation"), dict) or {}
+    raw_verdicts = _coerce_json(inp.get("verdicts"), list) or []
+    evidence = list(_coerce_json(inp.get("evidence_refs"), list) or [])
 
     by_index: dict[int, dict[str, Any]] = {}
     for v in raw_verdicts:

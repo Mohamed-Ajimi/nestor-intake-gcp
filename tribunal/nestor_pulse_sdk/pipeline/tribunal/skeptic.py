@@ -43,6 +43,7 @@ Task-1 confirmed defaults (overridable via env — see budget.py):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -147,6 +148,24 @@ def _block_get(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
+def _coerce_json(value: Any, expect: type) -> Any:
+    """Coerce a tool-input field the model returned as a JSON-encoded STRING.
+
+    F-01 (live run 4cbb5311, 2026-07-22): the model sometimes emits object/array
+    tool-input fields (e.g. reconciliation, verdicts) as JSON strings, which
+    crashed the verdict parsers with `'str' object has no attribute 'get'`.
+    If `value` is a str, attempt json.loads; return the (decoded) value only if
+    it is an instance of `expect`, else None so callers fall back to their
+    existing defaults.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value if isinstance(value, expect) else None
+
+
 def _collect_citation_urls(content: list[Any]) -> list[str]:
     """Pull source URLs surfaced by the server tools this turn.
 
@@ -192,11 +211,14 @@ def _parse_verdict(block: Any, citations: list[str] | None = None) -> dict[str, 
         inp = block.get("input") or {}
     else:
         inp = getattr(block, "input", {}) or {}
+    # F-01 hardening: the model may return `input` itself (or evidence_refs)
+    # as a JSON-encoded string — coerce before any .get access.
+    inp = _coerce_json(inp, dict) or {}
 
     return {
         "verdict": inp.get("verdict", "insufficient"),
         "confidence": float(inp.get("confidence", 0.0)),
-        "evidence_refs": list(inp.get("evidence_refs") or []),
+        "evidence_refs": list(_coerce_json(inp.get("evidence_refs"), list) or []),
         "citations": list(citations or []),
     }
 

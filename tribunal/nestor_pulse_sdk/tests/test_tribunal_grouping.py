@@ -152,6 +152,55 @@ class TestParseGroupVerdict:
         out = _parse_group_verdict(block, n_claims=1, citations=[])
         assert out["verdicts_by_index"][0]["verdict"] == "insufficient"  # 99 dropped, 0 filled
 
+    # F-01 regression (live run 4cbb5311, 2026-07-22): the model returned the
+    # reconciliation field as a JSON-encoded STRING -> "'str' object has no
+    # attribute 'get'" crash, and ALL of the group's verdicts were discarded
+    # (24 "BUG:recon-as-str" rows). The parser must coerce JSON-string fields.
+    def test_reconciliation_as_json_string_parsed_verdicts_preserved(self):
+        block = {"input": {
+            "verdicts": [{"claim_index": 0, "verdict": "support", "confidence": 0.9}],
+            "reconciliation": '{"disputed": true, "relation": "disputed", '
+                              '"note": "two prices, no scope", "canonical": "$4.99/mo"}',
+        }}
+        out = _parse_group_verdict(block, n_claims=1, citations=["https://src"])
+        assert out["verdicts_by_index"][0]["verdict"] == "support"  # not discarded
+        assert out["reconciliation"]["disputed"] is True
+        assert out["reconciliation"]["canonical"] == "$4.99/mo"
+
+    def test_reconciliation_garbage_string_falls_back_default(self):
+        block = {"input": {
+            "verdicts": [{"claim_index": 0, "verdict": "refute", "confidence": 0.8}],
+            "reconciliation": "not json {{",
+        }}
+        out = _parse_group_verdict(block, n_claims=1, citations=[])
+        assert out["verdicts_by_index"][0]["verdict"] == "refute"   # verdicts preserved
+        assert out["reconciliation"]["disputed"] is False           # default reconciliation
+        assert out["reconciliation"]["relation"] == "single"
+
+    def test_verdicts_as_json_string_parsed(self):
+        block = {"input": {
+            "verdicts": '[{"claim_index": 0, "verdict": "support", "confidence": 0.9}]',
+            "reconciliation": {"disputed": False, "relation": "single", "note": ""},
+        }}
+        out = _parse_group_verdict(block, n_claims=1, citations=[])
+        assert out["verdicts_by_index"][0]["verdict"] == "support"
+
+    def test_evidence_refs_as_json_string_parsed(self):
+        block = {"input": {
+            "verdicts": [{"claim_index": 0, "verdict": "support", "confidence": 0.9}],
+            "reconciliation": {"disputed": False, "relation": "single", "note": ""},
+            "evidence_refs": '["https://example.com/pricing"]',
+        }}
+        out = _parse_group_verdict(block, n_claims=1, citations=[])
+        assert out["verdicts_by_index"][0]["evidence_refs"] == ["https://example.com/pricing"]
+
+    def test_whole_input_as_json_string_no_crash(self):
+        block = {"input": '{"verdicts": [{"claim_index": 0, "verdict": "support", '
+                          '"confidence": 0.9}], "reconciliation": '
+                          '{"disputed": false, "relation": "single", "note": ""}}'}
+        out = _parse_group_verdict(block, n_claims=1, citations=[])
+        assert out["verdicts_by_index"][0]["verdict"] == "support"
+
 
 # ---------------------------------------------------------------------------
 # run_group_skeptic loop
