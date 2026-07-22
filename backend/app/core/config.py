@@ -23,8 +23,11 @@ Authoritative references:
 
 from __future__ import annotations
 
+import json
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -127,26 +130,53 @@ class Settings(BaseSettings):
     # CORS allowlist for the cross-origin browser handshake (WR-03). The frontend
     # (Cloudflare Workers origin) calls this backend (Cloud Run origin) directly with
     # an Authorization header, so the browser preflight (OPTIONS) must be answered with
-    # an EXPLICIT origin allowlist. Env CORS_ALLOWED_ORIGINS is a comma-separated list
-    # of exact origins (e.g. "https://nestor.example.com,http://localhost:5173").
+    # an EXPLICIT origin allowlist. Env CORS_ALLOWED_ORIGINS accepts EITHER a
+    # comma-separated list of exact origins
+    # (e.g. "https://nestor.example.com,http://localhost:5173") OR a JSON array
+    # (e.g. '["https://nestor.example.com","http://localhost:5173"]' — the live
+    # prod form).
+    #
+    # ``NoDecode`` (F-02): without it, pydantic-settings JSON-decodes ``list[str]``
+    # env values BEFORE the mode="before" validator runs, so a comma-separated
+    # value crashed startup (Phase-12 rev 00021). NoDecode hands the raw env
+    # string to ``_split_cors_origins`` instead.
     #
     # Default is EMPTY -> NO CORSMiddleware is installed and NO permissive "*" is ever
     # used (never broaden access by default). Credentials are allowed only against this
     # pinned allowlist — never "*" + credentials together (forbidden by the browser and
     # by this design).
-    cors_allowed_origins: list[str] = []
+    cors_allowed_origins: Annotated[list[str], NoDecode] = []
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, v: object) -> object:
-        """Accept a comma-separated CORS_ALLOWED_ORIGINS string (env-friendly).
+        """Parse CORS_ALLOWED_ORIGINS from either accepted env string form.
 
-        pydantic-settings would otherwise expect JSON for a ``list[str]`` env value;
-        this lets ``CORS_ALLOWED_ORIGINS=https://a.example,https://b.example`` work.
-        An empty/whitespace string -> empty list (no origins -> middleware not added).
-        A list is passed through unchanged (programmatic / test construction).
+        The field is ``NoDecode``-annotated, so the RAW env string always reaches
+        this validator (F-02 — previously pydantic-settings pre-decoded ``list[str]``
+        env values as JSON and a comma-separated value never got here). Two string
+        forms are accepted:
+
+        - JSON array (live-prod form): ``'["https://a.example","https://b.example"]'``
+          — detected by a leading ``[``; parsed via ``json.loads``. On JSON failure
+          the value falls through to the comma-split below.
+        - Comma-separated: ``https://a.example,https://b.example``.
+
+        Items are stripped and empties dropped in both forms. An empty/whitespace
+        string -> empty list (no origins -> middleware not added). A list is passed
+        through unchanged (programmatic / test construction).
         """
         if isinstance(v, str):
+            stripped = v.strip()
+            if stripped.startswith("["):
+                try:
+                    parsed = json.loads(stripped)
+                except ValueError:
+                    pass  # not valid JSON — fall through to the comma-split
+                else:
+                    return [
+                        str(origin).strip() for origin in parsed if str(origin).strip()
+                    ]
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
 
