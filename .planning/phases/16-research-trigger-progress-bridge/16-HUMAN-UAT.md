@@ -84,6 +84,12 @@ Observed during the green run of 2026-07-22 (run 4cbb5311 / tribunal 9c84e5a9) �
    `'str' object has no attribute 'get'` (tribunal_pipeline warning, 25+ groups). Non-fatal — groups
    proceed without their skeptic — but the tribunal's skeptic arm was effectively OFF this run.
    Fix in nestor_pulse_sdk pipeline (Phase 15 engine-enhancements or a quick task).
+   **FIXED IN REPO 2026-07-22 (stabilization pass, F-01, commit `bf5a8dc`):** root cause was the
+   model returning `emit_group_verdict.reconciliation` (sometimes the whole tool input /
+   `verdicts` / `evidence_refs`) as a JSON-encoded STRING; `_parse_group_verdict` now coerces
+   str→JSON with safe fallbacks (same hardening applied to `_parse_verdict` in skeptic.py).
+   Verified green in Cloud Build f6669c15 (48/48 incl. 8 new regression tests). NOT YET LIVE —
+   requires tribunal-api + tribunal-worker image rebuild/redeploy before the next run.
 2. **Anthropic org monthly usage cap tripped mid-run (11:59:41Z):** "You have reached your specified
    API usage limits... regain access 2026-08-01." Self-configured cap in the Anthropic console —
    separate from the credit balance. Late skeptic calls failed on it; run still completed because

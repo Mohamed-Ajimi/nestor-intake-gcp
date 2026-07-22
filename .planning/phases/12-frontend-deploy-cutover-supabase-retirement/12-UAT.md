@@ -223,13 +223,14 @@ MUST NOT proceed to Supabase-independence sign-off.
 2. **NDA PDF not dropped (operator decision):** `frontend/public/templates/NDA/…` is absent from
    the deployed image — the NDA download 404s. Closing requires the out-of-band PDF drop + a
    frontend image rebuild/redeploy.
-3. **Backend suite 218/223:** 5 failures, all in mail tests (`test_mail_render`, `test_mail_locale`,
-   `test_mail_endpoints`), diagnosed as TEST defects, not app bugs: absolute audit-row counts
-   against the shared Cloud Build DB (cross-test leakage) and a raw-`&` assertion vs Jinja2's
-   correct `&amp;` attribute escaping. App send-first/single-audit logic verified correct by
-   inspection. Needs a test-harness fix (delta counts / per-test isolation) in a gaps plan.
-4. **Latent backend config bug (found live):** comma-separated `CORS_ALLOWED_ORIGINS` crashes
-   startup — pydantic-settings JSON-decodes `list[str]` env values BEFORE the comma-splitting
-   `field_validator` runs (rev 00021 failed to start; recovered with rev 00022 using the JSON-array
-   form). The validator's comma-separated claim in `backend/app/core/config.py` is unreachable;
-   fix with `NoDecode`/custom source or correct the docstring.
+3. **RESOLVED 2026-07-22 (stabilization pass, F-03, commit `ce6da62`):** the remaining 4 mail-test
+   failures (2× `test_mail_endpoints`, 2× `test_mail_locale`) were absolute `mail.sent` audit-row
+   counts leaking across the shared Cloud Build DB — converted to delta counts (before/after the
+   action under test), preserving the WR-01/WR-04/D-16 zero-new-rows and exactly-one-new-row
+   intents. Test-only change; app code untouched.
+4. **RESOLVED 2026-07-22 (stabilization pass, F-02, commit `e3a84ba`):** comma-separated
+   `CORS_ALLOWED_ORIGINS` startup crash fixed — `cors_allowed_origins` is now
+   `Annotated[list[str], NoDecode]` so the raw env string reaches the validator, which accepts
+   BOTH the comma-separated form and the live JSON-array form (backward compatible with the
+   deployed rev's env). Unit-tested in `backend/tests/test_config_cors.py`. Takes effect live at
+   the next nestor-api image rebuild.

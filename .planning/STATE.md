@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: ready_to_plan
-stopped_at: Phase 18 complete (4/4) — ready to discuss Phase 19
+status: paused
+stopped_at: Phase 19 DEFERRED (operator, 2026-07-22) — stabilization/audit-fix pass in progress
 last_updated: 2026-07-22T18:08:17.236Z
 last_activity: 2026-07-22 -- Phase 18 execution started
 progress:
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 19 — q&a chat (voyage + haiku rag)
+**Current focus:** Stabilization pass (2026-07-22) — Phase 19 deferred by operator until the app is smooth/bug-free
 
 ## Current Position
 
-Phase: 19
+Phase: 19 (DEFERRED 2026-07-22 — operator: fix open app problems first; audit-fix pass running: F-01 group-skeptic crash, F-02 CORS env crash, F-03 mail test harness, plus chores)
 Plan: Not started
-Status: Ready to plan
+Status: Deferred — stabilization first
   live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
 Last activity: 2026-07-22
   0012/frontend 00016-qmr), UAT passed on run 4cbb5311, 3 fix commits during UAT
@@ -167,6 +167,7 @@ Resume file: .planning/phases/18-human-report-upload-client-delivery/18-CONTEXT.
 
 ## Operator Next Steps
 
-- Next: /gsd-discuss-phase 16 (or /gsd-plan-phase 16) — Research Trigger + Progress Bridge.
-- Execution order is now 16 → 17 → 18 → 19 → 15 → 20 (Phase 15 deferred 2026-07-21 — enhancements land on the complete proven flow).
-- Phase 16 reminders: first real trigger call closes the deferred Phase-14 seam UAT; progress UI must render the stage list dynamically (no hardcoded 9); flip `NESTOR_TRIBUNAL_UNCAPPED` off; top up Anthropic credits before live runs.
+- 2026-07-22: Phase 19 DEFERRED (operator) — stabilization/audit-fix pass first: F-01 tribunal group-skeptic JSON-string crash, F-02 CORS_ALLOWED_ORIGINS startup crash, F-03 4 mail test-harness defects, frontend/.env Supabase cleanup, Cloud Build suite rerun (closes a Phase-20 CLOSE-02 chore early).
+- OPERATOR ACTION (blocking further Tribunal runs): the Anthropic org MONTHLY usage cap tripped mid-run 2026-07-22 (self-configured console limit, resets 2026-08-01) — raise/remove it in the Anthropic console before any new live run.
+- After stabilization: resume with /gsd-discuss-phase 19 (Q&A chat). Remaining order stays 19 → 15 → 20.
+- Phase 19 reminders: verify voyage-3-large 1024-dim against vendor docs BEFORE the column migration; provision VOYAGE_API_KEY; chat retrieval joins the denial suite day one.
