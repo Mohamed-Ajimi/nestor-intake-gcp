@@ -96,7 +96,10 @@ export function LanguageSwitcher({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+      <PopoverContent
+        className={compact ? "w-36 p-0" : "w-[var(--radix-popover-trigger-width)] p-0"}
+        align={compact ? "end" : "start"}
+      >
         <Command>
           <CommandList>
             <CommandGroup>

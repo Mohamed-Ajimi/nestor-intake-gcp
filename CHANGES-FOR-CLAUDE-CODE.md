@@ -216,6 +216,14 @@ const COMPACT_TRIGGER_CLASS =
   "text-ink/50 hover:text-ink transition-colors";
 ```
 
+Also update `PopoverContent` to use a fixed width and right-align when compact (otherwise the
+popover inherits the tiny trigger width and clips the language names):
+```tsx
+<PopoverContent
+  className={compact ? "w-36 p-0" : "w-[var(--radix-popover-trigger-width)] p-0"}
+  align={compact ? "end" : "start"}
+>
+
 ---
 
 ## 10. `frontend/src/components/admin/ProductShell.tsx` — mount TopBar, remove sidebar switcher
