@@ -1035,6 +1035,17 @@ function IntakeDetailPage() {
  >
  {t("intakeDetail.info.openButton")}
  </button>
+ <button
+ type="button"
+ onClick={toggleHistory}
+ className="inline-flex items-center gap-1.5 border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+ >
+ <Clock className="h-3.5 w-3.5" />
+ {t("intakeDetail.history.title")}
+ {skillRuns && skillRuns.length > 0 && (
+ <span className="tabular-nums">({skillRuns.length})</span>
+ )}
+ </button>
  <div className="flex flex-col">
  <select
  value={intake.status ?? ""}
@@ -1165,21 +1176,6 @@ function IntakeDetailPage() {
            Lives inside the workflow card as a secondary action block, not floating
            in the content area. */}
         <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
-
-        {/* Activity log — clock button opens the run-history Sheet */}
-        <div className="border-t border-ink/10 px-6 py-4">
-          <button
-            type="button"
-            onClick={toggleHistory}
-            className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink transition-colors"
-          >
-            <Clock className="h-3.5 w-3.5" />
-            {t("intakeDetail.history.title")}
-            {skillRuns && skillRuns.length > 0 && (
-              <span className="tabular-nums">({skillRuns.length})</span>
-            )}
-          </button>
-        </div>
 
        {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
            on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
