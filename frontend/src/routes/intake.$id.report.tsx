@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Download, Loader2 } from "lucide-react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { auth, MOCK_AUTH } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 import { getIntake, getReport, type ReportView } from "@/lib/api/intakes";
 import * as storage from "@/lib/api/storage";
@@ -31,6 +31,7 @@ function authReady(): Promise<User | null> {
 
 export const Route = createFileRoute("/intake/$id/report")({
   beforeLoad: async () => {
+    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
     const user = await authReady();
     if (!user) {
       throw redirect({ to: "/auth/login" });

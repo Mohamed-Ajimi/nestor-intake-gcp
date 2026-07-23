@@ -8,7 +8,7 @@ import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Clock, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import {
   getIntake,
   submitIntake,
@@ -41,6 +41,12 @@ import {
  useAIReview,
  type ParsedSkillOutput,
 } from "@/components/intake/AIReviewPanel";
+
+// Stable empty fallback for useAIReview — must be module-level, not inline `{}`.
+// An inline `?? {}` creates a new object reference on every render, which fires the
+// `useEffect([parsed])` inside useAIReview on every render → infinite setState loop.
+const EMPTY_PARSED: ParsedSkillOutput = {};
+
 import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
@@ -49,6 +55,12 @@ import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   derivePhase,
   type PhaseSkillRunInput,
@@ -194,6 +206,16 @@ function isEmptyVal(v: unknown): boolean {
  return false;
 }
 
+// Human-readable Dutch labels for skill names in the activity log Sheet.
+const SKILL_LABELS: Record<string, string> = {
+  "apply-intake-skill":  "Intake analyse",
+  "structure-answers":   "Structureer antwoorden",
+  "extract-insights":    "Inzichten extractie",
+  "generate-embeddings": "Embeddings",
+  "transcribe-source":   "Transcriptie",
+  "context-pack":        "Context Pack",
+};
+
 function IntakeDetailPage() {
  const { id } = Route.useParams();
   const { t, i18n } = useTranslation("admin");
@@ -227,7 +249,7 @@ function IntakeDetailPage() {
  const [submittingReview, setSubmittingReview] = useState(false);
  const [successUrl, setSuccessUrl] = useState<string | null>(null);
   const [optimisticRunStartedAt, setOptimisticRunStartedAt] = useState<string | null>(null);
- const reviewState = useAIReview(reviewData?.parsed ?? {});
+ const reviewState = useAIReview(reviewData?.parsed ?? EMPTY_PARSED);
  const [historyOpen, setHistoryOpen] = useState(false);
   const [skillRuns, setSkillRuns] = useState<SkillRun[] | null>(null);
    const [loadingRuns, setLoadingRuns] = useState(false);
@@ -538,10 +560,19 @@ function IntakeDetailPage() {
  toast.success(t("intakeDetail.toast.statusUpdated"));
  };
 
+ // Read intakeId through a ref so loadSkillRuns can have a stable (empty) dep array.
+ // Previously [intake] as a dep caused a new function reference on every load(), which
+ // cascaded into the review-mode and terminal-status effects — causing the "Maximum
+ // update depth exceeded" loop when any setState (including Popover open) triggered a
+ // re-render. Stable reference = effects that list loadSkillRuns in deps fire only when
+ // their other deps actually change.
+ const intakeIdForRuns = useRef<string | undefined>(undefined);
+ intakeIdForRuns.current = intake?.id;
+
  const loadSkillRuns = useCallback(async () => {
- if (!intake) return;
+ if (!intakeIdForRuns.current) return;
  setLoadingRuns(true);
- const res = await listSkillRuns(intake.id);
+ const res = await listSkillRuns(intakeIdForRuns.current);
  const mapped: SkillRun[] = res.success
  ? res.data.runs.map((r) => ({
  id: r.id,
@@ -558,7 +589,8 @@ function IntakeDetailPage() {
  : [];
  setSkillRuns(mapped);
  setLoadingRuns(false);
- }, [intake]);
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, []);
 
  const toggleHistory = () => {
  const next = !historyOpen;
@@ -1063,8 +1095,39 @@ function IntakeDetailPage() {
  )}
  </div>
 
-     <div className="mb-8 border border-ink/15 bg-paper">
-       <div className="px-6 pt-6 pb-4">
+
+  {showAIReview && reviewMode && reviewData && (
+ <div data-ai-review-block>
+ <AIReviewTopBanner
+ costEur={reviewData.costEur}
+ decidedCount={reviewState?.decidedCount ?? 0}
+ onCancel={() => {
+ setReviewMode(false);
+ setReviewData(null);
+ }}
+ onSubmit={handleSubmitReview}
+ submitting={submittingReview}
+ />
+ <AIReviewInfoBanners parsed={reviewData.parsed} />
+ </div>
+ )}
+
+ {successUrl && (
+ <ReviewSuccessModal
+ url={successUrl}
+ onClose={async () => {
+ setSuccessUrl(null);
+ await exitReviewMode();
+ }}
+ />
+ )}
+
+      {/* 2-col layout: sticky workflow rail on right (xl+), content on left */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_272px] xl:gap-8 xl:items-start">
+
+        <aside className="mb-6 xl:mb-0 xl:col-start-2 xl:row-start-1 xl:sticky xl:top-[88px] xl:self-start">
+     <div className="border border-ink/15 bg-paper">
+       <div className="overflow-x-auto px-4 pt-4 pb-3">
          <IntakeWorkflowStepper
            status={intake.status}
            clientValidatedAt={intake.client_validated_at}
@@ -1101,6 +1164,27 @@ function IntakeDetailPage() {
          onCopyResultsLink={onCopyResultsLink}
          onArchive={onArchive}
        />
+
+
+       {/* AI enrichment skills — self-gates on status (submitted → decomposed).
+           Lives inside the workflow card as a secondary action block, not floating
+           in the content area. */}
+        <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+
+        {/* Activity log — clock button opens the run-history Sheet */}
+        <div className="border-t border-ink/10 px-6 py-4">
+          <button
+            type="button"
+            onClick={toggleHistory}
+            className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink transition-colors"
+          >
+            <Clock className="h-3.5 w-3.5" />
+            {t("intakeDetail.history.title")}
+            {skillRuns && skillRuns.length > 0 && (
+              <span className="tabular-nums">({skillRuns.length})</span>
+            )}
+          </button>
+        </div>
 
        {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
            on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
@@ -1165,6 +1249,192 @@ function IntakeDetailPage() {
          </div>
        )}
      </div>
+        </aside>
+
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+ {editMode && (
+ <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
+ <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
+ {t("intakeDetail.editBanner.title")}
+ </div>
+ <div className="text-ink font-sans">
+ {t("intakeDetail.editBanner.body")}
+ </div>
+ </div>
+ )}
+
+ <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
+ <aside className="hidden lg:block">
+ <nav className="sticky top-28 space-y-1">
+ <p className="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
+ {t("intakeDetail.sections.nav")}
+ </p>
+ {sections.map((s) => {
+ const isActive = activeSection === s.id;
+ const hasContent = s.fields.some(
+ (f) => !isFieldDisplayEmpty(f, answersMap.get(f.key)?.value),
+ );
+ return (
+ <a
+ key={s.id}
+ href={`#${s.id}`}
+ className={cn(
+ "flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors",
+ isActive ? "bg-paper2 text-ink" : "text-ink/60 hover:bg-ink/5 hover:text-ink",
+ )}
+ >
+ <span className={"nav-mark " + (isActive ? "nav-mark-green" : "nav-mark-ink")} />
+ <span className="flex-1 break-words">{s.title}</span>
+ </a>
+ );
+ })}
+ </nav>
+ </aside>
+
+ <main className="min-w-0 space-y-10">
+
+  {showContextPack && (
+    <div data-context-pack-block>
+      <ContextPackBlock
+        intakeId={intake.id}
+        intakeStatus={intake.status}
+        intakeTitle={intake.title ?? ""}
+        clientName={client?.name ?? "—"}
+        reloadSignal={contextPackReloadSignal}
+      />
+    </div>
+  )}
+
+    {showFinalReport && (
+      <div data-final-report-block>
+        <FinalReportBlock
+          intakeId={intake.id}
+          finalReportArtifactId={intake.final_report_artifact_id}
+          intakeStatus={intake.status}
+          hasResultsToken={!!intake.client_results_token}
+          onChange={async () => {
+            // The Deliver/Replace verb owns the transition (18-01) — reload the intake
+            // from the backend view so the phase machine advances from the AUTHORITATIVE
+            // status/final_report_artifact_id/results_link_sent_at, never a client-side fake.
+            const res = await getIntake(intake.id);
+            if (!res.success) return;
+            setIntake({
+              ...intake,
+              status: res.data.status,
+              final_report_artifact_id: res.data.final_report_artifact_id,
+              results_link_sent_at: res.data.results_link_sent_at,
+            });
+          }}
+        />
+      </div>
+    )}
+
+
+   {showResearch && (
+     <ResearchArtifactsBlock
+       intakeId={intake.id}
+       intakeStatus={intake.status}
+       onStartResearch={() => handleStatusChange("in_research")}
+     />
+   )}
+
+
+   {sections.map((section) => {
+   const hasProposalList = section.fields.some((f) => f.type === "proposal_list");
+ const allEmpty =
+ !editMode &&
+ section.fields.every((f) => isFieldDisplayEmpty(f, answersMap.get(f.key)?.value));
+ if (allEmpty && !reviewMode) return null;
+ return (
+ <section
+ key={section.id}
+ id={section.id}
+ ref={(el) => {
+ sectionRefs.current[section.id] = el;
+ }}
+ className="scroll-mt-32 border border-ink/10 bg-paper p-6"
+ >
+ <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
+ {section.title}
+ </h2>
+ {section.description && (
+ <p className="mb-4 font-sans text-sm text-ink/60">{section.description}</p>
+ )}
+ {reviewMode && reviewData && hasProposalList ? (
+ <div className="mt-4">
+ <ExtraQuestionsSection state={reviewState} inline />
+ </div>
+ ) : editMode ? (
+ <div className="mt-4 space-y-6">
+ {section.fields.map((field) => {
+ if (field.type === "download") return null;
+ const changed = changedKeys.has(field.key);
+ return (
+ <div
+ key={field.key}
+ className={cn(
+ "p-3 -mx-3",
+ changed && "border border-ink border-l-4 border-l-agenic-yellow bg-paperLight",
+ )}
+ >
+ <div className="flex items-center gap-2 mb-1">
+ {changed && (
+ <span className="border border-ink bg-agenic-yellow px-2 py-0.5 font-mono text-xs uppercase tracking-wider text-ink">
+ {t("intakeDetail.field.changed")}
+ </span>
+ )}
+ </div>
+ <FieldRenderer
+ field={field}
+ value={draft[field.key]}
+ onChange={(v) => setDraft((d) => ({ ...d, [field.key]: v }))}
+ intakeId={intake.id}
+ onDeferRemove={(paths) => {
+ pendingRemovals.current.push(...paths);
+ }}
+ onUndoDeferRemove={(paths) => {
+ pendingRemovals.current = pendingRemovals.current.filter((p) => !paths.includes(p));
+ }}
+ />
+ </div>
+ );
+ })}
+ </div>
+ ) : (
+ <dl className="mt-3">
+ {section.fields.map((field) => {
+ const a = answersMap.get(field.key);
+ return (
+ <div key={field.key}>
+ <FieldDisplay
+ field={field}
+ value={a?.value}
+ intakeId={intake.id}
+ editedByClient={a?.edited_by_client ?? false}
+ clientEditedAt={a?.client_edited_at ?? null}
+ />
+ {reviewMode && reviewData && (
+ <>
+ <InlineFieldSuggestion fieldKey={field.key} currentValue={a?.value} />
+ {field.key === RESEARCH_QUESTIONS_FIELD_KEY && (
+ <InlineResearchQuestionsSuggestions />
+ )}
+ </>
+ )}
+ </div>
+ );
+ })}
+ </dl>
+ )}
+ </section>
+ );
+  })}
+ </main>
+ </div>
+
+        </div>
+
+      </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
      {mailPickerType && (
@@ -1324,263 +1594,74 @@ function IntakeDetailPage() {
      )}
 
 
-  {/* HandoffBlock verwijderd: alle handoff-acties zitten nu in NextStepBanner per fase. */}
+     {/* Run-history Sheet — slides in from the right */}
+     <Sheet open={historyOpen} onOpenChange={(o) => {
+       if (!o) setHistoryOpen(false);
+       else { setHistoryOpen(true); if (skillRuns === null) loadSkillRuns(); }
+     }}>
+       <SheetContent
+         side="right"
+         className="w-full max-w-sm bg-paper border-l border-ink/15 p-0 flex flex-col"
+       >
+         <SheetHeader className="border-b border-ink/10 px-6 py-5">
+           <SheetTitle className="font-mono text-[11px] uppercase tracking-wider text-ink/60 font-normal">
+             {t("intakeDetail.history.title")}
+             {skillRuns && skillRuns.length > 0 && (
+               <span className="ml-2 tabular-nums text-ink/40">({skillRuns.length})</span>
+             )}
+           </SheetTitle>
+         </SheetHeader>
 
-  {showAIReview && reviewMode && reviewData && (
- <div data-ai-review-block>
- <AIReviewTopBanner
- costEur={reviewData.costEur}
- decidedCount={reviewState?.decidedCount ?? 0}
- onCancel={() => {
- setReviewMode(false);
- setReviewData(null);
- }}
- onSubmit={handleSubmitReview}
- submitting={submittingReview}
- />
- <AIReviewInfoBanners parsed={reviewData.parsed} />
- </div>
- )}
-
- {successUrl && (
- <ReviewSuccessModal
- url={successUrl}
- onClose={async () => {
- setSuccessUrl(null);
- await exitReviewMode();
- }}
- />
- )}
-
- {editMode && (
- <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
- <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
- {t("intakeDetail.editBanner.title")}
- </div>
- <div className="text-ink font-sans">
- {t("intakeDetail.editBanner.body")}
- </div>
- </div>
- )}
-
- <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
- <aside className="hidden lg:block">
- <nav className="sticky top-28 space-y-1">
- <p className="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
- {t("intakeDetail.sections.nav")}
- </p>
- {sections.map((s) => {
- const isActive = activeSection === s.id;
- const hasContent = s.fields.some(
- (f) => !isFieldDisplayEmpty(f, answersMap.get(f.key)?.value),
- );
- return (
- <a
- key={s.id}
- href={`#${s.id}`}
- className={cn(
- "flex w-full items-start gap-2 px-3 py-2 font-mono text-xs uppercase tracking-wider leading-[1.4] transition-colors",
- isActive ? "bg-paper2 text-ink" : "text-ink/60 hover:bg-ink/5 hover:text-ink",
- )}
- >
- <span className={"nav-mark " + (isActive ? "nav-mark-green" : "nav-mark-ink")} />
- <span className="flex-1 break-words">{s.title}</span>
- </a>
- );
- })}
- </nav>
- </aside>
-
- <main className="min-w-0 space-y-10">
- {skillRuns && skillRuns.length > 0 && (
- <section className="border border-ink/10 bg-paper">
- <button
- type="button"
- onClick={toggleHistory}
- className="flex w-full items-center justify-between px-6 py-3 text-left text-sm font-medium text-ink/70 hover:bg-ink/5"
- >
- <span className="flex items-center gap-2">
- {historyOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
- {t("intakeDetail.history.title")}
- {skillRuns && skillRuns.length > 0 && (
- <span className="text-xs text-ink/60">({skillRuns.length})</span>
- )}
- </span>
- </button>
- {historyOpen && (
- <div className="border-t border-ink/5 px-6 py-3">
- {loadingRuns ? (
- <p className="text-sm text-ink/60">{t("intakeDetail.history.loading")}</p>
- ) : skillRuns && skillRuns.length > 0 ? (
- <ul className="divide-y divide-ink/5">
- {skillRuns.map((r) => {
- const icon = r.status === "succeeded" ? "✅" : r.status === "failed" ? "❌" : "⏳";
- return (
- <li key={r.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
- <span>{icon}</span>
- <span className="font-medium text-ink/80">{r.skill_name}</span>
- <span className="text-ink/60">— {fmt(r.triggered_at)}</span>
- {r.cost_estimate_usd != null && (
- <span className="text-ink/60">— €{(r.cost_estimate_usd * 0.92).toFixed(2)}</span>
- )}
- {r.status === "failed" && r.error_message && (
-  <span className="text-red-600">— {t("intakeDetail.history.error")}: {r.error_message}</span>
- )}
- {r.status === "running" && (
- <span className="text-ink/60">— {t("intakeDetail.history.running")}</span>
- )}
- </li>
- );
- })}
- </ul>
- ) : null}
- </div>
- )}
- </section>
-  )}
-
-  {/* AISkillsPanel self-gates on status (submitted → decomposed); mount unconditionally. */}
-  <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
-
-  {showContextPack && (
-    <div data-context-pack-block>
-      <ContextPackBlock
-        intakeId={intake.id}
-        intakeStatus={intake.status}
-        intakeTitle={intake.title ?? ""}
-        clientName={client?.name ?? "—"}
-        reloadSignal={contextPackReloadSignal}
-      />
-    </div>
-  )}
-
-    {showFinalReport && (
-      <div data-final-report-block>
-        <FinalReportBlock
-          intakeId={intake.id}
-          finalReportArtifactId={intake.final_report_artifact_id}
-          intakeStatus={intake.status}
-          hasResultsToken={!!intake.client_results_token}
-          onChange={async () => {
-            // The Deliver/Replace verb owns the transition (18-01) — reload the intake
-            // from the backend view so the phase machine advances from the AUTHORITATIVE
-            // status/final_report_artifact_id/results_link_sent_at, never a client-side fake.
-            const res = await getIntake(intake.id);
-            if (!res.success) return;
-            setIntake({
-              ...intake,
-              status: res.data.status,
-              final_report_artifact_id: res.data.final_report_artifact_id,
-              results_link_sent_at: res.data.results_link_sent_at,
-            });
-          }}
-        />
-      </div>
-    )}
-
-
-   {showResearch && (
-     <ResearchArtifactsBlock
-       intakeId={intake.id}
-       intakeStatus={intake.status}
-       onStartResearch={() => handleStatusChange("in_research")}
-     />
-   )}
-
-
-   {sections.map((section) => {
-   const hasProposalList = section.fields.some((f) => f.type === "proposal_list");
- const allEmpty =
- !editMode &&
- section.fields.every((f) => isFieldDisplayEmpty(f, answersMap.get(f.key)?.value));
- if (allEmpty && !reviewMode) return null;
- return (
- <section
- key={section.id}
- id={section.id}
- ref={(el) => {
- sectionRefs.current[section.id] = el;
- }}
- className="scroll-mt-32 border border-ink/10 bg-paper p-6"
- >
- <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
- {section.title}
- </h2>
- {section.description && (
- <p className="mb-4 font-sans text-sm text-ink/60">{section.description}</p>
- )}
- {reviewMode && reviewData && hasProposalList ? (
- <div className="mt-4">
- <ExtraQuestionsSection state={reviewState} inline />
- </div>
- ) : editMode ? (
- <div className="mt-4 space-y-6">
- {section.fields.map((field) => {
- if (field.type === "download") return null;
- const changed = changedKeys.has(field.key);
- return (
- <div
- key={field.key}
- className={cn(
- "p-3 -mx-3",
- changed && "border border-ink border-l-4 border-l-agenic-yellow bg-paperLight",
- )}
- >
- <div className="flex items-center gap-2 mb-1">
- {changed && (
- <span className="border border-ink bg-agenic-yellow px-2 py-0.5 font-mono text-xs uppercase tracking-wider text-ink">
- {t("intakeDetail.field.changed")}
- </span>
- )}
- </div>
- <FieldRenderer
- field={field}
- value={draft[field.key]}
- onChange={(v) => setDraft((d) => ({ ...d, [field.key]: v }))}
- intakeId={intake.id}
- onDeferRemove={(paths) => {
- pendingRemovals.current.push(...paths);
- }}
- onUndoDeferRemove={(paths) => {
- pendingRemovals.current = pendingRemovals.current.filter((p) => !paths.includes(p));
- }}
- />
- </div>
- );
- })}
- </div>
- ) : (
- <dl className="mt-3">
- {section.fields.map((field) => {
- const a = answersMap.get(field.key);
- return (
- <div key={field.key}>
- <FieldDisplay
- field={field}
- value={a?.value}
- intakeId={intake.id}
- editedByClient={a?.edited_by_client ?? false}
- clientEditedAt={a?.client_edited_at ?? null}
- />
- {reviewMode && reviewData && (
- <>
- <InlineFieldSuggestion fieldKey={field.key} currentValue={a?.value} />
- {field.key === RESEARCH_QUESTIONS_FIELD_KEY && (
- <InlineResearchQuestionsSuggestions />
- )}
- </>
- )}
- </div>
- );
- })}
- </dl>
- )}
- </section>
- );
-  })}
- </main>
- </div>
-
+         <div className="flex-1 overflow-y-auto">
+           {loadingRuns ? (
+             <div className="flex items-center gap-2 px-6 py-8 text-sm text-ink/50">
+               <Loader2 className="h-4 w-4 animate-spin" />
+               {t("intakeDetail.history.loading")}
+             </div>
+           ) : !skillRuns || skillRuns.length === 0 ? (
+             <p className="px-6 py-8 text-sm text-ink/40">
+               {t("intakeDetail.history.empty", "Geen activiteit gevonden.")}
+             </p>
+           ) : (
+             <ol className="divide-y divide-ink/5">
+               {[...skillRuns].reverse().map((r) => {
+                 const label = SKILL_LABELS[r.skill_name] ?? r.skill_name;
+                 const isOk   = r.status === "succeeded";
+                 const isFail = r.status === "failed";
+                 const isRun  = r.status === "running" || r.status === "queued";
+                 return (
+                   <li key={r.id} className="px-6 py-4 space-y-1.5">
+                     <div className="flex items-center justify-between gap-2">
+                       <span className="font-mono text-[11px] uppercase tracking-wider text-ink">
+                         {label}
+                       </span>
+                       <span className={[
+                         "font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5",
+                         isOk   ? "bg-green-50 text-green-700"  : "",
+                         isFail ? "bg-red-50 text-red-600"      : "",
+                         isRun  ? "bg-amber-50 text-amber-700"  : "",
+                         !isOk && !isFail && !isRun ? "bg-ink/5 text-ink/40" : "",
+                       ].filter(Boolean).join(" ")}>
+                         {isOk ? "✓ voltooid" : isFail ? "✗ mislukt" : isRun ? "bezig…" : r.status}
+                       </span>
+                     </div>
+                     <p className="font-sans text-xs text-ink/50">{fmt(r.triggered_at)}</p>
+                     {r.cost_estimate_usd != null && (
+                       <p className="font-mono text-[11px] text-ink/40">
+                         €{(r.cost_estimate_usd * 0.92).toFixed(3)}
+                       </p>
+                     )}
+                     {isFail && r.error_message && (
+                       <p className="font-sans text-xs text-red-500 break-words">{r.error_message}</p>
+                     )}
+                   </li>
+                 );
+               })}
+             </ol>
+           )}
+         </div>
+       </SheetContent>
+     </Sheet>
  </div>
  </ReviewProvider>
  );

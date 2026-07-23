@@ -1,5 +1,8 @@
-import { apiUrl, auth } from "@/lib/firebase";
+import { apiUrl, auth, MOCK_AUTH } from "@/lib/firebase";
 import { getIdToken, signOut } from "firebase/auth";
+
+/** Fixed bearer token used in mock mode — accepted by mock-backend/server.js without verification. */
+const MOCK_TOKEN = "mock-token-for-local-development";
 
 // frontend/src/lib/api/client.ts — the FIRST lib/api module and the generalizable
 // token-attach transport seam that Phase 6 extends (NOT a throwaway). It reuses the
@@ -33,6 +36,7 @@ export type ApiResult<T> =
 export async function currentIdToken(
   forceRefresh = false,
 ): Promise<string | null> {
+  if (MOCK_AUTH) return MOCK_TOKEN;
   return auth.currentUser ? getIdToken(auth.currentUser, forceRefresh) : null;
 }
 

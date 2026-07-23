@@ -76,7 +76,27 @@ const AuthContext = createContext<AuthContextValue>({
   isSuperadmin: false,
 });
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+// ---------------------------------------------------------------------------
+// Mock auth — enabled by VITE_MOCK_AUTH=1 (local dev without a real Firebase
+// project). Returns a hardcoded superadmin session so all admin routes are
+// reachable. The mock backend (mock-backend/server.js) accepts any Bearer token.
+// ---------------------------------------------------------------------------
+const MOCK_AUTH = import.meta.env.VITE_MOCK_AUTH === "1";
+
+const MOCK_USER = MOCK_AUTH
+  ? ({
+      uid: "mock-user-001",
+      email: "admin@example.com",
+      displayName: "Mock Admin",
+    } as unknown as User)
+  : null;
+
+async function mockGetToken(): Promise<string> {
+  return "mock-token-for-local-development";
+}
+
+/** Real Firebase-backed provider — only rendered when VITE_MOCK_AUTH is not set. */
+function RealAuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<Role>(null);
@@ -202,6 +222,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+/** Public provider — delegates to mock or real based on VITE_MOCK_AUTH. */
+export function AuthProvider({ children }: { children: ReactNode }) {
+  if (MOCK_AUTH) {
+    return (
+      <AuthContext.Provider
+        value={{
+          session: MOCK_USER,
+          loading: false,
+          getToken: mockGetToken,
+          role: "superadmin",
+          isSuperadmin: true,
+        }}
+      >
+        {children}
+      </AuthContext.Provider>
+    );
+  }
+  return <RealAuthProvider>{children}</RealAuthProvider>;
 }
 
 export function useAuth() {

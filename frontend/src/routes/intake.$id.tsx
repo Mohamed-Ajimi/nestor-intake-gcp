@@ -2,7 +2,7 @@ import { createFileRoute, Outlet, redirect, useMatches, useNavigate } from "@tan
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { auth, MOCK_AUTH } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 import { getIntake } from "@/lib/api/intakes";
 import { listAnswers } from "@/lib/api/answers";
@@ -29,6 +29,7 @@ function authReady(): Promise<User | null> {
 
 export const Route = createFileRoute("/intake/$id")({
   beforeLoad: async () => {
+    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
     const user = await authReady();
     if (!user) {
       throw redirect({ to: "/auth/login" });

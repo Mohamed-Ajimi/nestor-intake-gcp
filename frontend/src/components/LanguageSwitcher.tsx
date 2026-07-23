@@ -28,6 +28,12 @@ const TRIGGER_CLASS =
   "flex w-full items-center justify-between gap-2 border border-ink bg-paper px-3 py-2 " +
   "font-mono text-xs uppercase tracking-wider text-ink";
 
+// compact variant: just the ISO code ("NL") with a small chevron, no border box.
+// Used by TopBar where space is tight and a full-width trigger would look wrong.
+const COMPACT_TRIGGER_CLASS =
+  "flex items-center gap-1 px-2 py-1 font-mono text-[10px] uppercase tracking-widest " +
+  "text-ink/50 hover:text-ink transition-colors";
+
 function rememberLocalChoice(lang: SupportedLocale) {
   if (typeof window === "undefined") return;
   try {
@@ -37,7 +43,14 @@ function rememberLocalChoice(lang: SupportedLocale) {
   }
 }
 
-export function LanguageSwitcher({ persist = true }: { persist?: boolean }) {
+export function LanguageSwitcher({
+  persist = true,
+  compact = false,
+}: {
+  persist?: boolean;
+  /** compact=true: shows just the ISO code ("NL") with a small chevron — used in TopBar. */
+  compact?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const { t, i18n } = useTranslation("common");
 
@@ -68,13 +81,25 @@ export function LanguageSwitcher({ persist = true }: { persist?: boolean }) {
           role="combobox"
           aria-expanded={open}
           aria-label={t("language.label")}
-          className={TRIGGER_CLASS}
+          className={compact ? COMPACT_TRIGGER_CLASS : TRIGGER_CLASS}
         >
-          <span className="truncate">{t(`language.${current}`)}</span>
-          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+          {compact ? (
+            <>
+              <span>{current.toUpperCase()}</span>
+              <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" />
+            </>
+          ) : (
+            <>
+              <span className="truncate">{t(`language.${current}`)}</span>
+              <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+            </>
+          )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+      <PopoverContent
+        className={compact ? "w-36 p-0" : "w-[var(--radix-popover-trigger-width)] p-0"}
+        align={compact ? "end" : "start"}
+      >
         <Command>
           <CommandList>
             <CommandGroup>

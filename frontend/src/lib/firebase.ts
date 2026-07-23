@@ -9,6 +9,9 @@ import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
 // access. The only data path is the FastAPI backend with a verified Bearer
 // ID token; no Supabase env values or DB DSN are shipped from this module.
 
+/** Set VITE_MOCK_AUTH=1 to bypass Firebase and use a local mock superadmin session. */
+export const MOCK_AUTH = import.meta.env.VITE_MOCK_AUTH === "1";
+
 const apiKey = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined;
 const authDomain = import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined;
 const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined;
