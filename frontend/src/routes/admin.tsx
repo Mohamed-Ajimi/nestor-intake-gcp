@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { useTranslation } from "react-i18next";
-import { auth } from "@/lib/firebase";
+import { auth, MOCK_AUTH } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 
 // Firebase resolves `auth.currentUser` only after the first onAuthStateChanged
@@ -22,6 +22,7 @@ export const Route = createFileRoute("/admin")({
   // get_current_identity dependency (plans 02/03). This guard is
   // defense-in-depth; live behavior is validated in GCP at/after Phase 12 (D-09).
   beforeLoad: async () => {
+    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
     const user = await authReady();
     if (!user) {
       throw redirect({ to: "/auth/login" });
