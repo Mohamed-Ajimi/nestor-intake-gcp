@@ -21,5 +21,8 @@ Thumbs.db
 # logs
 *.log
 
+# local image-tag scratch pointers from phase deploys
+.claude-phase*.tmp
+
 # GSD planning docs (local-only)
 .planning/
