@@ -8,7 +8,7 @@ import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Clock, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import {
   getIntake,
   submitIntake,
@@ -55,6 +55,12 @@ import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   derivePhase,
   type PhaseSkillRunInput,
@@ -199,6 +205,16 @@ function isEmptyVal(v: unknown): boolean {
  }
  return false;
 }
+
+// Human-readable Dutch labels for skill names in the activity log Sheet.
+const SKILL_LABELS: Record<string, string> = {
+  "apply-intake-skill":  "Intake analyse",
+  "structure-answers":   "Structureer antwoorden",
+  "extract-insights":    "Inzichten extractie",
+  "generate-embeddings": "Embeddings",
+  "transcribe-source":   "Transcriptie",
+  "context-pack":        "Context Pack",
+};
 
 function IntakeDetailPage() {
  const { id } = Route.useParams();
@@ -1155,6 +1171,21 @@ function IntakeDetailPage() {
            in the content area. */}
         <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
 
+        {/* Activity log — clock button opens the run-history Sheet */}
+        <div className="border-t border-ink/10 px-6 py-4">
+          <button
+            type="button"
+            onClick={toggleHistory}
+            className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink transition-colors"
+          >
+            <Clock className="h-3.5 w-3.5" />
+            {t("intakeDetail.history.title")}
+            {skillRuns && skillRuns.length > 0 && (
+              <span className="tabular-nums">({skillRuns.length})</span>
+            )}
+          </button>
+        </div>
+
        {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
            on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
            Renders the stage list dynamically from the mirrored research_runs row. */}
@@ -1261,52 +1292,6 @@ function IntakeDetailPage() {
  </aside>
 
  <main className="min-w-0 space-y-10">
- {skillRuns && skillRuns.length > 0 && (
- <section className="border border-ink/10 bg-paper">
- <button
- type="button"
- onClick={toggleHistory}
- className="flex w-full items-center justify-between px-6 py-3 text-left text-sm font-medium text-ink/70 hover:bg-ink/5"
- >
- <span className="flex items-center gap-2">
- {historyOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
- {t("intakeDetail.history.title")}
- {skillRuns && skillRuns.length > 0 && (
- <span className="text-xs text-ink/60">({skillRuns.length})</span>
- )}
- </span>
- </button>
- {historyOpen && (
- <div className="border-t border-ink/5 px-6 py-3">
- {loadingRuns ? (
- <p className="text-sm text-ink/60">{t("intakeDetail.history.loading")}</p>
- ) : skillRuns && skillRuns.length > 0 ? (
- <ul className="divide-y divide-ink/5">
- {skillRuns.map((r) => {
- const icon = r.status === "succeeded" ? "✅" : r.status === "failed" ? "❌" : "⏳";
- return (
- <li key={r.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
- <span>{icon}</span>
- <span className="font-medium text-ink/80">{r.skill_name}</span>
- <span className="text-ink/60">— {fmt(r.triggered_at)}</span>
- {r.cost_estimate_usd != null && (
- <span className="text-ink/60">— €{(r.cost_estimate_usd * 0.92).toFixed(2)}</span>
- )}
- {r.status === "failed" && r.error_message && (
-  <span className="text-red-600">— {t("intakeDetail.history.error")}: {r.error_message}</span>
- )}
- {r.status === "running" && (
- <span className="text-ink/60">— {t("intakeDetail.history.running")}</span>
- )}
- </li>
- );
- })}
- </ul>
- ) : null}
- </div>
- )}
- </section>
-  )}
 
   {showContextPack && (
     <div data-context-pack-block>
@@ -1608,6 +1593,75 @@ function IntakeDetailPage() {
        </div>
      )}
 
+
+     {/* Run-history Sheet — slides in from the right */}
+     <Sheet open={historyOpen} onOpenChange={(o) => {
+       if (!o) setHistoryOpen(false);
+       else { setHistoryOpen(true); if (skillRuns === null) loadSkillRuns(); }
+     }}>
+       <SheetContent
+         side="right"
+         className="w-full max-w-sm bg-paper border-l border-ink/15 p-0 flex flex-col"
+       >
+         <SheetHeader className="border-b border-ink/10 px-6 py-5">
+           <SheetTitle className="font-mono text-[11px] uppercase tracking-wider text-ink/60 font-normal">
+             {t("intakeDetail.history.title")}
+             {skillRuns && skillRuns.length > 0 && (
+               <span className="ml-2 tabular-nums text-ink/40">({skillRuns.length})</span>
+             )}
+           </SheetTitle>
+         </SheetHeader>
+
+         <div className="flex-1 overflow-y-auto">
+           {loadingRuns ? (
+             <div className="flex items-center gap-2 px-6 py-8 text-sm text-ink/50">
+               <Loader2 className="h-4 w-4 animate-spin" />
+               {t("intakeDetail.history.loading")}
+             </div>
+           ) : !skillRuns || skillRuns.length === 0 ? (
+             <p className="px-6 py-8 text-sm text-ink/40">
+               {t("intakeDetail.history.empty", "Geen activiteit gevonden.")}
+             </p>
+           ) : (
+             <ol className="divide-y divide-ink/5">
+               {[...skillRuns].reverse().map((r) => {
+                 const label = SKILL_LABELS[r.skill_name] ?? r.skill_name;
+                 const isOk   = r.status === "succeeded";
+                 const isFail = r.status === "failed";
+                 const isRun  = r.status === "running" || r.status === "queued";
+                 return (
+                   <li key={r.id} className="px-6 py-4 space-y-1.5">
+                     <div className="flex items-center justify-between gap-2">
+                       <span className="font-mono text-[11px] uppercase tracking-wider text-ink">
+                         {label}
+                       </span>
+                       <span className={[
+                         "font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5",
+                         isOk   ? "bg-green-50 text-green-700"  : "",
+                         isFail ? "bg-red-50 text-red-600"      : "",
+                         isRun  ? "bg-amber-50 text-amber-700"  : "",
+                         !isOk && !isFail && !isRun ? "bg-ink/5 text-ink/40" : "",
+                       ].filter(Boolean).join(" ")}>
+                         {isOk ? "✓ voltooid" : isFail ? "✗ mislukt" : isRun ? "bezig…" : r.status}
+                       </span>
+                     </div>
+                     <p className="font-sans text-xs text-ink/50">{fmt(r.triggered_at)}</p>
+                     {r.cost_estimate_usd != null && (
+                       <p className="font-mono text-[11px] text-ink/40">
+                         €{(r.cost_estimate_usd * 0.92).toFixed(3)}
+                       </p>
+                     )}
+                     {isFail && r.error_message && (
+                       <p className="font-sans text-xs text-red-500 break-words">{r.error_message}</p>
+                     )}
+                   </li>
+                 );
+               })}
+             </ol>
+           )}
+         </div>
+       </SheetContent>
+     </Sheet>
  </div>
  </ReviewProvider>
  );

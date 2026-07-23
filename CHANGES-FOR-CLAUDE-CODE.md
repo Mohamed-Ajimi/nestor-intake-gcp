@@ -406,6 +406,48 @@ inline in `run(...)`. Removed entirely.
 
 ## Summary of why each change exists
 
+---
+
+## Change 15 — Replace inline "Previous skill runs" accordion with a history Sheet
+
+**Files:** `src/routes/admin.pulse.intakes.$id.tsx`
+
+**Removed:** the inline `<section>` accordion in the main content column that expanded in-place
+to show run rows.
+
+**Added:**
+
+1. A small `⏰ EERDERE SKILL-RUNS (n)` trigger button at the bottom of the right-rail workflow
+   card (same visual grammar as the AI-verrijking trigger — monospace, uppercase, icon + label).
+
+2. A `<Sheet side="right">` overlay (Radix via `@/components/ui/sheet`) that slides in when the
+   button is clicked. Contents:
+   - Header: title + count
+   - Scrollable list (`overflow-y-auto`) of runs sorted newest-first
+   - Each row: human-readable Dutch skill label, coloured status badge (green/red/amber),
+     formatted timestamp, cost in EUR (when present), error message (when failed)
+   - Empty and loading states
+
+3. A module-level `SKILL_LABELS` map translating internal skill IDs to Dutch display names:
+   ```ts
+   const SKILL_LABELS: Record<string, string> = {
+     "apply-intake-skill":  "Intake analyse",
+     "structure-answers":   "Structureer antwoorden",
+     "extract-insights":    "Inzichten extractie",
+     "generate-embeddings": "Embeddings",
+     "transcribe-source":   "Transcriptie",
+     "context-pack":        "Context Pack",
+   };
+   ```
+
+**Lazy-load behaviour unchanged:** `loadSkillRuns` is only called when the Sheet opens for the
+first time (`skillRuns === null`). Subsequent opens reuse the already-fetched list (same as the
+old accordion's `toggleHistory` guard).
+
+---
+
+## Summary of why each change exists
+
 | Change | Reason |
 |---|---|
 | `vite.vite.server.allowedHosts` | Replit proxy domain was blocked by Vite's host check |
