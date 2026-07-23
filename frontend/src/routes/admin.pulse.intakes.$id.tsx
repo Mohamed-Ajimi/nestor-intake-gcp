@@ -19,6 +19,7 @@ import {
 import { RecipientPicker } from "@/components/intake/RecipientPicker";
 import { listAnswers, saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { listSkillRuns } from "@/lib/api/skillRuns";
+import { getContextPack } from "@/lib/api/contextPack";
 import * as skills from "@/lib/api/skills";
 import * as storage from "@/lib/api/storage";
 import { getTemplates } from "@/lib/api/templates";
@@ -572,11 +573,14 @@ function IntakeDetailPage() {
  const loadSkillRuns = useCallback(async () => {
  if (!intakeIdForRuns.current) return;
  setLoadingRuns(true);
- const res = await listSkillRuns(intakeIdForRuns.current);
+ const [res, packRes] = await Promise.all([
+ listSkillRuns(intakeIdForRuns.current),
+ getContextPack(intakeIdForRuns.current),
+ ]);
  const mapped: SkillRun[] = res.success
  ? res.data.runs.map((r) => ({
  id: r.id,
- skill_name: "intake-skill",
+ skill_name: r.skill || "apply-intake-skill",
  status: r.status,
  model: null,
  output: null,
@@ -587,6 +591,32 @@ function IntakeDetailPage() {
  error_message: null,
  }))
  : [];
+ // Context-pack generations surface in the same activity log. The read shape is
+ // {latest, history}; latest may or may not be included in history — dedup by id.
+ if (packRes.success) {
+ const packs = [packRes.data.latest, ...packRes.data.history].filter(
+ (p): p is NonNullable<typeof p> => p != null,
+ );
+ const seen = new Set<string>();
+ for (const p of packs) {
+ if (seen.has(p.id)) continue;
+ seen.add(p.id);
+ mapped.push({
+ id: p.id,
+ skill_name: "context-pack",
+ status: "succeeded",
+ model: null,
+ output: null,
+ cost_estimate_usd: null,
+ triggered_at: p.created_at ?? "",
+ completed_at: p.created_at,
+ applied_at: null,
+ error_message: null,
+ });
+ }
+ }
+ // Chronological ascending — the Sheet renders [...runs].reverse() (newest first).
+ mapped.sort((a, b) => a.triggered_at.localeCompare(b.triggered_at));
  setSkillRuns(mapped);
  setLoadingRuns(false);
  // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1145,6 +1175,19 @@ function IntakeDetailPage() {
          </div>
        )}
 
+       {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
+           on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
+           Renders the stage list dynamically from the mirrored research_runs row. */}
+       {intake.status === "in_research" && (
+         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
+       )}
+      </div>
+
+      {/* 2-col layout: content left, sticky action rail (next step + AI tools + search) right on xl+ */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_272px] xl:gap-8 xl:items-start">
+
+        <aside className="mb-6 xl:mb-0 xl:col-start-2 xl:row-start-1 xl:sticky xl:top-[88px] xl:self-start">
+     <div className="border border-ink/15 bg-paper">
        <NextStepBanner
          phase={currentPhase}
          validationLinkSentAt={intake.validation_link_sent_at}
@@ -1173,13 +1216,6 @@ function IntakeDetailPage() {
            Lives inside the workflow card as a secondary action block, not floating
            in the content area. */}
         <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
-
-       {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
-           on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
-           Renders the stage list dynamically from the mirrored research_runs row. */}
-       {intake.status === "in_research" && (
-         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
-       )}
 
        {showSemanticSearch && (
          <section className="border-t border-ink/10 bg-paperLight p-4">
@@ -1223,7 +1259,9 @@ function IntakeDetailPage() {
        )}
 
      </div>
+        </aside>
 
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
  {editMode && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
@@ -1403,6 +1441,10 @@ function IntakeDetailPage() {
   })}
  </main>
  </div>
+
+        </div>
+
+      </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
      {mailPickerType && (
