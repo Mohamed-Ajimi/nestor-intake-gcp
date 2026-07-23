@@ -9,4 +9,6 @@ export default defineConfig({
   // this takes effect. `wrangler.jsonc` + @cloudflare/vite-plugin are left INERT
   // (Pitfall 6 — removing them risks disturbing `npm run dev`), not deleted.
   nitro: { preset: "node-server" },
+  // Allow all hosts so the Replit proxied preview domain works in dev.
+  server: { allowedHosts: true },
 });
