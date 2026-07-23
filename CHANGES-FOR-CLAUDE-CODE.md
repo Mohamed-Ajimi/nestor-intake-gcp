@@ -150,6 +150,115 @@ See `mock-backend/server.js` for the full implementation. Key contracts:
 
 ---
 
+---
+
+## 8. New component: `frontend/src/components/TopBar.tsx`
+
+A thin sticky bar (`h-11`) with a compact language switcher and a disabled
+notification bell placeholder. Mount it at the top of every authenticated
+layout.
+
+```tsx
+import { Bell } from "lucide-react";
+import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+
+export function TopBar({ persist = true }: { persist?: boolean }) {
+  return (
+    <div className="flex h-11 shrink-0 items-center justify-end gap-1 border-b border-ink/10 bg-paper px-6">
+      <LanguageSwitcher persist={persist} compact />
+      <button
+        type="button"
+        disabled
+        title="Notificaties — binnenkort beschikbaar"
+        aria-label="Notificaties"
+        className="relative flex h-7 w-7 items-center justify-center text-ink/30 transition-colors"
+      >
+        <Bell className="h-4 w-4" />
+        {/* Wire up badge once GET /me/notifications exists */}
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## 9. `frontend/src/components/LanguageSwitcher.tsx` — add `compact` prop
+
+Add a `compact` boolean prop. When `true`, the trigger shows just the ISO
+code ("NL") + a small chevron using a tight inline style, instead of the
+full-width bordered box with the full language name.
+
+```tsx
+export function LanguageSwitcher({
+  persist = true,
+  compact = false,
+}: {
+  persist?: boolean;
+  compact?: boolean;
+}) {
+  // ...
+  // trigger:
+  className={compact ? COMPACT_TRIGGER_CLASS : TRIGGER_CLASS}
+  // content:
+  {compact ? (
+    <><span>{current.toUpperCase()}</span><ChevronsUpDown className="h-3 w-3 shrink-0 opacity-40" /></>
+  ) : (
+    <><span className="truncate">{t(`language.${current}`)}</span><ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" /></>
+  )}
+}
+```
+
+Add this constant alongside `TRIGGER_CLASS`:
+```ts
+const COMPACT_TRIGGER_CLASS =
+  "flex items-center gap-1 px-2 py-1 font-mono text-[10px] uppercase tracking-widest " +
+  "text-ink/50 hover:text-ink transition-colors";
+```
+
+---
+
+## 10. `frontend/src/components/admin/ProductShell.tsx` — mount TopBar, remove sidebar switcher
+
+1. Replace `import { LanguageSwitcher }` with `import { TopBar }`.
+2. Delete the sidebar language switcher block:
+   ```tsx
+   // DELETE:
+   <div className="mt-4">
+     <LanguageSwitcher persist />
+   </div>
+   ```
+3. Wrap `<main>` in a flex column so TopBar sits above it:
+   ```tsx
+   // BEFORE:
+   <main className="flex-1 px-6 py-8 md:px-10 md:py-10">{children}</main>
+
+   // AFTER:
+   <div className="flex flex-1 flex-col overflow-hidden">
+     <TopBar />
+     <main className="flex-1 overflow-y-auto px-6 py-8 md:px-10 md:py-10">{children}</main>
+   </div>
+   ```
+
+---
+
+## 11. `frontend/src/routes/intake.index.tsx` — mount TopBar, remove inline switcher
+
+1. Replace `import { LanguageSwitcher }` with `import { TopBar }`.
+2. Delete the inline `<div className="w-28"><LanguageSwitcher persist /></div>` from the
+   header flex row.
+3. Add `<TopBar />` as the first child of the outermost `<div className="min-h-screen ...">`:
+   ```tsx
+   <div className="min-h-screen bg-paper text-ink">
+     <TopBar />
+     <div className="mx-auto max-w-4xl px-6 py-12">
+       ...
+     </div>
+   </div>
+   ```
+
+---
+
 ## Summary of why each change exists
 
 | Change | Reason |

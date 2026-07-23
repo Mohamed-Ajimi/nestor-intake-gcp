@@ -10,7 +10,7 @@ import { auth, MOCK_AUTH } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
 import { listIntakes, type Intake } from "@/lib/api/intakes";
 import { StatusPill } from "@/components/intake/_status";
-import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { TopBar } from "@/components/TopBar";
 import {
   Table,
   TableBody,
@@ -129,16 +129,12 @@ function UserIntakeListPage() {
 
   return (
     <div className="min-h-screen bg-paper text-ink">
+      <TopBar />
       <div className="mx-auto max-w-4xl px-6 py-12">
         {/* Minimal authenticated chrome — no admin nav, no space switcher */}
         <div className="mb-10 flex items-center justify-between">
           <p className="font-mono text-xs uppercase tracking-widest text-ink/60">{t("list.brand")}</p>
           <div className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-ink/60">
-            {/* Persisting NL/FR/EN switcher — trigger is w-full, so constrain it to a
-                fixed-width box to keep the flex header row intact. */}
-            <div className="w-28">
-              <LanguageSwitcher persist />
-            </div>
             {session?.email && <span className="font-medium text-ink/70">{session.email}</span>}
             <button
               type="button"
