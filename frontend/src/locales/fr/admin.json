@@ -134,6 +134,8 @@
       "mailSent": "E-mail envoyé.",
       "contextPackStartFailed": "Échec du démarrage du Context Pack",
       "contextPackStarted": "Génération du Context Pack lancée — cela prend environ 1 à 2 minutes.",
+      "researchStarted": "Deep research lancée — la progression s'affiche ci-dessous.",
+      "researchStartFailed": "Échec du démarrage de la recherche",
       "scrollToContextPack": "Faites défiler vers le Context Pack ci-dessous.",
       "scrollToFinalReport": "Faites défiler vers le bloc rapport client ci-dessous.",
       "searchFailed": "Échec de la recherche",
