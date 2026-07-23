@@ -281,8 +281,6 @@ export function ContextPackBlock({
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewingPack, setViewingPack] = useState<Pack | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [history, setHistory] = useState<Pack[] | null>(null);
   const [questions, setQuestions] = useState<
     Array<{ id: string; priority: number | null; question_type: string | null; question_text: string }>
   >([]);
@@ -303,42 +301,19 @@ export function ContextPackBlock({
     setLoadingPack(false);
   }, [intakeId]);
 
-  const loadHistory = useCallback(async () => {
-    // History comes from the same 07-09 read surface (`{ latest, history }`).
-    const res = await getContextPack(intakeId);
-    if (!res.success) {
-      setHistory([]);
-      return;
-    }
-    setHistory(res.data.history.map(toPack));
-  }, [intakeId]);
-
   useEffect(() => {
     if (!VISIBLE_STATUSES.has(intakeStatus ?? "")) return;
     loadLatest();
     // A terminal context-pack run bumps `reloadSignal`; re-reading here refreshes the pack
-    // even when the status was already `decomposed` (a re-generate). The history is also
-    // re-fetched when it's already been opened, so it stays in sync.
-    if (history !== null) loadHistory();
+    // even when the status was already `decomposed` (a re-generate).
     // research_questions are written post-`decomposed` (Bucket E) and never render in
     // this milestone, so there is no read here.
     setQuestions([]);
-    // history is intentionally omitted from deps: it must not re-trigger on its own state
-    // change (that would loop). loadHistory is stable (useCallback on intakeId).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intakeStatus, loadLatest, loadHistory, intakeId, reloadSignal]);
-
-  const toggleHistory = () => {
-    const next = !historyOpen;
-    setHistoryOpen(next);
-    if (next && history === null) loadHistory();
-  };
+  }, [intakeStatus, loadLatest, intakeId, reloadSignal]);
 
   async function generateContextPack() {
-    // Dispatch the Phase-7 context-pack run. NOTE: the pack DISPLAY (loadLatest /
-    // loadHistory above) still has no backend read surface — the run succeeds and the
-    // intake advances to `decomposed`, but the markdown render stays empty until an
-    // artifacts-read endpoint exists (logged as an integration gap, 2026-07-13 UAT).
+    // Dispatch the Phase-7 context-pack run. The pack DISPLAY refreshes via loadLatest
+    // once the run terminates and bumps reloadSignal; the intake advances to `decomposed`.
     setGenerating(true);
     try {
       const res = await skills.generateContextPack(intakeId);
@@ -538,78 +513,6 @@ export function ContextPackBlock({
           </div>
         )}
       </div>
-
-      {latestPack && (
-        <section className="mb-6 border border-ink/10 bg-paper">
-          <button
-            type="button"
-            onClick={toggleHistory}
-            className="flex w-full items-center justify-between px-6 py-3 text-left text-sm font-medium text-ink/70 hover:bg-ink/5"
-          >
-            <span className="flex items-center gap-2">
-              {historyOpen ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-              {t("contextPack.historyToggle")}
-              {history && <span className="text-xs text-ink/60">({history.length})</span>}
-            </span>
-          </button>
-          {historyOpen && (
-            <div className="border-t border-ink/5 px-6 py-3">
-              {history === null ? (
-                <p className="text-sm text-ink/60">{t("contextPack.loading")}</p>
-              ) : history.length === 0 ? (
-                <p className="text-sm text-ink/60">{t("contextPack.noRuns")}</p>
-              ) : (
-                <ul className="divide-y divide-ink/5">
-                  {history.map((r) => (
-                    <li
-                      key={r.id}
-                      className="flex flex-wrap items-center gap-2 py-2 text-sm"
-                    >
-                      <span>✓</span>
-                      <span className="text-ink/70">
-                        {fmtDate(r.completed_at, at, dateFallback)}
-                      </span>
-                      {r.cost_estimate_usd != null && (
-                        <span className="text-ink/60">· €{r.cost_estimate_usd}</span>
-                      )}
-                      {r.model && <span className="text-ink/60">· {r.model}</span>}
-                      <span className="ml-auto flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setViewingPack(r)}
-                          className="border border-ink/20 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5"
-                        >
-                          {t("contextPack.view")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            r.output &&
-                            downloadContextPackPDF(
-                              r.output,
-                              clientName,
-                              intakeTitle,
-                              buildPdfLabels(),
-                            )
-                          }
-                          disabled={!r.output}
-                          className="border border-ink/20 px-2 py-1 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-40"
-                        >
-                          {t("contextPack.downloadPdf")}
-                        </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </section>
-      )}
 
       {viewingPack && (
         <div
