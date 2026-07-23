@@ -1129,12 +1129,9 @@ function IntakeDetailPage() {
  />
  )}
 
-      {/* 2-col layout: sticky workflow rail on right (xl+), content on left */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_272px] xl:gap-8 xl:items-start">
-
-        <aside className="mb-6 xl:mb-0 xl:col-start-2 xl:row-start-1 xl:sticky xl:top-[88px] xl:self-start">
-     <div className="border border-ink/15 bg-paper">
-       <div className="overflow-x-auto px-4 pt-4 pb-3">
+      {/* Workflow card — full-width in the center flow, above the content sections. */}
+      <div className="mb-8 border border-ink/15 bg-paper">
+       <div className="px-6 pt-6 pb-4">
          <IntakeWorkflowStepper
            status={intake.status}
            clientValidatedAt={intake.client_validated_at}
@@ -1226,9 +1223,7 @@ function IntakeDetailPage() {
        )}
 
      </div>
-        </aside>
 
-        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
  {editMode && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
@@ -1408,10 +1403,6 @@ function IntakeDetailPage() {
   })}
  </main>
  </div>
-
-        </div>
-
-      </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
      {mailPickerType && (
