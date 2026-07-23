@@ -41,6 +41,12 @@ import {
  useAIReview,
  type ParsedSkillOutput,
 } from "@/components/intake/AIReviewPanel";
+
+// Stable empty fallback for useAIReview — must be module-level, not inline `{}`.
+// An inline `?? {}` creates a new object reference on every render, which fires the
+// `useEffect([parsed])` inside useAIReview on every render → infinite setState loop.
+const EMPTY_PARSED: ParsedSkillOutput = {};
+
 import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
@@ -227,7 +233,7 @@ function IntakeDetailPage() {
  const [submittingReview, setSubmittingReview] = useState(false);
  const [successUrl, setSuccessUrl] = useState<string | null>(null);
   const [optimisticRunStartedAt, setOptimisticRunStartedAt] = useState<string | null>(null);
- const reviewState = useAIReview(reviewData?.parsed ?? {});
+ const reviewState = useAIReview(reviewData?.parsed ?? EMPTY_PARSED);
  const [historyOpen, setHistoryOpen] = useState(false);
   const [skillRuns, setSkillRuns] = useState<SkillRun[] | null>(null);
    const [loadingRuns, setLoadingRuns] = useState(false);
@@ -538,10 +544,19 @@ function IntakeDetailPage() {
  toast.success(t("intakeDetail.toast.statusUpdated"));
  };
 
+ // Read intakeId through a ref so loadSkillRuns can have a stable (empty) dep array.
+ // Previously [intake] as a dep caused a new function reference on every load(), which
+ // cascaded into the review-mode and terminal-status effects — causing the "Maximum
+ // update depth exceeded" loop when any setState (including Popover open) triggered a
+ // re-render. Stable reference = effects that list loadSkillRuns in deps fire only when
+ // their other deps actually change.
+ const intakeIdForRuns = useRef<string | undefined>(undefined);
+ intakeIdForRuns.current = intake?.id;
+
  const loadSkillRuns = useCallback(async () => {
- if (!intake) return;
+ if (!intakeIdForRuns.current) return;
  setLoadingRuns(true);
- const res = await listSkillRuns(intake.id);
+ const res = await listSkillRuns(intakeIdForRuns.current);
  const mapped: SkillRun[] = res.success
  ? res.data.runs.map((r) => ({
  id: r.id,
@@ -558,7 +573,8 @@ function IntakeDetailPage() {
  : [];
  setSkillRuns(mapped);
  setLoadingRuns(false);
- }, [intake]);
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, []);
 
  const toggleHistory = () => {
  const next = !historyOpen;

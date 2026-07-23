@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ChevronDown, Loader2, Sparkles } from "lucide-react";
@@ -29,8 +29,6 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
   const [audioSources, setAudioSources] = useState<IntakeSourceView[]>([]);
   const [transcribingId, setTranscribingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const closeRef = useRef<() => void>(() => setOpen(false));
-  closeRef.current = () => setOpen(false);
 
   useEffect(() => {
     let cancelled = false;

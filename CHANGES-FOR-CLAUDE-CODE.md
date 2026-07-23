@@ -343,24 +343,64 @@ machine couldn't be exercised past the first step. Also:
 
 ---
 
-## Known issue: "Maximum update depth exceeded" in dev console
+---
 
-The `admin.pulse.intakes.$id` route shows React "Maximum update depth exceeded" errors on
-page load in the browser console. The page renders correctly — the error doesn't crash the UI.
+## Change 14 — Fix "Maximum update depth exceeded" infinite loop
 
-**Diagnosed causes:**
-- `loadSkillRuns` (useCallback) has `intake` in its dependency array. Each call to `load()`
-  creates a new `intake` object reference, giving `loadSkillRuns` a new reference.
-- `loadSkillRuns` appears in the dep arrays of two effects (review-mode entry at ~L807,
-  terminal-status refresh at ~L825). Both effects guard with early-returns so they don't loop
-  for most statuses, but the instability creates transient cascades during initial load.
-- The SSE stream client (`openSkillRunStream`) was sending malformed events that confused
-  `toActiveSkillRun`, creating unstable `activeRun` objects. Fixed in mock change #13 above.
+**Files:** `src/routes/admin.pulse.intakes.$id.tsx`
 
-**Remaining root cause:** Not fully diagnosed without a runtime React profiler. The error is
-pre-existing and bounded — it fires a few times on mount then stops. The real fix is likely
-stabilising `loadSkillRuns` with a `useRef`-based identity-stable wrapper or removing
-`intake` from its `useCallback` deps (use `intake.id` instead).
+Three cascading setState loops were diagnosed and fixed:
+
+### 14a — `reviewData?.parsed ?? {}` inline object (root cause of the Popover crash)
+
+```tsx
+// BEFORE (line ~230):
+const reviewState = useAIReview(reviewData?.parsed ?? {});
+
+// AFTER:
+// Module-level constant — must NOT be an inline literal:
+const EMPTY_PARSED: ParsedSkillOutput = {};
+// ...inside component:
+const reviewState = useAIReview(reviewData?.parsed ?? EMPTY_PARSED);
+```
+
+**Why:** When `reviewData` is null, `?? {}` creates a new object reference on every render.
+`useAIReview` has `useEffect([parsed])` which fires whenever `parsed` changes → calls
+`setDecisions` + `setExtraQuestions` → re-render → new `{}` → fires again → infinite loop.
+Opening any Popover (e.g. the AI-verrijking dropdown) triggers an extra re-render that made
+the loop visible as a hard crash. A module-level constant has a stable reference forever.
+
+### 14b — `loadSkillRuns` useCallback depends on `intake` object
+
+```tsx
+// BEFORE:
+const loadSkillRuns = useCallback(async () => {
+  if (!intake) return;
+  const res = await listSkillRuns(intake.id);
+  ...
+}, [intake]);  // ← new reference every time load() sets intake
+
+// AFTER:
+const intakeIdForRuns = useRef<string | undefined>(undefined);
+intakeIdForRuns.current = intake?.id;           // updated every render, no re-render
+
+const loadSkillRuns = useCallback(async () => {
+  if (!intakeIdForRuns.current) return;
+  const res = await listSkillRuns(intakeIdForRuns.current);
+  ...
+}, []);  // ← stable forever
+```
+
+**Why:** `load()` always creates a new `intake` object via `setIntake(row)`. This gave
+`loadSkillRuns` a new function reference after every fetch, which destabilised the two
+effects that list it as a dep (review-mode entry at ~L807, terminal-status refresh at ~L825).
+
+### 14c — `closeRef` side-effect during render in AISkillsPanel
+
+Removed the `closeRef.current = ...` assignment that ran as a side-effect every render inside
+`AISkillsPanel`. While refs don't trigger re-renders, assigning to `.current` during render
+is a pattern React Strict Mode flags. The ref was also unused — `setOpen(false)` is called
+inline in `run(...)`. Removed entirely.
 
 ---
 
