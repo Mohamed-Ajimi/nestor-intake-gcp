@@ -97,7 +97,19 @@
       "title": "History",
       "loading": "Loading…",
       "error": "error",
-      "running": "running…"
+      "running": "running…",
+      "empty": "No activity found.",
+      "done": "✓ completed",
+      "failed": "✗ failed",
+      "busy": "running…",
+      "skill": {
+        "apply-intake-skill": "Intake analysis",
+        "structure-answers": "Structure answers",
+        "extract-insights": "Insight extraction",
+        "generate-embeddings": "Embeddings",
+        "transcribe-source": "Transcription",
+        "context-pack": "Context Pack"
+      }
     },
     "search": {
       "title": "Search research data (semantic)",

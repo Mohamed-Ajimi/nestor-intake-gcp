@@ -104,7 +104,7 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
           <div className="py-1">
             <SkillItem
               label={t("aiSkills.structureBtn")}
-              description={t("aiSkills.structureDesc", "Zet antwoorden om in gestructureerde data.")}
+              description={t("aiSkills.structureDesc")}
               spinning={busy === "structure"}
               disabled={isBusy}
               onClick={() =>
@@ -115,7 +115,7 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
             />
             <SkillItem
               label={t("aiSkills.extractBtn")}
-              description={t("aiSkills.extractDesc", "Extraheer sleutelinzichten uit de antwoorden.")}
+              description={t("aiSkills.extractDesc")}
               spinning={busy === "extract"}
               disabled={isBusy}
               onClick={() =>
@@ -126,7 +126,7 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
             />
             <SkillItem
               label={t("aiSkills.embeddingsBtn")}
-              description={t("aiSkills.embeddingsDesc", "Genereer embeddings voor semantisch zoeken.")}
+              description={t("aiSkills.embeddingsDesc")}
               spinning={busy === "embeddings"}
               disabled={isBusy}
               onClick={() =>
@@ -152,7 +152,7 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
                   label={t("aiSkills.transcribeSourceBtn", {
                     name: source.file_name ?? t("aiSkills.transcribeSourceFallback"),
                   })}
-                  description={t("aiSkills.transcribeDesc", "Transcribeer audio naar tekst.")}
+                  description={t("aiSkills.transcribeDesc")}
                   spinning={busy === "transcribe" && transcribingId === source.id}
                   disabled={isBusy}
                   onClick={() => {

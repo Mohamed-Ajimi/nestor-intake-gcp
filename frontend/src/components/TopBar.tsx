@@ -1,4 +1,5 @@
 import { Bell } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 
 // frontend/src/components/TopBar.tsx
@@ -17,6 +18,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ persist = true }: TopBarProps) {
+  const { t } = useTranslation("common");
   return (
     <div className="flex h-11 shrink-0 items-center justify-end gap-1 border-b border-ink/10 bg-paper px-6">
       {/* Compact language code button — "NL" / "FR" / "EN" */}
@@ -27,8 +29,8 @@ export function TopBar({ persist = true }: TopBarProps) {
       <button
         type="button"
         disabled
-        title="Notificaties — binnenkort beschikbaar"
-        aria-label="Notificaties"
+        title={t("notifications.comingSoon")}
+        aria-label={t("notifications.ariaLabel")}
         className="relative flex h-7 w-7 items-center justify-center text-ink/30 transition-colors"
       >
         <Bell className="h-4 w-4" />

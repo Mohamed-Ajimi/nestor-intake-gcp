@@ -97,7 +97,19 @@
       "title": "History",
       "loading": "Laden…",
       "error": "fout",
-      "running": "bezig…"
+      "running": "bezig…",
+      "empty": "Geen activiteit gevonden.",
+      "done": "✓ voltooid",
+      "failed": "✗ mislukt",
+      "busy": "bezig…",
+      "skill": {
+        "apply-intake-skill": "Intake analyse",
+        "structure-answers": "Structureer antwoorden",
+        "extract-insights": "Inzichten extractie",
+        "generate-embeddings": "Embeddings",
+        "transcribe-source": "Transcriptie",
+        "context-pack": "Context Pack"
+      }
     },
     "search": {
       "title": "Zoek in research data (semantic)",

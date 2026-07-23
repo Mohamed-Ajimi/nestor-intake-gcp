@@ -207,16 +207,6 @@ function isEmptyVal(v: unknown): boolean {
  return false;
 }
 
-// Human-readable Dutch labels for skill names in the activity log Sheet.
-const SKILL_LABELS: Record<string, string> = {
-  "apply-intake-skill":  "Intake analyse",
-  "structure-answers":   "Structureer antwoorden",
-  "extract-insights":    "Inzichten extractie",
-  "generate-embeddings": "Embeddings",
-  "transcribe-source":   "Transcriptie",
-  "context-pack":        "Context Pack",
-};
-
 function IntakeDetailPage() {
  const { id } = Route.useParams();
   const { t, i18n } = useTranslation("admin");
@@ -1630,12 +1620,12 @@ function IntakeDetailPage() {
              </div>
            ) : !skillRuns || skillRuns.length === 0 ? (
              <p className="px-6 py-8 text-sm text-ink/40">
-               {t("intakeDetail.history.empty", "Geen activiteit gevonden.")}
+               {t("intakeDetail.history.empty")}
              </p>
            ) : (
              <ol className="divide-y divide-ink/5">
                {[...skillRuns].reverse().map((r) => {
-                 const label = SKILL_LABELS[r.skill_name] ?? r.skill_name;
+                 const label = t(`intakeDetail.history.skill.${r.skill_name}`, r.skill_name);
                  const isOk   = r.status === "succeeded";
                  const isFail = r.status === "failed";
                  const isRun  = r.status === "running" || r.status === "queued";
@@ -1652,7 +1642,13 @@ function IntakeDetailPage() {
                          isRun  ? "bg-amber-50 text-amber-700"  : "",
                          !isOk && !isFail && !isRun ? "bg-ink/5 text-ink/40" : "",
                        ].filter(Boolean).join(" ")}>
-                         {isOk ? "✓ voltooid" : isFail ? "✗ mislukt" : isRun ? "bezig…" : r.status}
+                         {isOk
+                           ? t("intakeDetail.history.done")
+                           : isFail
+                             ? t("intakeDetail.history.failed")
+                             : isRun
+                               ? t("intakeDetail.history.busy")
+                               : r.status}
                        </span>
                      </div>
                      <p className="font-sans text-xs text-ink/50">{fmt(r.triggered_at)}</p>

@@ -45,5 +45,9 @@
   },
   "comingSoon": {
     "badge": "⌀ Coming soon"
+  },
+  "notifications": {
+    "comingSoon": "Notifications — coming soon",
+    "ariaLabel": "Notifications"
   }
 }

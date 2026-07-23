@@ -97,7 +97,19 @@
       "title": "Exécutions de skills précédentes",
       "loading": "Chargement…",
       "error": "erreur",
-      "running": "en cours…"
+      "running": "en cours…",
+      "empty": "Aucune activité trouvée.",
+      "done": "✓ terminé",
+      "failed": "✗ échoué",
+      "busy": "en cours…",
+      "skill": {
+        "apply-intake-skill": "Analyse d'intake",
+        "structure-answers": "Structurer les réponses",
+        "extract-insights": "Extraction d'insights",
+        "generate-embeddings": "Embeddings",
+        "transcribe-source": "Transcription",
+        "context-pack": "Context Pack"
+      }
     },
     "search": {
       "title": "Rechercher dans les données de recherche (sémantique)",
