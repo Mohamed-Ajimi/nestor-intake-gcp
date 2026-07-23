@@ -253,6 +253,10 @@
     "transcribeDisabledTitle": "Transcriptie start vanaf een geüploade audiobron (nog geen bronnen-overzicht beschikbaar).",
     "progressNote": "Voortgang verschijnt in het skill-run-overzicht."
   },
+  "skillRunProgress": {
+    "title": "Nestor analyseert",
+    "body": "Nestor verwerkt je intake. Gemiddeld 90–120 seconden voor een uitgebreide intake. Je mag deze tab open laten — we tonen het resultaat zodra het klaar is."
+  },
   "nextStep": {
     "dateFallback": "—",
     "at": "om",

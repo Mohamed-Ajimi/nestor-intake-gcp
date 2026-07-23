@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { getSkillRunFull, listSkillRuns, type SkillRun } from "@/lib/api/skillRuns";
 import { openSkillRunStream } from "@/lib/api/skillRunStream";
@@ -228,6 +229,7 @@ export function useSkillRunFull(
 }
 
 export function SkillRunProgress({ triggeredAt }: { triggeredAt: string }) {
+  const { t } = useTranslation("intake");
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -254,11 +256,10 @@ export function SkillRunProgress({ triggeredAt }: { triggeredAt: string }) {
           className="mb-1 font-mono text-[11px] uppercase tracking-wider"
           style={{ color: "#FF2D87" }}
         >
-          Nestor analyseert
+          {t("skillRunProgress.title")}
         </div>
         <div className="font-sans text-[15px] leading-relaxed text-ink">
-          Nestor verwerkt je intake. Gemiddeld 90–120 seconden voor een uitgebreide intake. Je mag
-          deze tab open laten — we tonen het resultaat zodra het klaar is.
+          {t("skillRunProgress.body")}
         </div>
       </div>
       <div className="font-mono text-2xl tabular-nums text-ink">

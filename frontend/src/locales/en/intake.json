@@ -253,6 +253,10 @@
     "transcribeDisabledTitle": "Transcription starts from an uploaded audio source (no source overview available yet).",
     "progressNote": "Progress appears in the skill-run overview."
   },
+  "skillRunProgress": {
+    "title": "Nestor analyzing",
+    "body": "Nestor is processing your intake. On average 90–120 seconds for an extensive intake. You may leave this tab open — we'll show the result as soon as it's ready."
+  },
   "nextStep": {
     "dateFallback": "—",
     "at": "at",
@@ -281,6 +285,10 @@
     "researchStartBody": "This launches <0>SerpAPI + SearchAPI + Apify</0> (rag-web-browser + website-content-crawler) for every research question. Delivers 2–5 artifacts per question, ready within 2–5 minutes. Then you can manually add extra artifacts per question.",
     "researchRunning": "Research running…",
     "startAutoResearch": "Start automatic research",
+    "researchConfirmTitle": "Start deep research?",
+    "researchConfirmBody": "This starts an extensive research run for this intake. The run takes several minutes and incurs API costs. Continue?",
+    "researchConfirmCancel": "Cancel",
+    "researchConfirmConfirm": "Yes, start research",
     "workPhaseTitle": "Work phase",
     "inResearchBody": "Research running. Upload artifacts per research question or let run-research run.",
     "reportUploadBody": "Research done. Upload the full client report (DOCX or PDF).",
@@ -476,5 +484,40 @@
     "revert": "Revert to original",
     "keep": "Keep Nestor's proposal",
     "questionLabel": "Question {{index}}"
+  },
+  "research": {
+    "panelTitle": "Deep research running",
+    "panelBody": "Nestor's researcher is working through the phases below. This usually takes a few minutes — you may leave this tab open.",
+    "startingBody": "Research is starting…",
+    "elapsed": "Elapsed",
+    "cost": "Cost",
+    "currentStage": "Current phase: {{stage}}",
+    "stageDone": "done",
+    "stageRunning": "running",
+    "stagePending": "pending",
+    "stagesTitle": "Phases",
+    "completedTitle": "Research completed",
+    "completedBody": "The deep research is complete. All phases have been worked through.",
+    "completedAt": "Completed on {{date}}",
+    "totalCost": "Total cost: {{cost}}",
+    "duration": "Duration: {{duration}}",
+    "failedTitle": "Research failed",
+    "failedBody": "The research stopped prematurely. Review the error message below and try again.",
+    "cancelledTitle": "Research cancelled",
+    "cancelledBody": "The research was cancelled before it could finish.",
+    "errorLabel": "Error message",
+    "retry": "Try again",
+    "costFallback": "—",
+    "dateFallback": "—",
+    "download": "Download raw output",
+    "downloadError": "The download link could not be created. Please try again.",
+    "lockedTitle": "Audit chain broken — download locked",
+    "lockedBody": "This run's audit hash chain did not verify, so the raw output is locked. Re-verify the chain to lift the lock.",
+    "reverify": "Re-verify chain",
+    "reverifyError": "Re-verification failed. Please try again.",
+    "reverifyStillBroken": "The chain is still broken — the download stays locked.",
+    "unverifiedTitle": "Audit chain not yet verified",
+    "unverifiedBody": "This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.",
+    "verifyChain": "Verify chain"
   }
 }

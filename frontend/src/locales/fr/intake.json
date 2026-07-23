@@ -253,6 +253,10 @@
     "transcribeDisabledTitle": "La transcription démarre depuis une source audio téléversée (aucun aperçu des sources disponible pour l'instant).",
     "progressNote": "La progression apparaît dans l'aperçu des exécutions de compétences."
   },
+  "skillRunProgress": {
+    "title": "Nestor analyse",
+    "body": "Nestor traite votre intake. En moyenne 90–120 secondes pour un intake détaillé. Vous pouvez laisser cet onglet ouvert — nous affichons le résultat dès qu'il est prêt."
+  },
   "nextStep": {
     "dateFallback": "—",
     "at": "à",
@@ -281,6 +285,10 @@
     "researchStartBody": "Ceci lance <0>SerpAPI + SearchAPI + Apify</0> (rag-web-browser + website-content-crawler) pour chaque question de recherche. Fournit 2–5 artifacts par question, prêts en 2–5 minutes. Ensuite vous pouvez ajouter manuellement des artifacts par question.",
     "researchRunning": "Recherche en cours…",
     "startAutoResearch": "Démarrer la recherche automatique",
+    "researchConfirmTitle": "Démarrer la recherche approfondie ?",
+    "researchConfirmBody": "Ceci lance une recherche approfondie pour cet intake. L'exécution dure quelques minutes et engendre des coûts d'API. Continuer ?",
+    "researchConfirmCancel": "Annuler",
+    "researchConfirmConfirm": "Oui, démarrer la recherche",
     "workPhaseTitle": "Phase de travail",
     "inResearchBody": "Recherche en cours. Téléversez des artifacts par question de recherche ou laissez run-research tourner.",
     "reportUploadBody": "Recherche terminée. Téléversez le rapport client complet (DOCX ou PDF).",
@@ -476,5 +484,40 @@
     "revert": "Rétablir l'original",
     "keep": "Garder la proposition de Nestor",
     "questionLabel": "Question {{index}}"
+  },
+  "research": {
+    "panelTitle": "Recherche approfondie en cours",
+    "panelBody": "Le chercheur de Nestor parcourt les phases ci-dessous. Cela prend généralement quelques minutes — vous pouvez laisser cet onglet ouvert.",
+    "startingBody": "La recherche démarre…",
+    "elapsed": "Écoulé",
+    "cost": "Coût",
+    "currentStage": "Phase actuelle : {{stage}}",
+    "stageDone": "terminé",
+    "stageRunning": "en cours",
+    "stagePending": "en attente",
+    "stagesTitle": "Phases",
+    "completedTitle": "Recherche terminée",
+    "completedBody": "La recherche approfondie est terminée. Toutes les phases ont été parcourues.",
+    "completedAt": "Terminé le {{date}}",
+    "totalCost": "Coût total : {{cost}}",
+    "duration": "Durée : {{duration}}",
+    "failedTitle": "Échec de la recherche",
+    "failedBody": "La recherche s'est arrêtée prématurément. Consultez le message d'erreur ci-dessous et réessayez.",
+    "cancelledTitle": "Recherche annulée",
+    "cancelledBody": "La recherche a été annulée avant de pouvoir se terminer.",
+    "errorLabel": "Message d'erreur",
+    "retry": "Réessayer",
+    "costFallback": "—",
+    "dateFallback": "—",
+    "download": "Télécharger la sortie brute",
+    "downloadError": "Le lien de téléchargement n'a pas pu être créé. Réessayez.",
+    "lockedTitle": "Chaîne d'audit rompue — téléchargement verrouillé",
+    "lockedBody": "La chaîne de hachage d'audit de cette exécution n'a pas pu être vérifiée, la sortie brute est donc verrouillée. Vérifiez à nouveau la chaîne pour lever le verrouillage.",
+    "reverify": "Vérifier à nouveau la chaîne",
+    "reverifyError": "La revérification a échoué. Réessayez.",
+    "reverifyStillBroken": "La chaîne est toujours rompue — le téléchargement reste verrouillé.",
+    "unverifiedTitle": "Chaîne d'audit pas encore vérifiée",
+    "unverifiedBody": "Cette exécution est terminée mais la chaîne de hachage d'audit n'a pas encore été contrôlée. Vérifiez la chaîne pour déverrouiller la sortie brute.",
+    "verifyChain": "Vérifier la chaîne"
   }
 }
