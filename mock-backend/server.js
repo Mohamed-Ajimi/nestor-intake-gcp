@@ -43,8 +43,6 @@ const MOCK_TEMPLATES = [
     id: "tpl-001",
     space_id: "space-001",
     name: "Standard Intake",
-    // Schema matches IntakeSchema type (intake-types.ts).
-    // Labels are plain strings (localizeSchema passthrough for non-LocalizedString values).
     schema: {
       schema_version: "1",
       title: "Standard Intake",
@@ -85,6 +83,31 @@ const MOCK_TEMPLATES = [
               rows: 5,
               placeholder: "Any relevant background, constraints, or prior knowledge.",
             },
+            {
+              key: "target_audience",
+              type: "text",
+              label: "Target audience",
+              placeholder: "Who should this research serve?",
+            },
+          ],
+        },
+        {
+          id: "section-scope",
+          title: "Scope & Deliverables",
+          fields: [
+            {
+              key: "desired_output",
+              type: "longtext",
+              label: "Desired output",
+              rows: 3,
+              placeholder: "What format should the research deliverable take?",
+            },
+            {
+              key: "deadline",
+              type: "text",
+              label: "Deadline",
+              placeholder: "e.g. End of Q3 2025",
+            },
           ],
         },
       ],
@@ -96,12 +119,102 @@ const MOCK_TEMPLATES = [
   },
 ];
 
+// Shared mock answers for submitted-and-beyond intakes
+const FILLED_ANSWERS = (intakeId) => [
+  { field_key: "client_name", value: "Strategisch Plan 2026", value_json: null },
+  { field_key: "main_question", value: "Welke marktsegmenten bieden de hoogste groeipotentie voor onze kernproducten in de Benelux?", value_json: null },
+  { field_key: "background", value: "We opereren al 8 jaar in de Benelux maar zien marktaandeel slinken in het MKB-segment. We willen begrijpen of dit structureel is of gedreven door specifieke productproblemen.", value_json: null },
+  { field_key: "target_audience", value: "Directie en product-management team", value_json: null },
+  { field_key: "desired_output", value: "Executive rapport met top-3 segmentaanbevelingen en een go/no-go matrix per segment.", value_json: null },
+  { field_key: "deadline", value: "Q4 2025", value_json: null },
+];
+
+// Per-intake skill runs — only submitted+ intakes have runs
+const MOCK_SKILL_RUNS = {
+  "int-003": [
+    {
+      id: "run-003-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 3600000 * 4).toISOString(),
+      completed_at: new Date(Date.now() - 3600000 * 3).toISOString(),
+      applied_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+      error: null,
+    },
+  ],
+  "int-004": [
+    {
+      id: "run-004-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 3).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 3 + 600000).toISOString(),
+      applied_at: new Date(Date.now() - 86400000 * 3 + 700000).toISOString(),
+      error: null,
+    },
+  ],
+  "int-005": [
+    {
+      id: "run-005-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 5).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 5 + 600000).toISOString(),
+      applied_at: new Date(Date.now() - 86400000 * 5 + 700000).toISOString(),
+      error: null,
+    },
+    {
+      id: "run-005-b",
+      skill: "context-pack",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 2).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 2 + 300000).toISOString(),
+      applied_at: null,
+      error: null,
+    },
+  ],
+  "int-006": [
+    {
+      id: "run-006-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 7).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 7 + 600000).toISOString(),
+      applied_at: new Date(Date.now() - 86400000 * 7 + 700000).toISOString(),
+      error: null,
+    },
+  ],
+  "int-007": [
+    {
+      id: "run-007-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 14).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 14 + 600000).toISOString(),
+      applied_at: new Date(Date.now() - 86400000 * 14 + 700000).toISOString(),
+      error: null,
+    },
+  ],
+  "int-008": [
+    {
+      id: "run-008-a",
+      skill: "apply-intake-skill",
+      status: "succeeded",
+      triggered_at: new Date(Date.now() - 86400000 * 30).toISOString(),
+      completed_at: new Date(Date.now() - 86400000 * 30 + 600000).toISOString(),
+      applied_at: new Date(Date.now() - 86400000 * 30 + 700000).toISOString(),
+      error: null,
+    },
+  ],
+};
+
+// One intake per status so every workflow phase is visible in the dev UI
 const MOCK_INTAKES = [
   {
     id: "int-001",
     space_id: "space-001",
     status: "draft",
-    client_name: "Sample Client",
+    client_name: "Draft Project",
     validation_link_sent_at: null,
     results_link_sent_at: null,
     context_pack_artifact_id: null,
@@ -111,11 +224,75 @@ const MOCK_INTAKES = [
     id: "int-002",
     space_id: "space-001",
     status: "submitted",
-    client_name: "Beta Tester",
+    client_name: "Benelux Groeianalyse",
+    validation_link_sent_at: null,
+    results_link_sent_at: null,
+    context_pack_artifact_id: null,
+    final_report_artifact_id: null,
+  },
+  {
+    id: "int-003",
+    space_id: "space-001",
+    status: "reviewed",
+    client_name: "DACH Expansie Scan",
+    // validation_link_sent_at null → phase = awaiting_validation_send
+    validation_link_sent_at: null,
+    results_link_sent_at: null,
+    context_pack_artifact_id: null,
+    final_report_artifact_id: null,
+  },
+  {
+    id: "int-004",
+    space_id: "space-001",
+    status: "reviewed",
+    client_name: "Retailstrategie NL",
+    // validation_link_sent_at set → phase = awaiting_client_validation
     validation_link_sent_at: new Date(Date.now() - 86400000).toISOString(),
     results_link_sent_at: null,
     context_pack_artifact_id: null,
     final_report_artifact_id: null,
+  },
+  {
+    id: "int-005",
+    space_id: "space-001",
+    status: "validated_by_client",
+    client_name: "Concurrentieanalyse 2026",
+    validation_link_sent_at: new Date(Date.now() - 86400000 * 4).toISOString(),
+    results_link_sent_at: null,
+    // context_pack_artifact_id set → phase = awaiting_research_start
+    context_pack_artifact_id: "art-cp-005",
+    final_report_artifact_id: null,
+  },
+  {
+    id: "int-006",
+    space_id: "space-001",
+    status: "in_research",
+    client_name: "Klantpanel Financiën",
+    validation_link_sent_at: new Date(Date.now() - 86400000 * 8).toISOString(),
+    results_link_sent_at: null,
+    context_pack_artifact_id: "art-cp-006",
+    final_report_artifact_id: null,
+  },
+  {
+    id: "int-007",
+    space_id: "space-001",
+    status: "delivered",
+    client_name: "HR Tech Benchmark",
+    validation_link_sent_at: new Date(Date.now() - 86400000 * 15).toISOString(),
+    // results_link_sent_at set → phase = completed
+    results_link_sent_at: new Date(Date.now() - 86400000 * 2).toISOString(),
+    context_pack_artifact_id: "art-cp-007",
+    final_report_artifact_id: "art-rep-007",
+  },
+  {
+    id: "int-008",
+    space_id: "space-001",
+    status: "archived",
+    client_name: "Marktintrede Scan 2024",
+    validation_link_sent_at: new Date(Date.now() - 86400000 * 45).toISOString(),
+    results_link_sent_at: new Date(Date.now() - 86400000 * 30).toISOString(),
+    context_pack_artifact_id: "art-cp-008",
+    final_report_artifact_id: "art-rep-008",
   },
 ];
 
@@ -241,7 +418,6 @@ app.delete("/admin/spaces/:spaceId/templates/:templateId", (req, res) => {
   res.status(204).send();
 });
 
-// GET /admin/spaces/:id/invitations
 app.get("/admin/spaces/:id/invitations", (req, res) => res.json([]));
 
 // ---------------------------------------------------------------------------
@@ -254,13 +430,10 @@ app.get("/admin/organizations", (req, res) => res.json([MOCK_ORG]));
 // Intakes — static sub-routes MUST come before dynamic /intakes/:id
 // ---------------------------------------------------------------------------
 
-// GET /intakes/templates — list templates visible to the current identity
 app.get("/intakes/templates", (req, res) => res.json(MOCK_TEMPLATES));
 
-// GET /intakes
 app.get("/intakes", (req, res) => res.json(MOCK_INTAKES));
 
-// POST /intakes
 app.post("/intakes", (req, res) => {
   const { client_name } = req.body;
   const intake = {
@@ -277,14 +450,12 @@ app.post("/intakes", (req, res) => {
   res.status(201).json(intake);
 });
 
-// GET /intakes/:id
 app.get("/intakes/:id", (req, res) => {
   const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
   if (!intake) return res.status(404).json({ detail: "Not found" });
   res.json(intake);
 });
 
-// PATCH /intakes/:id
 app.patch("/intakes/:id", (req, res) => {
   const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
   if (!intake) return res.status(404).json({ detail: "Not found" });
@@ -292,14 +463,12 @@ app.patch("/intakes/:id", (req, res) => {
   res.json(intake);
 });
 
-// Intake status transitions — all return the updated Intake object
-// Status names mirror frontend contract exactly (intake-phase.ts / _status.tsx):
-// draft → submitted → reviewed → validated_by_client → decomposed → in_research → delivered
+// Status transitions
 const STATUS_TRANSITIONS = {
-  submit: "submitted",          // draft→submitted, or reviewed→validated_by_client (frontend re-uses this verb)
-  review: "reviewed",           // submitted→reviewed  (frontend expects "reviewed", not "in_review")
-  deliver: "delivered",         // in_research→delivered
-  validate: "validated_by_client", // alias: reviewed→validated_by_client
+  submit: "submitted",
+  review: "reviewed",
+  deliver: "delivered",
+  validate: "validated_by_client",
   reject: "rejected",
   "start-decompose": "decomposed",
   "start-context-pack": "in_research",
@@ -315,7 +484,6 @@ Object.entries(STATUS_TRANSITIONS).forEach(([verb, newStatus]) => {
   });
 });
 
-// POST /intakes/:id/report/replace — upload / replace final report
 app.post("/intakes/:id/report/replace", (req, res) => {
   const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
   if (!intake) return res.status(404).json({ detail: "Not found" });
@@ -323,17 +491,16 @@ app.post("/intakes/:id/report/replace", (req, res) => {
   res.json(intake);
 });
 
-// GET /intakes/:id/report
 app.get("/intakes/:id/report", (req, res) => {
+  const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
   res.json({
     intake_id: req.params.id,
-    artifact_id: null,
-    download_url: null,
-    filename: null,
+    artifact_id: intake?.final_report_artifact_id ?? null,
+    download_url: intake?.final_report_artifact_id ? "https://example.com/mock-report.pdf" : null,
+    filename: intake?.final_report_artifact_id ? "nestor-rapport.pdf" : null,
   });
 });
 
-// GET /intakes/:id/members — space members for this intake
 app.get("/intakes/:id/members", (req, res) => {
   res.json([
     { id: "mem-001", email: "admin@example.com", role: "superadmin", status: "active" },
@@ -341,9 +508,15 @@ app.get("/intakes/:id/members", (req, res) => {
   ]);
 });
 
-// POST /intakes/:id/mail/:type — send notification mail
 app.post("/intakes/:id/mail/:type", (req, res) => {
-  console.log(`[mock] mail type=${req.params.type} for intake=${req.params.id}`);
+  const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
+  const type = req.params.type;
+  const now = new Date().toISOString();
+  if (intake) {
+    if (type === "validation" || type === "reminder") intake.validation_link_sent_at = now;
+    if (type === "results") intake.results_link_sent_at = now;
+  }
+  console.log(`[mock] mail type=${type} for intake=${req.params.id}`);
   res.json({ success: true });
 });
 
@@ -351,13 +524,17 @@ app.post("/intakes/:id/mail/:type", (req, res) => {
 // Intake — Answers
 // ---------------------------------------------------------------------------
 
-app.get("/intakes/:id/answers", (req, res) => res.json([]));
+// Return filled answers for all non-draft intakes
+app.get("/intakes/:id/answers", (req, res) => {
+  const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
+  if (!intake || intake.status === "draft") return res.json([]);
+  res.json(FILLED_ANSWERS(req.params.id));
+});
 
-// PATCH batch-upsert (matches frontend saveAnswers — method: "PATCH")
 app.patch("/intakes/:id/answers", (req, res) => res.json({ success: true }));
 
 // ---------------------------------------------------------------------------
-// Intake — Skills (all return a SkillDispatch stub)
+// Intake — Skills
 // ---------------------------------------------------------------------------
 
 const skillDispatchStub = () => ({
@@ -374,15 +551,31 @@ app.post("/intakes/:id/embeddings", (req, res) => res.status(202).json(skillDisp
 app.post("/intakes/:id/sources/:sourceId/transcribe", (req, res) => res.status(202).json(skillDispatchStub()));
 
 // ---------------------------------------------------------------------------
-// Intake — Skill runs
+// Intake — Skill runs (per-intake, keyed by intake id)
 // ---------------------------------------------------------------------------
 
+// Must return { latest, runs } — the API contract (SkillRunsView) expects a `latest`
+// field; returning only `runs` makes res.data.latest undefined and breaks phase derivation.
 app.get("/intakes/:id/skill-runs", (req, res) => {
-  res.json({ runs: [], total: 0 });
+  const runs = MOCK_SKILL_RUNS[req.params.id] ?? [];
+  const latest = runs.length > 0 ? runs[runs.length - 1] : null;
+  res.json({ latest, runs, total: runs.length });
 });
 
+// SSE stream for skill-run progress.
+// Return 404 — the stream client handles 404/401 as "no active run" (closed=true →
+// onFallback → single poll, then stops). Any other non-OK status triggers the backoff
+// retry loop, which is what was causing "Maximum update depth exceeded".
+app.get("/intakes/:id/skill-runs/stream", (req, res) => {
+  res.status(404).json({ detail: "No active skill run to stream" });
+});
+
+// GET a specific run by runId — must be declared AFTER /stream to avoid matching "stream" as a runId
 app.get("/intakes/:id/skill-runs/:runId", (req, res) => {
-  res.status(404).json({ detail: "No skill run found" });
+  const runs = MOCK_SKILL_RUNS[req.params.id] ?? [];
+  const run = runs.find((r) => r.id === req.params.runId);
+  if (!run) return res.status(404).json({ detail: "No skill run found" });
+  res.json({ ...run, output_parsed: null });
 });
 
 // ---------------------------------------------------------------------------
@@ -390,7 +583,13 @@ app.get("/intakes/:id/skill-runs/:runId", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post("/intakes/:id/research", (req, res) => {
+  const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
+  if (intake) intake.status = "in_research";
   res.status(202).json({ research_run_id: `rrun-${Date.now()}` });
+});
+
+app.get("/intakes/:id/research", (req, res) => {
+  res.json({ runs: [], total: 0 });
 });
 
 app.get("/intakes/:id/research/:runId/bundle-url", (req, res) => {
@@ -401,14 +600,14 @@ app.post("/intakes/:id/research/:runId/verify-chain", (req, res) => {
   res.json({ chain_status: "verified" });
 });
 
-// SSE streaming — return empty stream (not implemented in mock)
+// SSE streaming — emit a single done event so clients don't hang
 app.get("/intakes/:id/research/stream", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  res.write("data: {\"type\":\"done\"}\n\n");
+  res.write('data: {"type":"done"}\n\n');
   res.end();
 });
 
@@ -417,11 +616,15 @@ app.get("/intakes/:id/research/stream", (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get("/intakes/:id/context-pack", (req, res) => {
+  const intake = MOCK_INTAKES.find((i) => i.id === req.params.id);
+  const hasCP = !!intake?.context_pack_artifact_id;
   res.json({
     intake_id: req.params.id,
-    artifact_id: null,
-    content: null,
-    generated_at: null,
+    artifact_id: intake?.context_pack_artifact_id ?? null,
+    content: hasCP
+      ? "# Context Pack\n\nDit is een mock context pack met de kern van de intake-antwoorden."
+      : null,
+    generated_at: hasCP ? new Date(Date.now() - 86400000).toISOString() : null,
   });
 });
 
@@ -461,20 +664,15 @@ app.get("/intakes/:id/storage/signed-url", (req, res) => {
 app.get("/intakes/:id/search", (req, res) => res.json({ results: [] }));
 
 // ---------------------------------------------------------------------------
-// Global search
+// Global / admin search
 // ---------------------------------------------------------------------------
 
 app.get("/search", (req, res) => res.json([]));
 app.post("/search/refresh", (req, res) => res.status(204).send());
-
-// ---------------------------------------------------------------------------
-// Admin search
-// ---------------------------------------------------------------------------
-
 app.get("/admin/search", (req, res) => res.json({ results: [] }));
 
 // ---------------------------------------------------------------------------
-// Catch-all — fail loudly for unimplemented routes (helps detect contract gaps)
+// Catch-all — fail loudly for unimplemented routes
 // ---------------------------------------------------------------------------
 app.use((req, res) => {
   console.warn(`[mock] NOT IMPLEMENTED: ${req.method} ${req.path}`);
@@ -485,4 +683,5 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Mock backend running on http://localhost:${PORT}`);
+  console.log(`Intakes available: ${MOCK_INTAKES.map(i => `${i.id}(${i.status})`).join(', ')}`);
 });

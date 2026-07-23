@@ -1102,6 +1102,12 @@ function IntakeDetailPage() {
          onArchive={onArchive}
        />
 
+
+       {/* AI enrichment skills — self-gates on status (submitted → decomposed).
+           Lives inside the workflow card as a secondary action block, not floating
+           in the content area. */}
+        <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+
        {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
            on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
            Renders the stage list dynamically from the mirrored research_runs row. */}
@@ -1438,9 +1444,6 @@ function IntakeDetailPage() {
  )}
  </section>
   )}
-
-  {/* AISkillsPanel self-gates on status (submitted → decomposed); mount unconditionally. */}
-  <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
 
   {showContextPack && (
     <div data-context-pack-block>

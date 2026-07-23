@@ -16,7 +16,8 @@ type Props = {
 // milestone ceiling (`decomposed`). They stay hidden while the intake is still a draft.
 const VISIBLE_STATUSES = new Set(["submitted", "reviewed", "validated_by_client", "decomposed"]);
 
-const panelCls = "mb-6 border border-ink/30 border-l-4 bg-paperLight px-6 py-5";
+// Panel is now embedded inside the workflow card — no outer border/background needed.
+const panelCls = "border-t border-ink/10 px-6 py-5";
 const btnCls =
   "inline-flex items-center gap-2 border border-ink bg-transparent px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2 disabled:opacity-60 disabled:hover:border";
 
@@ -67,8 +68,8 @@ export function AISkillsPanel({ intakeId, intakeStatus }: Props) {
   };
 
   return (
-    <div className={panelCls} style={{ borderLeftColor: "#DFF940" }}>
-      <div className="mb-2 flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
+    <div className={panelCls}>
+      <div className="mb-2 flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
         <Sparkles className="h-3.5 w-3.5" />
         {t("aiSkills.title")}
       </div>

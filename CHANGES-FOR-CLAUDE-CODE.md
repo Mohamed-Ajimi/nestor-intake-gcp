@@ -267,6 +267,103 @@ popover inherits the tiny trigger width and clips the language names):
 
 ---
 
+## 12. `frontend/src/routes/admin.pulse.intakes.$id.tsx` — move AISkillsPanel into workflow card
+
+**Problem:** `<AISkillsPanel>` was mounted in `<main>` as a floating content block, visually
+disconnected from the workflow stepper card (NextStepBanner + ResearchRunProgress).
+
+**Fix:** Remove the existing mount in `<main>` and add it inside the workflow card div
+(`mb-8 border border-ink/15 bg-paper`), between `<NextStepBanner>` and `<ResearchRunProgress>`.
+
+```tsx
+// INSIDE the workflow card (between NextStepBanner and ResearchRunProgress):
+{/* AI enrichment skills — self-gates on status (submitted → decomposed).
+    Lives inside the workflow card as a secondary action block. */}
+<AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+
+{intake.status === "in_research" && (
+  <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
+)}
+
+// REMOVE the old free-standing mount in <main>:
+// {/* AISkillsPanel self-gates on status (submitted → decomposed); mount unconditionally. */}
+// <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+```
+
+`AISkillsPanel` already has its own `VISIBLE_STATUSES` guard so it hides itself outside of
+`submitted`, `reviewed`, `validated_by_client`, and `decomposed` — no conditional wrapper needed.
+
+---
+
+## 13. `mock-backend/server.js` — all 8 intake statuses + correct API shapes
+
+**Problem:** Mock only had 2 intakes (draft + submitted). The UI's workflow stepper and phase
+machine couldn't be exercised past the first step. Also:
+- `/intakes/:id/skill-runs` returned `{ runs, total }` but the API client expects
+  `{ latest, runs }` (`SkillRunsView` shape).
+- `/intakes/:id/skill-runs/stream` was unhandled → caught by the 501 catch-all →
+  the SSE stream client enters its backoff retry loop (any non-404/401 non-OK response
+  triggers `retry()`, not the clean `onFallback()` path).
+
+**Fixes:**
+
+1. Add one intake per status so every phase of the workflow is testable:
+   - `int-001` → `draft`
+   - `int-002` → `submitted`
+   - `int-003` → `reviewed`, `validation_link_sent_at: null` (awaiting send)
+   - `int-004` → `reviewed`, `validation_link_sent_at` set (awaiting client)
+   - `int-005` → `validated_by_client`, `context_pack_artifact_id` set (awaiting research start)
+   - `int-006` → `in_research`
+   - `int-007` → `delivered`, `results_link_sent_at` set (completed)
+   - `int-008` → `archived`
+
+2. Fix `skill-runs` list response shape:
+   ```js
+   // BEFORE:
+   res.json({ runs, total: runs.length });
+   // AFTER:
+   const latest = runs.length > 0 ? runs[runs.length - 1] : null;
+   res.json({ latest, runs, total: runs.length });
+   ```
+
+3. Add an SSE stream endpoint that returns 404 (no active run to stream):
+   ```js
+   // Return 404 — client handles 404/401 as "no active run":
+   //   closed=true → onFallback() → single poll → stops.
+   // Any other non-OK status triggers backoff retry loop.
+   app.get("/intakes/:id/skill-runs/stream", (req, res) => {
+     res.status(404).json({ detail: "No active skill run to stream" });
+   });
+   ```
+   **Important:** declare this route BEFORE `/intakes/:id/skill-runs/:runId` so Express
+   doesn't match the string "stream" as a runId.
+
+4. Add per-intake mock skill runs (succeeded apply-intake-skill for intakes 003–008 and a
+   context-pack run for int-005) and pre-filled answers for all non-draft intakes.
+
+---
+
+## Known issue: "Maximum update depth exceeded" in dev console
+
+The `admin.pulse.intakes.$id` route shows React "Maximum update depth exceeded" errors on
+page load in the browser console. The page renders correctly — the error doesn't crash the UI.
+
+**Diagnosed causes:**
+- `loadSkillRuns` (useCallback) has `intake` in its dependency array. Each call to `load()`
+  creates a new `intake` object reference, giving `loadSkillRuns` a new reference.
+- `loadSkillRuns` appears in the dep arrays of two effects (review-mode entry at ~L807,
+  terminal-status refresh at ~L825). Both effects guard with early-returns so they don't loop
+  for most statuses, but the instability creates transient cascades during initial load.
+- The SSE stream client (`openSkillRunStream`) was sending malformed events that confused
+  `toActiveSkillRun`, creating unstable `activeRun` objects. Fixed in mock change #13 above.
+
+**Remaining root cause:** Not fully diagnosed without a runtime React profiler. The error is
+pre-existing and bounded — it fires a few times on mount then stops. The real fix is likely
+stabilising `loadSkillRuns` with a `useRef`-based identity-stable wrapper or removing
+`intake` from its `useCallback` deps (use `intake.id` instead).
+
+---
+
 ## Summary of why each change exists
 
 | Change | Reason |
