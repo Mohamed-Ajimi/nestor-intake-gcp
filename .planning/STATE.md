@@ -29,9 +29,9 @@ Phase: 19 (DEFERRED 2026-07-22 — operator: fix open app problems first; audit-
 Plan: Not started
 Status: Deferred — stabilization first
   live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
-Last activity: 2026-07-23 - Quick task 260723-ior: merged replit-ui-changes into master (baf9a77, tsc+build
-  green, pushed); F-01/F-02 stabilization fixes deployed live (api 00039-l69, tribunal-api 00010-9qg,
-  tribunal-worker 00009-ck8); repo now has GitHub remote (Mohamed-Ajimi/nestor-intake-gcp)
+Last activity: 2026-07-23 - Quick tasks 260723-ior (replit-ui-changes merged + frontend rev 00019-wwh live)
+  and 260723-j56 (outdated end-of-scope messaging sweep + History button to header); F-01/F-02 fixes
+  deployed (api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8); GitHub remote active
 
 Progress: [██████████] 100%
 
@@ -143,6 +143,7 @@ Recent decisions affecting current work (v1.1):
 | fast | Client validation diff: patch applied refinements into research_questions + show applied text | 2026-07-16 | a710e8e | — |
 | 260720-eh4 | Record rev 00010-ndr deploy (a710e8e live) + operator UAT-deferral decision in 12-UAT.md | 2026-07-20 | 7731421 | [260720-eh4-record-rev-00010-ndr-deploy-defer-remain](./quick/260720-eh4-record-rev-00010-ndr-deploy-defer-remain/) |
 | 260723-ior | Merge replit-ui-changes branch (TopBar, compact lang switcher, AISkillsPanel redesign, intake-detail loop fixes + History Sheet, flag-guarded mock-auth scaffolding + mock-backend); tsc+build green | 2026-07-23 | baf9a77 | [260723-ior-merge-replit-ui-changes-branch-into-mast](./quick/260723-ior-merge-replit-ui-changes-branch-into-mast/) |
+| 260723-j56 | Sweep outdated end-of-scope research messaging (scopeNote block, dead HandoffBlock + handoff ns, out-of-scope toasts, statusUnavailable rewording) + History button into header beside Intake-info + en/fr researchStarted keys | 2026-07-23 | dc10b88 | [260723-j56-sweep-outdated-end-of-scope-research-mes](./quick/260723-j56-sweep-outdated-end-of-scope-research-mes/) |
 
 ## Deferred Items
 
