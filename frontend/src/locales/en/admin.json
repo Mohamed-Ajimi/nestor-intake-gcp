@@ -95,7 +95,7 @@
       "resultsLinkHint": "Works once status = Delivered"
     },
     "history": {
-      "title": "Previous skill runs",
+      "title": "History",
       "loading": "Loading…",
       "error": "error",
       "running": "running…"

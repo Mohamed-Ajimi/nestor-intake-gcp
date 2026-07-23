@@ -95,7 +95,7 @@
       "resultsLinkHint": "Werkt zodra status = Geleverd"
     },
     "history": {
-      "title": "Eerdere skill-runs",
+      "title": "History",
       "loading": "Laden…",
       "error": "fout",
       "running": "bezig…"
