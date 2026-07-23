@@ -1063,8 +1063,39 @@ function IntakeDetailPage() {
  )}
  </div>
 
-     <div className="mb-8 border border-ink/15 bg-paper">
-       <div className="px-6 pt-6 pb-4">
+
+  {showAIReview && reviewMode && reviewData && (
+ <div data-ai-review-block>
+ <AIReviewTopBanner
+ costEur={reviewData.costEur}
+ decidedCount={reviewState?.decidedCount ?? 0}
+ onCancel={() => {
+ setReviewMode(false);
+ setReviewData(null);
+ }}
+ onSubmit={handleSubmitReview}
+ submitting={submittingReview}
+ />
+ <AIReviewInfoBanners parsed={reviewData.parsed} />
+ </div>
+ )}
+
+ {successUrl && (
+ <ReviewSuccessModal
+ url={successUrl}
+ onClose={async () => {
+ setSuccessUrl(null);
+ await exitReviewMode();
+ }}
+ />
+ )}
+
+      {/* 2-col layout: sticky workflow rail on right (xl+), content on left */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_272px] xl:gap-8 xl:items-start">
+
+        <aside className="mb-6 xl:mb-0 xl:col-start-2 xl:row-start-1 xl:sticky xl:top-[88px] xl:self-start">
+     <div className="border border-ink/15 bg-paper">
+       <div className="overflow-x-auto px-4 pt-4 pb-3">
          <IntakeWorkflowStepper
            status={intake.status}
            clientValidatedAt={intake.client_validated_at}
@@ -1171,193 +1202,9 @@ function IntakeDetailPage() {
          </div>
        )}
      </div>
+        </aside>
 
-     {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
-     {mailPickerType && (
-       <RecipientPicker
-         open={mailPickerType !== null}
-         onOpenChange={(o) => {
-           if (!o) setMailPickerType(null);
-         }}
-         intakeId={intake.id}
-         type={mailPickerType}
-         busy={Boolean(busy[MAIL_BUSY_KEY[mailPickerType]])}
-         onConfirm={handleSendMail}
-       />
-     )}
-
-     {/* S3: archive confirmation — hand-rolled fixed-overlay dialog (house modal style). */}
-     {archiveConfirmOpen && (
-       <div
-         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
-         onClick={() => setArchiveConfirmOpen(false)}
-       >
-         <div
-           role="alertdialog"
-           className="w-full max-w-md border border-ink bg-paper p-6 shadow-lg"
-           onClick={(e) => e.stopPropagation()}
-         >
-           <h2 className="font-serif text-2xl font-normal lowercase text-ink">
-             {t("intakeDetail.archiveDialog.title")}
-           </h2>
-           <p className="mt-3 font-sans text-sm leading-relaxed text-ink/70">
-             {t("intakeDetail.archiveDialog.body")}
-           </p>
-           <div className="mt-6 flex justify-end gap-2">
-             <button
-               type="button"
-               onClick={() => setArchiveConfirmOpen(false)}
-               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
-             >
-               {t("intakeDetail.archiveDialog.cancel")}
-             </button>
-             <button
-               type="button"
-               onClick={confirmArchive}
-               className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85"
-             >
-               {t("intakeDetail.archiveDialog.confirm")}
-             </button>
-           </div>
-         </div>
-       </div>
-     )}
-
-     {/* 260716-ji9: Intake-info modal — the dl moved verbatim from the first page section;
-         same house overlay convention as the archive dialog, but wider + scrollable. */}
-     {infoModalOpen && (
-       <div
-         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
-         onClick={() => setInfoModalOpen(false)}
-       >
-         <div
-           role="dialog"
-           className="max-h-[85vh] w-full max-w-2xl overflow-y-auto border border-ink bg-paper p-6 shadow-lg"
-           onClick={(e) => e.stopPropagation()}
-         >
-           <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
-             {t("intakeDetail.info.title")}
-           </h2>
-           <dl className="mt-4">
-             <Meta label={t("intakeDetail.info.client")}>
-               {client ? (
-                 <Link to="/admin/pulse/clients" className="text-ink hover:underline">
-                   {client.name}
-                 </Link>
-               ) : (
-                 "—"
-               )}
-             </Meta>
-             <Meta label={t("intakeDetail.info.product")}>
-               {intake.product ? (
-                 <>
-                   <span className="text-ink">{intake.product.name}</span>
-                   {intake.product.tagline && (
-                     <span className="text-ink/60"> ({intake.product.tagline})</span>
-                   )}
-                 </>
-               ) : (
-                 intake.product_slug
-               )}
-             </Meta>
-             <Meta label={t("intakeDetail.info.status")}>
-               <StatusPill status={intake.status} />
-             </Meta>
-             <Meta label={t("intakeDetail.info.createdAt")}>{fmt(intake.created_at)}</Meta>
-             <Meta label={t("intakeDetail.info.lastEdited")}>{fmt(intake.updated_at)}</Meta>
-             {(intake.status === "delivered" || intake.status === "archived") && (
-               <Meta label={t("intakeDetail.info.deliveredOn")}>
-                 <DeliveredAtEditor
-                   intakeId={intake.id}
-                   value={intake.delivered_at}
-                   onSaved={(v) => setIntake({ ...intake, delivered_at: v })}
-                 />
-               </Meta>
-             )}
-             <Meta label={t("intakeDetail.info.initialIntakeLink")}>
-               <LinkRow
-                 url={intakeUrl}
-                 subtitle={t("intakeDetail.info.initialIntakeLinkSubtitle")}
-                 placeholder="—"
-               />
-             </Meta>
-             <Meta label={t("intakeDetail.info.validationLink")}>
-               <LinkRow
-                 url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
-                 subtitle={t("intakeDetail.info.validationLinkSubtitle")}
-                 placeholder="—"
-               />
-             </Meta>
-             <Meta label={t("intakeDetail.info.validation")}>
-               {intake.client_validated_at ? (
-                 <span className="text-emerald-700">
-                   {t("intakeDetail.info.validatedOn", { date: fmt(intake.client_validated_at) })}
-                 </span>
-               ) : (
-                 <span className="text-ink/60">{t("intakeDetail.info.notYetValidated")}</span>
-               )}
-             </Meta>
-             <Meta
-               label={
-                 <span className="inline-flex items-center gap-1">
-                   {t("intakeDetail.info.resultsLink")}
-                   <span
-                     className="cursor-help text-ink/40"
-                     title={t("intakeDetail.info.resultsLinkTooltip")}
-                   >
-                     ⓘ
-                   </span>
-                 </span>
-               }
-             >
-               <ResultsLinkRow
-                 intakeId={intake.id}
-                 hasFinalReport={!!intake.final_report_artifact_id}
-               />
-             </Meta>
-           </dl>
-           <div className="mt-6 flex justify-end">
-             <button
-               type="button"
-               onClick={() => setInfoModalOpen(false)}
-               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
-             >
-               {t("intakeDetail.info.close")}
-             </button>
-           </div>
-         </div>
-       </div>
-     )}
-
-
-  {/* HandoffBlock verwijderd: alle handoff-acties zitten nu in NextStepBanner per fase. */}
-
-  {showAIReview && reviewMode && reviewData && (
- <div data-ai-review-block>
- <AIReviewTopBanner
- costEur={reviewData.costEur}
- decidedCount={reviewState?.decidedCount ?? 0}
- onCancel={() => {
- setReviewMode(false);
- setReviewData(null);
- }}
- onSubmit={handleSubmitReview}
- submitting={submittingReview}
- />
- <AIReviewInfoBanners parsed={reviewData.parsed} />
- </div>
- )}
-
- {successUrl && (
- <ReviewSuccessModal
- url={successUrl}
- onClose={async () => {
- setSuccessUrl(null);
- await exitReviewMode();
- }}
- />
- )}
-
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
  {editMode && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
@@ -1369,7 +1216,7 @@ function IntakeDetailPage() {
  </div>
  )}
 
- <div className="grid grid-cols-1 gap-8 lg:grid-cols-[320px_1fr]">
+ <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
  <aside className="hidden lg:block">
  <nav className="sticky top-28 space-y-1">
  <p className="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
@@ -1583,6 +1430,167 @@ function IntakeDetailPage() {
   })}
  </main>
  </div>
+
+        </div>
+
+      </div>
+
+     {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
+     {mailPickerType && (
+       <RecipientPicker
+         open={mailPickerType !== null}
+         onOpenChange={(o) => {
+           if (!o) setMailPickerType(null);
+         }}
+         intakeId={intake.id}
+         type={mailPickerType}
+         busy={Boolean(busy[MAIL_BUSY_KEY[mailPickerType]])}
+         onConfirm={handleSendMail}
+       />
+     )}
+
+     {/* S3: archive confirmation — hand-rolled fixed-overlay dialog (house modal style). */}
+     {archiveConfirmOpen && (
+       <div
+         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+         onClick={() => setArchiveConfirmOpen(false)}
+       >
+         <div
+           role="alertdialog"
+           className="w-full max-w-md border border-ink bg-paper p-6 shadow-lg"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <h2 className="font-serif text-2xl font-normal lowercase text-ink">
+             {t("intakeDetail.archiveDialog.title")}
+           </h2>
+           <p className="mt-3 font-sans text-sm leading-relaxed text-ink/70">
+             {t("intakeDetail.archiveDialog.body")}
+           </p>
+           <div className="mt-6 flex justify-end gap-2">
+             <button
+               type="button"
+               onClick={() => setArchiveConfirmOpen(false)}
+               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+             >
+               {t("intakeDetail.archiveDialog.cancel")}
+             </button>
+             <button
+               type="button"
+               onClick={confirmArchive}
+               className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85"
+             >
+               {t("intakeDetail.archiveDialog.confirm")}
+             </button>
+           </div>
+         </div>
+       </div>
+     )}
+
+     {/* 260716-ji9: Intake-info modal — the dl moved verbatim from the first page section;
+         same house overlay convention as the archive dialog, but wider + scrollable. */}
+     {infoModalOpen && (
+       <div
+         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+         onClick={() => setInfoModalOpen(false)}
+       >
+         <div
+           role="dialog"
+           className="max-h-[85vh] w-full max-w-2xl overflow-y-auto border border-ink bg-paper p-6 shadow-lg"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <h2 className="border-b border-ink/30 pb-2 mb-2 font-serif text-2xl font-normal text-ink">
+             {t("intakeDetail.info.title")}
+           </h2>
+           <dl className="mt-4">
+             <Meta label={t("intakeDetail.info.client")}>
+               {client ? (
+                 <Link to="/admin/pulse/clients" className="text-ink hover:underline">
+                   {client.name}
+                 </Link>
+               ) : (
+                 "—"
+               )}
+             </Meta>
+             <Meta label={t("intakeDetail.info.product")}>
+               {intake.product ? (
+                 <>
+                   <span className="text-ink">{intake.product.name}</span>
+                   {intake.product.tagline && (
+                     <span className="text-ink/60"> ({intake.product.tagline})</span>
+                   )}
+                 </>
+               ) : (
+                 intake.product_slug
+               )}
+             </Meta>
+             <Meta label={t("intakeDetail.info.status")}>
+               <StatusPill status={intake.status} />
+             </Meta>
+             <Meta label={t("intakeDetail.info.createdAt")}>{fmt(intake.created_at)}</Meta>
+             <Meta label={t("intakeDetail.info.lastEdited")}>{fmt(intake.updated_at)}</Meta>
+             {(intake.status === "delivered" || intake.status === "archived") && (
+               <Meta label={t("intakeDetail.info.deliveredOn")}>
+                 <DeliveredAtEditor
+                   intakeId={intake.id}
+                   value={intake.delivered_at}
+                   onSaved={(v) => setIntake({ ...intake, delivered_at: v })}
+                 />
+               </Meta>
+             )}
+             <Meta label={t("intakeDetail.info.initialIntakeLink")}>
+               <LinkRow
+                 url={intakeUrl}
+                 subtitle={t("intakeDetail.info.initialIntakeLinkSubtitle")}
+                 placeholder="—"
+               />
+             </Meta>
+             <Meta label={t("intakeDetail.info.validationLink")}>
+               <LinkRow
+                 url={`${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`}
+                 subtitle={t("intakeDetail.info.validationLinkSubtitle")}
+                 placeholder="—"
+               />
+             </Meta>
+             <Meta label={t("intakeDetail.info.validation")}>
+               {intake.client_validated_at ? (
+                 <span className="text-emerald-700">
+                   {t("intakeDetail.info.validatedOn", { date: fmt(intake.client_validated_at) })}
+                 </span>
+               ) : (
+                 <span className="text-ink/60">{t("intakeDetail.info.notYetValidated")}</span>
+               )}
+             </Meta>
+             <Meta
+               label={
+                 <span className="inline-flex items-center gap-1">
+                   {t("intakeDetail.info.resultsLink")}
+                   <span
+                     className="cursor-help text-ink/40"
+                     title={t("intakeDetail.info.resultsLinkTooltip")}
+                   >
+                     ⓘ
+                   </span>
+                 </span>
+               }
+             >
+               <ResultsLinkRow
+                 intakeId={intake.id}
+                 hasFinalReport={!!intake.final_report_artifact_id}
+               />
+             </Meta>
+           </dl>
+           <div className="mt-6 flex justify-end">
+             <button
+               type="button"
+               onClick={() => setInfoModalOpen(false)}
+               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+             >
+               {t("intakeDetail.info.close")}
+             </button>
+           </div>
+         </div>
+       </div>
+     )}
 
  </div>
  </ReviewProvider>
