@@ -404,10 +404,6 @@ inline in `run(...)`. Removed entirely.
 
 ---
 
-## Summary of why each change exists
-
----
-
 ## Change 15 — Replace inline "Previous skill runs" accordion with a history Sheet
 
 **Files:** `src/routes/admin.pulse.intakes.$id.tsx`
@@ -417,7 +413,7 @@ to show run rows.
 
 **Added:**
 
-1. A small `⏰ EERDERE SKILL-RUNS (n)` trigger button at the bottom of the right-rail workflow
+1. A small `⏰ HISTORY (n)` trigger button at the bottom of the right-rail workflow
    card (same visual grammar as the AI-verrijking trigger — monospace, uppercase, icon + label).
 
 2. A `<Sheet side="right">` overlay (Radix via `@/components/ui/sheet`) that slides in when the
@@ -446,15 +442,39 @@ old accordion's `toggleHistory` guard).
 
 ---
 
+## Change 16 — Rename "Previous skill runs" / "Eerdere skill-runs" → "History"
+
+**Files:** `src/locales/en/admin.json`, `src/locales/nl/admin.json`
+
+```json
+// BEFORE (en):  "title": "Previous skill runs"
+// BEFORE (nl):  "title": "Eerdere skill-runs"
+// AFTER (both): "title": "History"
+```
+
+The label is used in two places: the trigger button in the right rail and the Sheet header.
+Both pull from the same i18n key (`intakeDetail.history.title`), so changing the locale files
+is sufficient — no JSX changes needed.
+
+---
+
 ## Summary of why each change exists
 
 | Change | Reason |
 |---|---|
-| `vite.vite.server.allowedHosts` | Replit proxy domain was blocked by Vite's host check |
-| `vite.vite.server.proxy` | `localhost:3001` is unreachable from the user's browser; proxy through port 5000 fixes it |
-| `VITE_API_BASE_URL=/api` | Makes `apiFetch` use relative paths so the Vite proxy intercepts them |
-| `MOCK_AUTH` in `firebase.ts` | Single flag, imported everywhere — avoids drift |
-| `currentIdToken` mock | Without this, `apiFetch` returns `NOT_LOGGED_IN` because `auth.currentUser` is null |
-| `AuthProvider` split | React rules of hooks — can't early-return before `useState` calls |
-| `beforeLoad` bypasses | Firebase `authReady()` hangs forever when no real Firebase user exists |
-| `mock-backend/` | Provides typed API responses so the UI renders data, not error/empty states |
+| 1 `vite.config.ts` | Replit proxy domain blocked; `allowedHosts: true` + `/api` proxy to mock backend |
+| 2 `.env.local` | `VITE_MOCK_AUTH=1` and `VITE_API_BASE_URL=/api` enable the mock path |
+| 3 `firebase.ts` | Single `MOCK_AUTH` export — avoids flag duplication across files |
+| 4 `client.ts` | `currentIdToken` returns mock token so `apiFetch` doesn't return `NOT_LOGGED_IN` |
+| 5 `auth-context.tsx` | Rules of hooks prohibit early-return before `useState`; split into Real/Mock providers |
+| 6 Route `beforeLoad` bypasses | `authReady()` hangs forever with no real Firebase user |
+| 7 `TopBar` component | Compact sticky header with language switcher + bell; replaced per-route inline bars |
+| 8 `LanguageSwitcher` `compact` prop | TopBar needed a smaller variant without breaking existing usages |
+| 9 `ProductShell` integration | TopBar mounted above `<main>` in the admin shell |
+| 10 `intake.index.tsx` | TopBar replaces the previous inline LanguageSwitcher on the intake list |
+| 11 `AISkillsPanel` repositioned | Moved from floating content block into workflow card (between banners) |
+| 12 `AISkillsPanel` redesigned | Replaced 4 flat buttons + prose with a single `⚡ AI tools ▾` Popover dropdown |
+| 13 Mock backend overhauled | 8 intakes (one per status), correct `{ latest, runs }` shape, 404 SSE stub |
+| 14 Infinite loop fixes | `EMPTY_PARSED` constant, stable `loadSkillRuns` ref, removed render-side-effect ref |
+| 15 History Sheet | Replaced inline accordion with a slide-in Sheet triggered from the right rail |
+| 16 "History" label | Renamed from "Previous skill runs" / "Eerdere skill-runs" in both locale files |
