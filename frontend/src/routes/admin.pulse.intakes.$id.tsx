@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveSkillRun, useSkillRunFull, type ActiveSkillRun } from "@/components/intake/SkillRunProgress";
 import { format, formatDistanceToNow } from "date-fns";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
@@ -781,10 +781,6 @@ function IntakeDetailPage() {
     await load();
   };
 
-  const onStartManualResearch = async () => {
-    toast.message(t("intakeDetail.toast.researchOutOfScope"));
-  };
-
   const onDownloadContextPack = () => {
     const el = document.querySelector("[data-context-pack-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1157,7 +1153,6 @@ function IntakeDetailPage() {
          onSendValidationReminder={onSendValidationReminder}
          onGenerateContextPack={onGenerateContextPack}
          onStartAutoResearch={onStartAutoResearch}
-         onStartManualResearch={onStartManualResearch}
          onDownloadContextPack={onDownloadContextPack}
          onUploadFinalReport={onUploadFinalReport}
          onSendResultsMail={onSendResultsMail}
@@ -1234,20 +1229,6 @@ function IntakeDetailPage() {
          </section>
        )}
 
-       {/* S6: persistent end-of-platform-scope note for decomposed-and-later statuses.
-           The onStartAutoResearch toast stays as-is (D5 — harmless duplication). */}
-       {["decomposed", "in_research", "delivered"].includes(intake.status ?? "") && (
-         <div className="border-t border-ink/10 bg-paper2 px-6 py-3 text-sm text-ink/70">
-           <span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-ink/50">
-             {t("intakeDetail.scopeNote.label")}
-           </span>
-           <Trans
-             i18nKey="intakeDetail.scopeNote.body"
-             ns="admin"
-             components={[<span className="font-mono text-xs" />]}
-           />
-         </div>
-       )}
      </div>
         </aside>
 

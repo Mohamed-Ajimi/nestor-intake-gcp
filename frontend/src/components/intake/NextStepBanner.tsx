@@ -33,7 +33,6 @@ type Props = {
   onSendValidationReminder: () => void;
   onGenerateContextPack: () => void;
   onStartAutoResearch: () => void;
-  onStartManualResearch: () => void;
   onDownloadContextPack: () => void;
   onUploadFinalReport: () => void;
   onSendResultsMail: () => void;

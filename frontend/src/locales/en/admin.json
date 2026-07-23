@@ -125,7 +125,7 @@
       "intakeNotLoaded": "Intake not loaded yet",
       "aiReviewNotLoaded": "AI review is not loaded yet — please wait.",
       "sendFailed": "Send failed",
-      "statusUnavailable": "Status change not available via the API (stops at decomposed).",
+      "statusUnavailable": "Status change not available via the API.",
       "statusNotUpdated": "Status not updated",
       "reviewOutputMissing": "Could not load the AI output — run the intake skill again.",
       "statusUpdated": "Status updated",
@@ -134,8 +134,6 @@
       "mailSent": "Email sent.",
       "contextPackStartFailed": "Failed to start Context Pack",
       "contextPackStarted": "Context Pack generation started — this takes about 1–2 minutes.",
-      "autoResearchOutOfScope": "Automatic research is out of scope for this phase (stops at decomposed).",
-      "researchOutOfScope": "Research is out of scope for this phase (stops at decomposed).",
       "scrollToContextPack": "Scroll to Context Pack below.",
       "scrollToFinalReport": "Scroll to the client report block below.",
       "searchFailed": "Search failed",
@@ -149,10 +147,6 @@
       "body": "The project will be closed and removed from the active intake list. The intake becomes read-only; the client's results page remains available.",
       "confirm": "Archive",
       "cancel": "Cancel"
-    },
-    "scopeNote": {
-      "label": "End of platform scope",
-      "body": "Automated research is out of scope for this phase (stops at <0>decomposed</0>). The research phase is started and tracked outside this system."
     }
   },
   "clientDrawer": {

@@ -125,7 +125,7 @@
       "intakeNotLoaded": "Intake pas encore chargé",
       "aiReviewNotLoaded": "La révision IA n'est pas encore chargée — patientez.",
       "sendFailed": "Échec de l'envoi",
-      "statusUnavailable": "Changement de statut non disponible via l'API (s'arrête à decomposed).",
+      "statusUnavailable": "Changement de statut non disponible via l'API.",
       "statusNotUpdated": "Statut non mis à jour",
       "reviewOutputMissing": "Impossible de charger la sortie IA — relancez le skill d'intake.",
       "statusUpdated": "Statut mis à jour",
@@ -134,8 +134,6 @@
       "mailSent": "E-mail envoyé.",
       "contextPackStartFailed": "Échec du démarrage du Context Pack",
       "contextPackStarted": "Génération du Context Pack lancée — cela prend environ 1 à 2 minutes.",
-      "autoResearchOutOfScope": "La recherche automatique est hors de cette phase (s'arrête à decomposed).",
-      "researchOutOfScope": "La recherche est hors de cette phase (s'arrête à decomposed).",
       "scrollToContextPack": "Faites défiler vers le Context Pack ci-dessous.",
       "scrollToFinalReport": "Faites défiler vers le bloc rapport client ci-dessous.",
       "searchFailed": "Échec de la recherche",
@@ -149,10 +147,6 @@
       "body": "Le projet sera clôturé et disparaîtra de la liste des intakes actifs. L'intake passe en lecture seule ; la page de résultats du client reste accessible.",
       "confirm": "Archiver",
       "cancel": "Annuler"
-    },
-    "scopeNote": {
-      "label": "Fin du périmètre plateforme",
-      "body": "La recherche automatique sort du cadre de cette phase (s'arrête à <0>decomposed</0>). La phase de recherche est lancée et suivie en dehors de ce système."
     }
   },
   "clientDrawer": {
