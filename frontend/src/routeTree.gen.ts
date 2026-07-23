@@ -17,7 +17,6 @@ import { Route as IntakeIdRouteImport } from './routes/intake.$id'
 import { Route as AuthLoginRouteImport } from './routes/auth.login'
 import { Route as AuthActionRouteImport } from './routes/auth.action'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
-import { Route as AdminTemplatesRouteImport } from './routes/admin.templates'
 import { Route as AdminSpacesRouteImport } from './routes/admin.spaces'
 import { Route as AdminSearchRouteImport } from './routes/admin.search'
 import { Route as AdminSalesRouteImport } from './routes/admin.sales'
@@ -84,11 +83,6 @@ const AuthActionRoute = AuthActionRouteImport.update({
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminTemplatesRoute = AdminTemplatesRouteImport.update({
-  id: '/templates',
-  path: '/templates',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminSpacesRoute = AdminSpacesRouteImport.update({
@@ -237,7 +231,6 @@ export interface FileRoutesByFullPath {
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
   '/admin/spaces': typeof AdminSpacesRoute
-  '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
@@ -272,7 +265,6 @@ export interface FileRoutesByTo {
   '/admin/organizations': typeof AdminOrganizationsRoute
   '/admin/search': typeof AdminSearchRoute
   '/admin/spaces': typeof AdminSpacesRoute
-  '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
@@ -311,7 +303,6 @@ export interface FileRoutesById {
   '/admin/sales': typeof AdminSalesRouteWithChildren
   '/admin/search': typeof AdminSearchRoute
   '/admin/spaces': typeof AdminSpacesRoute
-  '/admin/templates': typeof AdminTemplatesRoute
   '/admin/users': typeof AdminUsersRoute
   '/auth/action': typeof AuthActionRoute
   '/auth/login': typeof AuthLoginRoute
@@ -351,7 +342,6 @@ export interface FileRouteTypes {
     | '/admin/sales'
     | '/admin/search'
     | '/admin/spaces'
-    | '/admin/templates'
     | '/admin/users'
     | '/auth/action'
     | '/auth/login'
@@ -386,7 +376,6 @@ export interface FileRouteTypes {
     | '/admin/organizations'
     | '/admin/search'
     | '/admin/spaces'
-    | '/admin/templates'
     | '/admin/users'
     | '/auth/action'
     | '/auth/login'
@@ -424,7 +413,6 @@ export interface FileRouteTypes {
     | '/admin/sales'
     | '/admin/search'
     | '/admin/spaces'
-    | '/admin/templates'
     | '/admin/users'
     | '/auth/action'
     | '/auth/login'
@@ -518,13 +506,6 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/admin/users'
       preLoaderRoute: typeof AdminUsersRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/templates': {
-      id: '/admin/templates'
-      path: '/templates'
-      fullPath: '/admin/templates'
-      preLoaderRoute: typeof AdminTemplatesRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/spaces': {
@@ -790,7 +771,6 @@ interface AdminRouteChildren {
   AdminSalesRoute: typeof AdminSalesRouteWithChildren
   AdminSearchRoute: typeof AdminSearchRoute
   AdminSpacesRoute: typeof AdminSpacesRoute
-  AdminTemplatesRoute: typeof AdminTemplatesRoute
   AdminUsersRoute: typeof AdminUsersRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminEchoComingSoonRoute: typeof AdminEchoComingSoonRoute
@@ -809,7 +789,6 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminSalesRoute: AdminSalesRouteWithChildren,
   AdminSearchRoute: AdminSearchRoute,
   AdminSpacesRoute: AdminSpacesRoute,
-  AdminTemplatesRoute: AdminTemplatesRoute,
   AdminUsersRoute: AdminUsersRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminEchoComingSoonRoute: AdminEchoComingSoonRoute,
