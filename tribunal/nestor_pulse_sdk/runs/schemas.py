@@ -204,3 +204,55 @@ class RunMetrics(BaseModel):
     stages: list[dict] = []
     current_stage: str | None = None
     stage_detail: dict[str, StageDetail] | dict | None = None
+
+
+class VerificationVerdictItem(BaseModel):
+    """One verdict row in the verification report (never leaks tenant_id/hashes)."""
+    claim_id: str | None = None
+    verdict: str
+    confidence: str | None = None
+    evidence_refs: list | None = None
+    reconciliation: dict | None = None
+
+
+class VerificationVerdictGroups(BaseModel):
+    """Verdicts split by verdict class (support / refute / insufficient)."""
+    support: list[VerificationVerdictItem] = []
+    refute: list[VerificationVerdictItem] = []
+    insufficient: list[VerificationVerdictItem] = []
+
+
+class VerificationUnverified(BaseModel):
+    """Honest UNVERIFIED accounting: claims with NO verdict row."""
+    count: int = 0
+    claims_with_verdict: int = 0
+    total_claims: int = 0
+
+
+class VerificationTrueCost(BaseModel):
+    """True cost of the run: total + a pending flag (Plan 15-02 reconciliation)."""
+    cost_usd_total: str | None = None    # Decimal serialised as string
+    cost_pending: bool = False
+
+
+class VerificationReport(BaseModel):
+    """GET /api/runs/{id}/verification -- the operator's post-run truth surface.
+
+    Shaped by verification.report.build_verification_report from PERSISTED rows
+    (verification_verdict + run.verification_summary + run cost) -- never from a
+    GCS blob. Carries all six STAKEHOLDER-NOTES §2026-07-24 content areas:
+    funnel, per-class verdicts, refuted-with-evidence, superseded/scoped,
+    reconciled contradictions, an honest unverified list, and true cost.
+
+    `extra="allow"` so the shaper's `counts` rollup rides through without a
+    field-by-field mirror.
+    """
+    funnel: dict | None = None
+    verdicts: VerificationVerdictGroups = VerificationVerdictGroups()
+    refuted: list[VerificationVerdictItem] = []
+    superseded: list[VerificationVerdictItem] = []
+    reconciled: list[VerificationVerdictItem] = []
+    unverified: VerificationUnverified = VerificationUnverified()
+    true_cost: VerificationTrueCost = VerificationTrueCost()
+
+    model_config = {"extra": "allow"}

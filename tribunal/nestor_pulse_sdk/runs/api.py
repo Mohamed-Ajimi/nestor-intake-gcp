@@ -31,6 +31,7 @@ from nestor_pulse_sdk.runs.schemas import (
     ReportSpecRequest,
     RunMetrics,
     RunResponse,
+    VerificationReport,
 )
 from nestor_pulse_sdk.runs.stages import stages_for
 
@@ -847,6 +848,37 @@ async def get_run_metrics(
         ),
         stage_detail=run.stage_detail,
     )
+
+
+@router.get("/{run_id}/verification", response_model=VerificationReport)
+async def get_run_verification(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> VerificationReport:
+    """
+    The operator's post-run verification report (Phase 15 ENGINE-09).
+
+    Shapes the run's PERSISTED per-claim verdicts (verification_verdict) + the
+    run-level funnel (run.verification_summary) + true cost (run.cost_usd_total /
+    run.cost_pending) into the STAKEHOLDER-NOTES §2026-07-24 content:
+      funnel, per-class verdicts, refuted-with-evidence, superseded/scoped
+      findings, reconciled contradictions, an HONEST unverified list, true cost.
+
+    Reads ONLY persisted rows -- NEVER a GCS blob (build_verification_report
+    contains no storage import). All reads are tenant-scoped via RLS
+    (get_db_session sets the tenant GUC), so a cross-tenant run_id reads as absent:
+    the run scalar_one_or_none -> 404 (T-15-06), mirroring get_run_metrics /
+    renderer.get_source. There is NO distinguishable 403 -- a foreign run and a
+    non-existent run look identical to the caller by design.
+    """
+    from nestor_pulse_sdk.verification.report import build_verification_report
+
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+
+    report = await build_verification_report(session, run)
+    return VerificationReport.model_validate(report)
 
 
 @router.get("/{run_id}/report")
