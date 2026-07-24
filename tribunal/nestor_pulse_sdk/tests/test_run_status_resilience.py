@@ -433,6 +433,58 @@ class TestRunStatusResilience:
             f"Expected same run ID on retry but got {run_id_1} vs {run_id_2}"
         )
 
+    def test_needs_report_spec_reads_do_not_500(self, client_with_store):
+        """CR-03 regression: a run paused at 'needs_report_spec' must round-trip.
+
+        The DB CHECK (ck_run_status) and submit_report_spec make
+        'needs_report_spec' a reachable status (the interactive report-shaping
+        pause). The response schemas' status Literal omitted it, so
+        RunResponse.model_validate raised inside the handler -> HTTP 500 on
+        GET /api/runs/{id} for the paused run AND on GET /api/runs (list) for
+        the whole tenant. Both reads must be 200 with the status passed through.
+        """
+        tc, run_store, project_id, tenant_id = client_with_store
+        idem_key = str(uuid.uuid4())
+
+        create_resp = tc.post(
+            "/api/runs",
+            json={
+                "project_id": str(project_id),
+                "brief": "Report-spec pause test brief",
+                "engine": "sdk",
+                "idempotency_key": idem_key,
+            },
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        run_id = create_resp.json()["id"]
+        run_uuid = uuid.UUID(run_id)
+
+        # Park the run at the report-shaping pause (what the report planner does).
+        run_store[run_uuid]["status"] = "needs_report_spec"
+
+        # GET /api/runs/{id} must NOT 500 while paused (the UI polls exactly then).
+        get_resp = tc.get(
+            f"/api/runs/{run_id}",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        assert get_resp.status_code == 200, (
+            f"paused run read must be 200, got {get_resp.status_code}: {get_resp.text}"
+        )
+        assert get_resp.json()["status"] == "needs_report_spec"
+
+        # GET /api/runs (list) must NOT 500 for the tenant while ANY run is paused.
+        list_resp = tc.get(
+            "/api/runs",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        assert list_resp.status_code == 200, (
+            f"list_runs must be 200 with a paused run present, "
+            f"got {list_resp.status_code}: {list_resp.text}"
+        )
+        statuses = {r["id"]: r["status"] for r in list_resp.json()}
+        assert statuses.get(run_id) == "needs_report_spec"
+
     def test_engine_must_be_adk_or_sdk(self, client_with_store):
         tc, run_store, project_id, tenant_id = client_with_store
 

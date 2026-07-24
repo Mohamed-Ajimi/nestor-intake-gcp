@@ -29,6 +29,17 @@ class UploadedDoc(BaseModel):
 # D-02 (+ Plan 01-12 A/B arm): the three selectable engines.
 Engine = Literal["adk", "sdk", "tribunal"]
 
+# The FULL run-status vocabulary -- MUST stay in sync with the DB CHECK
+# (ck_run_status, db/models/run.py). 'needs_input' is the clarification pause
+# (0005); 'needs_report_spec' is the interactive report-shaping pause (the
+# report planner parks the run there until POST /{id}/report-spec). Response
+# schemas validate FROM the DB row, so every DB-legal status must be listed --
+# a missing literal turns reads of a paused run into HTTP 500s (CR-03).
+RunStatus = Literal[
+    "queued", "running", "completed", "failed", "cancelled",
+    "needs_input", "needs_report_spec",
+]
+
 
 class CreateRunRequest(BaseModel):
     """POST /api/runs request body."""
@@ -59,9 +70,12 @@ class RunResponse(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     engine: Engine
-    status: Literal[
-        "queued", "running", "completed", "failed", "cancelled", "needs_input"
-    ]
+    # RunStatus mirrors the DB CHECK (ck_run_status, db/models/run.py): the
+    # interactive report-shaping pause parks a run at 'needs_report_spec'
+    # (submit_report_spec resumes it). Omitting it here made every read of a
+    # paused run -- and GET /api/runs for the whole tenant -- 500 on pydantic
+    # validation (CR-03). Keep this Literal in sync with the DB CHECK.
+    status: RunStatus
     brief: str
     created_at: datetime
     started_at: datetime | None = None
@@ -180,9 +194,8 @@ class RunMetrics(BaseModel):
     """
     run_id: uuid.UUID
     engine: Engine
-    status: Literal[
-        "queued", "running", "completed", "failed", "cancelled", "needs_input"
-    ]
+    # Full DB-legal vocabulary incl. needs_report_spec (CR-03 -- see RunStatus).
+    status: RunStatus
     cost_usd_total: Decimal | None = None
     elapsed_seconds: int | None = None
     claim_count: int = 0
