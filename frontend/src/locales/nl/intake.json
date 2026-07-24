@@ -569,5 +569,21 @@
     "costPending": "toolkosten: in behandeling",
     "evidenceLabel": "Bewijs",
     "effectLabel": "Effect"
+  },
+  "citation": {
+    "loadError": "De momentopname van de bron kon niet worden geladen. Probeer het opnieuw.",
+    "regionLabel": "Bron van citaat",
+    "title": "Bron [{{n}}]",
+    "close": "Sluiten",
+    "loading": "Momentopname van bron laden…",
+    "untitled": "Bron zonder titel",
+    "published": "Gepubliceerd: {{date}}",
+    "dateUnknown": "datum onbekend",
+    "tierOfficial": "Officiële bron",
+    "tierPress": "Serieuze pers",
+    "tierBlog": "Blog / overig",
+    "singleSource": "enkele bron",
+    "snapshotLabel": "Opgeslagen momentopname",
+    "snapshotEmpty": "Voor deze bron is geen momentopnametekst opgeslagen."
   }
 }

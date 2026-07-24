@@ -106,6 +106,40 @@ export type AuditBody = {
   response: unknown;
 };
 
+/**
+ * A single citation source snapshot read back through the Plan 15-04 superadmin proxy
+ * (`GET /intakes/{id}/research/sources/{sourceId}` → tribunal `GET /api/sources/{id}`,
+ * Plan 15-03 renderer payload). `snapshot_text` is the STORED text of the source captured
+ * at fetch time — the CitationPanel renders this DIRECTLY and NEVER re-fetches the live
+ * `url`, so a dead link still resolves (T-15-15 SSRF + dead-link survival). This is a
+ * DISTINCT concern from intake-upload sources (`sources.ts`) — do NOT overload that module.
+ */
+export type CitationSource = {
+  id: string;
+  url: string;
+  title: string | null;
+  provider: string | null;
+  fetched_at: string | null;
+  snapshot_text: string | null;
+};
+
+/**
+ * A single numbered citation as GENERATED from the DB by Plan 15-03's numbering (never the
+ * model — T-15-16). `n` is the displayed `[n]` marker; `source_id` resolves against the
+ * citation-source proxy above so every number is guaranteed to resolve. `quality_tier`
+ * maps 1→official / 2→serious press / 3→blog; `single_source` flags a claim resting on a
+ * lone source; `temporal_note` carries a verification-flagged outdated-fact caveat inline.
+ */
+export type Citation = {
+  n: number;
+  source_id: string;
+  title: string | null;
+  publication_date: string | null;
+  quality_tier: 1 | 2 | 3;
+  single_source: boolean;
+  temporal_note?: string | null;
+};
+
 export type ResearchRun = {
   id: string;
   status: string;
@@ -198,6 +232,26 @@ export function getAuditBody(
 ): Promise<ApiResult<AuditBody>> {
   return apiFetch<AuditBody>(
     `/intakes/${intakeId}/research/${runId}/audit/${auditId}`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Fetch a single citation source snapshot for the D13 numbered-citation panel (Plan 15-06 /
+ * ENGINE-09). A one-shot `apiFetch` over the token-attaching transport (never fork the
+ * transport), method GET, hitting the Plan 15-04 superadmin proxy `/intakes/{id}/research/
+ * sources/{sourceId}`. The returned `snapshot_text` is rendered DIRECTLY — the live `url` is
+ * NEVER re-fetched (T-15-15 SSRF + dead-link survival). Superadmin-only + space-scoped; a
+ * client / cross-space caller is existence-hidden as 404. Returns `ApiResult<CitationSource>`
+ * — never throws (CLAUDE.md return-no-throw). This is a DISTINCT surface from the intake-upload
+ * `sources.ts` module — do NOT overload that one.
+ */
+export function getSource(
+  intakeId: string,
+  sourceId: string,
+): Promise<ApiResult<CitationSource>> {
+  return apiFetch<CitationSource>(
+    `/intakes/${intakeId}/research/sources/${sourceId}`,
     { method: "GET" },
   );
 }
