@@ -179,9 +179,13 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-24 (abruptly stopped mid-closure; recovered 2026-07-24T23:00)
-Stopped at: Phase 15 COMPLETE — all 7 plans + REVIEW committed; interrupted only at the ROADMAP/STATE closure commit (now finished). SC4 gap closed in code (be3fc8a).
-Resume file: /gsd-discuss-phase 15.1 (Verification Gates) — or operator deploy window for Phase 15 (DEPLOY-RUNBOOK Phase 15 section)
+Last session: 2026-07-24 (recovered abrupt stop; closed + deployed Phase 15; quick 260724-vyf gate fix live)
+Stopped at: Phase 15 (operator surfaces) COMPLETE + DEPLOYED (rev 00025-4w8). Gate fix shipped so the
+  surfaces render on delivered/archived. OPERATOR DIRECTION 2026-07-24: this part is done — proceed to
+  the other Phase-15* parts next (15.1 Verification Gates, 15.2 Engine Core), then run ONE combined
+  Phase-15* UAT once 15/15.1/15.2 are all ready (against a live run post-2026-08-01). Do NOT UAT
+  Phase 15 piecemeal.
+Resume file: /gsd-discuss-phase 15.1 (Verification Gates)
 
 ## Operator Next Steps
 
