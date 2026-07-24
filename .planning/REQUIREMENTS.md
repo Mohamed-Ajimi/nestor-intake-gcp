@@ -13,8 +13,14 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **ENGINE-02**: One real research run completes end-to-end green on the new deployment before dependent features build on it
 - [ ] **ENGINE-03**: The per-run cost cap is re-enabled for client runs (dev `NESTOR_TRIBUNAL_UNCAPPED` flag off) and the stale-run reclaim window is calibrated above the real max run length (no double-runs)
 - [x] **ENGINE-04**: The tamper-evident audit hash-chain verifies green (`verify_chain`) after the move — **blocking gate, before 2026-08-02 (EU AI Act Art. 12 enforcement)**
-- [ ] **ENGINE-05**: A plan-critique pass reviews the research plan before the multi-provider fan-out launches (frontier idea A2)
-- [ ] **ENGINE-06**: Competing report drafts are ranked pairwise (tournament) and the winner becomes the run's report (frontier idea A1)
+- [ ] **ENGINE-05**: The research plan is critiqued before the multi-provider fan-out launches (frontier idea A2) — ABSORBED 2026-07-24 (S-02) into the Phase 15.2 question workshop: orientation + critique + pairwise tournament IS the plan-critique pass, evolved; no separate critique pass is built
+- ~~**ENGINE-06**: Competing report drafts are ranked pairwise (tournament) and the winner becomes the run's report (frontier idea A1)~~ — **DROPPED 2026-07-24** (operator, S-03): single synthesis + operator shaping step stays (D14); tournament exists at question level only (ENGINE-11). First candidate to revisit if report quality disappoints after the redesign ships.
+
+### Research Engine Redesign (added 2026-07-24 — requirement source: `.planning/RESEARCH-ENGINE-DECISIONS.md` D1–D15/R1–R7/C1 + `.planning/STAKEHOLDER-NOTES.md` §2026-07-24)
+
+- [ ] **ENGINE-09**: Post-run operator surfaces: superadmin-only verification report, live agent-feed foundation (D15 — operator-agreed mockup), facts-only itemized cost (C1 — no estimates, pending-then-backfill-exact), numbered clickable citations (D13) — built and UAT'd against recorded run-4cbb5311 data, no live LLM runs
+- [ ] **ENGINE-10**: Verification gates: materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture and reproducing the recorded keep/drop numbers
+- [ ] **ENGINE-11**: Engine core redesign: question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller (D8), SerpAPI-fueled own researcher stream (D10), LLM-based cross-provider merge (D9), language tagging (D7), reliability R1–R7 (park/resume per F-01/F-02/F-03), report changes (D13/D14); old engine path removed on acceptance (V-03)
 - [ ] **ENGINE-07**: Research runs execute via the queue + always-on worker model (never inside an HTTP request), so runs of any length are immune to Cloud Run request timeouts
 - [x] **ENGINE-08**: Multiple research runs from different clients run concurrently without interference — per-run audit-chain advisory lock added (completing Tribunal's unexecuted concurrency plan 01-19), proven by a test of ≥2 simultaneous runs from different spaces
 
@@ -88,8 +94,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENGINE-08 | Phase 13 | Complete |
 | SEAM-01 | Phase 14 | Complete |
 | SEAM-02 | Phase 14 | Complete |
-| ENGINE-05 | Phase 15 | Pending |
-| ENGINE-06 | Phase 15 | Pending |
+| ENGINE-09 | Phase 15 | Pending |
+| ENGINE-10 | Phase 15.1 | Pending |
+| ENGINE-05 | Phase 15.2 | Pending (absorbed into question workshop) |
+| ENGINE-11 | Phase 15.2 | Pending |
+| ENGINE-06 | — | Dropped 2026-07-24 (S-03) |
 | SEAM-03 | Phase 16 | Pending |
 | SEAM-04 | Phase 16 | Pending |
 | RUN-01 | Phase 16 | Pending |
@@ -108,14 +117,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLOSE-03 | Phase 20 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 24 total
-- Mapped to phases: 24
+- v1.1 requirements: 26 active (ENGINE-09/10/11 added 2026-07-24; ENGINE-06 dropped 2026-07-24)
+- Mapped to phases: 26
 - Unmapped: 0 ✓
 
 **Per-phase requirement counts:**
 - Phase 13 (Tribunal Re-home + Infra Baseline): 4 — ENGINE-01, ENGINE-02, ENGINE-04, ENGINE-08
 - Phase 14 (Auth Retirement + Integration Seam): 2 — SEAM-01, SEAM-02
-- Phase 15 (Engine Enhancements): 2 — ENGINE-05, ENGINE-06
+- Phase 15 (Research Engine Redesign — Operator Surfaces): 1 — ENGINE-09
+- Phase 15.1 (Research Engine Redesign — Verification Gates): 1 — ENGINE-10
+- Phase 15.2 (Research Engine Redesign — Engine Core): 2 — ENGINE-05, ENGINE-11
 - Phase 16 (Research Trigger + Progress Bridge): 6 — SEAM-03, SEAM-04, RUN-01, RUN-02, ENGINE-03, ENGINE-07
 - Phase 17 (Raw Output + Audit Chain Guard): 1 — RUN-03
 - Phase 18 (Human Report Upload + Client Delivery): 3 — REPORT-01, REPORT-02, REPORT-03
@@ -125,3 +136,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-07-20*
 *Last updated: 2026-07-20 after roadmap creation (traceability populated, 24/24 mapped across Phases 13-20)*
+*Changelog 2026-07-24 (Research Engine Redesign, 15-CONTEXT S-01/S-02/S-03): ENGINE-06 DROPPED (draft tournament out of scope this milestone); ENGINE-05 absorbed into the Phase 15.2 question workshop; ENGINE-09/10/11 added for phases 15/15.1/15.2 — the plain-language decision files (`RESEARCH-ENGINE-DECISIONS.md`, `STAKEHOLDER-NOTES.md` §2026-07-24) are the requirement source of truth for these phases.*

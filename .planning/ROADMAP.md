@@ -13,11 +13,13 @@ two Cloud Run services with an isolated `tribunal` schema and a verified-intact 
 (Phase 13) → retire its standalone auth and prove the server-to-server seam (Phase 14) → build the
 milestone spine on the engine as-is: research trigger + live progress bridge into the admin UI
 (Phase 16) → secure the raw output behind a superadmin-only, audit-guarded download (Phase 17) →
-human-crafted report upload and client delivery (Phase 18) → Q&A chat over indexed findings via
-Voyage + Haiku (Phase 19) → land the two engine enhancements, plan-critique and draft-tournament, on
-the complete proven flow (Phase 15, deferred by operator decision 2026-07-21) → close out deferred
-v1.0 chores and the parity UAT ledger (Phase 20). The flow extends from `decomposed` through
-`in_research` to `delivered`.
+human-crafted report upload and client delivery (Phase 18) → redesign the research engine in three
+steps (operator decision 2026-07-24, supersedes the 2026-07-21 deferral): operator surfaces on
+recorded run data (Phase 15), verification gates proven on the recorded claim fixture (Phase 15.1),
+and the engine core — question workshop, structured fact lists, reliability — live-validated against
+the recorded baseline (Phase 15.2) → Q&A chat over the NEW engine's indexed findings via Voyage +
+Haiku (Phase 19) → close out deferred v1.0 chores and the parity UAT ledger (Phase 20). The flow
+extends from `decomposed` through `in_research` to `delivered`.
 
 ## Phases
 
@@ -60,7 +62,9 @@ trail intact.
 
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
-- [ ] **Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament)** - DEFERRED (operator decision 2026-07-21): runs after Phase 19, before Phase 20 — plan-critique pass and pairwise draft tournament land on the complete proven A-to-Z flow
+- [ ] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs
+- [ ] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture
+- [ ] **Phase 15.2: Research Engine Redesign — Engine Core** (INSERTED 2026-07-24) - question workshop + pairwise tournament (absorbs ENGINE-05), per-provider fact lists, SerpAPI researcher stream, LLM-based merge, reliability R1–R7 — live-validated vs the recorded baseline after 2026-08-01; old engine path removed on acceptance
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
 - [x] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path (completed 2026-07-22)
 - [x] **Phase 18: Human Report Upload + Client Delivery** - Superadmin uploads the final PDF (status → `delivered`); client sees/downloads it + delivery email (completed 2026-07-22)
@@ -98,17 +102,39 @@ trail intact.
   - [x] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
   - [x] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
-### Phase 15: Engine Enhancements (Plan-Critique + Draft Tournament) — DEFERRED after Phase 19
-**Goal**: The two new frontier engine enhancements are added to the Tribunal pipeline on the complete, proven A-to-Z flow — after the full intake → research → delivery → Q&A spine is live and UAT'd on the engine as it stands today.
-**Depends on**: Phase 19 (complete spine live; enhancements land on and are UAT'd against the full flow). Original dep — Phase 13 (re-homed engine proven green) — remains satisfied.
-**Requirements**: ENGINE-05, ENGINE-06
+### Phase 15: Research Engine Redesign — Operator Surfaces
+**Goal**: The superadmin gets truthful post-run visibility on the engine as it runs today — a superadmin-only verification report, the live agent-feed foundation, facts-only cost itemization, and numbered clickable citations — built and UAT'd against the recorded run-4cbb5311 data with NO live LLM runs.
+**Depends on**: Phase 16 (SSE bridge + dynamic-stage contract) + Phase 17 (audit bundle path) — both complete. REDEFINED 2026-07-24 (operator): replaces "Engine Enhancements (Plan-Critique + Draft Tournament)"; requirement source = `.planning/RESEARCH-ENGINE-DECISIONS.md` (D1–D15, R1–R7, C1) + `.planning/STAKEHOLDER-NOTES.md` §2026-07-24 (applies to 15/15.1/15.2).
+**Requirements**: ENGINE-09
 **Success Criteria** (what must be TRUE):
-  1. A plan-critique pass reviews the research plan before the multi-provider fan-out launches, and its effect is observable in a run's stage trace (frontier idea A2).
-  2. Competing report drafts are ranked pairwise in a tournament and the winner becomes the run's final report (frontier idea A1).
-  3. A real research run completes green with both enhancements active, and the audit hash-chain still verifies (`verify_chain` green — no frozen payload field renamed).
-  4. The Phase 16 progress UI renders the enhanced run's stage trace (including any added pass) without code changes — confirming the dynamic-stage-list contract held.
+  1. A superadmin-only post-run verification report renders for a completed run from recorded data (run 4cbb5311): gate funnel numbers, per-claim verdicts, drill-down — no client visibility (16-D-08 stands).
+  2. The live agent-feed foundation (D15) renders agent-level activity per the operator-agreed feed mockup — extending (not replacing) the Phase 16 dynamic-stage-list contract; per-row cost visible.
+  3. Cost display is facts-only (C1): every countable cost class is counted (cache writes, search fees, deep-research usageMetadata) — pending-then-backfill-exact, never an estimate.
+  4. Citations render as numbered, clickable references generated from the existing 3-table citation model (D13); every citation number resolves.
+  5. `verify_chain` stays green — new fields only ADD; no frozen audit payload field renamed.
 **Plans**: TBD
-**Note on ordering**: DEFERRED by operator decision 2026-07-21 — originally placed before Phase 16 so the trigger + progress bridge would integrate against the final report/stage shape. Deferral is safe because (a) Phase 16 renders the stage list dynamically from the run's stage trace (no hardcoded stage count), (b) the final report is treated as an opaque artifact downstream, and (c) SC3 already forbids renaming frozen payload fields, protecting the audit chain and Phases 17/19 consumers regardless of when the enhancements land.
+
+### Phase 15.1: Research Engine Redesign — Verification Gates (INSERTED 2026-07-24)
+**Goal**: The verification stage applies the redesigned gate package — materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud behavior, and the "superseded" verdict — proven by replaying the recorded 1,162-claim fixture through the gates in tests.
+**Depends on**: Phase 15 (surfaces render the gate outputs). No live LLM runs needed.
+**Requirements**: ENGINE-10
+**Success Criteria** (what must be TRUE):
+  1. The gate pipeline replays the recorded 1,162-claim fixture (`docs/tribunal-run-reports/run-20260722-4cbb5311/selection-experiment/`) in tests and reproduces the recorded keep/drop numbers.
+  2. Materiality + error-likelihood gates, canonical grouping, and corroboration prioritization run in the verification stage (STAKEHOLDER-NOTES package + D9/D11), with fail-loud on gate errors and a "superseded" verdict available.
+  3. `verify_chain` stays green — frozen payload fields unchanged.
+**Plans**: TBD
+
+### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
+**Goal**: The pipeline core is restructured — question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller, SerpAPI-fueled researcher stream, LLM-based cross-provider merge, language tagging, reliability R1–R7, and report changes — validated by a live run compared against the recorded baseline plus operator sign-off, after which the old engine path is removed immediately.
+**Depends on**: Phase 15.1 (gates in place). Live validation run lands after 2026-08-01 (Anthropic monthly cap reset).
+**Requirements**: ENGINE-05, ENGINE-11
+**Success Criteria** (what must be TRUE):
+  1. The question workshop (orientation + critique + pairwise tournament, D2–D7) selects the run's research questions — visible in the feed — without altering client-validated questions (D4). This IS the evolved plan-critique pass (ENGINE-05 absorbed per S-02).
+  2. Providers return structured fact lists with a per-provider safety-net distiller (D8); the SerpAPI-fueled own researcher stream contributes (D10); the cross-provider merge clusters same-fact claims via LLM-based grouping (D9/B-04 — no embedding machinery).
+  3. Reliability R1–R7 hold: retry/backoff, breaker, checkpointing, park + superadmin-click-only resume (F-01), checkpoint-resumes free/unlimited with the 3-attempt rule counting full restarts only (F-02), park/failure mail to the triggering superadmin (F-03).
+  4. V-01/V-02 acceptance passes: live run on a test intake compared against the recorded 4cbb5311 baseline; hard checklist green (workshop questions visible in feed, per-provider fact lists present, gate funnel recorded, citations resolve, `verify_chain` green, cost fully itemized per C1, feed complete with per-row cost) PLUS operator sign-off next to the recorded baseline.
+  5. On acceptance the old engine path (adaptive_intake one-call → distiller-as-shredder → exact-key grouping) is removed immediately (V-03 — no fallback flag), and the first live run validates the deployed F-01 skeptic fix by construction.
+**Plans**: TBD
 
 ### Phase 16: Research Trigger + Progress Bridge
 **Goal**: A superadmin can trigger a research run on a `decomposed` intake and watch live stage-by-stage progress with running cost in the intake admin UI, receiving an email when it finishes — the milestone spine.
@@ -159,7 +185,7 @@ trail intact.
 
 ### Phase 19: Q&A Chat (Voyage + Haiku RAG)
 **Goal**: After delivery, both client and superadmin can ask questions over the indexed research findings and get grounded, Belgian-Dutch answers.
-**Depends on**: Phase 16 (completed research output to index); independent of Phase 18
+**Depends on**: Phase 16 (completed research output to index) + Phase 15.2 (NEW engine live — Q&A indexes the new engine's output from day one, order set 2026-07-24); independent of Phase 18
 **Requirements**: CHAT-01, CHAT-02, CHAT-03
 **Success Criteria** (what must be TRUE):
   1. When a run completes, its findings are chunked and embedded into a dedicated Voyage `voyage-3-large` 1024-dim pgvector table (distinct from the OpenAI 1536-dim column).
@@ -170,7 +196,7 @@ trail intact.
 
 ### Phase 20: Deferred Chores + v1.0 UAT Closure
 **Goal**: Carry-over v1.0 items are closed on the now-extended, stable flow — no new features.
-**Depends on**: Phases 16-19 (extended flow live and stable) + Phase 15 (deferred enhancements landed)
+**Depends on**: Phases 16-19 (extended flow live and stable) + Phases 15/15.1/15.2 (engine redesign landed)
 **Requirements**: CLOSE-01, CLOSE-02, CLOSE-03
 **Success Criteria** (what must be TRUE):
   1. The 21-item deferred v1.0 UAT ledger is re-run against the extended flow and its results recorded.
@@ -181,14 +207,16 @@ trail intact.
 ## Progress
 
 **Execution Order:**
-13 → 14 → 16 → 17 → 18 → 19 → 15 → 20 (Phase 15 deferred after Phase 19 by operator decision 2026-07-21 — spine ships on the engine as-is, enhancements land on the complete proven flow)
+13 → 14 → 16 → 17 → 18 → 15 → 15.1 → 15.2 → 19 → 20 (operator decision 2026-07-24, SUPERSEDES the 2026-07-21 deferral: Phase 15 redefined as the Research Engine Redesign, split into 15/15.1/15.2, all before Phase 19 so Q&A chat indexes the NEW engine's output from day one)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 15. Engine Enhancements | v1.1 | 0/TBD | Deferred — runs after 19 | - |
+| 15. Research Engine Redesign — Operator Surfaces | v1.1 | 0/TBD | Planning | - |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 0/TBD | Not started | - |
+| 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
