@@ -62,7 +62,7 @@ trail intact.
 
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
-- [ ] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs
+- [x] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs (completed 2026-07-24)
 - [ ] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture
 - [ ] **Phase 15.2: Research Engine Redesign — Engine Core** (INSERTED 2026-07-24) - question workshop + pairwise tournament (absorbs ENGINE-05), per-provider fact lists, SerpAPI researcher stream, LLM-based merge, reliability R1–R7 — live-validated vs the recorded baseline after 2026-08-01; old engine path removed on acceptance
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
@@ -113,13 +113,13 @@ trail intact.
   4. Citations render as numbered, clickable references generated from the existing 3-table citation model (D13); every citation number resolves.
   5. `verify_chain` stays green — new fields only ADD; no frozen audit payload field renamed.
 **Plans**: 7 plans
-  - [ ] 15-01-PLAN.md — Foundation: tribunal alembic 0011 (cost columns + verification_verdict RLS table) + models + recorded-run fixture + hash-chain replay
-  - [ ] 15-02-PLAN.md — Cost-truth C1 fixes: cache-write charge + web_search/web_fetch fees + Gemini DR usageMetadata + pending flag (facts-only)
-  - [ ] 15-03-PLAN.md — Verification report shaper + /verification endpoint + deterministic [n] citation numbering + enriched /metrics feed schema (RLS-denial tested)
-  - [ ] 15-04-PLAN.md — Intake seam: get_verification/get_source methods + superadmin-only proxy routes + denial trio
-  - [ ] 15-05-PLAN.md — Frontend: D15 agent-feed renderer + superadmin VerificationReport + research.ts getVerification + en/fr/nl i18n
-  - [ ] 15-06-PLAN.md — Frontend: numbered clickable CitationPanel (stored-snapshot, dead-link safe) + getSource + en/fr/nl i18n
-  - [ ] 15-07-PLAN.md — DEPLOY-RUNBOOK Phase 15 section (dual rebuild + 0011 migrate + frontend) + 15-UAT.md recorded-run walkthrough + operator UAT checkpoint
+  - [x] 15-01-PLAN.md — Foundation: tribunal alembic 0011 (cost columns + verification_verdict RLS table) + models + recorded-run fixture + hash-chain replay
+  - [x] 15-02-PLAN.md — Cost-truth C1 fixes: cache-write charge + web_search/web_fetch fees + Gemini DR usageMetadata + pending flag (facts-only)
+  - [x] 15-03-PLAN.md — Verification report shaper + /verification endpoint + deterministic [n] citation numbering + enriched /metrics feed schema (RLS-denial tested)
+  - [x] 15-04-PLAN.md — Intake seam: get_verification/get_source methods + superadmin-only proxy routes + denial trio
+  - [x] 15-05-PLAN.md — Frontend: D15 agent-feed renderer + superadmin VerificationReport + research.ts getVerification + en/fr/nl i18n
+  - [x] 15-06-PLAN.md — Frontend: numbered clickable CitationPanel (stored-snapshot, dead-link safe) + getSource + en/fr/nl i18n
+  - [x] 15-07-PLAN.md — DEPLOY-RUNBOOK Phase 15 section (dual rebuild + 0011 migrate + frontend) + 15-UAT.md recorded-run walkthrough + operator UAT checkpoint
 
 ### Phase 15.1: Research Engine Redesign — Verification Gates (INSERTED 2026-07-24)
 **Goal**: The verification stage applies the redesigned gate package — materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud behavior, and the "superseded" verdict — proven by replaying the recorded 1,162-claim fixture through the gates in tests.
@@ -221,7 +221,7 @@ trail intact.
 | 1-12 (all) | v1.0 | 70/70 | Complete (shipped) | 2026-07-20 |
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
-| 15. Research Engine Redesign — Operator Surfaces | v1.1 | 0/7 | Planning | - |
+| 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
 | 15.1. Research Engine Redesign — Verification Gates | v1.1 | 0/TBD | Not started | - |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |

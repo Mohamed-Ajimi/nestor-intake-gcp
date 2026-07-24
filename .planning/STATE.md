@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 15 context gathered (redesign scope, 3-phase split, new execution order 15->15.1->15.2->19->20)
-last_updated: "2026-07-24T18:02:30.660Z"
-last_activity: 2026-07-24 -- Phase 15 planning complete
+stopped_at: Phase 15 COMPLETE (7/7 plans, REVIEW fixed, SC4 closed be3fc8a); next per order 15->15.1->15.2->19->20
+last_updated: "2026-07-24T23:00:00.000Z"
+last_activity: 2026-07-24 -- Phase 15 executed, reviewed, and closed
 progress:
   total_phases: 10
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 28
-  completed_plans: 21
-  percent: 50
+  completed_plans: 28
+  percent: 55
 ---
 
 # Project State
@@ -21,17 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Stabilization pass (2026-07-22) — Phase 19 deferred by operator until the app is smooth/bug-free
+**Current focus:** Phase 15 COMPLETE — next is Phase 15.1 (Verification Gates)
 
 ## Current Position
 
-Phase: 19 (DEFERRED 2026-07-22 — operator: fix open app problems first; audit-fix pass running: F-01 group-skeptic crash, F-02 CORS env crash, F-03 mail test harness, plus chores)
-Plan: Not started
-Status: Ready to execute
-  live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
-Last activity: 2026-07-24 -- Phase 15 planning complete
-  and 260723-j56 (outdated end-of-scope messaging sweep + History button to header); F-01/F-02 fixes
-  deployed (api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8); GitHub remote active
+Phase: 15 (Research Engine Redesign — Operator Surfaces) — COMPLETE (7/7 plans, 2026-07-24)
+Plan: 7 of 7 done; REVIEW fixed (8 findings), SC4 citation gap closed (be3fc8a)
+Status: Phase 15 closed. Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
+  Not yet deployed to Cloud Run — DEPLOY-RUNBOOK Phase 15 section authored; dual tribunal rebuild +
+  0011 migrate + frontend pending an operator deploy window.
+Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
+Last activity: 2026-07-24 -- Phase 15 executed, reviewed, and closed
+  (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)
 
 Progress: [██████████] 100%
 
@@ -168,9 +169,9 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-24T14:59:12.758Z
-Stopped at: Phase 15 context gathered (redesign scope, 3-phase split, new execution order 15->15.1->15.2->19->20)
-Resume file: .planning/phases/15-engine-enhancements-plan-critique-draft-tournament-deferred-/15-CONTEXT.md
+Last session: 2026-07-24 (abruptly stopped mid-closure; recovered 2026-07-24T23:00)
+Stopped at: Phase 15 COMPLETE — all 7 plans + REVIEW committed; interrupted only at the ROADMAP/STATE closure commit (now finished). SC4 gap closed in code (be3fc8a).
+Resume file: /gsd-discuss-phase 15.1 (Verification Gates) — or operator deploy window for Phase 15 (DEPLOY-RUNBOOK Phase 15 section)
 
 ## Operator Next Steps
 
