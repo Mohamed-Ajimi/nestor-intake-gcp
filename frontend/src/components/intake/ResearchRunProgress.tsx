@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
+  ArrowDownToLine,
   CheckCircle2,
+  ChevronDown,
   Circle,
   Download,
+  FileSearch,
   Loader2,
   Lock,
+  RotateCw,
   XCircle,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -19,7 +23,9 @@ import {
   reVerifyChain,
   triggerResearch,
   type ResearchRun,
+  type ResearchStageSummary,
 } from "@/lib/api/research";
+import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
 
 // frontend/src/components/intake/ResearchRunProgress.tsx — the admin's live window into a
 // Tribunal deep-research run (Phase 16, RUN-01/D-07/D-09). It mirrors SkillRunProgress's
@@ -32,13 +38,40 @@ import {
 
 const RESEARCH_TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
-type StageRow = { key: string; name: string; status: string };
+/**
+ * One row of the D15 activity feed. An `item` row is an agent card (task title, expandable
+ * prompt, status line with facts/cost, retry state, drill-down); a `summary` row is a
+ * per-block "Worked for X · N actions · $Y" card that closes out a stage. The enriched
+ * fields are all optional (D-07): a legacy flat `{name,status}` item renders as an agent
+ * card with no cost/prompt/retry/audit affordance — exactly as before.
+ */
+type StageRow =
+  | {
+      kind: "item";
+      key: string;
+      stageKey: string;
+      name: string;
+      status: string;
+      task_prompt?: string;
+      cost_usd?: string;
+      facts?: number;
+      retry?: { attempt: number; max: number; wait_s: number };
+      audit_id?: string;
+    }
+  | {
+      kind: "summary";
+      key: string;
+      stageKey: string;
+      summary: ResearchStageSummary;
+    };
 
 /**
- * Flatten the mirrored `stage_detail` JSONB (`{ stage_key: { items: [{ name, status }] } }`)
- * into an ordered, data-driven row list. The list length is whatever the run reports — a
- * run with 10 stages renders 10 rows. Object key order is preserved (insertion order for
- * string keys), which mirrors the engine's stage sequence.
+ * Flatten the mirrored `stage_detail` JSONB into an ordered, data-driven feed. The list
+ * length is whatever the run reports — a run with 10 stages renders 10 blocks. Object key
+ * order is preserved (insertion order for string keys), mirroring the engine's stage
+ * sequence. Enriched item fields (cost_usd, task_prompt, retry, facts, audit_id) ride onto
+ * each `item` row ADDITIVELY, and a stage's optional `summary` becomes a trailing summary
+ * row — a row missing any of these renders as it did before (D-07 contract preserved).
  */
 function toStageRows(run: ResearchRun | null): StageRow[] {
   if (!run?.stage_detail) return [];
@@ -47,15 +80,26 @@ function toStageRows(run: ResearchRun | null): StageRow[] {
     const items = group?.items ?? [];
     if (items.length === 0) {
       // A stage with no sub-items still renders one row keyed on the stage itself.
-      rows.push({ key: stageKey, name: stageKey, status: "pending" });
-      continue;
+      rows.push({ kind: "item", key: stageKey, stageKey, name: stageKey, status: "pending" });
+    } else {
+      for (const [idx, item] of items.entries()) {
+        rows.push({
+          kind: "item",
+          key: `${stageKey}:${idx}`,
+          stageKey,
+          name: item.name,
+          status: item.status,
+          task_prompt: item.task_prompt,
+          cost_usd: item.cost_usd,
+          facts: item.facts,
+          retry: item.retry,
+          audit_id: item.audit_id,
+        });
+      }
     }
-    for (const [idx, item] of items.entries()) {
-      rows.push({
-        key: `${stageKey}:${idx}`,
-        name: item.name,
-        status: item.status,
-      });
+    // Trailing per-block summary card (D15 "Worked for X · N actions · $Y").
+    if (group?.summary) {
+      rows.push({ kind: "summary", key: `${stageKey}:__summary`, stageKey, summary: group.summary });
     }
   }
   return rows;
@@ -158,7 +202,153 @@ function StageIcon({ status }: { status: string }) {
   if (status === "done") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "running")
     return <Loader2 className="h-4 w-4 animate-spin text-ink" style={{ color: "#FF2D87" }} />;
+  if (status === "retry") return <RotateCw className="h-4 w-4 text-amber-600" />;
+  if (status === "failed") return <AlertTriangle className="h-4 w-4 text-red-600" />;
   return <Circle className="h-4 w-4 text-ink/30" />;
+}
+
+/** Format a duration in seconds as "Xm Ys" (D15 summary-card style). */
+function fmtDurationSecs(secs: number): string {
+  const s = Math.max(0, Math.floor(secs));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return m > 0 ? `${m}m ${rem}s` : `${rem}s`;
+}
+
+/**
+ * A D15 per-block summary card — the professionalism signal that closes out a stage:
+ * "Worked for {duration} · {actions} actions · {items_read} items read · ${cost}".
+ * `items_read` is optional (only shown when the engine reports it).
+ */
+function StageSummaryCard({ summary }: { summary: ResearchStageSummary }) {
+  const { t } = useTranslation("intake");
+  const base = t("research.feed.summaryCard", {
+    duration: fmtDurationSecs(summary.duration_s),
+    actions: summary.actions,
+    cost: fmtCost(summary.cost_usd, "—"),
+  });
+  return (
+    <div className="my-2 border-l-2 border-ink/20 bg-paper px-3 py-1.5 font-mono text-[12px] text-ink/70">
+      {base}
+      {summary.items_read != null && (
+        <span>{t("research.feed.summaryItemsRead", { count: summary.items_read })}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A single D15 agent card. Renders the task title, an expandable task prompt ("Show more"/
+ * "Show less"), a status line mapping status → icon + a `done · N facts · $X` result, a
+ * visible retry state ("retry {attempt}/{max} — waiting {wait_s}s"), and — when the item
+ * carries an `audit_id` AND the run has an id — a drill-down affordance that opens the
+ * redacted audit body. The card renders identically for a legacy item that lacks all the
+ * enriched fields (D-07). `onDrillDown` is only wired when a real drill-down is possible;
+ * there is NO no-op stub handler.
+ */
+function AgentCard({
+  row,
+  onDrillDown,
+  drilldownOpen,
+}: {
+  row: Extract<StageRow, { kind: "item" }>;
+  onDrillDown?: (auditId: string) => void;
+  drilldownOpen?: boolean;
+}) {
+  const { t } = useTranslation("intake");
+  const [promptOpen, setPromptOpen] = useState(false);
+
+  const canDrill = !!row.audit_id && !!onDrillDown;
+
+  const statusLabel =
+    row.status === "done"
+      ? t("research.stageDone")
+      : row.status === "running"
+        ? t("research.stageRunning")
+        : row.status === "retry"
+          ? t("research.feed.statusRetrying")
+          : row.status === "failed"
+            ? t("research.feed.statusFailed")
+            : t("research.stagePending");
+
+  // "done · 14 facts · $0.12" — only the parts the item actually carries.
+  const resultParts: string[] = [statusLabel];
+  if (row.facts != null) resultParts.push(t("research.feed.factsCount", { count: row.facts }));
+  if (row.cost_usd != null && row.cost_usd !== "") resultParts.push(fmtCost(row.cost_usd, "—"));
+  const resultLine = resultParts.join(" · ");
+
+  return (
+    <li className="border-l-2 border-ink/10 pl-3">
+      <div className="flex items-start gap-2 font-mono text-[13px]">
+        <span className="mt-0.5">
+          <StageIcon status={row.status} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div
+            className={
+              row.status === "done"
+                ? "text-ink/80"
+                : row.status === "running" || row.status === "retry"
+                  ? "text-ink"
+                  : row.status === "failed"
+                    ? "text-red-700"
+                    : "text-ink/40"
+            }
+          >
+            {row.name}
+          </div>
+          <div className="mt-0.5 text-[11px] uppercase tracking-wider text-ink/40">
+            {resultLine}
+          </div>
+
+          {/* Retries shown in the open (R5), never hidden. */}
+          {row.retry && (
+            <div className="mt-1 inline-flex items-center gap-1 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+              <RotateCw className="h-3 w-3" />
+              {t("research.feed.retryState", {
+                attempt: row.retry.attempt,
+                max: row.retry.max,
+                wait: row.retry.wait_s,
+              })}
+            </div>
+          )}
+
+          {/* Expandable subagent task prompt (Replit-style block). */}
+          {row.task_prompt && (
+            <div className="mt-1">
+              <button
+                type="button"
+                onClick={() => setPromptOpen((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink"
+              >
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform ${promptOpen ? "rotate-180" : ""}`}
+                />
+                {promptOpen ? t("research.feed.showLess") : t("research.feed.showPrompt")}
+              </button>
+              {promptOpen && (
+                <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words bg-paper px-3 py-2 text-[12px] leading-relaxed text-ink/70">
+                  {row.task_prompt}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {/* Audit-body drill-down affordance — hidden when audit_id OR run.id absent. */}
+          {canDrill && (
+            <button
+              type="button"
+              onClick={() => onDrillDown!(row.audit_id!)}
+              className="mt-1 inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink"
+            >
+              <FileSearch className="h-3 w-3" />
+              {drilldownOpen ? t("research.feed.hideAudit") : t("research.feed.viewAudit")}
+            </button>
+          )}
+        </div>
+      </div>
+    </li>
+  );
 }
 
 /**
@@ -278,22 +468,102 @@ function RawOutputControls({
 }
 
 /**
- * The live research-progress panel. While the run is active it renders the dynamic stage
- * list + running cost + elapsed clock. On a terminal status it collapses to a summary card
- * (completed → timestamp/cost/duration; failed/cancelled → error + a re-trigger affordance).
+ * The D15 agent feed — the ordered list of agent cards + per-block summary cards, with the
+ * audit-body drill-down wired. Shared by the ACTIVE panel and the COMPLETED summary card so
+ * that after the run the feed "stays frozen and clickable" (D15). Owns the drill-down open
+ * state + scroll-to-latest. When `runId` is null (no run id available) the drill-down
+ * affordance is hidden for every row (guards against calling getAuditBody without a runId).
+ */
+function AgentFeed({
+  rows,
+  intakeId,
+  runId,
+}: {
+  rows: StageRow[];
+  intakeId: string;
+  runId: string | null;
+}) {
+  const { t } = useTranslation("intake");
+  const [openAuditId, setOpenAuditId] = useState<string | null>(null);
+  const feedEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollToLatest = () => feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="font-mono text-[11px] uppercase tracking-wider text-ink/50">
+          {t("research.feed.title")}
+        </span>
+        <button
+          type="button"
+          onClick={scrollToLatest}
+          className="inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-wider text-ink/50 hover:text-ink"
+        >
+          <ArrowDownToLine className="h-3 w-3" />
+          {t("research.feed.scrollToLatest")}
+        </button>
+      </div>
+      <ul className="max-h-[28rem] space-y-2 overflow-auto">
+        {rows.map((row) =>
+          row.kind === "summary" ? (
+            <StageSummaryCard key={row.key} summary={row.summary} />
+          ) : (
+            <div key={row.key}>
+              <AgentCard
+                row={row}
+                drilldownOpen={!!row.audit_id && openAuditId === row.audit_id}
+                onDrillDown={
+                  row.audit_id && runId
+                    ? (auditId) => setOpenAuditId((cur) => (cur === auditId ? null : auditId))
+                    : undefined
+                }
+              />
+              {/* Real audit-body drill-down — intakeId + runId + auditId threaded. */}
+              {row.audit_id && runId && openAuditId === row.audit_id && (
+                <AuditBodyPanel
+                  intakeId={intakeId}
+                  runId={runId}
+                  auditId={row.audit_id}
+                  onClose={() => setOpenAuditId(null)}
+                />
+              )}
+            </div>
+          ),
+        )}
+      </ul>
+      <div ref={feedEndRef} />
+    </div>
+  );
+}
+
+/**
+ * The live research-progress panel. While the run is active it renders the dynamic D15
+ * agent feed + running cost + elapsed clock. On a terminal status it collapses to a summary
+ * card (completed → timestamp/cost/duration + the frozen, clickable feed; failed/cancelled →
+ * error + a re-trigger affordance).
  *
  * `onRetry` re-invokes the trigger; the 3-attempt cap is enforced server-side, so the panel
  * always offers the affordance and lets the backend reject an over-cap retry.
  */
 export function ResearchRunProgress({
   intakeId,
+  runId: runIdProp,
   onRetry,
 }: {
   intakeId: string;
+  // Optional: the route may lift the run id explicitly. When omitted (the default), the
+  // run id is sourced from the SSE run (`run.id`) internally. Either way the audit
+  // drill-down threads intakeId + runId + auditId into AuditBodyPanel.
+  runId?: string;
   onRetry?: () => void;
 }) {
   const { t } = useTranslation("intake");
   const { run } = useActiveResearchRun(intakeId);
+  // The run id used to scope the audit drill-down: prefer an explicit route prop, else the
+  // SSE run's id. When neither exists, the drill-down affordance is hidden by AgentFeed.
+  const runId = runIdProp ?? run?.id ?? null;
 
   const status = run?.status ?? "queued";
   // `needs_input` is the engine's parked clarification state. The intake side has
@@ -335,6 +605,14 @@ export function ResearchRunProgress({
           </div>
           {/* Raw-output download (verified) or locked+re-verify (broken) — RUN-03. */}
           {run && <RawOutputControls intakeId={intakeId} run={run} />}
+
+          {/* D15: after the run the feed stays frozen + clickable — a replay of what
+              happened, with the audit-body drill-down still reachable (superadmin-only). */}
+          {stageRows.length > 0 && (
+            <div className="mt-5 border-t border-ink/10 pt-4">
+              <AgentFeed rows={stageRows} intakeId={intakeId} runId={runId} />
+            </div>
+          )}
         </div>
       );
     }
@@ -422,38 +700,7 @@ export function ResearchRunProgress({
         </div>
       )}
 
-      {stageRows.length > 0 && (
-        <div>
-          <div className="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
-            {t("research.stagesTitle")}
-          </div>
-          <ul className="space-y-1">
-            {stageRows.map((row) => (
-              <li key={row.key} className="flex items-center gap-2 font-mono text-[13px]">
-                <StageIcon status={row.status} />
-                <span
-                  className={
-                    row.status === "done"
-                      ? "text-ink/70"
-                      : row.status === "running"
-                        ? "text-ink"
-                        : "text-ink/40"
-                  }
-                >
-                  {row.name}
-                </span>
-                <span className="ml-auto text-[11px] uppercase tracking-wider text-ink/40">
-                  {row.status === "done"
-                    ? t("research.stageDone")
-                    : row.status === "running"
-                      ? t("research.stageRunning")
-                      : t("research.stagePending")}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <AgentFeed rows={stageRows} intakeId={intakeId} runId={runId} />
     </div>
   );
 }
