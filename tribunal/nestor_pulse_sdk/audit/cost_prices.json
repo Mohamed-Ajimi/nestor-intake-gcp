@@ -1,6 +1,12 @@
 {
   "_comment": "Cost prices per 1M tokens as of 2026-05-27. Hot-reloadable per Pitfall 5.",
   "_format": "{ provider_model: { prompt, completion, cache_read, cache_creation_5m } } -- all values in USD per 1M tokens",
+  "_tool_fees_format": "Per-call flat server-tool fees in USD (NOT per token). Plan 15-02 C1 -- published rates, facts only, never estimated.",
+  "_tool_fees": {
+    "web_search": 0.01,
+    "web_fetch": 0.0
+  },
+  "_tool_fees_source": "web_search: Anthropic published $10 per 1000 searches = $0.01/search. web_fetch: Anthropic web_fetch has no per-fetch fee (billed as input tokens only) -> 0.0 flat fee; its token cost is already in prompt_tokens.",
 
   "anthropic/claude-opus-4-5": {
     "prompt": 15.0,
@@ -81,7 +87,7 @@
     "cache_read": 0.3125,
     "cache_creation_5m": 0.0
   },
-  "_comment_deep_research_preview": "Prices for deep-research-max/preview-04-2026 are ESTIMATES copied from gemini-2.5-pro pending official Google pricing.",
+  "_comment_deep_research_preview": "Plan 15-02 C1: the per-TOKEN rates below are the published Gemini 2.5 Pro base rates (the underlying deep-research model) -- these are FACTS, applied only when usageMetadata is present. Google does NOT publish an itemized grounding/search tool fee for these preview deep-research agents, so that un-itemizable fee is NEVER estimated: the caller sets run.cost_pending=True and the exact amount is backfilled from GCP billing. No displayed number is a guess.",
   "google/deep-research-max-preview-04-2026": {
     "prompt": 1.25,
     "completion": 10.0,

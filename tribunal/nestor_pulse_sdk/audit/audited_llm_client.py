@@ -209,6 +209,50 @@ def extract_report_from_steps(interaction: dict) -> str:
     return text
 
 
+def _extract_anthropic_tool_counts(usage) -> tuple[int, int]:
+    """Return (web_search_count, web_fetch_count) from an Anthropic usage object.
+
+    Plan 15-02 C1: Anthropic reports server-tool invocations under
+    usage.server_tool_use (e.g. .web_search_requests). These are FACTS read
+    straight off the response -- never estimated. Missing -> 0 (no fee added).
+    Accepts either an attribute-style object (SDK) or a dict (replayed row).
+    """
+    if usage is None:
+        return 0, 0
+
+    def _get(obj, name):
+        if isinstance(obj, dict):
+            return obj.get(name)
+        return getattr(obj, name, None)
+
+    stu = _get(usage, "server_tool_use")
+    if stu is None:
+        return 0, 0
+    web_search = _get(stu, "web_search_requests") or 0
+    web_fetch = _get(stu, "web_fetch_requests") or 0
+    try:
+        return int(web_search), int(web_fetch)
+    except (TypeError, ValueError):
+        return 0, 0
+
+
+def _extract_gemini_dr_usage(interaction: dict) -> Optional[dict]:
+    """Return the Gemini deep-research usageMetadata dict, or None if absent.
+
+    Plan 15-02 C1: the Interactions API MAY return a `usageMetadata` block with
+    promptTokenCount / candidatesTokenCount / thoughtsTokenCount. When present,
+    the caller prices the DR call from these FACTS (thoughts billed at output rate).
+    When ABSENT (confirmed for recorded run-4cbb5311), the caller sets
+    run.cost_pending=True -- it NEVER writes a placeholder/estimated number.
+    """
+    if not isinstance(interaction, dict):
+        return None
+    meta = interaction.get("usageMetadata")
+    if isinstance(meta, dict) and meta:
+        return meta
+    return None
+
+
 @dataclass
 class AuditHandle:
     """
@@ -307,14 +351,22 @@ class AuditedLLMClient:
             # Pitfall 6: extract cache token fields explicitly -- do NOT collapse into input_tokens
             cache_read_input_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
             cache_creation_input_tokens = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            # Plan 15-02 C1: count server-tool invocations (web_search/web_fetch) so their
+            # published flat fees enter this call's cost. Anthropic reports these under
+            # usage.server_tool_use.web_search_requests (facts from the response, never guessed).
+            web_search_count, web_fetch_count = _extract_anthropic_tool_counts(usage)
 
-            # Cost uses cache_read_input_tokens as cached_tokens; cache_creation charged separately
+            # Cost uses cache_read_input_tokens as cached_tokens; cache_creation is now
+            # CHARGED (Plan 15-02 C1) at the 5m rate, and server-tool fees are added.
             cost_usd = self._costs.compute(
                 provider="anthropic",
                 model=model,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cached_tokens=cache_read_input_tokens,
+                cache_creation_tokens=cache_creation_input_tokens,
+                web_search_count=web_search_count,
+                web_fetch_count=web_fetch_count,
             )
 
             request_dict = {k: v for k, v in kwargs.items() if k != "model"}
@@ -354,6 +406,7 @@ class AuditedLLMClient:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     cached_tokens=cache_read_input_tokens,
+                    cache_creation_tokens=cache_creation_input_tokens,
                     cost_usd=cost_usd,
                     gcs_uri=gcs_uri,
                     prev_hash=prev_hash,
@@ -661,14 +714,32 @@ class AuditedLLMClient:
 
             # Extract usage from response (provider-shaped)
             usage = response.get("usage", {})
+            # Plan 15-02 C1: deep-research grounding-fee pending flag. Set True only
+            # when a DR call completes WITHOUT usageMetadata -- its un-itemizable
+            # grounding/search fee is then backfilled from GCP billing, never estimated.
+            dr_cost_pending = False
             if handle.provider == "anthropic":
                 prompt_tokens = usage.get("input_tokens", 0) or 0
                 completion_tokens = usage.get("output_tokens", 0) or 0
                 # Pitfall 6: explicit cache token extraction
                 cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
             elif handle.provider == "google":
-                prompt_tokens = usage.get("prompt_token_count", 0) or 0
-                completion_tokens = usage.get("candidates_token_count", 0) or 0
+                # Plan 15-02 C1: Gemini deep-research returns camelCase usageMetadata
+                # (promptTokenCount/candidatesTokenCount/thoughtsTokenCount). Thoughts
+                # bill at the output rate, so fold them into completion_tokens.
+                dr_meta = response.get("usageMetadata")
+                if isinstance(dr_meta, dict) and dr_meta:
+                    prompt_tokens = int(dr_meta.get("promptTokenCount", 0) or 0)
+                    candidates = int(dr_meta.get("candidatesTokenCount", 0) or 0)
+                    thoughts = int(dr_meta.get("thoughtsTokenCount", 0) or 0)
+                    completion_tokens = candidates + thoughts
+                else:
+                    # No usageMetadata (confirmed for recorded run-4cbb5311): fall back
+                    # to the flat-shape usage dict if any; mark the grounding fee pending.
+                    prompt_tokens = usage.get("prompt_token_count", 0) or 0
+                    completion_tokens = usage.get("candidates_token_count", 0) or 0
+                    if status == "success":
+                        dr_cost_pending = True
                 cached_tokens = 0
             elif handle.provider == "openai":
                 prompt_tokens = usage.get("input_tokens", 0) or 0
@@ -688,6 +759,18 @@ class AuditedLLMClient:
                 completion_tokens=completion_tokens,
                 cached_tokens=cached_tokens,
             )
+
+            # Plan 15-02 C1: flag the run's grounding fee as pending (backfilled from
+            # billing) when a DR call has no usageMetadata. Best-effort + optional:
+            # only invoked if the injected writer exposes mark_cost_pending (the
+            # mandatory writer protocol is unchanged; a NULL number is never written).
+            if dr_cost_pending:
+                mark_pending = getattr(self._audit, "mark_cost_pending", None)
+                if callable(mark_pending):
+                    try:
+                        await mark_pending(run_id=handle.run_id, tenant_id=handle.tenant_id)
+                    except Exception as exc:  # never fail the audit write on a flag update
+                        log.warning("mark_cost_pending failed (run=%s): %s", handle.run_id, exc)
 
             # GCS upload OUTSIDE the per-run lock (slow; handle.audit_id is the stable
             # unique key component -- guaranteed unique per call regardless of provider/model).
@@ -819,7 +902,15 @@ class AuditedLLMClient:
                     if status in ("completed", "done"):
                         log.info("Gemini deep-research completed (agent=%s)", agent)
                         report_text = extract_report_from_steps(interaction)
-                        return {"status": "success", "report": report_text}
+                        # Plan 15-02 C1: surface usageMetadata (promptTokenCount/
+                        # candidatesTokenCount/thoughtsTokenCount) so end_call can price
+                        # the DR call from facts. ABSENT for recorded run-4cbb5311 -> the
+                        # value is None and end_call sets cost_pending (never estimated).
+                        envelope = {"status": "success", "report": report_text}
+                        dr_usage = _extract_gemini_dr_usage(interaction)
+                        if dr_usage is not None:
+                            envelope["usageMetadata"] = dr_usage
+                        return envelope
                     if status in ("failed", "error", "cancelled"):
                         error = interaction.get("error", "unknown error")
                         log.warning("Gemini deep-research failed: %s", error)
