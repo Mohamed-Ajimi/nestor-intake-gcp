@@ -312,7 +312,11 @@ class _ConstraintEnforcingFakeWriter:
         self, *, audit_id, run_id, tenant_id, seq, provider, model,
         started_at, duration_ms, prompt_tokens, completion_tokens,
         cached_tokens, cost_usd, gcs_uri, prev_hash, hash,
+        cache_creation_tokens=None,
     ) -> None:
+        # cache_creation_tokens (15-02, additive) is accepted but not stored:
+        # it is outside the hashed payload, and FakeAuditRow mirrors only the
+        # chain-relevant columns.
         # Enforce unique (run_id, seq)
         for existing in self.rows:
             if existing.run_id == run_id and existing.seq == seq:

@@ -268,7 +268,11 @@ def test_legacy_tools_not_modified():
         if not target.is_file():
             not_carried.append(rel_path)
             continue
-        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        # Normalize CRLF -> LF before hashing: the snapshot hashes LF bytes,
+        # but Windows checkouts (and Cloud Build archives made from them)
+        # carry CRLF, which is not a content change.
+        content = target.read_bytes().replace(b"\r\n", b"\n")
+        actual = hashlib.sha256(content).hexdigest()
         if actual != expected:
             mismatches.append(
                 f"{rel_path}: expected {expected[:12]}..., got {actual[:12]}..."
