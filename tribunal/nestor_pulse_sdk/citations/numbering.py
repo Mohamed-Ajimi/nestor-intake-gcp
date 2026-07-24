@@ -61,10 +61,18 @@ def _domain(url: str | None) -> str:
 
 
 def derive_quality_tier(provider: str | None, url: str | None) -> int:
-    """Derive a 1/2/3 quality tier from the provider/domain (A3 heuristic).
+    """Derive a 1/2/3 quality tier from the domain (A3 heuristic).
 
     1 = official/primary, 2 = established press/data provider, 3 = blog/other.
     NOT a stored column -- recomputed on read, deterministic for a given url.
+
+    The tier comes ONLY from the domain: which search provider fetched a source
+    says nothing about the source's quality, so any domain not recognised as
+    tier 1/2 is honestly tier 3 (blog/other) regardless of provider (WR-05 --
+    the old provider-conditional was dead code returning 3 on both branches;
+    the behavior is pinned by test_citation_numbering's tier tests). `provider`
+    stays in the signature: callers pass it and a REAL provider-informed
+    heuristic remains a later option.
     """
     host = _domain(url)
     if host:
@@ -72,10 +80,6 @@ def derive_quality_tier(provider: str | None, url: str | None) -> int:
             return 1
         if any(h in host for h in _TIER2_HOST_HINTS):
             return 2
-    # Provider-level fallback: an official-search provider hints tier 2 over blog.
-    prov = (provider or "").lower()
-    if prov in ("anthropic", "google", "openai", "tribunal_skeptic"):
-        return 3
     return 3
 
 
