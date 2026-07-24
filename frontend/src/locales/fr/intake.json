@@ -569,5 +569,21 @@
     "costPending": "frais d'outils : en attente",
     "evidenceLabel": "Preuve",
     "effectLabel": "Effet"
+  },
+  "citation": {
+    "loadError": "L'instantané de la source n'a pas pu être chargé. Veuillez réessayer.",
+    "regionLabel": "Source de la citation",
+    "title": "Source [{{n}}]",
+    "close": "Fermer",
+    "loading": "Chargement de l'instantané de la source…",
+    "untitled": "Source sans titre",
+    "published": "Publié : {{date}}",
+    "dateUnknown": "date inconnue",
+    "tierOfficial": "Source officielle",
+    "tierPress": "Presse sérieuse",
+    "tierBlog": "Blog / autre",
+    "singleSource": "source unique",
+    "snapshotLabel": "Instantané enregistré",
+    "snapshotEmpty": "Aucun texte d'instantané n'a été enregistré pour cette source."
   }
 }

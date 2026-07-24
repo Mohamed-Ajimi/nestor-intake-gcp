@@ -569,5 +569,21 @@
     "costPending": "tool fees: pending",
     "evidenceLabel": "Evidence",
     "effectLabel": "Effect"
+  },
+  "citation": {
+    "loadError": "The source snapshot could not be loaded. Please try again.",
+    "regionLabel": "Citation source",
+    "title": "Source [{{n}}]",
+    "close": "Close",
+    "loading": "Loading source snapshot…",
+    "untitled": "Untitled source",
+    "published": "Published: {{date}}",
+    "dateUnknown": "date unknown",
+    "tierOfficial": "Official source",
+    "tierPress": "Serious press",
+    "tierBlog": "Blog / other",
+    "singleSource": "single source",
+    "snapshotLabel": "Stored snapshot",
+    "snapshotEmpty": "No snapshot text was stored for this source."
   }
 }
