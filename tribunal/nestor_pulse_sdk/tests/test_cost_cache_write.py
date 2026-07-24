@@ -270,7 +270,61 @@ def test_unknown_model_null():
 
 
 # ===========================================================================
-# TEST 5 (CR-02 regression): the PRODUCTION writer implements mark_cost_pending
+# TEST 5 (WR-01 regression): two-phase anthropic end_call counts cache-write
+# tokens + server-tool fees exactly like the atomic path
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_two_phase_anthropic_counts_cache_write_and_tool_fees():
+    """An anthropic call routed through start_call/end_call must price
+    cache_creation_input_tokens (5m rate) + server-tool fees, and persist the
+    cache_creation_tokens fact -- the WR-01 defect was that only the atomic
+    anthropic_messages path did, silently under-pricing two-phase calls."""
+    tenant_id = uuid.uuid4()
+    writer = _FakeWriter()
+    client = _make_client(writer)
+    run_id = uuid.uuid4()
+
+    prompt_tokens, completion_tokens = 1000, 500
+    cached_tokens, cache_create, searches = 100, 200, 3
+
+    handle = AuditHandle(
+        audit_id=uuid.uuid4(), run_id=run_id, tenant_id=tenant_id,
+        seq=-1, prev_hash="", started_at=0.0,
+        started_dt=datetime.now(tz=timezone.utc),
+        provider="anthropic", model=_SONNET, request_dict={"q": "x"},
+    )
+    await client.end_call(
+        handle,
+        response={
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "cache_read_input_tokens": cached_tokens,
+                "cache_creation_input_tokens": cache_create,
+                "server_tool_use": {"web_search_requests": searches},
+            },
+        },
+        status="success",
+    )
+
+    assert len(writer.rows) == 1
+    row = writer.rows[0]
+    # The cache-write token FACT is persisted (non-hashed column, additive).
+    assert row.cache_creation_tokens == cache_create
+    # EXACT expected cost: full Pitfall-6 formula + C1 cache-create + tool fee.
+    expected = (
+        Decimal(prompt_tokens - cached_tokens) * (_PROMPT_RATE / _PER_M)
+        + Decimal(cached_tokens) * (_CACHE_READ_RATE / _PER_M)
+        + Decimal(cache_create) * (_CACHE_CREATE_RATE / _PER_M)
+        + Decimal(completion_tokens) * (_COMPLETION_RATE / _PER_M)
+        + Decimal(searches) * _WEB_SEARCH_FEE
+    )
+    assert row.cost_usd == expected
+
+
+# ===========================================================================
+# TEST 6 (CR-02 regression): the PRODUCTION writer implements mark_cost_pending
 # ===========================================================================
 
 def test_production_writer_implements_mark_cost_pending():

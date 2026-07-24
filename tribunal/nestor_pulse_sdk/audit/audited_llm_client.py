@@ -718,11 +718,22 @@ class AuditedLLMClient:
             # when a DR call completes WITHOUT usageMetadata -- its un-itemizable
             # grounding/search fee is then backfilled from GCP billing, never estimated.
             dr_cost_pending = False
+            cache_creation_tokens = 0
+            web_search_count = 0
+            web_fetch_count = 0
             if handle.provider == "anthropic":
                 prompt_tokens = usage.get("input_tokens", 0) or 0
                 completion_tokens = usage.get("output_tokens", 0) or 0
                 # Pitfall 6: explicit cache token extraction
                 cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
+                # WR-01 / Plan 15-02 C1: the two-phase path must count the SAME
+                # facts the atomic anthropic_messages path counts -- cache-WRITE
+                # tokens (charged at the 5m rate) and server-tool invocations
+                # (published flat fees). Omitting them silently under-priced any
+                # Anthropic call routed through start_call/end_call and dropped
+                # the cache_creation_tokens fact from the audit row.
+                cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) or 0
+                web_search_count, web_fetch_count = _extract_anthropic_tool_counts(usage)
             elif handle.provider == "google":
                 # Plan 15-02 C1: Gemini deep-research returns camelCase usageMetadata
                 # (promptTokenCount/candidatesTokenCount/thoughtsTokenCount). Thoughts
@@ -751,13 +762,17 @@ class AuditedLLMClient:
                 completion_tokens = 0
                 cached_tokens = 0
 
-            # Pitfall 5: unknown model -> None
+            # Pitfall 5: unknown model -> None. Cache-write + server-tool facts
+            # enter the price exactly as on the atomic path (WR-01 / C1).
             cost_usd = self._costs.compute(
                 provider=handle.provider,
                 model=handle.model,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 cached_tokens=cached_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+                web_search_count=web_search_count,
+                web_fetch_count=web_fetch_count,
             )
 
             # Plan 15-02 C1: flag the run's grounding fee as pending (backfilled from
@@ -825,6 +840,12 @@ class AuditedLLMClient:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     cached_tokens=cached_tokens,
+                    # WR-01: persist the cache-write token FACT (non-hashed column,
+                    # additive -- same as the atomic path). NULL for non-anthropic
+                    # providers (fact not applicable); a counted 0 stays 0.
+                    cache_creation_tokens=(
+                        cache_creation_tokens if handle.provider == "anthropic" else None
+                    ),
                     cost_usd=cost_usd,
                     gcs_uri=gcs_uri,
                     prev_hash=prev_hash,
