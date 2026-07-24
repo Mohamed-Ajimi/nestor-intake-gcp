@@ -30,11 +30,13 @@ Plan: 7 of 7 done; REVIEW fixed (8 findings), SC4 citation gap closed (be3fc8a)
 Status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 00040-8mw,
   tribunal images 20260724-214354, migration 0011 applied, suites green — see 15-UAT.md Deploy Record).
   Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
-  UAT BLOCKER (found 2026-07-24): recorded run-4cbb5311 exists ONLY as a pytest fixture
-  (loader.load_recorded_run seeds a TEST session) — never seeded into the live DB and no intake is
-  wired to it, so the "View verification report" button has no page to appear on. Browser UAT needs
-  either (a) a live seed of the recorded run + in_research intake + mirrored research_runs row, or
-  (b) a real live run after the Anthropic cap resets 2026-08-01.
+  UAT STATUS (2026-07-24): Gate fix (quick 260724-vyf, rev 00025-4w8) deployed — the "View
+  verification report" button + D15 feed now render on delivered/archived intakes (SURFACING proven).
+  But the recorded run-4cbb5311 exists ONLY as a pytest fixture (loader.load_recorded_run seeds a
+  TEST session), never seeded into the live DB, so the report body is empty on the old delivered run.
+  OPERATOR DECISION 2026-07-24: WAIT for a real live run (seed option declined) — populated SC1-SC4
+  browser walkthrough deferred to a live Tribunal run after the Anthropic monthly cap resets
+  2026-08-01. No live-DB seeding will be done. This aligns with the existing end-of-Phase-15.2 UAT deferral.
 Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
 Last activity: 2026-07-24 -- quick 260724-vyf: broadened ResearchRunProgress mount gate
   (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT;
