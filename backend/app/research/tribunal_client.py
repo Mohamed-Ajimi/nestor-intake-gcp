@@ -302,3 +302,94 @@ def verify_chain(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 operator read surfaces (SEAM-01): get_verification / get_source /
+# get_audit_body.
+#
+# Same keyword-only + blocking-httpx + raise_for_status + JSON-return shape as
+# get_metrics — they REUSE _headers / _mint_id_token (no new OIDC code, audience
+# stays the path-less service_url per Pitfall 4). These proxy the Plan 15-03
+# tribunal read endpoints (GET /api/runs/{run_id}/verification, GET
+# /api/sources/{source_id}, GET /api/runs/{run_id}/audit/{audit_id}) so the intake
+# backend stays the SOLE caller of Tribunal (the frontend never calls it directly).
+# These persist NOTHING.
+# ---------------------------------------------------------------------------
+
+
+def get_verification(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Fetch a run's verification report; return the VerificationReport dict.
+
+    GETs ``{service_url}/api/runs/{run_id}/verification`` with the same headers as
+    :func:`get_metrics`. Returns the STAKEHOLDER-NOTES verification shape (funnel +
+    verdict groups + refuted-with-evidence + true cost) the operator surface renders.
+    Raises ``httpx.HTTPStatusError`` on any non-2xx (RLS-miss / unknown run is a 404 at
+    the tribunal layer). Persists NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/verification",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_source(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    source_id: str,
+) -> dict:
+    """Fetch a research-citation source snapshot; return the source dict.
+
+    GETs ``{service_url}/api/sources/{source_id}`` with the same headers as
+    :func:`get_metrics`. This is the RESEARCH-CITATION source (title/url/provider/
+    snapshot) behind a ``[n]`` citation — a DISTINCT concern from the intake-upload
+    ``sources`` surface. Raises ``httpx.HTTPStatusError`` on any non-2xx (RLS-miss /
+    unknown source is a 404 at the tribunal layer). Persists NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/sources/{source_id}",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_audit_body(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+    audit_id: str,
+) -> dict:
+    """Fetch a run's redacted audit-body drill-down; return the AuditBody dict.
+
+    GETs ``{service_url}/api/runs/{run_id}/audit/{audit_id}`` with the same headers as
+    :func:`get_metrics`. This is the D15 feed drill-down target — the ALREADY-REDACTED
+    audit body (provider/model/request/response, NO hash/prev_hash) for a single
+    ``audit_id`` scoped to ``run_id``. Raises ``httpx.HTTPStatusError`` on any non-2xx
+    (RLS-miss / cross-tenant / unknown audit is a 404 at the tribunal layer). Persists
+    NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/audit/{audit_id}",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
