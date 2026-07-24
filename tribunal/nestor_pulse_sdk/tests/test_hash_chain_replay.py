@@ -755,3 +755,107 @@ async def test_gcs_key_unique_per_audit_id():
     # Each key must embed its respective audit_id
     assert str(audit_id_1) in key1, f"audit_id_1 not in key1: {key1}"
     assert str(audit_id_2) in key2, f"audit_id_2 not in key2: {key2}"
+
+
+# ===========================================================================
+# TEST 11: Chain stays GREEN after the 0011 cost/verification migration
+# (Phase 15 ENGINE-09, T-15-01). The new columns cache_creation_tokens /
+# cost_pending / verification_summary are ADDITIVE and must NOT be members of
+# the frozen 11-field _payload_for_row set -- otherwise every existing chain
+# breaks.
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_chain_green_after_cost_migration():
+    """verify_chain stays (True, None) after 0011, AND the three new column
+    names are absent from the frozen _payload_for_row field set."""
+    from nestor_pulse_sdk.audit.hash_chain import _payload_for_row
+
+    run_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+
+    # A valid chain built with the pre-migration 11-field payload must still
+    # verify green -- the migration adds columns OUTSIDE that set.
+    rows = _build_chain_rows(4, run_id, tenant_id)
+    session = _make_mock_session(rows)
+    ok, broken_at = await verify_chain(run_id, session)
+    assert ok is True, f"chain broke at {broken_at} after cost migration"
+    assert broken_at is None
+
+    # Introspect the frozen payload field set from a representative row.
+    frozen_fields = set(_payload_for_row(rows[0]).keys())
+    assert len(frozen_fields) == 11, (
+        f"_payload_for_row must stay at 11 frozen fields, got {len(frozen_fields)}: "
+        f"{sorted(frozen_fields)}"
+    )
+    for new_col in ("cache_creation_tokens", "cost_pending", "verification_summary"):
+        assert new_col not in frozen_fields, (
+            f"{new_col} MUST stay OUT of the hashed payload (T-15-01) -- "
+            f"adding it would break every existing chain."
+        )
+
+
+# ===========================================================================
+# TEST 12: Recorded run 4cbb5311 fixture seeds an ENRICHED stage_detail
+# (per-row cost_usd + audit_id) so the D15 feed (Plan 15-05) renders REAL
+# recorded data at UAT -- NOT flat {name,status} rows. Also proves the verdict
+# extraction seeds real refute+reconciliation rows and the recorded funnel.
+# ===========================================================================
+
+def test_recorded_stage_detail_enriched():
+    """load_recorded_run seeds run.stage_detail with enriched items; at least
+    one item carries BOTH cost_usd and audit_id (feed-shape proof), and the
+    recorded funnel + a refute verdict with non-null reconciliation are present.
+    """
+    from nestor_pulse_sdk.tests.fixtures.run_4cbb5311 import (
+        RECORDED_FUNNEL_COUNTS,
+        load_recorded_run,
+    )
+
+    tenant_id = uuid.uuid4()
+    # session=None -> pure construction, no DB required (no-Docker dev box).
+    run = load_recorded_run(session=None, tenant_id=tenant_id)
+
+    # --- enriched stage_detail: NOT flat {name,status} ---
+    assert isinstance(run.stage_detail, dict) and run.stage_detail, (
+        "stage_detail must be a non-empty enriched dict"
+    )
+    enriched_hit = False
+    for stage_key, stage in run.stage_detail.items():
+        assert "items" in stage and "summary" in stage, (
+            f"stage {stage_key!r} must carry items + summary (enriched shape)"
+        )
+        for item in stage["items"]:
+            # Enriched fields present on every item.
+            for field_name in ("name", "status", "task_prompt", "cost_usd",
+                               "facts", "audit_id"):
+                assert field_name in item, (
+                    f"item in stage {stage_key!r} missing enriched field "
+                    f"{field_name!r} -- feed would degrade to flat rows"
+                )
+            if item["cost_usd"] is not None and item["audit_id"] is not None:
+                enriched_hit = True
+    assert enriched_hit, (
+        "at least ONE stage_detail item must have BOTH cost_usd AND audit_id "
+        "populated so the D15 feed renders per-row cost + drill-down (SC2 / V-02)"
+    )
+
+    # --- recorded funnel counts ---
+    assert run.verification_summary["distilled"] == 1162
+    assert run.verification_summary == RECORDED_FUNNEL_COUNTS
+
+    # --- real verdict rows incl. >=1 refute with non-null reconciliation ---
+    verdict_rows = run._fixture_verdict_rows  # type: ignore[attr-defined]
+    assert verdict_rows, "fixture must seed verification_verdict rows"
+    refute_rows = [
+        v for v in verdict_rows
+        if v.verdict == "refute" and v.reconciliation is not None
+    ]
+    assert refute_rows, (
+        "at least one seeded verdict must be verdict='refute' with a non-null "
+        "reconciliation (verdict-depth acceptance)"
+    )
+    # evidence_refs non-null on the refute row.
+    assert any(v.evidence_refs is not None for v in refute_rows), (
+        "the refute row must carry non-null evidence_refs"
+    )
