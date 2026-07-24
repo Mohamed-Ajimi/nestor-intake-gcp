@@ -68,28 +68,44 @@ export type ResearchStageDetail = Record<
 /**
  * The superadmin verification report (Plan 15-03 `build_verification_report`). Shaped from
  * the recorded run's persisted `verification_verdict` rows + `run.verification_summary`
- * funnel + true cost. `extra="allow"` server-side means additional rollup fields (`counts`)
- * may ride through — the type is intentionally permissive on those.
+ * funnel + true cost. These types MIRROR the backend `VerificationReport` /
+ * `VerificationVerdictItem` pydantic schemas in tribunal `runs/schemas.py` (shaped by
+ * `verification/report.py::_verdict_dto`) VERBATIM — the intake proxy returns the tribunal
+ * JSON unchanged, so field names here MUST match the backend emit (`claim_id` /
+ * `confidence` / `evidence_refs` / `reconciliation`, `true_cost.{cost_usd_total,
+ * cost_pending}`, `unverified.{count,claims_with_verdict,total_claims}`). `extra="allow"`
+ * server-side means additional rollup fields (`counts`) may ride through — the index
+ * signature keeps the type permissive on those.
  */
 export type VerificationVerdictItem = {
-  claim?: string | null;
+  claim_id?: string | null;
   verdict?: string | null;
-  evidence?: string | null;
-  effect?: string | null;
+  confidence?: string | null;
+  evidence_refs?: unknown[] | null;
+  reconciliation?: {
+    disputed?: boolean;
+    relation?: string | null;
+    note?: string | null;
+    canonical?: string | null;
+    [k: string]: unknown;
+  } | null;
   [k: string]: unknown;
 };
 
 export type VerificationReport = {
-  funnel: Record<string, number>;
+  funnel: Record<string, number> | null;
   verdicts: {
     support?: VerificationVerdictItem[];
     refute?: VerificationVerdictItem[];
     insufficient?: VerificationVerdictItem[];
   };
+  /** Refute verdicts carrying real skeptic evidence_refs (the "why refuted" list). */
+  refuted?: VerificationVerdictItem[];
   superseded: VerificationVerdictItem[];
   reconciled: VerificationVerdictItem[];
-  unverified: { count: number; items?: VerificationVerdictItem[] };
-  cost: { total: string; pending: boolean };
+  unverified: { count: number; claims_with_verdict: number; total_claims: number };
+  /** C1 facts-only cost: `cost_pending` true means an un-itemized fee is still open. */
+  true_cost: { cost_usd_total: string | null; cost_pending: boolean };
   [k: string]: unknown;
 };
 

@@ -34,7 +34,35 @@ function MdText({ value }: { value: string | null | undefined }) {
   );
 }
 
-/** A verdict/contradiction row: claim + optional evidence + optional effect/canonical. */
+/**
+ * Render one backend `evidence_refs` entry as display text. The refs are opaque JSON
+ * (skeptic-emitted): usually strings, sometimes objects carrying a quote/text/url field.
+ * Never throws — an unrecognised shape degrades to its JSON string.
+ */
+function refToText(ref: unknown): string {
+  if (typeof ref === "string") return ref;
+  if (ref && typeof ref === "object") {
+    const r = ref as Record<string, unknown>;
+    for (const key of ["quote", "text", "evidence", "claim", "title", "url", "source"]) {
+      const v = r[key];
+      if (typeof v === "string" && v) return v;
+    }
+    try {
+      return JSON.stringify(ref);
+    } catch {
+      return "";
+    }
+  }
+  return ref == null ? "" : String(ref);
+}
+
+/**
+ * A verdict/contradiction row rendering the REAL backend `_verdict_dto` fields
+ * (claim_id / verdict / confidence / evidence_refs / reconciliation) — never the
+ * pre-CR-01 imaginary `claim`/`evidence`/`effect` keys the backend does not emit.
+ * The evidence block lists `evidence_refs`; the effect/canonical block renders
+ * `reconciliation.canonical`, with `reconciliation.note` as an inline caveat.
+ */
 function VerdictItemRow({
   item,
   showEffect,
@@ -43,27 +71,50 @@ function VerdictItemRow({
   showEffect?: boolean;
 }) {
   const { t } = useTranslation("intake");
-  const claim = typeof item.claim === "string" ? item.claim : "";
-  const evidence = typeof item.evidence === "string" ? item.evidence : "";
-  const effect = typeof item.effect === "string" ? item.effect : "";
+  const verdict = typeof item.verdict === "string" ? item.verdict : "";
+  const confidence = typeof item.confidence === "string" ? item.confidence : "";
+  const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
+  const recon =
+    item.reconciliation && typeof item.reconciliation === "object" ? item.reconciliation : null;
+  const canonical = typeof recon?.canonical === "string" ? recon.canonical : "";
+  const note = typeof recon?.note === "string" ? recon.note : "";
   return (
     <li className="border-l-2 border-ink/15 pl-3">
-      {claim && <MdText value={claim} />}
-      {evidence && (
+      <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink/60">
+        {verdict && <span className="uppercase tracking-wider">{verdict}</span>}
+        {confidence && (
+          <span className="bg-paper px-2 py-0.5">
+            {t("verification.confidenceLabel")}: {confidence}
+          </span>
+        )}
+      </div>
+      {refs.length > 0 && (
         <div className="mt-1">
           <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
             {t("verification.evidenceLabel")}
           </span>
-          <MdText value={evidence} />
+          <ul className="space-y-1">
+            {refs.map((ref, idx) => {
+              const text = refToText(ref);
+              return text ? (
+                <li key={idx}>
+                  <MdText value={text} />
+                </li>
+              ) : null;
+            })}
+          </ul>
         </div>
       )}
-      {showEffect && effect && (
+      {showEffect && canonical && (
         <div className="mt-1">
           <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
             {t("verification.effectLabel")}
           </span>
-          <MdText value={effect} />
+          <MdText value={canonical} />
         </div>
+      )}
+      {note && (
+        <p className="mt-1 bg-amber-50 px-2 py-1 font-sans text-[12px] text-amber-800">{note}</p>
       )}
     </li>
   );
@@ -195,29 +246,33 @@ export function VerificationReport({
             items={report.verdicts?.insufficient}
           />
 
-          {/* ── Superseded / scoped findings (temporal caveat inline) ───────────── */}
+          {/* ── Superseded / scoped findings (canonical value + caveat inline) ──── */}
           <VerdictSection
             title={t("verification.supersededTitle")}
             items={report.superseded}
+            showEffect
           />
 
           {/* ── Reconciled contradictions (chosen canonical value) ─────────────── */}
           <VerdictSection
             title={t("verification.reconciledTitle")}
             items={report.reconciled}
+            showEffect
           />
 
-          {/* ── Honest unverified list ──────────────────────────────────────────── */}
+          {/* ── Honest unverified accounting (count-only — the backend emits no
+                 per-claim items: {count, claims_with_verdict, total_claims}) ──────── */}
           <div className="mb-5">
             <div className="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
               {t("verification.unverifiedTitle", { count: report.unverified?.count ?? 0 })}
             </div>
-            {report.unverified?.items && report.unverified.items.length > 0 ? (
-              <ul className="space-y-2">
-                {report.unverified.items.map((item, idx) => (
-                  <VerdictItemRow key={idx} item={item} />
-                ))}
-              </ul>
+            {(report.unverified?.count ?? 0) > 0 ? (
+              <p className="font-sans text-[13px] text-ink/60">
+                {t("verification.unverifiedSummary", {
+                  withVerdict: report.unverified?.claims_with_verdict ?? 0,
+                  total: report.unverified?.total_claims ?? 0,
+                })}
+              </p>
             ) : (
               <p className="font-sans text-[13px] text-ink/60">
                 {t("verification.unverifiedNone")}
@@ -230,16 +285,20 @@ export function VerificationReport({
             <div className="mb-1 font-mono text-[11px] uppercase tracking-wider text-ink/50">
               {t("verification.costTitle")}
             </div>
-            {report.cost?.pending ? (
+            {report.true_cost?.cost_pending ? (
               <div className="font-mono text-[13px] text-ink/70">
-                {t("verification.costTotalWithPending", { total: report.cost?.total ?? "—" })}
+                {t("verification.costTotalWithPending", {
+                  total: report.true_cost?.cost_usd_total ?? "—",
+                })}
                 <span className="ml-2 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
                   {t("verification.costPending")}
                 </span>
               </div>
             ) : (
               <div className="font-mono text-[13px] text-ink/70">
-                {t("verification.costTotal", { total: report.cost?.total ?? "—" })}
+                {t("verification.costTotal", {
+                  total: report.true_cost?.cost_usd_total ?? "—",
+                })}
               </div>
             )}
           </div>

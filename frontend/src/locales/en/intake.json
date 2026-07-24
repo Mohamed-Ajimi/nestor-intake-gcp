@@ -563,6 +563,8 @@
     "reconciledTitle": "Reconciled contradictions",
     "unverifiedTitle": "Unverified ({{count}})",
     "unverifiedNone": "No unverified claims — every claim carries a verdict.",
+    "unverifiedSummary": "{{withVerdict}} of {{total}} claims carry a verdict; the rest are unverified.",
+    "confidenceLabel": "Confidence",
     "costTitle": "True itemized cost",
     "costTotal": "Total: {{total}}",
     "costTotalWithPending": "Total so far: {{total}}",

@@ -563,6 +563,8 @@
     "reconciledTitle": "Verzoende tegenstrijdigheden",
     "unverifiedTitle": "Niet-geverifieerd ({{count}})",
     "unverifiedNone": "Geen niet-geverifieerde beweringen — elke bewering draagt een oordeel.",
+    "unverifiedSummary": "{{withVerdict}} van de {{total}} beweringen dragen een oordeel; de rest is niet geverifieerd.",
+    "confidenceLabel": "Vertrouwen",
     "costTitle": "Werkelijke gespecificeerde kosten",
     "costTotal": "Totaal: {{total}}",
     "costTotalWithPending": "Totaal tot nu toe: {{total}}",

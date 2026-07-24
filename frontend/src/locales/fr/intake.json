@@ -563,6 +563,8 @@
     "reconciledTitle": "Contradictions réconciliées",
     "unverifiedTitle": "Non vérifiées ({{count}})",
     "unverifiedNone": "Aucune affirmation non vérifiée — chaque affirmation porte un verdict.",
+    "unverifiedSummary": "{{withVerdict}} des {{total}} affirmations portent un verdict ; les autres ne sont pas vérifiées.",
+    "confidenceLabel": "Confiance",
     "costTitle": "Coût réel détaillé",
     "costTotal": "Total : {{total}}",
     "costTotalWithPending": "Total à ce jour : {{total}}",
