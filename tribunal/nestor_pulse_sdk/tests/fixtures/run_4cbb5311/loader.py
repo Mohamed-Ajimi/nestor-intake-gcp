@@ -65,11 +65,16 @@ RECORDED_FUNNEL_COUNTS: dict[str, int] = {
 
 
 def _report_dir() -> Path:
-    """Locate the committed run-report dir by walking up from this module.
+    """Locate the committed run-report dir.
 
-    Robust to worktree vs main-checkout layout: searches ancestors for
-    `docs/tribunal-run-reports/run-20260722-4cbb5311`.
+    Prefers the in-package `recorded/` copy — required in Cloud Build, where
+    `gcloud builds submit tribunal` ships only the tribunal/ subtree and the
+    repo-root `docs/` dir is absent from /workspace. Falls back to walking up
+    for `docs/tribunal-run-reports/run-20260722-4cbb5311` (dev checkouts).
     """
+    local = Path(__file__).resolve().parent / "recorded"
+    if (local / "index.json").is_file():
+        return local
     rel = Path("docs/tribunal-run-reports/run-20260722-4cbb5311")
     here = Path(__file__).resolve()
     for ancestor in here.parents:
