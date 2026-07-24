@@ -761,9 +761,11 @@ class AuditedLLMClient:
             )
 
             # Plan 15-02 C1: flag the run's grounding fee as pending (backfilled from
-            # billing) when a DR call has no usageMetadata. Best-effort + optional:
-            # only invoked if the injected writer exposes mark_cost_pending (the
-            # mandatory writer protocol is unchanged; a NULL number is never written).
+            # billing) when a DR call has no usageMetadata. The production writer
+            # (DBAuditWriter.mark_cost_pending) implements this; a writer that lacks
+            # the method is a PROTOCOL BUG -- the pending fact would be silently lost
+            # and an incomplete cost presented as settled (the CR-02 defect), so the
+            # missing-method case logs at ERROR instead of silently no-opping.
             if dr_cost_pending:
                 mark_pending = getattr(self._audit, "mark_cost_pending", None)
                 if callable(mark_pending):
@@ -771,6 +773,13 @@ class AuditedLLMClient:
                         await mark_pending(run_id=handle.run_id, tenant_id=handle.tenant_id)
                     except Exception as exc:  # never fail the audit write on a flag update
                         log.warning("mark_cost_pending failed (run=%s): %s", handle.run_id, exc)
+                else:
+                    log.error(
+                        "audit writer %s lacks mark_cost_pending -- run %s cost_pending "
+                        "NOT persisted (C1 facts-only cost violated; fix the writer)",
+                        type(self._audit).__name__,
+                        handle.run_id,
+                    )
 
             # GCS upload OUTSIDE the per-run lock (slow; handle.audit_id is the stable
             # unique key component -- guaranteed unique per call regardless of provider/model).

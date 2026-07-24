@@ -267,3 +267,33 @@ def test_unknown_model_null():
         cache_creation_tokens=200, web_search_count=3,
     ) is None
     assert ct.compute("madeup", "model-x", 100, 50, 0) is None
+
+
+# ===========================================================================
+# TEST 5 (CR-02 regression): the PRODUCTION writer implements mark_cost_pending
+# ===========================================================================
+
+def test_production_writer_implements_mark_cost_pending():
+    """DBAuditWriter (the PRODUCTION writer) must implement mark_cost_pending.
+
+    The CR-02 defect: end_call's pending path probes the writer via getattr and
+    silently no-ops when the method is missing -- and only the test FAKE had it,
+    so run.cost_pending was dead in production (an incomplete cost presented as
+    settled, violating C1 facts-only). This pins the method on the real writer:
+    async, keyword-only run_id + tenant_id (the exact call shape end_call uses).
+    """
+    import inspect
+
+    from nestor_pulse_sdk.audit.writer import DBAuditWriter
+
+    method = getattr(DBAuditWriter, "mark_cost_pending", None)
+    assert callable(method), (
+        "DBAuditWriter must implement mark_cost_pending -- without it the "
+        "run.cost_pending flag is silently dropped in production (CR-02)"
+    )
+    assert inspect.iscoroutinefunction(method), "mark_cost_pending must be async"
+    params = inspect.signature(method).parameters
+    assert "run_id" in params and "tenant_id" in params, (
+        "mark_cost_pending must accept run_id + tenant_id keywords "
+        "(end_call calls it as mark_pending(run_id=..., tenant_id=...))"
+    )

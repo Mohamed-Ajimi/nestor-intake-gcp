@@ -170,6 +170,30 @@ class DBAuditWriter:
                     },
                 )
 
+    async def mark_cost_pending(
+        self, *, run_id: uuid.UUID, tenant_id: uuid.UUID
+    ) -> None:
+        """Flag the run's cost as pending (Plan 15-02 C1 -- facts-only cost).
+
+        Sets ``run.cost_pending = true`` when a deep-research call completes
+        WITHOUT usage metadata: its un-itemizable grounding/search fee is
+        backfilled from GCP billing later -- NEVER estimated. The flag drives
+        the verification report's ``true_cost.cost_pending`` label so an
+        incomplete cost is never presented as a settled fact.
+
+        Own session + tenant context (Autonomous Transaction pattern, same as
+        every other writer method): run is FORCE-RLS, so the UPDATE is scoped
+        to the caller's tenant -- a cross-tenant run_id updates zero rows.
+        Idempotent (repeated pending calls keep the flag true).
+        """
+        async with self._sm() as session:
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                await session.execute(
+                    text("UPDATE run SET cost_pending = true WHERE id = :rid"),
+                    {"rid": str(run_id)},
+                )
+
     async def write_full_row(
         self,
         *,
