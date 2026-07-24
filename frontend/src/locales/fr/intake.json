@@ -518,6 +518,56 @@
     "reverifyStillBroken": "La chaîne est toujours rompue — le téléchargement reste verrouillé.",
     "unverifiedTitle": "Chaîne d'audit pas encore vérifiée",
     "unverifiedBody": "Cette exécution est terminée mais la chaîne de hachage d'audit n'a pas encore été contrôlée. Vérifiez la chaîne pour déverrouiller la sortie brute.",
-    "verifyChain": "Vérifier la chaîne"
+    "verifyChain": "Vérifier la chaîne",
+    "feed": {
+      "title": "Activité",
+      "scrollToLatest": "Aller au plus récent",
+      "summaryCard": "Travaillé pendant {{duration}} · {{actions}} actions · {{cost}}",
+      "summaryItemsRead": " · {{count}} éléments lus",
+      "statusRetrying": "nouvelle tentative",
+      "statusFailed": "échec",
+      "factsCount": "{{count}} faits",
+      "retryState": "tentative {{attempt}}/{{max}} — attente {{wait}}s",
+      "showPrompt": "Afficher la tâche",
+      "showLess": "Afficher moins",
+      "viewAudit": "Voir le corps d'audit",
+      "hideAudit": "Masquer le corps d'audit"
+    }
+  },
+  "audit": {
+    "loadError": "Le corps d'audit n'a pas pu être chargé. Réessayez.",
+    "regionLabel": "Corps d'audit",
+    "title": "Corps d'audit",
+    "close": "Fermer",
+    "loading": "Chargement du corps d'audit…",
+    "provider": "Fournisseur : {{provider}}",
+    "model": "Modèle : {{model}}",
+    "unknown": "inconnu",
+    "request": "Requête",
+    "response": "Réponse"
+  },
+  "verification": {
+    "loadError": "Le rapport de vérification n'a pas pu être chargé. Réessayez.",
+    "regionLabel": "Rapport de vérification",
+    "title": "Rapport de vérification",
+    "close": "Fermer",
+    "loading": "Chargement du rapport de vérification…",
+    "viewAction": "Voir le rapport de vérification",
+    "hideAction": "Masquer le rapport de vérification",
+    "funnelTitle": "Entonnoir des filtres",
+    "funnelStage": "{{stage}} : {{count}}",
+    "refutedTitle": "Affirmations réfutées",
+    "supportTitle": "Affirmations confirmées",
+    "insufficientTitle": "Preuves insuffisantes",
+    "supersededTitle": "Constats dépassés / limités",
+    "reconciledTitle": "Contradictions réconciliées",
+    "unverifiedTitle": "Non vérifiées ({{count}})",
+    "unverifiedNone": "Aucune affirmation non vérifiée — chaque affirmation porte un verdict.",
+    "costTitle": "Coût réel détaillé",
+    "costTotal": "Total : {{total}}",
+    "costTotalWithPending": "Total à ce jour : {{total}}",
+    "costPending": "frais d'outils : en attente",
+    "evidenceLabel": "Preuve",
+    "effectLabel": "Effet"
   }
 }

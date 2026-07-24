@@ -518,6 +518,56 @@
     "reverifyStillBroken": "The chain is still broken — the download stays locked.",
     "unverifiedTitle": "Audit chain not yet verified",
     "unverifiedBody": "This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.",
-    "verifyChain": "Verify chain"
+    "verifyChain": "Verify chain",
+    "feed": {
+      "title": "Activity",
+      "scrollToLatest": "Scroll to latest",
+      "summaryCard": "Worked for {{duration}} · {{actions}} actions · {{cost}}",
+      "summaryItemsRead": " · {{count}} items read",
+      "statusRetrying": "retrying",
+      "statusFailed": "failed",
+      "factsCount": "{{count}} facts",
+      "retryState": "retry {{attempt}}/{{max}} — waiting {{wait}}s",
+      "showPrompt": "Show task",
+      "showLess": "Show less",
+      "viewAudit": "View audit body",
+      "hideAudit": "Hide audit body"
+    }
+  },
+  "audit": {
+    "loadError": "The audit body could not be loaded. Please try again.",
+    "regionLabel": "Audit body",
+    "title": "Audit body",
+    "close": "Close",
+    "loading": "Loading audit body…",
+    "provider": "Provider: {{provider}}",
+    "model": "Model: {{model}}",
+    "unknown": "unknown",
+    "request": "Request",
+    "response": "Response"
+  },
+  "verification": {
+    "loadError": "The verification report could not be loaded. Please try again.",
+    "regionLabel": "Verification report",
+    "title": "Verification report",
+    "close": "Close",
+    "loading": "Loading verification report…",
+    "viewAction": "View verification report",
+    "hideAction": "Hide verification report",
+    "funnelTitle": "Gate funnel",
+    "funnelStage": "{{stage}}: {{count}}",
+    "refutedTitle": "Refuted claims",
+    "supportTitle": "Supported claims",
+    "insufficientTitle": "Insufficient evidence",
+    "supersededTitle": "Superseded / scoped findings",
+    "reconciledTitle": "Reconciled contradictions",
+    "unverifiedTitle": "Unverified ({{count}})",
+    "unverifiedNone": "No unverified claims — every claim carries a verdict.",
+    "costTitle": "True itemized cost",
+    "costTotal": "Total: {{total}}",
+    "costTotalWithPending": "Total so far: {{total}}",
+    "costPending": "tool fees: pending",
+    "evidenceLabel": "Evidence",
+    "effectLabel": "Effect"
   }
 }

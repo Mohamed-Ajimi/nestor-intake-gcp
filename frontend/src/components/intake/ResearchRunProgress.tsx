@@ -26,6 +26,7 @@ import {
   type ResearchStageSummary,
 } from "@/lib/api/research";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
+import { VerificationReport } from "@/components/intake/VerificationReport";
 
 // frontend/src/components/intake/ResearchRunProgress.tsx — the admin's live window into a
 // Tribunal deep-research run (Phase 16, RUN-01/D-07/D-09). It mirrors SkillRunProgress's
@@ -564,6 +565,8 @@ export function ResearchRunProgress({
   // The run id used to scope the audit drill-down: prefer an explicit route prop, else the
   // SSE run's id. When neither exists, the drill-down affordance is hidden by AgentFeed.
   const runId = runIdProp ?? run?.id ?? null;
+  // The D-09 summary card's "View verification report" toggle (superadmin-only surface).
+  const [showVerification, setShowVerification] = useState(false);
 
   const status = run?.status ?? "queued";
   // `needs_input` is the engine's parked clarification state. The intake side has
@@ -605,6 +608,32 @@ export function ResearchRunProgress({
           </div>
           {/* Raw-output download (verified) or locked+re-verify (broken) — RUN-03. */}
           {run && <RawOutputControls intakeId={intakeId} run={run} />}
+
+          {/* D-09 summary-card action: open the superadmin verification report (funnel +
+              verdicts + superseded + reconciled + unverified + true cost). Only reachable
+              when a run id is available. Superadmin-only by placement. */}
+          {runId && (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => setShowVerification((v) => !v)}
+                className="inline-flex items-center gap-2 border border-ink/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
+              >
+                {showVerification
+                  ? t("verification.hideAction")
+                  : t("verification.viewAction")}
+              </button>
+            </div>
+          )}
+          {runId && showVerification && (
+            <div className="mt-4">
+              <VerificationReport
+                intakeId={intakeId}
+                runId={runId}
+                onClose={() => setShowVerification(false)}
+              />
+            </div>
+          )}
 
           {/* D15: after the run the feed stays frozen + clickable — a replay of what
               happened, with the audit-body drill-down still reachable (superadmin-only). */}
