@@ -1716,6 +1716,274 @@ Failure triage:
 
 ---
 
+## Phase 15 — Research engine redesign: operator surfaces (dual tribunal REBUILD + 0011 migrate + frontend REBUILD, NO new secret)
+
+This section is the enumerated source of truth for the Plan 15-07 operator live session that ships the
+Phase-15 research-engine-redesign OPERATOR SURFACES to production. Phase 15 adds surface to THREE
+deployables — BOTH Tribunal images (`tribunal-worker` AND `tribunal-api`) plus the frontend — and lands
+ONE migration (alembic **0011** in the **tribunal** schema, NOT the intake `nestor` line). There is
+**NO new secret and NO new env** this phase (SERPAPI is Phase 15.2 / D10, not here).
+
+**Why BOTH Tribunal images rebuild (unlike Phase 17, which rebuilt only tribunal-api):**
+
+1. **`tribunal-worker`** carries the C1 cost-truth fix — `audit/audited_llm_client.py` +
+   `audit/cost_table.py` + `audit/cost_prices.json` + `audit/writer.py` (cache-CREATE tokens priced,
+   `web_search`/`web_fetch` server-tool fees counted, Gemini deep-research `usageMetadata` recorded,
+   `run.cost_pending` set when the grounding fee is un-itemizable). The worker is the RUN-EMITTING
+   side — it writes the per-call `cost_usd` and the `cache_creation_tokens` column the feed reads. If
+   the worker image is stale, every future run still under-counts cost (~€5 vs ~$43–45, the P1 defect).
+2. **`tribunal-api`** carries the new READ surfaces the operator UI calls: `GET /api/runs/{run_id}/verification`
+   (the verification report shaper over `verification_verdict` + `run.verification_summary`), the enriched
+   `GET /api/runs/{run_id}/metrics` `stage_detail` (D15 feed items with per-row cost + `audit_id`), the
+   citation numbering read, and `GET /api/runs/{run_id}/audit/{audit_id}` (the feed drill-down GCS reader).
+   If the api image is stale, the intake seam proxies (already shipped on `nestor-api`) 404 on real calls.
+
+The worker emits cost, the api serves the read surfaces — **so BOTH rebuild at one `$SHA`.** This mirrors
+the § Phase 17 Step-17.a dual-rebuild idiom, except Phase 17 left the worker unchanged and Phase 15 does not.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is FORBIDDEN on this project (it would rotate the BUILT_IN DB
+> passwords and take down all services). Every step below is a manual gcloud reconciliation run in
+> Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **The recurring deploy-gap (READ FIRST — Steps 15.a AND 15.c both hit it).** "Nothing is real until
+> it is deployed, and a config-only env flip ships a STALE image." Phase 15 adds new code to BOTH
+> Tribunal images AND the frontend, plus the 0011 migration — a `gcloud run services update
+> --update-env-vars` on the current revisions ships NONE of it. Steps 15.a and 15.c are mandatory Cloud
+> Build **image REBUILDs**, not env flips. This phase introduces **NO new env var and NO new secret**
+> (Step 15.d is confirm-only + the verify gates): SERPAPI (the own-researcher key) is **Phase 15.2**
+> (D10), not this phase.
+
+> **NO nestor-api rebuild this phase.** The intake-side seam proxies + frontend transport
+> (`/intakes/{id}/research/{run}/verification`, `/research/sources/{sourceId}`,
+> `/research/{run}/audit/{auditId}`) shipped as PART of the Plan 15-04/15-05/15-06 code that lands in
+> the frontend rebuild (Step 15.c) and the ALREADY-DEPLOYED `nestor-api` — Plan 15-04's proxy routes
+> were authored into `backend/app/api/research_routes.py`. **Re-confirm** whether the live `nestor-api`
+> revision predates the Plan 15-04 proxy routes; if it does, rebuild `nestor-api` per the § Phase 17
+> Step-17.b idiom BEFORE the frontend (the frontend calls those proxies). If the live `nestor-api`
+> already carries them (e.g. a Phase-17/18 rebuild post-dated 15-04), no nestor-api rebuild is needed —
+> the Tribunal read endpoints are the only new server surface. Check the deployed image tag against the
+> Plan 15-04 commit (`ac6102d`) date before deciding.
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13/14/16/17/18).
+export GOOGLE_PROJECT="<the intake Nestor Pulse project id>"     # acct tools@dotto.be / tools@epicimpact.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export TRIBUNAL_SA="tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+### Step 15.a — REBUILD + deploy BOTH Tribunal images via Cloud Build at ONE `$SHA` (worker cost fix + api read surfaces)
+
+BOTH `tribunal-worker` (cost fix in `audited_llm_client` / `cost_table` — the run-emitting side) AND
+`tribunal-api` (new `/verification` + enriched `/metrics` + citation numbering + `/audit/{audit_id}`)
+change this phase, so BOTH images rebuild at one `$SHA`. This is an **image REBUILD, not an env flip.**
+Reuse the § Phase 13.e / 14.b / 17.a Cloud Build idiom (never a local `docker build` — downloads are
+blocked on the dev box). The retargeted deploy scripts pin `IMAGE_TAG=$SHA` and PRESERVE the Phase-14
+lockdown (tribunal-run SA + `--no-allow-unauthenticated` + invoker=nestor-run ONLY — NOT re-granted here).
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+# Rebuild tribunal-worker (bakes the C1 cost fix into the run-emitting image).
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+# Rebuild tribunal-api (bakes the new /verification + enriched /metrics + citation + /audit endpoints).
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+# Redeploy BOTH at the just-built tag via the retargeted deploy scripts (worker first, then api —
+# same order as § Phase 13.g). The scripts keep tribunal-run SA + --no-allow-unauthenticated +
+# invoker=nestor-run; the Phase-14 lockdown is PRESERVED by the scripts, NOT re-granted here.
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+```
+
+Confirm the tribunal-api URL is UNCHANGED from Phase 14/16/17 (a redeploy of an existing service keeps
+its URL; capture it read-only for the Step-15.d confirm — do NOT re-set the seam env, Pitfall 4). This
+is the `describe` WITHOUT a path (the OIDC audience is the path-less `service_url`):
+
+```bash
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+echo "tribunal-api URL: $TRIBUNAL_URL"   # expect the SAME https://tribunal-api-...-ew.a.run.app as Phase 14/16/17
+```
+
+### Step 15.b — Run the `tribunal-migrate` Job with `--wait` to apply alembic 0011 (into the TRIBUNAL schema, using the JUST-BUILT image)
+
+The `tribunal-migrate` Cloud Run Job runs `alembic upgrade head` into the **tribunal** schema (app_user
+DSN — the SAME pattern as § Phase 13.f). Migration **0011** (`0011_cost_verification.py`,
+`down_revision = "0010"`) adds `audit_log.cache_creation_tokens` (nullable, non-hashed),
+`run.cost_pending` (bool default false), `run.verification_summary` (JSONB nullable), and the
+`verification_verdict` FORCE-RLS read-model table (tenant policy copied verbatim from 0003). All are
+ADDITIVE and land OUTSIDE the frozen hash-chain payload (`_payload_for_row` untouched, T-15-01). This is
+the **tribunal** alembic line — it does NOT touch the intake `nestor` migrations (whose head is 0012
+after § Phase 17).
+
+> ⚠️ **LESSON (image-pin, hit live 2026-07-22 on `nestor-migrate`): the Job does NOT track the service
+> image.** Redeploying `tribunal-api`/`tribunal-worker` at `$SHA` leaves the `tribunal-migrate` Job
+> pinned to its OLD image — executing it then is a **silent no-op** (alembic connects, finds itself "at
+> head" on the stale revision set, exits 0, logs no `Running upgrade` line). ALWAYS repin the Job to the
+> just-built image FIRST:
+
+```bash
+gcloud run jobs update tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}"   # the SAME $SHA built in Step 15.a
+gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+# CONFIRM the log shows "Running upgrade 0010 -> 0011" — no upgrade line = stale-image no-op.
+```
+
+Then confirm the migration landed in the TRIBUNAL schema (read-only, via the migrate Job's connection or
+a Cloud SQL psql session):
+
+```bash
+#   \d tribunal.audit_log        -> cache_creation_tokens  int  (nullable)
+#   \d tribunal.run              -> cost_pending  bool (default false); verification_summary  jsonb (nullable)
+#   \d tribunal.verification_verdict  -> table exists; ENABLE + FORCE ROW LEVEL SECURITY;
+#        tenant-isolation policy present (copied from 0003); idx_verification_verdict_tenant_run present.
+#   alembic head in the TRIBUNAL line == 0011 (NOT the nestor 0012 head — different alembic line).
+#   Pre-existing rows keep NULL on the new columns (no server_default backfill except run.cost_pending=false).
+```
+
+Alembic still below `0011` in the tribunal line after this → the Job in this step did not run (or ran on
+the pre-rebuild image); re-run Step 15.a then this step.
+
+### Step 15.c — REBUILD + deploy the frontend image (D15 feed + VerificationReport + CitationPanel + audit drill-down + i18n)
+
+The frontend gains the Plan 15-05/15-06 operator surfaces: the D15 agent-feed renderer + `AuditBodyPanel`
+drill-down + superadmin `VerificationReport` (`frontend/src/components/intake/ResearchRunProgress.tsx`,
+`VerificationReport.tsx`, `AuditBodyPanel.tsx`), the numbered `CitationPanel` (`CitationPanel.tsx`), the
+`getVerification`/`getAuditBody`/`getSource` transport (`frontend/src/lib/api/research.ts`), and en/fr/nl
+i18n keys. **NO new route is added** — the components mount on the EXISTING
+`admin.pulse.intakes.$id` anchor (via `ResearchRunProgress`), so **`routeTree.gen.ts` does NOT need
+regenerating** (unlike § Phase 18, which added a route). Rebuild + deploy per the standard § Phase 12
+Step-12.3 / § Phase 17 Step-17.d frontend flow (Cloud Build image REBUILD; `--build-arg VITE_*` from
+substitutions; **NO `VITE_SUPABASE_*`** — the in-image bundle guard fails the build if a Supabase
+signature leaks). Reuse the SAME `_API_BASE_URL` + Firebase substitutions captured at Phase 12 Step 12.3
+(unchanged — no URL re-wiring, no new env/secret):
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:$(date +%Y%m%d-%H%M%S)"
+
+# Reuse the SAME _API_BASE_URL / _FB_* substitutions from Phase 12 Step 12.3 (unchanged).
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<hash>-ew.a.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" \
+  --region "$REGION" \
+  --allow-unauthenticated \
+  --port 8080 \
+  --project="$GOOGLE_PROJECT"
+```
+
+### Step 15.d — Verify without printing secrets (Cloud Build pytest targets + `verify_chain` re-run on deployed data + endpoint role checks) — NO new secret this phase
+
+Phase 15 introduces **NO new env var and NO new secret** (15-RESEARCH § Runtime State Inventory: SERPAPI
+is Phase 15.2 / D10). This step is confirm-only for env + the automated verify gates. All four sub-checks
+run WITHOUT printing any secret value.
+
+1. **Run the Phase-15 pytest targets in Cloud Build against the fresh images** (authored by-construction
+   in Plans 15-01…15-06; the dev box has no Python, so they run at deploy). The tribunal suite covers
+   the hash-chain-green-post-0011 replay, the cost recompute, the verification-report shaping + RLS
+   denials, the citation numbering, and the audit-body denials; the intake suite covers the seam denial
+   trios + the superadmin happy path:
+
+   ```bash
+   # Tribunal side (cost + verification + citation + chain):
+   gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+   # Intake side (seam proxies + denial trios + superadmin funnel happy path):
+   # From the repo root — source MUST be `.` (repo root), never `backend` (§ Phase 14.g / 16.a note).
+   gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+   ```
+
+2. **Re-run `verify_chain` GREEN on the DEPLOYED audit data (SC5 — the phase gate).** The 0011 migration
+   is additive and keeps the new columns OUTSIDE the frozen hash-chain payload, so `verify_chain` must
+   stay green on the live audit chain after the migration lands. This is the T-15-17 mitigation — the
+   deployed-data re-verify BEFORE sign-off. Run the tribunal `verify_chain` proof against the live audit
+   chain (the same job used in § Phase 13.h / 14 / 16 to prove chain integrity):
+
+   ```bash
+   # verify_chain against the deployed run's audit chain (e.g. the recorded/parked run) — expect GREEN.
+   # (Run via the tribunal verify-chain Cloud Build target / job the prior phases used; no secret printed.)
+   gcloud builds submit tribunal --config=tribunal/cloudbuild.test-critical.yaml --project="$GOOGLE_PROJECT"
+   ```
+
+   A RED chain here is a STOP — do not sign off; investigate whether a non-additive change slipped into
+   `_payload_for_row` (T-15-01).
+
+3. **Confirm the recorded run's read endpoints answer correctly per role** (superadmin 200, client 404) —
+   the intake-seam proxies over the now-rebuilt tribunal-api. On the recorded run's intake, a superadmin
+   GET of `/intakes/{id}/research/{run}/verification` (and enriched `/metrics`) returns **200**; the SAME
+   path for a **client** (user-role) member of that space returns **404** (existence-hidden, 16-D-08 /
+   T-15-18). These are proven automatically by the intake denial-trio + happy-path tests in sub-check 1;
+   the browser confirmation is Step 15.f (the UAT), item 3.
+
+4. **Confirm NO new env/secret is needed (READ-ONLY).** The operator surfaces reuse the EXISTING seam
+   (`TRIBUNAL_SERVICE_URL` on `nestor-api` — the Phase-14/16 OIDC audience) and the EXISTING tribunal
+   audit bucket (`AUDIT_GCS_BUCKET` on the tribunal services — the audit-body reader source). No new key
+   this phase. Confirm the seam env is present (confirm-only — do NOT re-set; a wrong value breaks the
+   seam, Pitfall 4):
+
+   ```bash
+   gcloud run services describe nestor-api \
+     --region="$REGION" --project="$GOOGLE_PROJECT" \
+     --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep -E 'TRIBUNAL_SERVICE_URL'
+   # expect: TRIBUNAL_SERVICE_URL=https://tribunal-api-...-ew.a.run.app  (same as Step 15.a $TRIBUNAL_URL)
+   ```
+
+   **Explicitly: NO SERPAPI_API_KEY this phase** — the own-researcher key lands in Phase 15.2 (D10). Do
+   NOT create or seed it here.
+
+### Step 15.e — (conditional) rebuild `nestor-api` ONLY if the live revision predates the Plan 15-04 proxy routes
+
+If the live `nestor-api` revision predates the Plan 15-04 seam proxy routes (`ac6102d` —
+`/intakes/{id}/research/{run}/verification`, `/research/sources/{sourceId}`, `/research/{run}/audit/{auditId}`
+on `research_routes.py`), rebuild it per the § Phase 17 Step-17.b idiom BEFORE the frontend deploy
+(Step 15.c calls those proxies). If the live `nestor-api` already carries them (a Phase-17/18 rebuild
+post-dated 15-04 in the same tree), SKIP this step — no nestor-api rebuild is needed. This phase lands
+**NO intake `nestor` migration** (the 0011 migration is the TRIBUNAL line only), so the `nestor-migrate`
+Job need NOT run this phase.
+
+```bash
+# Only if the deployed nestor-api image tag predates commit ac6102d:
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:$(date +%Y%m%d-%H%M%S)"
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" --image "$IMAGE"
+# NO nestor-migrate run — Phase 15 lands no intake-line migration (0011 is the tribunal line, Step 15.b).
+```
+
+### Step 15.f — Operator recorded-run UAT (points to 15-UAT.md — see Task 3 checkpoint)
+
+With BOTH Tribunal images rebuilt at one `$SHA` (worker cost fix + api read surfaces), the tribunal 0011
+migration applied, the frontend deployed, the Phase-15 pytest targets green in Cloud Build, and
+`verify_chain` re-run green on the deployed audit data, run the operator RECORDED-RUN session per
+`.planning/phases/15-engine-enhancements-plan-critique-draft-tournament-deferred-/15-UAT.md`.
+
+**NO live LLM run is needed** — the UAT walks the RECORDED run-4cbb5311 on the admin intake detail page
+(the Anthropic monthly cap blocks live runs until 2026-08-01; the recorded fixture supplies all surface
+data). Walk 15-UAT.md steps 1–5: the D15 feed vs `replit view.png` incl. the audit-body drill-down; the
+verification report content; facts-only cost with the pending state; every `[n]` citation resolves; a
+CLIENT login sees NONE of it (16-D-08); and `verify_chain` green (SC5). Record PASS/FAIL + the V-02
+operator sign-off in 15-UAT.md, read next to the recorded baseline
+`docs/tribunal-run-reports/run-20260722-4cbb5311/`.
+
+Failure triage: the verification report / feed **404s for a superadmin** → Step-15.a tribunal-api rebuild
+was skipped (stale image, recurring deploy-gap — the seam proxy hits a stale endpoint). Per-row cost shows
+the OLD ~€5 undercount → Step-15.a tribunal-WORKER rebuild was skipped (the cost fix did not ship). A
+`[n]` citation dangles or the drill-down is empty → the 0011 migrate (Step 15.b) ran on a stale image
+(silent no-op — no `Running upgrade 0010 -> 0011` line). A **client** can reach ANY research surface →
+STOP, this is a 16-D-08 breach — do not accept the phase.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -1778,3 +2046,9 @@ Failure triage:
 - [ ] Step 18.c — `nestor-frontend` image REBUILT via Cloud Build (new `/intake/$id/report` route + regenerated `routeTree.gen.ts` + repaired `FinalReportBlock` + list "View report" CTA) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `nestor-migrate` Job run (no migration landed)
 - [ ] Step 18.d — CONFIRM-ONLY read: `APP_BASE_URL` + `NESTOR_ADMIN_EMAIL` + `RESEND_API_KEY` present on `nestor-api` (Phase-10 mail stack reused; the delivery mail refuse-sends if `APP_BASE_URL` unset); NO new env/secret; Resend-key rotation LEFT for Phase 20 CLOSE-02 (do NOT rotate mid-UAT)
 - [ ] Step 18.e — CHECKPOINT: live UAT on an `in_research` smoke intake — stage a PDF (status stays `in_research`, CLIENT sees nothing — REPORT-02 blocking) → Deliver (status → `delivered`, mail arrives in the recipient's NL/FR/EN locale, CTA → `/intake/{id}/report`) → CLIENT sees "View report" + downloads/opens the PDF (REPORT-02) → Replace silent + re-notify (status stays `delivered`, newest file served — REPORT-03); intake id / recipients / locales / download result / PASS-FAIL per REPORT-01/02/03 recorded in 18-HUMAN-UAT.md
+- [ ] Step 15.a — BOTH Tribunal images REBUILT via Cloud Build at ONE `$SHA` (`tribunal-worker` — C1 cost fix in `audited_llm_client`/`cost_table`/`cost_prices.json`/`writer.py`; `tribunal-api` — new `/verification` + enriched `/metrics` + citation numbering + `/audit/{audit_id}`) + redeployed worker-then-api at `$SHA` via the retargeted deploy scripts (Phase-14 lockdown preserved, not re-granted); tribunal-api URL confirmed UNCHANGED via `describe` WITHOUT a path (Pitfall 4). BOTH rebuild because the worker EMITS cost and the api SERVES the read surfaces
+- [ ] Step 15.b — `tribunal-migrate` Job REPINNED to the `$SHA` image FIRST (image-pin lesson — else silent no-op) then executed `--wait` (alembic → **0011** in the **TRIBUNAL** schema, NOT the intake `nestor` line); log shows `Running upgrade 0010 -> 0011`; `audit_log.cache_creation_tokens` + `run.cost_pending`/`verification_summary` + `verification_verdict` FORCE-RLS table (tenant policy from 0003) + index confirmed; tribunal alembic head == 0011
+- [ ] Step 15.c — `nestor-frontend` image REBUILT via Cloud Build (D15 feed + `VerificationReport` + `CitationPanel` + `AuditBodyPanel` + `getVerification`/`getAuditBody`/`getSource` + en/fr/nl i18n) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route — components mount on the existing `admin.pulse.intakes.$id` anchor)
+- [ ] Step 15.d — VERIFY without printing secrets: Phase-15 pytest targets green in Cloud Build (tribunal `cloudbuild.test.yaml` cost/verification/citation/chain + intake `cloudbuild.test.yaml` seam denial trios + superadmin funnel happy path); **`verify_chain` re-run GREEN on the DEPLOYED audit data (SC5 — T-15-17 gate)**; recorded-run `/verification` + enriched `/metrics` return 200 for a superadmin and 404 for a client (16-D-08 / T-15-18); CONFIRM-ONLY read that `TRIBUNAL_SERVICE_URL` present on `nestor-api`; NO new env/secret — explicitly NO `SERPAPI_API_KEY` (that is Phase 15.2 / D10)
+- [ ] Step 15.e — (conditional) `nestor-api` REBUILT via Cloud Build ONLY if the live revision predates the Plan 15-04 proxy routes (commit `ac6102d`) — else SKIP; NO intake `nestor` migration this phase (0011 is the tribunal line), so NO `nestor-migrate` Job run
+- [ ] Step 15.f — CHECKPOINT: operator RECORDED-RUN UAT (run-4cbb5311, NO live LLM run — Anthropic cap until 2026-08-01) per 15-UAT.md steps 1–5: D15 feed vs `replit view.png` + audit-body drill-down; verification report content; facts-only cost with pending state; every `[n]` resolves; CLIENT sees nothing (16-D-08); `verify_chain` green (SC5); V-02 operator sign-off recorded next to `docs/tribunal-run-reports/run-20260722-4cbb5311/`
