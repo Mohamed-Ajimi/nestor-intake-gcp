@@ -65,10 +65,54 @@ def _as(identity: "Identity"):
     return _override
 
 
-def _patch_engines(monkeypatch, user_engine) -> None:
-    """Patch the engine factories session.py + ai_session.py imported (see test_research_routes)."""
+#: Password granted to the app_superadmin role for the connect-as superadmin engine (test
+#: only — mirrors test_intake_cross_tenant._SUPERADMIN_TEST_PASSWORD). The role is created
+#: LOGIN (no pw) by conftest's _ensure_app_superadmin; the superadmin_engine fixture sets a pw.
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
+
+def _patch_engines(monkeypatch, user_engine, sa_engine=None) -> None:
+    """Patch the engine factories session.py + ai_session.py imported (see test_research_routes).
+
+    ``sa_engine`` (when provided) also swaps ``get_superadmin_engine`` in both namespaces so a
+    superadmin request flows through the production ``get_tenant_repo`` verbatim against the
+    testcontainer's connect-as ``app_superadmin`` engine (the happy-path proof).
+    """
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
     monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: user_engine)
+    if sa_engine is not None:
+        monkeypatch.setattr(
+            session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+        monkeypatch.setattr(
+            ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS the ``app_superadmin`` role (connect-as, not SET ROLE).
+
+    Faithful to production's two-engine routing (D-05): ``current_user = 'app_superadmin'``
+    makes the 0003 ``*_superadmin_all`` bypass policy match, granting cross-tenant reach.
+    ``app_superadmin`` is a plain non-superuser LOGIN role (conftest's _ensure_app_superadmin),
+    so it proves the bypass POLICY + GRANTs, not superuser ambient authority. Shape mirrors
+    test_intake_cross_tenant.superadmin_engine.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 def _build_app():
@@ -494,6 +538,367 @@ def test_verify_chain_null_space_404(
         )
         assert fake_tribunal_client["verify_chain_calls"] == 0, (
             "a role-denied verify-chain must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# verification (GET) denial — ENGINE-09 / 16-D-08 (Plan 15-04 Task 3). Three
+# cases prove the verification-report proxy is superadmin-only + space-scoped +
+# existence-hidden, with NO seam call on denial.
+# ===========================================================================
+
+
+def test_verification_cross_tenant_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """space-B user GET of space-A's verification → EXACTLY 404; no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (verification denial)")
+    _seed_space(engine, space_b, "Space B (verification denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/verification",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant verification must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r}); 403/200 leaks existence."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+        assert fake_tribunal_client["get_verification_calls"] == 0, (
+            "a denied verification must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_verification_user_role_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (superadmin-only); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (verification user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/verification",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(run_a) not in r.text, "404 body leaked the run id."
+        assert fake_tribunal_client["get_verification_calls"] == 0, (
+            "a role-denied verification must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_verification_null_space_404(
+    engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A null-space ``user`` → EXACTLY 404 (superadmin role-check fires first); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (verification null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/{run_id}/verification",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, got {r.status_code}."
+        )
+        assert fake_tribunal_client["get_verification_calls"] == 0, (
+            "a role-denied verification must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_verification_superadmin_happy_path(
+    engine, superadmin_engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A superadmin same-space GET → 200 with a non-empty funnel (distilled > 0).
+
+    Pre-UAT proof (warning fix) that the full intake → seam → (fake tribunal) path
+    returns REAL funnel data, not just that denials 404. The fake_tribunal_client's
+    ``verification_report`` default carries ``funnel.distilled == 3``. The superadmin
+    reads through the connect-as ``app_superadmin`` engine (the 0003 bypass), so the
+    seeded intake+run resolve cross-space and the seam call fires exactly once.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (verification happy-path)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id)
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+
+    app = _build_app()
+    # A superadmin scoping this client is space-narrowed by the intake's own space.
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/{run_id}/verification",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 200, (
+            f"superadmin same-space verification must be 200, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        body = r.json()
+        assert body.get("funnel"), "verification body must carry a non-empty funnel."
+        assert body["funnel"].get("distilled", 0) > 0, (
+            "the funnel must report a distilled count > 0 (real data through the seam)."
+        )
+        assert fake_tribunal_client["get_verification_calls"] == 1, (
+            "the superadmin happy path must make EXACTLY one seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# research-source (GET) denial — ENGINE-09 / 16-D-08 (Plan 15-04 Task 3). The
+# source route has no run in its path (source_id is tribunal-scoped by the tenant
+# header), so the trio pins the role + intake-scope + null-space walls.
+# ===========================================================================
+
+
+def test_research_source_cross_tenant_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """space-B user GET of space-A's research source → EXACTLY 404; no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, source_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (source denial)")
+    _seed_space(engine, space_b, "Space B (source denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/sources/{source_a}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant source must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r}); 403/200 leaks existence."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(source_a) not in r.text, "404 body leaked the foreign source id."
+        assert fake_tribunal_client["get_source_calls"] == 0, (
+            "a denied source must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_research_source_user_role_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (superadmin-only); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, source_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (source user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/sources/{source_a}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(source_a) not in r.text, "404 body leaked the source id."
+        assert fake_tribunal_client["get_source_calls"] == 0, (
+            "a role-denied source must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_research_source_null_space_404(
+    engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A null-space ``user`` → EXACTLY 404 (superadmin role-check fires first); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, source_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (source null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/sources/{source_id}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, got {r.status_code}."
+        )
+        assert fake_tribunal_client["get_source_calls"] == 0, (
+            "a role-denied source must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# audit-body (GET) denial — ENGINE-09 / T-15-11b (Plan 15-04 Task 3). The feed
+# drill-down proxy: superadmin-only + space-scoped + existence-hidden, no seam
+# call on denial.
+# ===========================================================================
+
+
+def test_audit_body_cross_tenant_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """space-B user GET of space-A's audit body → EXACTLY 404; no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a, audit_a = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (audit-body denial)")
+    _seed_space(engine, space_b, "Space B (audit-body denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/audit/{audit_a}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant audit body must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r}); 403/200 leaks existence."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+        assert str(audit_a) not in r.text, "404 body leaked the foreign audit id."
+        assert fake_tribunal_client["get_audit_body_calls"] == 0, (
+            "a denied audit body must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_audit_body_user_role_404(
+    engine, set_space, two_spaces, monkeypatch, fake_tribunal_client
+):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (superadmin-only); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a, audit_a = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (audit-body user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_a}/research/{run_a}/audit/{audit_a}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(audit_a) not in r.text, "404 body leaked the audit id."
+        assert fake_tribunal_client["get_audit_body_calls"] == 0, (
+            "a role-denied audit body must make NO seam call."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_audit_body_null_space_404(
+    engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A null-space ``user`` → EXACTLY 404 (superadmin role-check fires first); no seam call."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id, audit_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (audit-body null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id)
+    _patch_engines(monkeypatch, engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/{run_id}/audit/{audit_id}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, got {r.status_code}."
+        )
+        assert fake_tribunal_client["get_audit_body_calls"] == 0, (
+            "a role-denied audit body must make NO seam call."
         )
     finally:
         app.dependency_overrides.clear()

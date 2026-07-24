@@ -878,6 +878,19 @@ def fake_tribunal_client(monkeypatch):
         "verify_verdict": {"ok": True, "broken_at": None},
         "get_research_bundle_calls": 0,
         "verify_chain_calls": 0,
+        # Phase-15 operator read surfaces (SEAM-01). Call counters prove a denied
+        # proxy makes NO seam call; the report is OVERRIDABLE so the happy-path test
+        # asserts a real funnel flows intake -> seam -> (fake tribunal).
+        "get_verification_calls": 0,
+        "get_source_calls": 0,
+        "get_audit_body_calls": 0,
+        # Default verification report carries a non-empty funnel with a distilled
+        # count > 0 (the happy-path assertion). A test may reassign this BEFORE
+        # driving the proxy.
+        "verification_report": {
+            "funnel": {"distilled": 3, "kept": 2, "dropped": 1},
+            "counts": {"support": 2, "refute": 1, "insufficient": 0},
+        },
     }
 
     def _fake_create_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -914,6 +927,26 @@ def fake_tribunal_client(monkeypatch):
         capture["verify_chain_calls"] += 1
         return dict(capture["verify_verdict"])
 
+    def _fake_get_verification(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # Return the OVERRIDABLE report so the happy-path test asserts a real funnel
+        # flows through the intake proxy -> seam.
+        capture["get_verification_calls"] += 1
+        return dict(capture["verification_report"])
+
+    def _fake_get_source(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        capture["get_source_calls"] += 1
+        return {"id": kwargs.get("source_id"), "title": "fake source", "url": "https://x"}
+
+    def _fake_get_audit_body(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        capture["get_audit_body_calls"] += 1
+        return {
+            "audit_id": kwargs.get("audit_id"),
+            "provider": "fake",
+            "model": "fake-model",
+            "request": {},
+            "response": {},
+        }
+
     def _fake_ensure_org(*args: Any, **kwargs: Any) -> None:
         return None
 
@@ -930,6 +963,9 @@ def fake_tribunal_client(monkeypatch):
         ("get_report", _fake_get_report),
         ("get_research_bundle", _fake_get_research_bundle),
         ("verify_chain", _fake_verify_chain),
+        ("get_verification", _fake_get_verification),
+        ("get_source", _fake_get_source),
+        ("get_audit_body", _fake_get_audit_body),
         ("ensure_org", _fake_ensure_org),
         ("ensure_project", _fake_ensure_project),
     ):
