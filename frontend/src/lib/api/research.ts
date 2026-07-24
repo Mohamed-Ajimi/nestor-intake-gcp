@@ -39,12 +39,72 @@ import { apiFetch, currentIdToken, type ApiResult } from "@/lib/api/client";
 export type ResearchStageItem = {
   name: string;
   status: string;
+  // ── Phase-15 enriched D15 feed fields (Plan 15-01 fixture + Plan 15-03 schema).
+  // ALL OPTIONAL so today's recorded rows and legacy flat {name,status} rows still
+  // type-check (additive, D-07 — a row lacking these renders exactly as before).
+  task_prompt?: string;
+  cost_usd?: string;
+  facts?: number;
+  retry?: { attempt: number; max: number; wait_s: number };
+  audit_id?: string;
+};
+
+/**
+ * Per-stage summary card fields (D15 "Worked for X · N actions · M items read · $Y").
+ * Optional so a stage group that carries only `items` still validates.
+ */
+export type ResearchStageSummary = {
+  duration_s: number;
+  actions: number;
+  items_read?: number;
+  cost_usd: string;
 };
 
 export type ResearchStageDetail = Record<
   string,
-  { items?: ResearchStageItem[] } | undefined
+  { items?: ResearchStageItem[]; summary?: ResearchStageSummary } | undefined
 >;
+
+/**
+ * The superadmin verification report (Plan 15-03 `build_verification_report`). Shaped from
+ * the recorded run's persisted `verification_verdict` rows + `run.verification_summary`
+ * funnel + true cost. `extra="allow"` server-side means additional rollup fields (`counts`)
+ * may ride through — the type is intentionally permissive on those.
+ */
+export type VerificationVerdictItem = {
+  claim?: string | null;
+  verdict?: string | null;
+  evidence?: string | null;
+  effect?: string | null;
+  [k: string]: unknown;
+};
+
+export type VerificationReport = {
+  funnel: Record<string, number>;
+  verdicts: {
+    support?: VerificationVerdictItem[];
+    refute?: VerificationVerdictItem[];
+    insufficient?: VerificationVerdictItem[];
+  };
+  superseded: VerificationVerdictItem[];
+  reconciled: VerificationVerdictItem[];
+  unverified: { count: number; items?: VerificationVerdictItem[] };
+  cost: { total: string; pending: boolean };
+  [k: string]: unknown;
+};
+
+/**
+ * A single redacted audit-log body read back from GCS (Plan 15-03 `AuditBody` / Plan 15-04
+ * proxy). The body is ALREADY REDACTED server-side and carries NO hash/prev_hash — the
+ * request/response are opaque JSON blobs rendered read-only in the drill-down panel.
+ */
+export type AuditBody = {
+  audit_id: string;
+  provider: string | null;
+  model: string | null;
+  request: unknown;
+  response: unknown;
+};
 
 export type ResearchRun = {
   id: string;
@@ -101,6 +161,43 @@ export function getBundleUrl(
 ): Promise<ApiResult<{ url: string; expires_in: number }>> {
   return apiFetch<{ url: string; expires_in: number }>(
     `/intakes/${intakeId}/research/${runId}/bundle-url`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Fetch the superadmin verification report for a completed run (Plan 15-05 / ENGINE-09).
+ * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
+ * method GET, hitting the Plan 15-04 superadmin proxy `/intakes/{id}/research/{runId}/
+ * verification`. Superadmin-only + space-scoped server-side; a client / cross-space caller
+ * is existence-hidden as 404. Returns `ApiResult<VerificationReport>` — never throws
+ * (CLAUDE.md return-no-throw).
+ */
+export function getVerification(
+  intakeId: string,
+  runId: string,
+): Promise<ApiResult<VerificationReport>> {
+  return apiFetch<VerificationReport>(
+    `/intakes/${intakeId}/research/${runId}/verification`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Fetch a single redacted audit-log body for the D15 feed drill-down (Plan 15-05).
+ * A one-shot `apiFetch` (never fork the transport), method GET, hitting the Plan 15-04
+ * superadmin proxy `/intakes/{id}/research/{runId}/audit/{auditId}`. The body is already
+ * redacted server-side (no live-URL fetch, no key re-exposure). Superadmin-only + space-
+ * scoped; a client / cross-space caller is existence-hidden as 404. Returns
+ * `ApiResult<AuditBody>` — never throws (CLAUDE.md return-no-throw).
+ */
+export function getAuditBody(
+  intakeId: string,
+  runId: string,
+  auditId: string,
+): Promise<ApiResult<AuditBody>> {
+  return apiFetch<AuditBody>(
+    `/intakes/${intakeId}/research/${runId}/audit/${auditId}`,
     { method: "GET" },
   );
 }
