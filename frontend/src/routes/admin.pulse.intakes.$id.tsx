@@ -165,6 +165,14 @@ const STATUS_WITH_BANNER = new Set([
 ]);
 const STATUS_WITH_HINT = new Set(["reviewed", "validated_by_client"]);
 
+// Statuses on which a research run has run (or is running), so the operator's
+// post-run forensic surfaces (D15 feed replay, verification report, cost,
+// citations) stay reachable. `in_research` is the live window; `delivered` and
+// `archived` keep the frozen replay visible AFTER the report PDF flips the status,
+// so a superadmin can still review the run. There is no raw `completed` status
+// (the phase machine derives that phase from `delivered` + results_link_sent_at).
+const RESEARCH_SURFACE_STATUSES = new Set(["in_research", "delivered", "archived"]);
+
 // Phase machine lives in @/lib/intake-phase. The detail-page derives a single
 // Phase from intake + latest intake-skill-run + hasResearchArtifacts.
 
@@ -1165,10 +1173,14 @@ function IntakeDetailPage() {
          </div>
        )}
 
-       {/* Phase 16 (RUN-01/D-07): the operator's live window into a Tribunal run. Mounts
+       {/* Phase 16 (RUN-01/D-07): the operator's window into a Tribunal run. Mounts
            on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
-           Renders the stage list dynamically from the mirrored research_runs row. */}
-       {intake.status === "in_research" && (
+           Renders the stage list dynamically from the mirrored research_runs row.
+           Phase 15 (quick 260724-vyf): visible on every post-research status, not just the
+           live `in_research` window — for a terminal run the component shows the frozen
+           replay card (feed + verification report + cost + citations), so a superadmin can
+           still review the run after the report PDF flips the intake to `delivered`/`archived`. */}
+       {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
          <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
        )}
       </div>
