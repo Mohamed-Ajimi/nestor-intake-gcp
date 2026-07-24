@@ -248,6 +248,30 @@ class VerificationTrueCost(BaseModel):
     cost_pending: bool = False
 
 
+class VerificationCitation(BaseModel):
+    """One numbered [n] citation entry (SC4 / D13).
+
+    Mirrors the entries produced by `citations.numbering.number_citations`:
+    numbers are GENERATED from claim/claim_source DB ordering (never the model),
+    so every [n] the operator surface renders resolves to a real source. The
+    frontend opens the CitationPanel via `source_id` (proxied GET /api/sources/
+    {source_id}); `first_claim_id` lets the report body attach markers to the
+    verdict rows of the claim that introduced the source.
+    """
+    n: int
+    source_id: str
+    title: str | None = None
+    url: str | None = None
+    provider: str | None = None
+    publication_date: str | None = None   # source.fetched_at ISO (date proxy, A3)
+    quality_tier: int = 3                 # 1 official / 2 press / 3 blog-or-other
+    single_source: bool = False
+    first_claim_id: str | None = None
+    first_claim_position: int | None = None
+
+    model_config = {"extra": "allow"}
+
+
 class VerificationReport(BaseModel):
     """GET /api/runs/{id}/verification -- the operator's post-run truth surface.
 
@@ -267,6 +291,8 @@ class VerificationReport(BaseModel):
     reconciled: list[VerificationVerdictItem] = []
     unverified: VerificationUnverified = VerificationUnverified()
     true_cost: VerificationTrueCost = VerificationTrueCost()
+    # SC4 / D13: the numbered [n] citations list (DB-generated, all-resolving).
+    citations: list[VerificationCitation] = []
 
     model_config = {"extra": "allow"}
 

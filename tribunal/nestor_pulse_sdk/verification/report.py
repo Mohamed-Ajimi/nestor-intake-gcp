@@ -14,10 +14,11 @@ STAKEHOLDER-NOTES §2026-07-24 REQUIRED content (six areas):
   6. true_cost         -- run.cost_usd_total + a cost_pending flag (Plan 15-02).
 
 CRITICAL (Plan 15-03 acceptance): this module reads ONLY persisted rows
-(`verification_verdict` + `run` + `claim`). It performs NO GCS / storage / blob
-read -- the verdicts were already parsed + persisted by Plan 15-01's
-verdict_extract. There is intentionally no `google.cloud`, `storage`, `gcs`, or
-`blob` import anywhere in this file.
+(`verification_verdict` + `run` + `claim`, plus `source`/`claim_source` via
+`citations.numbering.number_citations` for the SC4 [n] citations list). It
+performs NO GCS / storage / blob read -- the verdicts were already parsed +
+persisted by Plan 15-01's verdict_extract. There is intentionally no
+`google.cloud`, `storage`, `gcs`, or `blob` import anywhere in this file.
 
 Split design (dev-box has no Python/Postgres):
   - `shape_verification_report(...)` is a PURE function over already-materialised
@@ -37,6 +38,7 @@ from typing import Any, Iterable
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nestor_pulse_sdk.citations.numbering import number_citations
 from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
 
 
@@ -78,6 +80,7 @@ def shape_verification_report(
     claim_count: int,
     cost_usd_total: Decimal | None,
     cost_pending: bool,
+    citations: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Shape the six STAKEHOLDER-NOTES content areas from materialised rows.
 
@@ -91,11 +94,15 @@ def shape_verification_report(
       cost_usd_total: `run.cost_usd_total` (Decimal or None).
       cost_pending:   `run.cost_pending` -- True while Plan 15-02's recompute is
                       still reconciling some per-call costs.
+      citations:      the run's ordered `[n] -> source` entries from
+                      `citations.numbering.number_citations` (SC4 / D13 -- numbers
+                      GENERATED from the DB, never the model). Optional so the pure
+                      shaper stays DB-free; defaults to an empty list.
 
     Returns a JSON-safe dict with keys:
       funnel, verdicts{support,refute,insufficient}, refuted, superseded,
       reconciled, unverified{count,claims_with_verdict,total_claims},
-      true_cost{cost_usd_total,cost_pending}, counts.
+      true_cost{cost_usd_total,cost_pending}, citations, counts.
     """
     rows = list(verdict_rows)
 
@@ -169,6 +176,9 @@ def shape_verification_report(
             ),
             "cost_pending": bool(cost_pending),
         },
+        # SC4 / D13: the numbered [n] citation entries the operator surface renders
+        # as clickable markers -- every [n] resolves (generated from the DB).
+        "citations": list(citations) if citations else [],
         "counts": {
             "verdicts_total": len(rows),
             "support": len(support),
@@ -213,10 +223,17 @@ async def build_verification_report(
         )
     ).scalar_one()
 
+    # SC4 / D13: the run's numbered [n] citation entries -- deterministic DB
+    # numbering (claim/source/claim_source rows only, RLS-scoped, no GCS). This
+    # is what makes the operator surface's [n] markers resolvable: every marker
+    # rendered comes from THIS list, so no number can dangle.
+    citations = await number_citations(session, run.id)
+
     return shape_verification_report(
         verdict_rows=verdict_rows,
         funnel=getattr(run, "verification_summary", None),
         claim_count=int(claim_count or 0),
         cost_usd_total=getattr(run, "cost_usd_total", None),
         cost_pending=bool(getattr(run, "cost_pending", False)),
+        citations=citations,
     )

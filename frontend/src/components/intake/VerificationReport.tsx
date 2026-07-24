@@ -6,9 +6,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   getVerification,
+  type Citation,
   type VerificationReport as VerificationReportData,
   type VerificationVerdictItem,
 } from "@/lib/api/research";
+import { CitationPanel, renderCitationMarker } from "@/components/intake/CitationPanel";
 
 // frontend/src/components/intake/VerificationReport.tsx — the superadmin-only verification
 // report surface (Plan 15-05 / ENGINE-09). It fetches the recorded run's verification report
@@ -66,9 +68,14 @@ function refToText(ref: unknown): string {
 function VerdictItemRow({
   item,
   showEffect,
+  citations,
+  onOpenCitation,
 }: {
   item: VerificationVerdictItem;
   showEffect?: boolean;
+  /** The [n] citations introduced by this row's claim (SC4 — markers inline). */
+  citations?: Citation[];
+  onOpenCitation?: (c: Citation) => void;
 }) {
   const { t } = useTranslation("intake");
   const verdict = typeof item.verdict === "string" ? item.verdict : "";
@@ -87,6 +94,10 @@ function VerdictItemRow({
             {t("verification.confidenceLabel")}: {confidence}
           </span>
         )}
+        {onOpenCitation &&
+          citations &&
+          citations.length > 0 &&
+          citations.map((c) => renderCitationMarker(c, onOpenCitation))}
       </div>
       {refs.length > 0 && (
         <div className="mt-1">
@@ -125,10 +136,14 @@ function VerdictSection({
   title,
   items,
   showEffect,
+  citationsByClaim,
+  onOpenCitation,
 }: {
   title: string;
   items?: VerificationVerdictItem[];
   showEffect?: boolean;
+  citationsByClaim?: Map<string, Citation[]>;
+  onOpenCitation?: (c: Citation) => void;
 }) {
   if (!items || items.length === 0) return null;
   return (
@@ -138,7 +153,17 @@ function VerdictSection({
       </div>
       <ul className="space-y-2">
         {items.map((item, idx) => (
-          <VerdictItemRow key={idx} item={item} showEffect={showEffect} />
+          <VerdictItemRow
+            key={idx}
+            item={item}
+            showEffect={showEffect}
+            citations={
+              typeof item.claim_id === "string"
+                ? citationsByClaim?.get(item.claim_id)
+                : undefined
+            }
+            onOpenCitation={onOpenCitation}
+          />
         ))}
       </ul>
     </div>
@@ -164,6 +189,26 @@ export function VerificationReport({
   const [report, setReport] = useState<VerificationReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // SC4: the clicked [n] citation whose CitationPanel is open (null = closed).
+  const [openCitation, setOpenCitation] = useState<Citation | null>(null);
+
+  // SC4 / D13: markers are rendered from EXACTLY the backend citations list, so
+  // every [n] resolves. Group by the claim that introduced the source so verdict
+  // rows carry their own markers inline (claim-linked runs; the recorded run's
+  // rows predate claim linkage and surface via the numbered list below instead).
+  const citations = report?.citations ?? [];
+  const citationsByClaim = new Map<string, Citation[]>();
+  for (const c of citations) {
+    const cid = typeof c.first_claim_id === "string" && c.first_claim_id ? c.first_claim_id : null;
+    if (!cid) continue;
+    const list = citationsByClaim.get(cid);
+    if (list) {
+      list.push(c);
+    } else {
+      citationsByClaim.set(cid, [c]);
+    }
+  }
+  const openCitationPanel = (c: Citation) => setOpenCitation(c);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,14 +281,20 @@ export function VerificationReport({
             title={t("verification.refutedTitle")}
             items={report.verdicts?.refute}
             showEffect
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
           />
           <VerdictSection
             title={t("verification.supportTitle")}
             items={report.verdicts?.support}
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
           />
           <VerdictSection
             title={t("verification.insufficientTitle")}
             items={report.verdicts?.insufficient}
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
           />
 
           {/* ── Superseded / scoped findings (canonical value + caveat inline) ──── */}
@@ -251,6 +302,8 @@ export function VerificationReport({
             title={t("verification.supersededTitle")}
             items={report.superseded}
             showEffect
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
           />
 
           {/* ── Reconciled contradictions (chosen canonical value) ─────────────── */}
@@ -258,6 +311,8 @@ export function VerificationReport({
             title={t("verification.reconciledTitle")}
             items={report.reconciled}
             showEffect
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
           />
 
           {/* ── Honest unverified accounting (count-only — the backend emits no
@@ -279,6 +334,33 @@ export function VerificationReport({
               </p>
             )}
           </div>
+
+          {/* ── Numbered citations (SC4 / D13 — every [n] clickable + resolving) ── */}
+          {citations.length > 0 && (
+            <div className="mb-5">
+              <div className="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                {t("verification.citationsTitle")}
+              </div>
+              <ul className="space-y-1">
+                {citations.map((c) => (
+                  <li
+                    key={c.n}
+                    className="flex items-baseline gap-1 font-sans text-[13px] text-ink/80"
+                  >
+                    {renderCitationMarker(c, openCitationPanel)}
+                    <span>{c.title ?? t("citation.untitled")}</span>
+                  </li>
+                ))}
+              </ul>
+              {openCitation && (
+                <CitationPanel
+                  intakeId={intakeId}
+                  citation={openCitation}
+                  onClose={() => setOpenCitation(null)}
+                />
+              )}
+            </div>
+          )}
 
           {/* ── True itemized cost (facts-only; pending → LABEL, never a number) ── */}
           <div className="border-t border-ink/10 pt-3">

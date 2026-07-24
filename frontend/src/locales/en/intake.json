@@ -570,7 +570,8 @@
     "costTotalWithPending": "Total so far: {{total}}",
     "costPending": "tool fees: pending",
     "evidenceLabel": "Evidence",
-    "effectLabel": "Effect"
+    "effectLabel": "Effect",
+    "citationsTitle": "Numbered citations"
   },
   "citation": {
     "loadError": "The source snapshot could not be loaded. Please try again.",

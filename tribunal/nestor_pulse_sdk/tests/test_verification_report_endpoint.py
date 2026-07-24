@@ -110,11 +110,51 @@ def test_true_cost_surfaces_total_and_pending_flag():
 
 
 def test_all_six_stakeholder_content_areas_present():
-    """All six STAKEHOLDER-NOTES content areas exist as report keys."""
+    """All six STAKEHOLDER-NOTES content areas exist as report keys (+ SC4 citations)."""
     report = _report_from_fixture()
     for key in ("funnel", "verdicts", "refuted", "superseded", "reconciled",
-                "unverified", "true_cost"):
+                "unverified", "true_cost", "citations"):
         assert key in report, f"missing STAKEHOLDER-NOTES content area {key!r}"
+
+
+def test_citations_ride_through_shaper():
+    """SC4 / D13: the DB-numbered citations list rides through the report shape.
+
+    The pure shaper defaults `citations` to [] (it is DB-free); when the async
+    wrapper supplies number_citations() entries they must pass through VERBATIM
+    -- the frontend renders its clickable [n] markers from exactly this list,
+    which is what guarantees every rendered [n] resolves.
+    """
+    from decimal import Decimal
+
+    # Default: key present, empty list (pure shaper, no DB numbering here).
+    assert _report_from_fixture()["citations"] == []
+
+    tenant_id = uuid.uuid4()
+    run = load_recorded_run(session=None, tenant_id=tenant_id)
+    entries = [
+        {
+            "n": 1,
+            "source_id": str(uuid.uuid4()),
+            "title": "SEC filing 10-K",
+            "url": "https://www.sec.gov/x",
+            "provider": "google",
+            "publication_date": "2026-01-01T00:00:00+00:00",
+            "quality_tier": 1,
+            "single_source": False,
+            "first_claim_id": None,
+            "first_claim_position": 0,
+        },
+    ]
+    report = shape_verification_report(
+        verdict_rows=run._fixture_verdict_rows,  # type: ignore[attr-defined]
+        funnel=run.verification_summary,
+        claim_count=0,
+        cost_usd_total=Decimal("1.00"),
+        cost_pending=False,
+        citations=entries,
+    )
+    assert report["citations"] == entries, "citations must ride through verbatim"
 
 
 # ===========================================================================

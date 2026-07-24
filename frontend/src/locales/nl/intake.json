@@ -570,7 +570,8 @@
     "costTotalWithPending": "Totaal tot nu toe: {{total}}",
     "costPending": "toolkosten: in behandeling",
     "evidenceLabel": "Bewijs",
-    "effectLabel": "Effect"
+    "effectLabel": "Effect",
+    "citationsTitle": "Genummerde citaten"
   },
   "citation": {
     "loadError": "De momentopname van de bron kon niet worden geladen. Probeer het opnieuw.",

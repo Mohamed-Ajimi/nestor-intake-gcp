@@ -570,7 +570,8 @@
     "costTotalWithPending": "Total à ce jour : {{total}}",
     "costPending": "frais d'outils : en attente",
     "evidenceLabel": "Preuve",
-    "effectLabel": "Effet"
+    "effectLabel": "Effet",
+    "citationsTitle": "Citations numérotées"
   },
   "citation": {
     "loadError": "L'instantané de la source n'a pas pu être chargé. Veuillez réessayer.",
