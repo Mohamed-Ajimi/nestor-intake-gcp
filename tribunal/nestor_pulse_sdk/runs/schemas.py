@@ -256,3 +256,19 @@ class VerificationReport(BaseModel):
     true_cost: VerificationTrueCost = VerificationTrueCost()
 
     model_config = {"extra": "allow"}
+
+
+class AuditBody(BaseModel):
+    """GET /api/runs/{id}/audit/{audit_id} -- the feed's audit_id drill-down body.
+
+    Returns the ALREADY-REDACTED request/response of one LLM call, read back from
+    GCS (download_audit_body). The bodies were redacted at upload, so no provider
+    key is re-exposed. hash / prev_hash are NEVER included (mirrors
+    audit.api._audit_row_dto's omission -- chain integrity is only checkable via
+    /api/audit/verify/{run_id}, never by exposing raw hashes).
+    """
+    audit_id: str
+    provider: str | None = None
+    model: str | None = None
+    request: dict | None = None
+    response: dict | None = None

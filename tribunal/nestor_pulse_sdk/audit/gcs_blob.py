@@ -190,3 +190,74 @@ async def upload_audit_body(
     )
 
     return f"gs://{bucket_name}/{key}"
+
+
+async def download_audit_body(gcs_uri: str) -> dict | None:
+    """Read one stored audit body back from GCS (the 15-04 drill-down reader).
+
+    Fetches the JSON object at `gcs_uri` and returns it AS-STORED. The stored body
+    was ALREADY redacted at upload time (upload_audit_body redacts request keys
+    before writing), so this reader NEVER re-exposes provider keys and NEVER
+    re-fetches anything from a live source URL -- it reads GCS (or the local-dev
+    file:// fallback) ONLY.
+
+    Returns:
+      * the parsed body dict `{run_id, audit_id, seq, provider, model, request,
+        response}` as stored, OR
+      * None for an `error://` uri, a missing/unreadable object, or any GCS error
+        (logged at warning). None is the caller's cue to 404 the drill-down.
+
+    Design mirrors upload_audit_body's bucket resolution (AUDIT_GCS_BUCKET env) and
+    the NESTOR_AUDIT_LOCAL_DIR file:// fallback so it works on a box with no GCP
+    project. No new secret exposure, no live-URL fetch (Plan 15-03 T-15-08c).
+    """
+    if not gcs_uri or gcs_uri.startswith("error://"):
+        _logger.warning("download_audit_body: unusable uri %r -> None", gcs_uri)
+        return None
+
+    # Local-dev fallback: a file:// uri written by upload_audit_body's local path.
+    if gcs_uri.startswith("file://"):
+        from urllib.parse import urlparse
+        from urllib.request import url2pathname
+
+        try:
+            path = url2pathname(urlparse(gcs_uri).path)
+            with open(path, "rb") as fh:
+                return json.loads(fh.read().decode("utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            _logger.warning("download_audit_body: local read failed for %s: %s", gcs_uri, exc)
+            return None
+
+    if not gcs_uri.startswith("gs://"):
+        _logger.warning("download_audit_body: not a gs:// uri %r -> None", gcs_uri)
+        return None
+
+    # Parse gs://<bucket>/<key>. The bucket is taken from the uri itself (it was
+    # recorded at upload); AUDIT_GCS_BUCKET remains the default for consistency.
+    without_scheme = gcs_uri[len("gs://"):]
+    bucket_name, _, key = without_scheme.partition("/")
+    if not bucket_name or not key:
+        _logger.warning("download_audit_body: malformed gs uri %r -> None", gcs_uri)
+        return None
+
+    try:
+        from google.cloud import storage  # type: ignore
+    except ImportError as exc:
+        _logger.error(
+            "google-cloud-storage not installed; cannot download audit body: %s", exc
+        )
+        return None
+
+    try:
+        client = storage.Client()
+        blob = client.bucket(bucket_name).blob(key)
+        raw = blob.download_as_bytes()
+    except Exception as exc:  # noqa: BLE001 -- a missing object / GCS error -> 404 upstream
+        _logger.warning("download_audit_body: GCS read failed for %s: %s", gcs_uri, exc)
+        return None
+
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        _logger.warning("download_audit_body: body at %s is unreadable JSON: %s", gcs_uri, exc)
+        return None

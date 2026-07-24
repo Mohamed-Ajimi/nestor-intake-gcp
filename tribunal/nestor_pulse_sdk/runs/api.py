@@ -25,6 +25,7 @@ from nestor_pulse_sdk.auth.provider import AuthClaims
 from nestor_pulse_sdk.db.models import Run, Project, Output
 from nestor_pulse_sdk.runs.schemas import (
     AnswerRequest,
+    AuditBody,
     CompareResponse,
     CreateCompareRequest,
     CreateRunRequest,
@@ -879,6 +880,52 @@ async def get_run_verification(
 
     report = await build_verification_report(session, run)
     return VerificationReport.model_validate(report)
+
+
+@router.get("/{run_id}/audit/{audit_id}", response_model=AuditBody)
+async def get_run_audit_body(
+    run_id: uuid.UUID,
+    audit_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> AuditBody:
+    """
+    The feed's audit_id drill-down: the redacted request/response of one LLM call.
+
+    Loads the audit_log row filtered by BOTH id == audit_id AND run_id == run_id
+    under the caller's tenant context; scalar_one_or_none -> 404 when None (an RLS
+    miss -- a cross-tenant audit_id, or one whose run_id != the path run_id --
+    reads as absent, T-15-08b). Then reads the ALREADY-REDACTED body back from GCS
+    via download_audit_body; a None body (missing/error uri) is also a 404.
+
+    Returns the body ONLY -- {audit_id, provider, model, request, response}. The
+    request was redacted at upload (no key re-exposure, T-15-08c) and hash/prev_hash
+    are NEVER included (mirrors audit.api._audit_row_dto).
+    """
+    from nestor_pulse_sdk.audit.gcs_blob import download_audit_body
+    from nestor_pulse_sdk.db.models.audit_log import AuditLog
+
+    row = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.id == audit_id,
+                AuditLog.run_id == run_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "audit not found")
+
+    body = await download_audit_body(row.gcs_uri)
+    if body is None:
+        raise HTTPException(404, "audit not found")
+
+    return AuditBody(
+        audit_id=str(audit_id),
+        provider=body.get("provider") or row.provider,
+        model=body.get("model") or row.model,
+        request=body.get("request"),
+        response=body.get("response"),
+    )
 
 
 @router.get("/{run_id}/report")
