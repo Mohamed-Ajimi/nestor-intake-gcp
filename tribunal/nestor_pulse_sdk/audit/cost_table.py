@@ -74,8 +74,24 @@ def _load_prices() -> dict:
     if _cache.get("mtime") == mtime and _cache.get("path") == str(prices_path):
         return _cache["data"]
 
-    with prices_path.open(encoding="utf-8") as f:
-        data = json.load(f)
+    # WR-04: the file is designed to be hot-edited in place, so a truncated
+    # write mid-reload is the EXPECTED failure mode. The module contract is
+    # "never fail, never guess" -- a parse error must degrade (keep serving the
+    # last good table, or NULL costs), never raise out of compute() into the
+    # live audit-write path.
+    try:
+        with prices_path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        _logger.warning(
+            "cost_prices.json at %s is malformed (%s) -- %s",
+            prices_path,
+            exc,
+            "serving last good table" if _cache.get("data") else "all costs will be NULL",
+        )
+        # Do NOT update the mtime cache: the next call re-tries the parse, so a
+        # completed hot-edit is picked up as soon as the file is whole again.
+        return _cache.get("data") or {}
 
     # Strip comment keys (keys starting with "_")
     prices = {k: v for k, v in data.items() if not k.startswith("_")}
@@ -152,11 +168,26 @@ def compute(
         return None
 
     entry = prices[key]
-    base_per_token = Decimal(str(entry["prompt"])) / Decimal("1000000")
-    cache_read_per_token = Decimal(str(entry["cache_read"])) / Decimal("1000000")
-    completion_per_token = Decimal(str(entry["completion"])) / Decimal("1000000")
+
+    # WR-04: a hot-added entry may omit a rate field -- degrade that component to
+    # 0 with a warning instead of raising KeyError out of the live audit write.
+    def _rate(field: str) -> Decimal:
+        val = entry.get(field)
+        if val is None:
+            _logger.warning(
+                "cost_prices.json entry %r missing rate %r -- treating as 0 "
+                "(fix the price file)",
+                key,
+                field,
+            )
+            return Decimal("0")
+        return Decimal(str(val))
+
+    base_per_token = _rate("prompt") / Decimal("1000000")
+    cache_read_per_token = _rate("cache_read") / Decimal("1000000")
+    completion_per_token = _rate("completion") / Decimal("1000000")
     # cache_creation_5m: 1.25x base for Anthropic; 0.0 for providers without cache-write.
-    cache_create_per_token = Decimal(str(entry["cache_creation_5m"])) / Decimal("1000000")
+    cache_create_per_token = _rate("cache_creation_5m") / Decimal("1000000")
 
     # Prompt cost: non-cached tokens at full rate
     non_cached = max(0, prompt_tokens - cached_tokens)

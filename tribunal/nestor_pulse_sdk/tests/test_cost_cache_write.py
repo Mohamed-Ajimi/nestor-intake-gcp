@@ -324,7 +324,46 @@ async def test_two_phase_anthropic_counts_cache_write_and_tool_fees():
 
 
 # ===========================================================================
-# TEST 6 (CR-02 regression): the PRODUCTION writer implements mark_cost_pending
+# TEST 6 (WR-04 regression): hot-reload never raises out of compute()
+# ===========================================================================
+
+def test_malformed_price_file_degrades_not_raises(tmp_path, monkeypatch):
+    """A truncated/malformed cost_prices.json (the expected hot-edit failure
+    mode) must DEGRADE -- last good table or NULL costs -- never raise
+    json.JSONDecodeError out of compute() into the live audit-write path; a
+    hot-added entry missing a rate field must price that component 0, not
+    KeyError."""
+    import json as _json
+
+    saved = dict(ct._cache)
+    ct._cache.clear()
+    try:
+        # Truncated file: parse fails -> no crash, unknown model -> None.
+        bad = tmp_path / "cost_prices.json"
+        bad.write_text('{"anthropic/x": {"prompt": 1.0,', encoding="utf-8")
+        monkeypatch.setenv("COST_PRICES_PATH", str(bad))
+        assert ct.compute("anthropic", _SONNET, 100, 10, 0) is None
+
+        # Entry missing cache_read/cache_creation_5m: those components are 0,
+        # the present rates still price (never KeyError).
+        partial = tmp_path / "partial.json"
+        partial.write_text(
+            _json.dumps({"anthropic/partial-model": {"prompt": 1.0, "completion": 2.0}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("COST_PRICES_PATH", str(partial))
+        ct._cache.clear()
+        cost = ct.compute("anthropic", "partial-model", 1_000_000, 0, 0)
+        assert cost == Decimal("1.0"), (
+            f"present rates must still price with missing fields as 0, got {cost}"
+        )
+    finally:
+        ct._cache.clear()
+        ct._cache.update(saved)
+
+
+# ===========================================================================
+# TEST 7 (CR-02 regression): the PRODUCTION writer implements mark_cost_pending
 # ===========================================================================
 
 def test_production_writer_implements_mark_cost_pending():
