@@ -25,12 +25,14 @@ from nestor_pulse_sdk.auth.provider import AuthClaims
 from nestor_pulse_sdk.db.models import Run, Project, Output
 from nestor_pulse_sdk.runs.schemas import (
     AnswerRequest,
+    AuditBody,
     CompareResponse,
     CreateCompareRequest,
     CreateRunRequest,
     ReportSpecRequest,
     RunMetrics,
     RunResponse,
+    VerificationReport,
 )
 from nestor_pulse_sdk.runs.stages import stages_for
 
@@ -846,6 +848,83 @@ async def get_run_metrics(
             "done" if run.status == "completed" else run.current_stage
         ),
         stage_detail=run.stage_detail,
+    )
+
+
+@router.get("/{run_id}/verification", response_model=VerificationReport)
+async def get_run_verification(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> VerificationReport:
+    """
+    The operator's post-run verification report (Phase 15 ENGINE-09).
+
+    Shapes the run's PERSISTED per-claim verdicts (verification_verdict) + the
+    run-level funnel (run.verification_summary) + true cost (run.cost_usd_total /
+    run.cost_pending) into the STAKEHOLDER-NOTES §2026-07-24 content:
+      funnel, per-class verdicts, refuted-with-evidence, superseded/scoped
+      findings, reconciled contradictions, an HONEST unverified list, true cost.
+
+    Reads ONLY persisted rows -- NEVER a GCS blob (build_verification_report
+    contains no storage import). All reads are tenant-scoped via RLS
+    (get_db_session sets the tenant GUC), so a cross-tenant run_id reads as absent:
+    the run scalar_one_or_none -> 404 (T-15-06), mirroring get_run_metrics /
+    renderer.get_source. There is NO distinguishable 403 -- a foreign run and a
+    non-existent run look identical to the caller by design.
+    """
+    from nestor_pulse_sdk.verification.report import build_verification_report
+
+    run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+
+    report = await build_verification_report(session, run)
+    return VerificationReport.model_validate(report)
+
+
+@router.get("/{run_id}/audit/{audit_id}", response_model=AuditBody)
+async def get_run_audit_body(
+    run_id: uuid.UUID,
+    audit_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> AuditBody:
+    """
+    The feed's audit_id drill-down: the redacted request/response of one LLM call.
+
+    Loads the audit_log row filtered by BOTH id == audit_id AND run_id == run_id
+    under the caller's tenant context; scalar_one_or_none -> 404 when None (an RLS
+    miss -- a cross-tenant audit_id, or one whose run_id != the path run_id --
+    reads as absent, T-15-08b). Then reads the ALREADY-REDACTED body back from GCS
+    via download_audit_body; a None body (missing/error uri) is also a 404.
+
+    Returns the body ONLY -- {audit_id, provider, model, request, response}. The
+    request was redacted at upload (no key re-exposure, T-15-08c) and hash/prev_hash
+    are NEVER included (mirrors audit.api._audit_row_dto).
+    """
+    from nestor_pulse_sdk.audit.gcs_blob import download_audit_body
+    from nestor_pulse_sdk.db.models.audit_log import AuditLog
+
+    row = (
+        await session.execute(
+            select(AuditLog).where(
+                AuditLog.id == audit_id,
+                AuditLog.run_id == run_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "audit not found")
+
+    body = await download_audit_body(row.gcs_uri)
+    if body is None:
+        raise HTTPException(404, "audit not found")
+
+    return AuditBody(
+        audit_id=str(audit_id),
+        provider=body.get("provider") or row.provider,
+        model=body.get("model") or row.model,
+        request=body.get("request"),
+        response=body.get("response"),
     )
 
 
