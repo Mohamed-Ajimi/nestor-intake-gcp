@@ -27,11 +27,17 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 15 (Research Engine Redesign — Operator Surfaces) — COMPLETE (7/7 plans, 2026-07-24)
 Plan: 7 of 7 done; REVIEW fixed (8 findings), SC4 citation gap closed (be3fc8a)
-Status: Phase 15 closed. Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
-  Not yet deployed to Cloud Run — DEPLOY-RUNBOOK Phase 15 section authored; dual tribunal rebuild +
-  0011 migrate + frontend pending an operator deploy window.
+Status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 00040-8mw,
+  tribunal images 20260724-214354, migration 0011 applied, suites green — see 15-UAT.md Deploy Record).
+  Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
+  UAT BLOCKER (found 2026-07-24): recorded run-4cbb5311 exists ONLY as a pytest fixture
+  (loader.load_recorded_run seeds a TEST session) — never seeded into the live DB and no intake is
+  wired to it, so the "View verification report" button has no page to appear on. Browser UAT needs
+  either (a) a live seed of the recorded run + in_research intake + mirrored research_runs row, or
+  (b) a real live run after the Anthropic cap resets 2026-08-01.
 Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
-Last activity: 2026-07-24 -- Phase 15 executed, reviewed, and closed
+Last activity: 2026-07-24 -- quick 260724-vyf: broadened ResearchRunProgress mount gate
+  (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT
   (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)
 
 Progress: [██████████] 100%
@@ -149,6 +155,7 @@ Recent decisions affecting current work (v1.1):
 | fast | Restore workflow stepper card from replit right rail to full-width center position | 2026-07-23 | 39fc499 | — |
 | fast | Context-pack runs merged into History sheet (real skill names) + NextStepBanner/AISkillsPanel/search in sticky right rail, stepper stays center | 2026-07-23 | 1aafe77 | — |
 | 260723-kjj | Exhaustive i18n sweep (validated): AI-skills descs, History labels, TopBar bell, SKILL_LABELS→i18n, 37-key research ns backfilled en/fr, i18n-audit.mjs hard-gate script; context-pack accordion removed from center (verifier: passed, 1 browser check open) | 2026-07-23 | cd7e63a | [260723-kjj-exhaustive-i18n-hardcoded-string-sweep-h](./quick/260723-kjj-exhaustive-i18n-hardcoded-string-sweep-h/) |
+| 260724-vyf | Broaden ResearchRunProgress mount gate to show Phase-15 research surfaces (D15 feed, verification report button, cost, citations) on delivered/archived intakes, not just in_research (Phase-15 UAT gap; surfacing only, not backfill; not yet deployed) | 2026-07-24 | 4398edb | [260724-vyf-broaden-researchrunprogress-mount-gate-t](./quick/260724-vyf-broaden-researchrunprogress-mount-gate-t/) |
 
 ## Deferred Items
 
