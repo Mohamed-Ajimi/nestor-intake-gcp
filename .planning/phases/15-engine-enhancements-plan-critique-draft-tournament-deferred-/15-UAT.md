@@ -224,3 +224,36 @@ operator surfaces truthfully represent the recorded run and accept the phase:
 - **All 6 hard-checklist items PASS:** ☐ yes ☐ no (if no, list gaps below)
 - **Gaps to close (if any):** ______________________________________________________
 - **Operator:** _________________________  **Date:** _______________  **Verdict:** ☐ ACCEPT ☐ REJECT
+
+---
+
+## Deploy Record + Deferral (2026-07-24)
+
+**Operator decision (2026-07-24):** deploy now, DEFER the browser walkthrough + V-02 sign-off
+to the combined UAT at the END of Phase 15.2 (one session covering 15 surfaces + 15.1 gates +
+15.2 engine acceptance). The prerequisite deploy (Steps 15.a–15.e) and ALL automated gates ran
+green on 2026-07-24:
+
+| Step | Result |
+|------|--------|
+| 15.a tribunal-worker | deployed, image `20260724-214354` |
+| 15.a tribunal-api | deployed, image `20260724-214354`, URL unchanged |
+| 15.b migration 0011 | applied — log line `Running upgrade 0010 -> 0011` confirmed (no stale-image no-op) |
+| 15.e nestor-api | rev `nestor-api-00040-8mw` (live rev predated 15-04 routes) |
+| 15.c frontend | rev `nestor-frontend-00024-lwq` |
+| 15.d intake suite | Cloud Build SUCCESS (denial trios + happy path incl.) |
+| 15.d tribunal full suite | Cloud Build SUCCESS — 345 passed / 35 skipped (first-ever full-suite green; Phase-13 keyless-env debt resolved) |
+| 15.d verify_chain critical | Cloud Build SUCCESS — chain green post-0011 (SC5 automated half) |
+| 15.d seam env | `TRIBUNAL_SERVICE_URL` present, untouched |
+
+**Fix cycle during gates (3 commits on master):** (1) recorded fixture data committed in-package
+(`tests/fixtures/run_4cbb5311/recorded/`) because `gcloud builds submit tribunal` ships only the
+tribunal/ subtree — repo-root `docs/` was absent in Cloud Build; (2) 15-01's
+`_ConstraintEnforcingFakeWriter` accepts 15-02's additive `cache_creation_tokens` kwarg
+(cross-wave integration miss caught by the gate); (3) legacy-tools D-01 guard hashes
+LF-normalized bytes (Windows CRLF checkout ≠ content change; normalized hash matches the
+snapshot exactly, proving the carried file untouched).
+
+**Walkthrough status:** steps 1–5 below remain PENDING — to be run in the combined
+end-of-15.2 UAT session. Client-blindness (16-D-08) is meanwhile covered automatically by the
+15-04 denial trios (client/user-role → 404) which ran green in the intake suite.
