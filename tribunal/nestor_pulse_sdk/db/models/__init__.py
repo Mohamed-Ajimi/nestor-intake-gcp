@@ -14,6 +14,7 @@ from nestor_pulse_sdk.db.models.source import Source
 from nestor_pulse_sdk.db.models.claim import Claim
 from nestor_pulse_sdk.db.models.claim_source import ClaimSource
 from nestor_pulse_sdk.db.models.audit_log import AuditLog
+from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
 
 __all__ = [
     "Org",
@@ -25,4 +26,5 @@ __all__ = [
     "Claim",
     "ClaimSource",
     "AuditLog",
+    "VerificationVerdict",
 ]
