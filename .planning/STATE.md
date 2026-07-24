@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: paused
-stopped_at: Phase 19 DEFERRED (operator, 2026-07-22) — stabilization/audit-fix pass in progress
-last_updated: 2026-07-22T18:08:17.236Z
-last_activity: 2026-07-22 -- Phase 18 execution started
+status: Deferred — stabilization first
+stopped_at: Phase 15 context gathered (redesign scope, 3-phase split, new execution order 15->15.1->15.2->19->20)
+last_updated: "2026-07-24T14:59:12.771Z"
+last_activity: 2026-07-23 - Quick tasks 260723-ior (replit-ui-changes merged + frontend rev 00019-wwh live)
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 21
-  completed_plans: 91
-  percent: 50
+  completed_plans: 21
+  percent: 63
 ---
 
 # Project State
@@ -168,9 +168,9 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-22T14:47:02.421Z
-Stopped at: Phase 18 context gathered
-Resume file: .planning/phases/18-human-report-upload-client-delivery/18-CONTEXT.md
+Last session: 2026-07-24T14:59:12.758Z
+Stopped at: Phase 15 context gathered (redesign scope, 3-phase split, new execution order 15->15.1->15.2->19->20)
+Resume file: .planning/phases/15-engine-enhancements-plan-critique-draft-tournament-deferred-/15-CONTEXT.md
 
 ## Operator Next Steps
 
