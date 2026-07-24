@@ -183,9 +183,29 @@ wrong without these).
   (e.g. OpenAI deep-research background mode with continuation tokens) so a
   dropped connection cannot kill a 20-minute provider task — reconnect and resume.
 
+## Area 10 — Cost transparency (every feed row shows a true number)
+
+- **C1 (2026-07-24): Count every cost class.** The last run's panel said ~€5 vs
+  ~$43–45 real. Fixes, verified against provider docs 2026-07-24:
+  - **Anthropic calls**: count all four token classes — input, output, cache-READ,
+    and cache-WRITE (cache-write is billed at a premium and is currently ignored:
+    8.7M uncounted tokens ≈ $33 last run). Also price the per-search web_search /
+    web_fetch tool fees (last run: 516 searches + 216 fetches).
+  - **Gemini deep-research calls**: the API DOES return `usageMetadata` (input,
+    output, thinking tokens — thinking bills at output rate); our adapter currently
+    DROPS it (audit blobs store only status+report). Fix the adapter to record it.
+    Search/grounding tool fees are billed separately — show a live estimate and
+    reconcile monthly via Google's automatic `is_deep_research` billing label.
+  - **UI rule**: the run total shows "measured $X + estimated $Y" — never one
+    falsely-precise number. Feed rows (D15) show per-call measured cost where
+    available, clearly-marked estimates where not.
+  - **Monthly reconciliation habit**: compare recorded totals against provider
+    invoices (Anthropic console, GCP billing filtered on `is_deep_research`);
+    adjust estimate rates when they drift.
+
 ---
 
-Brainstorm completed 2026-07-24 — all areas decided (D1–D15, R1–R7; one open
+Brainstorm completed 2026-07-24 — all areas decided (D1–D15, R1–R7, C1; one open
 sub-decision under R4).
 Related, agreed the same day in STAKEHOLDER-NOTES.md: the 7 verification-stage
 changes + the superadmin-only post-run verification report.
