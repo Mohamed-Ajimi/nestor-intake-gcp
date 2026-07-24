@@ -13,17 +13,27 @@ Cost formula (Pitfall 6 -- Anthropic prompt cache token accounting):
         + cached_tokens * cache_read_rate       # 0.1x base for Anthropic
         + cache_creation_tokens * cache_creation_rate  # 1.25x base for Anthropic
         + completion_tokens * completion_rate
+        + web_search_count * web_search_fee     # server-tool fee (Plan 15-02 C1)
+        + web_fetch_count  * web_fetch_fee      # server-tool fee (Plan 15-02 C1)
 
   In this module, `cached_tokens` = cache_read_input_tokens (already paid at 0.1x).
-  cache_creation_tokens are NOT tracked separately here (they arrive via a different
-  AuditedLLMClient field). The formula simplifies to:
+  As of Plan 15-02 (C1 cost-truth fix), `cache_creation_tokens` ARE charged here:
+  Anthropic returns cache_creation_input_tokens on every cache-write call, and the
+  audited client threads it into compute(). The full formula is now:
 
     prompt_cost   = (prompt_tokens - cached_tokens) * (base / 1_000_000)
     cache_cost    = cached_tokens * (cache_read / 1_000_000)
+    create_cost   = cache_creation_tokens * (cache_creation_5m / 1_000_000)
     complete_cost = completion_tokens * (completion / 1_000_000)
-    total         = prompt_cost + cache_cost + complete_cost
+    tool_fee      = web_search_count * web_search_fee + web_fetch_count * web_fetch_fee
+    total         = prompt_cost + cache_cost + create_cost + complete_cost + tool_fee
 
-  This matches the Pitfall 6 formula in 01-RESEARCH.md.
+  Server-tool fees (web_search/web_fetch) are per-call flat fees, NOT per-token, and
+  are read from the "_tool_fees" object in cost_prices.json (published rates, facts
+  only -- never estimated). Un-itemizable Gemini grounding fees are marked pending by
+  the caller (run.cost_pending), never priced here (C1: no estimate ever).
+
+  This matches the Pitfall 6 formula in 01-RESEARCH.md, extended for C1 cost-truth.
 """
 
 from __future__ import annotations
@@ -74,22 +84,55 @@ def _load_prices() -> dict:
     return prices
 
 
+def _tool_fee(fee_name: str) -> Decimal:
+    """Return the per-call USD fee for a server-tool (web_search/web_fetch).
+
+    Reads the "_tool_fees" object from cost_prices.json. Missing entry -> 0
+    (no estimate, no crash). Fees are published flat rates (facts only).
+    """
+    prices = _load_prices()
+    # _tool_fees is stripped by _load_prices (leading-underscore keys removed),
+    # so re-read the raw file for the fee table.
+    prices_path = Path(os.environ.get("COST_PRICES_PATH", str(_DEFAULT_PRICES_PATH)))
+    try:
+        with prices_path.open(encoding="utf-8") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return Decimal("0")
+    fees = raw.get("_tool_fees", {})
+    val = fees.get(fee_name)
+    if val is None:
+        return Decimal("0")
+    return Decimal(str(val))
+
+
 def compute(
     provider: str,
     model: str,
     prompt_tokens: int,
     completion_tokens: int,
     cached_tokens: int,
+    cache_creation_tokens: int = 0,
+    web_search_count: int = 0,
+    web_fetch_count: int = 0,
 ) -> Optional[Decimal]:
     """
     Compute cost in USD for one LLM call.
 
     Arguments:
-      provider:          "anthropic", "google", or "openai"
-      model:             model identifier (e.g. "claude-sonnet-4-6")
-      prompt_tokens:     total input tokens (includes cached_tokens; from provider usage)
-      completion_tokens: output tokens
-      cached_tokens:     cache_read_input_tokens (Pitfall 6 -- Anthropic prompt cache hits)
+      provider:              "anthropic", "google", or "openai"
+      model:                 model identifier (e.g. "claude-sonnet-4-6")
+      prompt_tokens:         total input tokens (includes cached_tokens; from provider usage)
+      completion_tokens:     output tokens
+      cached_tokens:         cache_read_input_tokens (Pitfall 6 -- Anthropic prompt cache hits)
+      cache_creation_tokens: cache_creation_input_tokens (Plan 15-02 C1 -- charged at the
+                             cache_creation_5m rate; 0 for providers without cache-write).
+                             Defaults to 0 so pre-15-02 callers keep identical results.
+      web_search_count:      number of server-side web_search invocations on this call
+                             (Plan 15-02 C1 -- priced at the published _tool_fees.web_search
+                             flat fee; 0 by default).
+      web_fetch_count:       number of server-side web_fetch invocations on this call
+                             (priced at _tool_fees.web_fetch; 0 by default).
 
     Returns:
       Decimal cost in USD, or None if the model is not in cost_prices.json.
@@ -112,6 +155,8 @@ def compute(
     base_per_token = Decimal(str(entry["prompt"])) / Decimal("1000000")
     cache_read_per_token = Decimal(str(entry["cache_read"])) / Decimal("1000000")
     completion_per_token = Decimal(str(entry["completion"])) / Decimal("1000000")
+    # cache_creation_5m: 1.25x base for Anthropic; 0.0 for providers without cache-write.
+    cache_create_per_token = Decimal(str(entry["cache_creation_5m"])) / Decimal("1000000")
 
     # Prompt cost: non-cached tokens at full rate
     non_cached = max(0, prompt_tokens - cached_tokens)
@@ -120,7 +165,17 @@ def compute(
     # Cache-read tokens at reduced rate (0.1x base for Anthropic; per cost_prices.json for others)
     cache_cost = Decimal(str(cached_tokens)) * cache_read_per_token
 
+    # Cache-CREATE tokens at the 5m rate (Plan 15-02 C1). 0 for non-cache-write calls.
+    cache_create_cost = Decimal(str(cache_creation_tokens)) * cache_create_per_token
+
     # Completion cost
     completion_cost = Decimal(str(completion_tokens)) * completion_per_token
 
-    return prompt_cost + cache_cost + completion_cost
+    # Server-tool flat fees (Plan 15-02 C1 -- published rate, facts only, never estimated).
+    tool_fee_cost = Decimal("0")
+    if web_search_count:
+        tool_fee_cost += Decimal(str(web_search_count)) * _tool_fee("web_search")
+    if web_fetch_count:
+        tool_fee_cost += Decimal(str(web_fetch_count)) * _tool_fee("web_fetch")
+
+    return prompt_cost + cache_cost + cache_create_cost + completion_cost + tool_fee_cost
