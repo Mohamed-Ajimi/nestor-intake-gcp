@@ -53,8 +53,11 @@ Surfaced during the Phase-15 operator UAT (a `delivered` intake had no button).
   delivered intake, but the verification report body will be empty/404
   (existence-hidden) and the feed/cost render in the old shape. Populated Phase-15
   data still requires the recorded-run seed OR a fresh post-Phase-15 run.
-- **Not yet deployed.** This change is committed to master but not built/deployed to
-  the `nestor-frontend` Cloud Run service. Needs a frontend rebuild to appear live.
+- **Deployed 2026-07-24.** Frontend rebuilt via Cloud Build (image
+  `frontend:20260724-231312`, build `6b0f8f62` SUCCESS, Supabase-leak guard passed) and
+  deployed to `nestor-frontend` — live rev **`nestor-frontend-00025-4w8`**, serving 100%
+  traffic (root returns 307 SSR redirect = healthy). No pass-2 URL re-wiring needed (same
+  frontend origin; CORS/APP_BASE_URL unchanged).
 
 ## Self-Check: PASSED
 

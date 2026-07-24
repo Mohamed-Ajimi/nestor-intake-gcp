@@ -37,7 +37,8 @@ Status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 
   (b) a real live run after the Anthropic cap resets 2026-08-01.
 Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
 Last activity: 2026-07-24 -- quick 260724-vyf: broadened ResearchRunProgress mount gate
-  (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT
+  (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT;
+  DEPLOYED frontend rev nestor-frontend-00025-4w8 (image 20260724-231312)
   (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)
 
 Progress: [██████████] 100%
