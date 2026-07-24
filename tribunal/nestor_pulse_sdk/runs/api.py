@@ -947,9 +947,14 @@ async def get_run_report(
     if run.status != "completed":
         raise HTTPException(409, "report not available yet")
 
+    # WR-02: filter to format='markdown' (mirrors create_comparison_content_compare).
+    # Later flows append NON-markdown Outputs to the same run (critique /
+    # content_compare / synthesis_cache / report_spec); an unfiltered
+    # newest-Output pick returned those JSON blobs as the report, corrupting the
+    # Report viewer and the downstream intake raw-output bundle.
     output = (await session.execute(
         select(Output)
-        .where(Output.run_id == run_id)
+        .where(Output.run_id == run_id, Output.format == "markdown")
         .order_by(Output.created_at.desc())
         .limit(1)
     )).scalar_one_or_none()
