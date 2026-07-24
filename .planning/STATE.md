@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: Deferred — stabilization first
+status: executing
 stopped_at: Phase 15 context gathered (redesign scope, 3-phase split, new execution order 15->15.1->15.2->19->20)
-last_updated: "2026-07-24T14:59:12.771Z"
-last_activity: 2026-07-23 - Quick tasks 260723-ior (replit-ui-changes merged + frontend rev 00019-wwh live)
+last_updated: "2026-07-24T18:02:30.660Z"
+last_activity: 2026-07-24 -- Phase 15 planning complete
 progress:
-  total_phases: 8
+  total_phases: 10
   completed_phases: 5
-  total_plans: 21
+  total_plans: 28
   completed_plans: 21
-  percent: 63
+  percent: 50
 ---
 
 # Project State
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 19 (DEFERRED 2026-07-22 — operator: fix open app problems first; audit-fix pass running: F-01 group-skeptic crash, F-02 CORS env crash, F-03 mail test harness, plus chores)
 Plan: Not started
-Status: Deferred — stabilization first
+Status: Ready to execute
   live runs until engine fixes (which come LAST, after phases 18+19) — see STAKEHOLDER-NOTES 2026-07-22.
-Last activity: 2026-07-23 - Quick tasks 260723-ior (replit-ui-changes merged + frontend rev 00019-wwh live)
+Last activity: 2026-07-24 -- Phase 15 planning complete
   and 260723-j56 (outdated end-of-scope messaging sweep + History button to header); F-01/F-02 fixes
   deployed (api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8); GitHub remote active
 
