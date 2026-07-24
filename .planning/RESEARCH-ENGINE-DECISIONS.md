@@ -194,14 +194,19 @@ wrong without these).
   - **Gemini deep-research calls**: the API DOES return `usageMetadata` (input,
     output, thinking tokens — thinking bills at output rate); our adapter currently
     DROPS it (audit blobs store only status+report). Fix the adapter to record it.
-    Search/grounding tool fees are billed separately — show a live estimate and
-    reconcile monthly via Google's automatic `is_deep_research` billing label.
-  - **UI rule**: the run total shows "measured $X + estimated $Y" — never one
-    falsely-precise number. Feed rows (D15) show per-call measured cost where
-    available, clearly-marked estimates where not.
-  - **Monthly reconciliation habit**: compare recorded totals against provider
-    invoices (Anthropic console, GCP billing filtered on `is_deep_research`);
-    adjust estimate rates when they drift.
+  - **NO ESTIMATES — facts and correct calculations only (operator, 2026-07-24).**
+    Every displayed number is computed from recorded usage × published prices:
+    Anthropic tokens (all four classes) and Anthropic search/fetch fees (reported
+    count × published per-search price) are exact and live; Gemini deep-research
+    tokens are exact and live once the adapter records usageMetadata.
+  - **Gemini search/grounding tool fees are not itemized live by Google** → the
+    feed row shows "tool fees: pending". When the billing data (auto-labeled
+    `is_deep_research`) lands, the EXACT amount is written back onto the run and
+    the total updates. A run's cost is marked "final" only when nothing is
+    pending. No placeholder or estimated numbers anywhere, ever.
+  - **Reconciliation**: recorded totals are checked against provider invoices
+    (Anthropic console, GCP billing per `is_deep_research`); any mismatch is a BUG
+    to investigate, not a rate to tune.
 
 ---
 
