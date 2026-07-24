@@ -451,6 +451,137 @@ def reverify_chain(
 
 
 # ---------------------------------------------------------------------------
+# Phase 15 operator read proxies (SEAM-01, superadmin-only, space-scoped)
+# ---------------------------------------------------------------------------
+#
+# Three sync-``def`` proxies over the Plan 15-03 tribunal read endpoints
+# (verification report / citation source / audit-body drill-down). Same
+# superadmin-only + space-scoped + existence-hidden discipline as
+# :func:`get_bundle_url`: the ``_superadmin_gate`` dependency + a defense-in-depth
+# in-body 404 (Pitfall 5 — a client / cross-tenant caller can NEVER distinguish
+# existence, never 403/200), an intake-existence 404, and a run-scope 404
+# (``run.intake_id != intake_id``). The seam call happens OUTSIDE any held DB
+# session (mirrors get_bundle_url) so the ~seam round-trip holds no connection.
+# These enforce 16-D-08 (the client sees nothing) and keep the intake backend the
+# SOLE caller of Tribunal (the frontend never calls it directly). Persists NOTHING.
+
+
+@research_router.get("/{intake_id}/research/{run_id}/verification")
+def get_research_verification(
+    intake_id: str,
+    run_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Proxy a run's verification report to the superadmin operator surface (SEAM-01).
+
+    Superadmin-only + space-scoped, existence-hidden throughout (mirrors
+    :func:`get_bundle_url`):
+
+    * ``identity.role != "superadmin"`` → 404 (defense-in-depth; a client is user-role
+      and 16-D-08 says it can NEVER reach this — Pitfall 5, NOT 403).
+    * a cross-tenant / missing intake or run → 404 (existence hidden, D-07).
+
+    The seam call (:func:`tribunal_client.get_verification`) runs OUTSIDE any held DB
+    session; its JSON (the STAKEHOLDER-NOTES verification shape) is returned verbatim.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # Seam call OUTSIDE the held DB session (mirrors get_bundle_url's connection-free window).
+    settings = get_settings()
+    return tribunal_client.get_verification(
+        service_url=settings.tribunal_service_url,
+        space_id=str(intake.space_id),
+        acting_user_id=identity.uid,
+        acting_email=identity.email,
+        run_id=run.tribunal_run_id,
+    )
+
+
+@research_router.get("/{intake_id}/research/sources/{source_id}")
+def get_research_source(
+    intake_id: str,
+    source_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Proxy a research-citation source snapshot to the superadmin surface (SEAM-01).
+
+    Same superadmin-only + space-scoped existence-hidden discipline as
+    :func:`get_research_verification`: role gate (404), intake-existence (404). This is
+    the RESEARCH-CITATION source behind a ``[n]`` — a DISTINCT concern from the
+    intake-upload ``sources`` surface (do NOT overload that). The seam call runs OUTSIDE
+    any held DB session; its JSON is returned verbatim.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    # Seam call OUTSIDE the held DB session (the source is scoped by the tenant header;
+    # tribunal RLS 404s a cross-tenant/unknown source_id).
+    settings = get_settings()
+    return tribunal_client.get_source(
+        service_url=settings.tribunal_service_url,
+        space_id=str(intake.space_id),
+        acting_user_id=identity.uid,
+        acting_email=identity.email,
+        source_id=source_id,
+    )
+
+
+@research_router.get("/{intake_id}/research/{run_id}/audit/{audit_id}")
+def get_research_audit_body(
+    intake_id: str,
+    run_id: str,
+    audit_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Proxy a run's redacted audit-body drill-down to the superadmin surface (SEAM-01).
+
+    Same superadmin-only + space-scoped existence-hidden discipline as
+    :func:`get_research_verification`: role gate (404), intake-existence (404), run-scope
+    (404 if ``run is None or run.intake_id != intake_id``). This is the D15 feed
+    drill-down target — the ALREADY-REDACTED audit body. The seam call
+    (:func:`tribunal_client.get_audit_body`) runs OUTSIDE any held DB session; its JSON
+    (provider/model/request/response, NO hash) is returned verbatim.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # Seam call OUTSIDE the held DB session; tribunal RLS 404s a cross-tenant/unknown audit.
+    settings = get_settings()
+    return tribunal_client.get_audit_body(
+        service_url=settings.tribunal_service_url,
+        space_id=str(intake.space_id),
+        acting_user_id=identity.uid,
+        acting_email=identity.email,
+        run_id=run.tribunal_run_id,
+        audit_id=audit_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # SSE research stream (the ONE async def — cloned from stream_skill_runs)
 # ---------------------------------------------------------------------------
 #
