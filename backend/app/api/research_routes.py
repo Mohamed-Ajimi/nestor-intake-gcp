@@ -40,6 +40,7 @@ import json
 import logging
 
 import anyio
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -495,16 +496,30 @@ def get_research_verification(
     run = ResearchRunRepository(repo.session, identity).get(run_id)
     if run is None or str(run.intake_id) != str(intake_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    # WR-03: a run without a tribunal id can never resolve at the seam (the URL
+    # would be /api/runs/None/...) -- existence-hidden 404, not a seam 500.
+    if not run.tribunal_run_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
 
-    # Seam call OUTSIDE the held DB session (mirrors get_bundle_url's connection-free window).
+    # Seam call OUTSIDE the held DB session (mirrors get_bundle_url's connection-free
+    # window). WR-03: the seam getter raise_for_status()es -- a tribunal-side 404
+    # (RLS miss / unknown id) maps to the pinned existence-hidden 404, any other
+    # seam failure to 502 -- never an unhandled 500.
     settings = get_settings()
-    return tribunal_client.get_verification(
-        service_url=settings.tribunal_service_url,
-        space_id=str(intake.space_id),
-        acting_user_id=identity.uid,
-        acting_email=identity.email,
-        run_id=run.tribunal_run_id,
-    )
+    try:
+        return tribunal_client.get_verification(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            run_id=run.tribunal_run_id,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
+        ) from exc
 
 
 @research_router.get("/{intake_id}/research/sources/{source_id}")
@@ -530,15 +545,25 @@ def get_research_source(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     # Seam call OUTSIDE the held DB session (the source is scoped by the tenant header;
-    # tribunal RLS 404s a cross-tenant/unknown source_id).
+    # tribunal RLS 404s a cross-tenant/unknown source_id). WR-03: source_id is a free
+    # path input never validated intake-side, so a tribunal 404 is the EXPECTED miss
+    # shape -- map it to the pinned existence-hidden 404, any other seam failure to
+    # 502 -- never an unhandled 500.
     settings = get_settings()
-    return tribunal_client.get_source(
-        service_url=settings.tribunal_service_url,
-        space_id=str(intake.space_id),
-        acting_user_id=identity.uid,
-        acting_email=identity.email,
-        source_id=source_id,
-    )
+    try:
+        return tribunal_client.get_source(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            source_id=source_id,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Source not found") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
+        ) from exc
 
 
 @research_router.get("/{intake_id}/research/{run_id}/audit/{audit_id}")
@@ -568,17 +593,30 @@ def get_research_audit_body(
     run = ResearchRunRepository(repo.session, identity).get(run_id)
     if run is None or str(run.intake_id) != str(intake_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    # WR-03: a run without a tribunal id can never resolve at the seam (the URL
+    # would be /api/runs/None/...) -- existence-hidden 404, not a seam 500.
+    if not run.tribunal_run_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
 
-    # Seam call OUTSIDE the held DB session; tribunal RLS 404s a cross-tenant/unknown audit.
+    # Seam call OUTSIDE the held DB session; tribunal RLS 404s a cross-tenant/unknown
+    # audit. WR-03: map the seam 404 to the pinned existence-hidden 404, any other
+    # seam failure to 502 -- never an unhandled 500.
     settings = get_settings()
-    return tribunal_client.get_audit_body(
-        service_url=settings.tribunal_service_url,
-        space_id=str(intake.space_id),
-        acting_user_id=identity.uid,
-        acting_email=identity.email,
-        run_id=run.tribunal_run_id,
-        audit_id=audit_id,
-    )
+    try:
+        return tribunal_client.get_audit_body(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            run_id=run.tribunal_run_id,
+            audit_id=audit_id,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -903,3 +903,89 @@ def test_audit_body_null_space_404(
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
+
+
+# ===========================================================================
+# WR-03 — seam-error mapping: a tribunal-side 404 surfaces as the pinned
+# existence-hidden 404 (never an unhandled httpx.HTTPStatusError → 500), and
+# any other seam failure surfaces as 502. Exercised on the most exposed proxy
+# (get_research_source: source_id is a free path input never validated
+# intake-side) via the superadmin happy-path scaffolding.
+# ===========================================================================
+
+
+def _raise_http_status(status_code: int):
+    """Return a fake seam getter that raises httpx.HTTPStatusError(status_code)."""
+    import httpx
+
+    def _raiser(*args, **kwargs):
+        req = httpx.Request("GET", "http://tribunal.local/api/sources/x")
+        resp = httpx.Response(status_code, request=req)
+        raise httpx.HTTPStatusError(
+            f"{status_code} from seam", request=req, response=resp
+        )
+
+    return _raiser
+
+
+def test_source_seam_404_maps_to_existence_hidden_404(
+    engine, superadmin_engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A tribunal-side 404 (RLS miss / unknown source_id) → intake 404, not 500."""
+    from fastapi.testclient import TestClient
+
+    from app.research import tribunal_client as tc_mod
+
+    space = uuid.uuid4()
+    intake_id, source_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (seam-404 mapping)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    monkeypatch.setattr(tc_mod, "get_source", _raise_http_status(404))
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/sources/{source_id}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a tribunal-side 404 must map to the existence-hidden 404, "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(source_id) not in r.text, "404 body leaked the source id."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_source_seam_5xx_maps_to_502(
+    engine, superadmin_engine, set_space, monkeypatch, fake_tribunal_client
+):
+    """A non-404 seam failure (tribunal 500) → 502 Research engine unavailable."""
+    from fastapi.testclient import TestClient
+
+    from app.research import tribunal_client as tc_mod
+
+    space = uuid.uuid4()
+    intake_id, source_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (seam-5xx mapping)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    monkeypatch.setattr(tc_mod, "get_source", _raise_http_status(500))
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).get(
+            f"/intakes/{intake_id}/research/sources/{source_id}",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 502, (
+            f"a non-404 seam failure must map to 502, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
