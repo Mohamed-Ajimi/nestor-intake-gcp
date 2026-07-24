@@ -518,6 +518,56 @@
     "reverifyStillBroken": "De keten is nog steeds gebroken — de download blijft vergrendeld.",
     "unverifiedTitle": "Audit-keten nog niet geverifieerd",
     "unverifiedBody": "Deze run is voltooid maar de audit-hashketen is nog niet gecontroleerd. Verifieer de keten om de ruwe output te ontgrendelen.",
-    "verifyChain": "Keten verifiëren"
+    "verifyChain": "Keten verifiëren",
+    "feed": {
+      "title": "Activiteit",
+      "scrollToLatest": "Naar nieuwste",
+      "summaryCard": "Gewerkt gedurende {{duration}} · {{actions}} acties · {{cost}}",
+      "summaryItemsRead": " · {{count}} items gelezen",
+      "statusRetrying": "opnieuw proberen",
+      "statusFailed": "mislukt",
+      "factsCount": "{{count}} feiten",
+      "retryState": "poging {{attempt}}/{{max}} — {{wait}}s wachten",
+      "showPrompt": "Taak tonen",
+      "showLess": "Minder tonen",
+      "viewAudit": "Audit-body bekijken",
+      "hideAudit": "Audit-body verbergen"
+    }
+  },
+  "audit": {
+    "loadError": "De audit-body kon niet worden geladen. Probeer opnieuw.",
+    "regionLabel": "Audit-body",
+    "title": "Audit-body",
+    "close": "Sluiten",
+    "loading": "Audit-body laden…",
+    "provider": "Provider: {{provider}}",
+    "model": "Model: {{model}}",
+    "unknown": "onbekend",
+    "request": "Verzoek",
+    "response": "Antwoord"
+  },
+  "verification": {
+    "loadError": "Het verificatierapport kon niet worden geladen. Probeer opnieuw.",
+    "regionLabel": "Verificatierapport",
+    "title": "Verificatierapport",
+    "close": "Sluiten",
+    "loading": "Verificatierapport laden…",
+    "viewAction": "Verificatierapport bekijken",
+    "hideAction": "Verificatierapport verbergen",
+    "funnelTitle": "Filtertrechter",
+    "funnelStage": "{{stage}}: {{count}}",
+    "refutedTitle": "Weerlegde beweringen",
+    "supportTitle": "Ondersteunde beweringen",
+    "insufficientTitle": "Onvoldoende bewijs",
+    "supersededTitle": "Achterhaalde / afgebakende bevindingen",
+    "reconciledTitle": "Verzoende tegenstrijdigheden",
+    "unverifiedTitle": "Niet-geverifieerd ({{count}})",
+    "unverifiedNone": "Geen niet-geverifieerde beweringen — elke bewering draagt een oordeel.",
+    "costTitle": "Werkelijke gespecificeerde kosten",
+    "costTotal": "Totaal: {{total}}",
+    "costTotalWithPending": "Totaal tot nu toe: {{total}}",
+    "costPending": "toolkosten: in behandeling",
+    "evidenceLabel": "Bewijs",
+    "effectLabel": "Effect"
   }
 }
