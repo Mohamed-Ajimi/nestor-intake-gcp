@@ -28,6 +28,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -88,6 +89,16 @@ class Run(Base):
     # {"items": [{"name": str, "status": "done|running|pending"}]}. NULL when the
     # current stage has no sub-progress.
     stage_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Cost reconciliation flag (0011): True while some per-call costs are still
+    # unresolved (unknown model at write time -- Pitfall 5). The recompute job
+    # clears it. server_default false so legacy rows read as reconciled.
+    cost_pending: Mapped[bool] = mapped_column(
+        server_default=text("false"), default=False, nullable=False
+    )
+    # Run-level verification FUNNEL store (0011): distilled / selected /
+    # sessions / verdicts / skipped / failed counts. Populated by the
+    # verification report builder (Plan 15-03); NULL for legacy / pre-verify runs.
+    verification_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     project = relationship("Project", back_populates="runs")
     outputs = relationship(

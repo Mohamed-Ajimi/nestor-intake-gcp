@@ -68,6 +68,13 @@ class AuditLog(Base):
     completion_tokens: Mapped[int] = mapped_column(nullable=False)
     # Anthropic prompt-cache hits (Pitfall 6); 0 for providers without caching.
     cached_tokens: Mapped[int] = mapped_column(default=0, nullable=False)
+    # Anthropic prompt-cache CREATION tokens (1.25x), priced by Plan 15-02's C1
+    # cost fix. nullable=True: legacy rows never captured it (migration 0011
+    # adds the column). OUTSIDE the frozen hash-chain payload (_payload_for_row)
+    # -- additive, no chain break (T-15-01).
+    cache_creation_tokens: Mapped[int | None] = mapped_column(
+        default=None, nullable=True
+    )
     # NULL if unknown model (Pitfall 5) -- caller MUST decide whether to
     # short-circuit the chain in that case.
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
