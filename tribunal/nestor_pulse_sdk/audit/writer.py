@@ -188,8 +188,16 @@ class DBAuditWriter:
         gcs_uri: str,
         prev_hash: str,
         hash: str,
+        cache_creation_tokens: Optional[int] = None,
     ) -> None:
-        """Atomic single-INSERT path for synthesis-step calls that finish in seconds."""
+        """Atomic single-INSERT path for synthesis-step calls that finish in seconds.
+
+        Plan 15-02 C1: `cache_creation_tokens` (Anthropic cache-write tokens) is
+        persisted to the non-hashed audit_log.cache_creation_tokens column so the
+        displayed per-call cost is countable. It is OUTSIDE the frozen hash-chain
+        payload (_payload_for_row) -- additive, no chain break (T-15-04). Defaults
+        to None so non-anthropic callers persist NULL (legacy-compatible).
+        """
         async with self._sm() as session:
             async with session.begin():
                 await set_tenant_context(session, tenant_id)
@@ -198,13 +206,13 @@ class DBAuditWriter:
                         "INSERT INTO audit_log ("
                         "id, tenant_id, run_id, seq, provider, model, "
                         "started_at, duration_ms, prompt_tokens, "
-                        "completion_tokens, cached_tokens, cost_usd, "
-                        "gcs_uri, prev_hash, hash"
+                        "completion_tokens, cached_tokens, cache_creation_tokens, "
+                        "cost_usd, gcs_uri, prev_hash, hash"
                         ") VALUES ("
                         ":id, :tid, :rid, :seq, :provider, :model, "
                         ":started_at, :duration_ms, :prompt_tokens, "
-                        ":completion_tokens, :cached_tokens, :cost_usd, "
-                        ":gcs_uri, :prev_hash, :hash"
+                        ":completion_tokens, :cached_tokens, :cache_creation_tokens, "
+                        ":cost_usd, :gcs_uri, :prev_hash, :hash"
                         ")"
                     ),
                     {
@@ -219,6 +227,7 @@ class DBAuditWriter:
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "cached_tokens": cached_tokens,
+                        "cache_creation_tokens": cache_creation_tokens,
                         "cost_usd": cost_usd,
                         "gcs_uri": gcs_uri,
                         "prev_hash": prev_hash,
