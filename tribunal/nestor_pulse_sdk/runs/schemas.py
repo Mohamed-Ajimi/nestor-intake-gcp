@@ -124,6 +124,53 @@ class CompareResponse(BaseModel):
     runs: list[RunResponse]
 
 
+class StageRetry(BaseModel):
+    """Retry sub-state for one enriched stage_detail item (D15 feed).
+
+    Present only when a call was retried; ALL fields optional so the recorded
+    4cbb5311 run (which has no retries) still validates.
+    """
+    attempt: int | None = None
+    max: int | None = None
+    wait_s: float | None = None
+
+
+class StageDetailItem(BaseModel):
+    """One enriched stage_detail feed item (D15 Feed Data Model, Phase 15 SC2).
+
+    The BASE feed contract is `{name, status}`. Plan 15-01's fixture and the
+    15.2 engine enrich each item with per-row cost / task_prompt / facts / retry
+    / audit_id. EVERY enriched field is Optional (default None) so today's
+    recorded stage_detail -- and any legacy run's flat rows -- still validate
+    (additive, D-07 contract). `status` widens the base to the D15 lifecycle.
+    """
+    name: str
+    status: Literal["running", "done", "retry", "failed", "pending"] | None = None
+    task_prompt: str | None = None
+    cost_usd: str | None = None          # Decimal serialised as string in JSONB
+    facts: int | None = None
+    retry: StageRetry | None = None
+    audit_id: str | None = None          # drill-down target for GET /audit/{audit_id}
+
+    model_config = {"extra": "allow"}
+
+
+class StageSummary(BaseModel):
+    """Optional per-stage rollup carried alongside a stage's items."""
+    duration_s: float | None = None
+    actions: int | None = None
+    items_read: int | None = None
+    cost_usd: str | None = None          # Decimal serialised as string in JSONB
+
+
+class StageDetail(BaseModel):
+    """One stage bucket in the enriched stage_detail map: items + optional summary."""
+    items: list[StageDetailItem] = []
+    summary: StageSummary | None = None
+
+    model_config = {"extra": "allow"}
+
+
 class RunMetrics(BaseModel):
     """GET /api/runs/{id}/metrics -- per-run A/B comparison metrics.
 
@@ -144,8 +191,16 @@ class RunMetrics(BaseModel):
     source_count: int = 0                   # distinct sources cited across claims
     # Live stage progress (0006). `stages` is the engine's full ordered schema
     # [{"key","label"}] so the UI can render every stage up front; `current_stage`
-    # is the key the engine is on now ('done' when finished, None if not started);
-    # `stage_detail` is optional sub-progress {"items":[{"name","status"}]}.
+    # is the key the engine is on now ('done' when finished, None if not started).
+    #
+    # `stage_detail` is the enriched sub-progress map (Phase 15 SC2). Each stage
+    # bucket is a `StageDetail` (items + optional summary) whose items carry the
+    # enriched per-row cost_usd / task_prompt / facts / retry / audit_id fields
+    # (see StageDetailItem). We keep the wire type as an open `dict` so
+    # get_run_metrics returns `run.stage_detail` JSONB VERBATIM -- the enriched
+    # fields ride through for free (D-07 contract; NO field stripping, and legacy
+    # flat {name,status} rows still validate). StageDetail/StageDetailItem are the
+    # documented schema the D15 feed renderer (Plan 15-05) reads.
     stages: list[dict] = []
     current_stage: str | None = None
-    stage_detail: dict | None = None
+    stage_detail: dict[str, StageDetail] | dict | None = None
