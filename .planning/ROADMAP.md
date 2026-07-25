@@ -63,7 +63,7 @@ trail intact.
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
 - [x] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs (completed 2026-07-24)
-- [ ] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture
+- [x] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture (completed 2026-07-25)
 - [ ] **Phase 15.2: Research Engine Redesign — Engine Core** (INSERTED 2026-07-24) - question workshop + pairwise tournament (absorbs ENGINE-05), per-provider fact lists, SerpAPI researcher stream, LLM-based merge, reliability R1–R7 — live-validated vs the recorded baseline after 2026-08-01; old engine path removed on acceptance
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
 - [x] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path (completed 2026-07-22)
@@ -139,7 +139,7 @@ trail intact.
   - [x] 15.1-07-PLAN.md — G-02 pipeline wiring: gate stage insertion, gate-driven selector, corroboration ordering, low-stakes depth tier, bucket-3 counters
   - [x] 15.1-08-PLAN.md — Funnel persistence: `run.verification_summary` written in the worker's completion transaction (SC1 propagation)
   - [x] 15.1-09-PLAN.md — G-01 pair: deterministic answer-key replay CI gate + the `@pytest.mark.live` August calibration (no threshold)
-  - [ ] 15.1-10-PLAN.md — Phase gate (full suite, `verify_chain` green), dual Tribunal image rebuild + deploy, DEPLOY-RUNBOOK section, deferred Phase-15* UAT checklist
+  - [x] 15.1-10-PLAN.md — Phase gate (full suite, `verify_chain` green), dual Tribunal image rebuild + deploy, DEPLOY-RUNBOOK section, deferred Phase-15* UAT checklist
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
 **Goal**: The pipeline core is restructured — question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller, SerpAPI-fueled researcher stream, LLM-based cross-provider merge, language tagging, reliability R1–R7, and report changes — validated by a live run compared against the recorded baseline plus operator sign-off, after which the old engine path is removed immediately.
@@ -232,7 +232,7 @@ trail intact.
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
-| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 9/10 | In Progress|  |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 10/10 | Complete   | 2026-07-25 |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
