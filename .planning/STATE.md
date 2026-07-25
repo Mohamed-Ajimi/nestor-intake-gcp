@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 00040-8mw,
-stopped_at: Phase 15.1 context gathered
-last_updated: "2026-07-25T11:06:48.319Z"
-last_activity: "2026-07-25 -- Phase 15.1 context gathered (verification gates)"
+status: executing
+stopped_at: Phase 15.1 context gathered (12 decisions G-01..G-12; CONTEXT.md + DISCUSSION-LOG.md
+last_updated: "2026-07-25T14:21:14.765Z"
+last_activity: 2026-07-25 -- Phase 15.1 planning complete
 progress:
   total_phases: 10
   completed_phases: 6
-  total_plans: 28
+  total_plans: 38
   completed_plans: 28
   percent: 60
 ---
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 15 (Research Engine Redesign — Operator Surfaces) — COMPLETE (7/7 plans, 2026-07-24)
 Plan: 7 of 7 done; REVIEW fixed (8 findings), SC4 citation gap closed (be3fc8a)
-Status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 00040-8mw,
+Status: Ready to execute
   tribunal images 20260724-214354, migration 0011 applied, suites green — see 15-UAT.md Deploy Record).
   Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
   UAT STATUS (2026-07-24): Gate fix (quick 260724-vyf, rev 00025-4w8) deployed — the "View
@@ -38,7 +38,7 @@ Status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 
   browser walkthrough deferred to a live Tribunal run after the Anthropic monthly cap resets
   2026-08-01. No live-DB seeding will be done. This aligns with the existing end-of-Phase-15.2 UAT deferral.
 Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
-Last activity: 2026-07-24 -- quick 260724-vyf: broadened ResearchRunProgress mount gate
+Last activity: 2026-07-25 -- Phase 15.1 planning complete
   (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT;
   DEPLOYED frontend rev nestor-frontend-00025-4w8 (image 20260724-231312)
   (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)
