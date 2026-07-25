@@ -52,15 +52,56 @@ RECORDED_AUDIT_BUCKET = (
 # ~24 sessions returned reconciliation-as-string (BUG:recon-as-str) and were
 #   DISCARDED by the live pipeline; the loader reproduces that by skipping
 #   malformed emit blocks (see verdict_extract._parse_one_extract).
+#
+# 15.1 ADDITIVE keys -- G-08 accounting buckets, G-10 marker, G-11 gate errors.
+# The six keys above are NEVER renamed: Phase-15 surfaces and
+# test_hash_chain_replay.py assert on them. Sources, per key:
+#   not_falsifiable 358 / not_load_bearing 320 / both 28
+#       `reason` column tallies of claims-classified-full.tsv. They sum to
+#       `dropped`: 358 + 320 + 28 == 706.
+#   checked 198
+#       summed `#claims` across the 176 rows of recorded/GROUPS.md -- per
+#       recorded/REPORT.md §3.5 the 176 COMPLETED group-skeptic passes covered
+#       198 claim slots.
+#   should_have_been_checked 226
+#       DERIVED ARITHMETIC, not a directly recorded number:
+#       selected_verify 424 - checked 198 == 226. These are the claims the gates
+#       selected that the 776 cap-rejected passes never reached. G-08 bucket 3 --
+#       MUST be 0 on a healthy run.
+#   gate_errors 0
+#       zero by construction: the recorded run had no gate stage at all.
+#   verification_degraded True
+#       G-10 marker. The recorded run WAS degraded (776 Anthropic cap-400s in
+#       55 seconds).
+#
+# Invariants these values satisfy:
+#   distilled == kept + dropped                            1162 == 456 + 706
+#   kept      == selected_verify + skipped_stable            456 == 424 + 32
+#   dropped   == not_falsifiable + not_load_bearing + both   706 == 358 + 320 + 28
+#   distilled == checked + (dropped + skipped_stable) + should_have_been_checked
+#                                                          1162 == 198 + 738 + 226
+#   verification_degraded == (should_have_been_checked > 0)
+#
 # These constants let downstream funnel tests assert the EXACT recorded numbers.
 # ---------------------------------------------------------------------------
-RECORDED_FUNNEL_COUNTS: dict[str, int] = {
+RECORDED_FUNNEL_COUNTS: dict[str, int | bool] = {
     "distilled": 1162,
     "kept": 456,
     "dropped": 706,
     "selected_verify": 424,
     "skipped_stable": 32,
-    "verify_sessions": 176,
+    # G-13: 176 counts the group-skeptic calls that RETURNED on 2026-07-22 (776
+    # more were hard-400'd by the Anthropic usage cap). It measures an outage,
+    # not the funnel -- a recorded pass-through constant only.
+    "verify_sessions": 176,  # incident-derived (G-13) -- NOT a gate assertion
+    # --- 15.1 additive keys (per-key sources in the block above) ---
+    "not_falsifiable": 358,
+    "not_load_bearing": 320,
+    "both": 28,
+    "checked": 198,
+    "should_have_been_checked": 226,
+    "gate_errors": 0,
+    "verification_degraded": True,
 }
 
 
@@ -186,8 +227,21 @@ def _mtime_span_seconds(sorted_mtimes: list[str]) -> int:
     return int((_parse(sorted_mtimes[-1]) - _parse(sorted_mtimes[0])).total_seconds())
 
 
-def build_verification_summary() -> dict[str, int]:
-    """The run-level verification funnel (recorded counts) for run.verification_summary."""
+def build_verification_summary() -> dict[str, int | bool]:
+    """The run-level verification funnel (recorded counts) for run.verification_summary.
+
+    Carries all 13 contract keys: the six original funnel counts, the G-08
+    accounting buckets (not_falsifiable / not_load_bearing / both / checked /
+    should_have_been_checked), the G-11 gate_errors line, and the G-10
+    `verification_degraded` marker.
+
+    Returns a COPY so callers cannot mutate the constant. The body is
+    deliberately just `dict(RECORDED_FUNNEL_COUNTS)`: two tests compare this
+    against RECORDED_FUNNEL_COUNTS by FULL DICT EQUALITY
+    (test_hash_chain_replay.py, test_verification_report_endpoint.py), so
+    keeping the builder a pure copy makes both hold by construction whenever the
+    constant gains keys.
+    """
     return dict(RECORDED_FUNNEL_COUNTS)
 
 
