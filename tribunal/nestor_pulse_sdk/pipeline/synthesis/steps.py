@@ -727,15 +727,35 @@ def _dedupe_claims(claims: list[dict]) -> list[dict]:
     whitespace) and keeps the first occurrence. Removing the global 30-claim cap
     means the same fact now arrives many times across 8 angles × 3 providers; this
     is what keeps the skeptic load proportional to DISTINCT facts, not raw volume.
+
+    G-12 contract: a duplicate is MERGED into the first occurrence's ``found_by``
+    rather than discarded, so the output length, order and claim texts are identical
+    to the pre-15.1 behaviour while the corroboration signal survives.
     """
-    seen: set[str] = set()
+    seen: dict[str, dict] = {}
     out: list[dict] = []
     for c in claims:
         norm = re.sub(r"[^a-z0-9 ]", "", (c.get("text") or "").lower())
         norm = re.sub(r"\s+", " ", norm).strip()
-        if not norm or norm in seen:
+        if not norm:
             continue
-        seen.add(norm)
+        kept = seen.get(norm)
+        if kept is not None:
+            # MERGE, do not discard (G-12 bug 2). Three researchers independently
+            # confirming a fact used to collapse to one indistinguishable claim.
+            # Order-stable and duplicate-free: found_by is serialised into
+            # synthesis_cache JSON, so no bare set may be stored here.
+            incoming = c.get("found_by") or []
+            if incoming:
+                kept_found_by = kept.get("found_by")
+                if not isinstance(kept_found_by, list):
+                    kept_found_by = []
+                    kept["found_by"] = kept_found_by
+                for provider in incoming:
+                    if provider not in kept_found_by:
+                        kept_found_by.append(provider)
+            continue
+        seen[norm] = c
         out.append(c)
     return out
 
