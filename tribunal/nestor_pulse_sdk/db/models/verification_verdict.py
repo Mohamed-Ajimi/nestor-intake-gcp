@@ -6,9 +6,12 @@ call. Persists the `_parse_group_verdict` shape so the verification report
 (Plan 15-03) and the operator drill-down read REAL verdict data instead of
 re-parsing raw audit blobs at request time.
 
-Mirrors migration 0011's `verification_verdict` table EXACTLY. FK shape +
-tenant scoping copied from claim.py; the RLS ENABLE/FORCE + policy live in the
-migration (0011), not the ORM, exactly as claim/source do.
+Mirrors migrations 0011 + 0012's `verification_verdict` table EXACTLY (0011
+created the table, 0012 added `superseded_note`). FK shape + tenant scoping
+copied from claim.py; the RLS ENABLE/FORCE + policy live in the migration
+(0011), not the ORM, exactly as claim/source do -- and 0012 deliberately
+re-issues none of it, since a row-level policy is table-level and covers a new
+column by construction.
 
 Columns:
   - id           UUID PK (default uuid4)
@@ -17,10 +20,13 @@ Columns:
   - claim_id     UUID nullable -- links to claim.id when the group's claim is
                  resolvable (the recorded run predates claim linkage, so NULL
                  is expected for reconstructed fixtures).
-  - verdict      TEXT  (support | refute | insufficient)
+  - verdict      TEXT  (support | refute | insufficient | superseded)
   - confidence   TEXT nullable (stringified 0..1 score from the emit payload)
   - evidence_refs JSONB nullable (the evidence URL/quote array)
   - reconciliation JSONB nullable (disputed / relation / note / canonical)
+  - superseded_note TEXT nullable (added by 0012 -- the G-07 caveat carried by a
+                 `superseded` verdict: what changed and from when. NULL for
+                 every non-superseded row and for every row predating 0012.)
   - created_at   timestamptz server_default now()
 """
 
@@ -61,6 +67,9 @@ class VerificationVerdict(Base):
     evidence_refs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # disputed / relation / note / canonical (group reconciliation).
     reconciliation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # G-07 caveat shipped alongside a `superseded` verdict: what changed and
+    # from when. Added by migration 0012; NULL on every non-superseded row.
+    superseded_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

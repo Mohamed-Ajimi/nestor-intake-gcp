@@ -37,6 +37,17 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
+            # The LAST THREE entries below arrive with the 15.1 GAP-CLOSURE
+            # plans (11-15) and are PRE-REGISTERED here before they exist: the
+            # verdict-publication file lands in plan 15.1-12, the stage-schema
+            # file in 15.1-13 and the verdict-write-path file in 15.1-14. All
+            # three are pure (no Postgres, no provider key, no network), so they
+            # belong in THIS config rather than cloudbuild.test-critical.yaml.
+            # Listing them early is safe ONLY because of the "2>/dev/null ||
+            # true" guard below, which drops still-missing paths instead of
+            # aborting collection -- do not tidy that guard away, and do not
+            # replace this explicit list with a glob: the explicit list is what
+            # keeps unrelated suite files out of this fast gate.
             FILES=$$(ls nestor_pulse_sdk/tests/test_gate_replay.py \
                         nestor_pulse_sdk/tests/test_gate_selector.py \
                         nestor_pulse_sdk/tests/test_gate_failure_modes.py \
@@ -46,7 +57,10 @@ steps:
                         nestor_pulse_sdk/tests/test_fail_loud.py \
                         nestor_pulse_sdk/tests/test_tribunal_grouping.py \
                         nestor_pulse_sdk/tests/test_claim_distiller.py \
-                        nestor_pulse_sdk/tests/test_tribunal_adjudicate.py 2>/dev/null || true)
+                        nestor_pulse_sdk/tests/test_tribunal_adjudicate.py \
+                        nestor_pulse_sdk/tests/test_verdict_publication.py \
+                        nestor_pulse_sdk/tests/test_stage_schema.py \
+                        nestor_pulse_sdk/tests/test_verdict_write_path.py 2>/dev/null || true)
             if [ -z "$$FILES" ]; then
               echo "no 15.1 gate test files present yet — nothing to run"
               exit 0
