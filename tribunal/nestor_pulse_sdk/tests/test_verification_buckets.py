@@ -277,6 +277,15 @@ def test_client_appendix_unchanged():
     submits. The appendix's "Independently fact-checked" arithmetic is therefore
     explicitly OUT OF SCOPE for 15.1, and this test exists to keep it that way.
     If a future plan wants to fix that line, it must first reopen G-14.
+
+    GAP CLOSURE 2026-07-25 (review WR-11): the operator reopened ONE specific
+    sentence — the one describing unverified claims as low-stakes supporting
+    detail. G-02 had made it false (stakes stopped selecting anything; the gates
+    decide, and the count is now simply "claims with no verdict"), and G-14 was a
+    scope ruling about ADDING new vocabulary, not a licence to keep a sentence the
+    same phase falsified. The replacement introduces no gate/bucket vocabulary, so
+    the containment rule below is UNCHANGED and still fully enforced — do not read
+    the extra assertions as G-14 being abandoned.
     """
     from nestor_pulse_sdk.pipeline.tribunal.pipeline import _verification_appendix
 
@@ -310,6 +319,20 @@ def test_client_appendix_unchanged():
     assert "## Verification" in text
     assert "**Factual statements extracted and reviewed:** 100" in text
     assert "**Independently fact-checked against the live web:** 80" in text
+
+    # WR-11: the false sentence must never come back. Stakes no longer selects what
+    # gets checked (G-02), so describing these claims by their stakes tier misstates
+    # the engine to the reader of a report they cannot audit.
+    assert "low-stakes" not in text, (
+        "WR-11: stakes no longer selects what gets checked (G-02) — the appendix "
+        "must not describe unverified claims by a stakes tier"
+    )
+    assert "Waved through" not in text, (
+        "WR-11: stakes no longer selects what gets checked (G-02) — nothing is "
+        "'waved through' on a stakes basis any more"
+    )
+    # Positive control for the replacement (the call above passes n_unverified=20).
+    assert "**Not independently fact-checked:** 20" in text
 
 
 def test_no_coverage_percentage_in_report():

@@ -1493,7 +1493,15 @@ def _verification_appendix(
         f"*   **Independently fact-checked against the live web:** {n_claims - n_unverified}",
         f"*   **Removed after failing fact-checking or losing a conflict:** {n_dropped} "
         "(the supporting passages were deleted from the research before this report was written)",
-        f"*   **Waved through unverified (low-stakes supporting detail):** {n_unverified}",
+        # WR-11: this line used to describe these claims as "low-stakes supporting
+        # detail". Under G-02 stakes no longer selects what gets
+        # checked — the gates do — so n_unverified is now "claims with no verdict"
+        # (gate-dropped + skipped-stable + members of unselected clusters) and has
+        # nothing to do with stakes. The sentence was factually wrong about its own
+        # engine. The operator reopened and resolved this in the 2026-07-25 gap-
+        # closure scope: the sentence is CORRECTED without introducing any 15.1
+        # gate vocabulary, so G-14's containment rule stands unchanged.
+        f"*   **Not independently fact-checked:** {n_unverified}",
     ]
     if claims_per_facet:
         breakdown = ", ".join(
