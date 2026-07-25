@@ -20,6 +20,11 @@ Return dict shape:
         "claim_count":        int,       # number of survivor claims persisted
         "verdict":            dict,      # quality gate Verdict.as_dict()
         "verification_report": dict,     # AUDIT-ONLY (no UI change in Phase 1)
+        "verification_summary": dict,    # the 15.1 funnel — the WORKER persists this
+                                         # onto run.verification_summary in the same
+                                         # transaction that sets status='completed'
+                                         # (plan 15.1-08 / G-10). Same 13-key shape on
+                                         # every path, including the zero-claim one.
     }
 
 Intake is a DELEGATOR (quick task 260721-twy): the brief is operator-validated, so
@@ -259,6 +264,54 @@ def _build_funnel(
     return funnel
 
 
+def _verify_closing_item(funnel: dict[str, Any]) -> dict[str, str]:
+    """The verify stage's closing D15 feed row — degradation stated in WORDS (G-10).
+
+    G-10 is explicit that a gutted verification is announced "in words … not a
+    subtle icon", because the run still ends with status `completed` and an
+    operator scanning a green feed has nothing else to warn them. So when bucket 3
+    is non-empty the sentence LEADS with the degradation and names the count; the
+    counts follow as supporting detail rather than as the headline.
+
+    `status` is deliberately one of the values the feed already renders
+    (`ResearchRunProgress.tsx` handles done / running / retry / failed / pending) —
+    an invented string would fall through to the neutral styling and produce
+    exactly the quiet failure this is here to prevent. "failed" is the honest one:
+    part of the verification stage did fail, even though the run completes.
+    """
+    distilled = int(funnel.get("distilled", 0) or 0)
+    selected = int(funnel.get("selected_verify", 0) or 0)
+    checked = int(funnel.get("checked", 0) or 0)
+    unchecked = int(funnel.get("should_have_been_checked", 0) or 0)
+    dropped = int(funnel.get("dropped", 0) or 0)
+    stable = int(funnel.get("skipped_stable", 0) or 0)
+    gate_errors = int(funnel.get("gate_errors", 0) or 0)
+    sessions = int(funnel.get("verify_sessions", 0) or 0)
+
+    counts = (
+        f"{checked} of {selected} selected claims checked · "
+        f"{dropped} not checkable · {stable} stable facts skipped · "
+        f"{sessions} skeptic sessions"
+    )
+    if gate_errors:
+        counts += f" · {gate_errors} gate errors (sent for checking)"
+
+    if unchecked > 0:
+        return {
+            "name": (
+                f"VERIFICATION DEGRADED — {unchecked} of {selected} selected claims "
+                f"were never checked (crash, usage cap, budget exhaustion or gate "
+                f"error). Their passages ship unexamined: only a refutation removes "
+                f"one. Do not read this run's verification as green. — {counts}"
+            ),
+            "status": "failed",
+        }
+    return {
+        "name": f"verification complete · {counts} · {distilled} claims distilled",
+        "status": "done",
+    }
+
+
 class TribunalPipeline:
     """Adaptive-effort Tribunal SDK engine (ADR-006).
 
@@ -434,6 +487,12 @@ class TribunalPipeline:
 
         if not claims:
             log.warning("tribunal_pipeline: no claims distilled — returning empty synthesis")
+            # RESEARCH Pitfall 10: this hand-built skeleton used to carry no funnel
+            # at all, so the zero-claim path reported a DIFFERENT shape from the
+            # full path and every consumer had to branch on which one it got. Same
+            # builder, all keys, all zero — and the same top-level carrier key, so
+            # the worker's persistence path does not branch on the path either.
+            _empty_funnel = _build_funnel(None, unchecked_selected=0, verify_sessions=0)
             return {
                 "output_text": "(No claims could be distilled from the research reports.)",
                 "claim_count": 0,
@@ -443,12 +502,9 @@ class TribunalPipeline:
                     "dropped_count": 0,
                     "budget_marker": "",
                     "coverage": {"pass": True, "uncovered": []},
-                    # RESEARCH Pitfall 10: this hand-built skeleton used to carry no
-                    # funnel at all, so the zero-claim path reported a DIFFERENT
-                    # shape from the full path and every consumer had to branch on
-                    # which one it got. Same builder, all keys, all zero.
-                    "funnel": _build_funnel(None, unchecked_selected=0, verify_sessions=0),
+                    "funnel": _empty_funnel,
                 },
+                "verification_summary": _empty_funnel,
             }
 
         # ------------------------------------------------------------------
@@ -839,6 +895,59 @@ class TribunalPipeline:
             survivors = adjudication_result["survivors"]
             dropped = adjudication_result["dropped"]
 
+        # ------------------------------------------------------------------
+        # The funnel is final here — and so is what the feed must say about it
+        # ------------------------------------------------------------------
+        # Bucket 3, reconciled against GROUND TRUTH before it is published: a claim
+        # the gates selected that ended with no verdict was not checked, whatever
+        # the cause — including causes the three counted sites do not name (a group
+        # session that returned but skipped an index, a claim lost between batches).
+        # The counters above exist to LOG the cause at the moment of loss; this line
+        # decides the number, so no unnamed path can quietly read as verified.
+        #
+        # This runs HERE rather than down at the synthesis bundle because every
+        # skeptic call is now behind us — the main verify stage AND the coverage-gate
+        # re-entry, which is the last thing that can turn an unchecked claim into a
+        # checked one. Nothing between here and synthesis adds a verdict (conflict
+        # resolution only moves claims between survivors and dropped). Computing it
+        # here is what lets the VERIFY stage's closing line be written while verify
+        # is still the stage being reported: a `set_stage(..., "verify", ...)` issued
+        # after synthesis had started would rewind `run.current_stage`.
+        _observed_unchecked = sum(
+            1 for c in claims
+            if (c.get("gate") or {}).get("strict") == "VERIFY"
+            and not verdicts_by_claim.get(id(c))
+        )
+        if _observed_unchecked != unchecked_selected:
+            log.warning(
+                "tribunal_pipeline: bucket-3 reconciliation — counted %d at the loss "
+                "sites, observed %d selected claims with no verdict; publishing the "
+                "observed number", unchecked_selected, _observed_unchecked,
+            )
+        unchecked_selected = _observed_unchecked
+
+        # The ONE funnel for this run: built once, then carried on the synthesis
+        # bundle, the verification report and the pipeline's return value, so the
+        # feed, the operator report and run.verification_summary cannot disagree.
+        verification_funnel = _build_funnel(
+            gate_funnel,
+            unchecked_selected=unchecked_selected,
+            verify_sessions=total_skeptics,
+        )
+        # G-10: the closing summary states degradation in words, not with an icon.
+        await set_stage(
+            run_id, tenant_id, "verify",
+            detail={"items": [_verify_closing_item(verification_funnel)]},
+        )
+        if verification_funnel["should_have_been_checked"]:
+            log.warning(
+                "tribunal_pipeline: VERIFICATION DEGRADED — %d of %d selected claims "
+                "were never checked",
+                verification_funnel["should_have_been_checked"],
+                verification_funnel["selected_verify"],
+                extra={"run_id": str(run_id)},
+            )
+
         # Snapshot which claims were dropped by FACT-CHECK (skeptic adjudication)
         # BEFORE conflict resolution adds its own losers — so each rejected claim
         # can be labelled with WHY it was removed (failed_factcheck vs lost_conflict).
@@ -971,24 +1080,9 @@ class TribunalPipeline:
             per_claim_verdicts[ckey] = verdicts_by_claim.get(id(claim), [])
         n_unverified = sum(1 for c in claims if not verdicts_by_claim.get(id(c)))
 
-        # Bucket 3, reconciled against GROUND TRUTH before it is published: a claim
-        # the gates selected that ended with no verdict was not checked, whatever
-        # the cause — including causes the three counted sites do not name (a group
-        # session that returned but skipped an index, a claim lost between batches).
-        # The counters above exist to LOG the cause at the moment of loss; this line
-        # decides the number, so no unnamed path can quietly read as verified.
-        _observed_unchecked = sum(
-            1 for c in claims
-            if (c.get("gate") or {}).get("strict") == "VERIFY"
-            and not verdicts_by_claim.get(id(c))
-        )
-        if _observed_unchecked != unchecked_selected:
-            log.warning(
-                "tribunal_pipeline: bucket-3 reconciliation — counted %d at the loss "
-                "sites, observed %d selected claims with no verdict; publishing the "
-                "observed number", unchecked_selected, _observed_unchecked,
-            )
-        unchecked_selected = _observed_unchecked
+        # (Bucket 3 was reconciled against ground truth and `verification_funnel`
+        # built right after the coverage gate — see the block above. Both are final
+        # by the time we get here; nothing since then could add a verdict.)
         claims_per_facet: dict[str, int] = {}
         for c in claims:
             f = c.get("facet") or "?"
@@ -1016,13 +1110,12 @@ class TribunalPipeline:
                 "claims_per_facet": claims_per_facet,
                 "budget_exceeded": budget_exceeded,
                 # The 15.1 funnel — the gates' nine keys plus this stage's four.
-                # Carried on the bundle so it survives the interactive-report pause
-                # (plan 15.1-09 persists it onto run.verification_summary from here).
-                "funnel": _build_funnel(
-                    gate_funnel,
-                    unchecked_selected=unchecked_selected,
-                    verify_sessions=total_skeptics,
-                ),
+                # Carried on the bundle so it survives the interactive-report pause:
+                # the resume path rebuilds the result from this cache, and
+                # _write_final_report lifts the funnel back out of it onto the
+                # pipeline's `verification_summary` key, which is what the worker
+                # persists onto run.verification_summary (plan 15.1-08).
+                "funnel": verification_funnel,
             },
         }
         # Cache the scrubbed-research bundle so a "Rewrite report" — or the
@@ -1203,6 +1296,13 @@ async def _write_final_report(
         "verdict": verdict_dict,
         "verification_report": verification_report,
         "rejected_claims": rejected_claims,
+        # The carrier the worker reads (plan 15.1-08), following the
+        # `rejected_claims` precedent exactly: a top-level result key the worker
+        # picks up defensively and persists in the SAME transaction that sets
+        # status='completed', so a run can never report completed while its
+        # degradation marker is missing (G-10). Same dict object as
+        # verification_report["funnel"] — one funnel, three readers, no drift.
+        "verification_summary": verification_report["funnel"],
     }
 
 
