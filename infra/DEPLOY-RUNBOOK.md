@@ -1984,6 +1984,196 @@ STOP, this is a 16-D-08 breach — do not accept the phase.
 
 ---
 
+## Phase 15.1 — Verification gates (dual tribunal REBUILD, **NO migration**, **NO env change**, NO new secret)
+
+This section is the enumerated source of truth for shipping the Phase-15.1 VERIFICATION GATES to
+production. Phase 15.1 replaces the verification stage's selection logic — materiality +
+error-likelihood gates, LLM canonical grouping, corroboration prioritization, honest three-bucket
+accounting, a fourth `superseded` verdict and a loud degradation marker. It touches **exactly two
+deployables** (`tribunal-worker` AND `tribunal-api`) and **nothing else**:
+
+- **NO migration** — see Step 15.1.a.
+- **NO Cloud Run env change and NO new secret** — see Step 15.1.b.
+- **NO frontend rebuild** — the operator surface added in Phase 15 already renders this phase's
+  output. `VerificationReport.tsx` renders the funnel via `Object.entries(report.funnel)`, so the
+  new funnel keys appear with **no frontend change**. (One honest caveat is recorded as a known
+  gap in `15.1-UAT.md` § Known gaps: the backend now emits `verification_degraded_text`, but no
+  component renders it yet — the operator sees degradation as raw funnel keys plus the D15 feed's
+  closing sentence. Closing that is a frontend change, deliberately out of this phase's scope.)
+- **NO `nestor-api` rebuild** — no intake-side surface changed this phase.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is FORBIDDEN on this project (it would rotate the BUILT_IN DB
+> passwords and take down all services). Every step below is a manual gcloud reconciliation run in
+> Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no Docker).
+
+> **The recurring deploy-gap (READ FIRST).** "Nothing is real until it is deployed." Phases 6, 8,
+> 10 and 11 were all *executed but not deployed*. Gate code that only exists in git changes nothing
+> about the next real run — the engine will keep sending ~950 claims to the fact-checkers and keep
+> reporting a gutted verification as green. Step 15.1.c is a mandatory **image REBUILD**; there is
+> no env flip that ships it, because this phase adds no env var to flip.
+
+### Step 15.1.a — CONFIRM there is nothing to migrate (do NOT run the migrate Job)
+
+**Phase 15.1 lands NO migration.** The tribunal alembic head stays at **0011**
+(`0011_cost_verification.py`, shipped in § Phase 15 Step 15.b). Both columns this phase writes
+already exist:
+
+- `run.verification_summary` — JSONB, nullable. Created by 0011. Phase 15.1 gives it its FIRST
+  production writer (`runs/worker.py`, in the same `UPDATE` statement that sets
+  `status='completed'`), but the column itself is unchanged.
+- `verification_verdict.verdict` — free **`TEXT`, with NO enum and NO CHECK constraint**. The new
+  fourth value `superseded` therefore needs no DDL; only the tool schema, the parser, adjudication
+  and the report shaper changed, and those all ship inside the image.
+
+```bash
+# Confirm — read-only. Expect 0011_cost_verification.py, i.e. NO 0012 in the tribunal line.
+ls tribunal/nestor_pulse_sdk/alembic/versions/ | tail -1
+```
+
+> ⚠️ **Do NOT run `gcloud run jobs execute tribunal-migrate` for this phase.** There is no
+> `0011 -> 0012` upgrade to apply. (The image-pin lesson from § Phase 15 Step 15.b — a Job left
+> pinned to a stale image is a silent no-op — still stands for any FUTURE phase that does land a
+> migration; it simply does not apply here because no Job should run at all.)
+
+### Step 15.1.b — CONFIRM no Cloud Run env change is required (read-only)
+
+Every tunable this phase introduces is read at import with a **production-safe default**, so the
+deployed services need no `--update-env-vars` and no new secret. Set one ONLY to deviate from the
+default:
+
+| Env var | Default | Read by | Effect |
+|---|---|---|---|
+| `NESTOR_TRIBUNAL_GATE_BATCH` | `40` | `pipeline/tribunal/gates.py` | claims per gate-classifier call |
+| `NESTOR_TRIBUNAL_GATE_CONCURRENCY` | `4` | `gates.py` | bounded fan-out over gate batches |
+| `NESTOR_TRIBUNAL_GATE_RETRIES` | `2` | `gates.py` | extra attempts on a **transient** gate failure (cap/billing 400s are never retried) |
+| `NESTOR_TRIBUNAL_GATE_BACKOFF_S` | `2.0` | `gates.py` | exponential-backoff base between gate retries |
+| `NESTOR_TRIBUNAL_GATE_CONTEXT_CHARS` | `2000` | `gates.py` | ceiling on the decision context in the gate prompt |
+| `NESTOR_TRIBUNAL_GATE_BRIEF_CHARS` | `1200` | `pipeline/tribunal/pipeline.py` | ceiling on the mission brief fed in as that decision context (the tighter of the two) |
+| `NESTOR_TRIBUNAL_CLUSTER` | `true` | `pipeline/tribunal/grouping.py` | **ROLLBACK LEVER 1** — see below |
+| `NESTOR_TRIBUNAL_CLUSTER_BATCH` | `40` | `grouping.py` | claims per clustering call |
+| `NESTOR_TRIBUNAL_CLUSTER_MAX_BLOCK` | `60` | `grouping.py` | max claims in one blocking group before chunking |
+| `NESTOR_TRIBUNAL_CLUSTER_CONCURRENCY` | `4` | `grouping.py` | bounded fan-out over cluster blocks |
+
+**The two rollback levers — no redeploy needed, these are config-only `--update-env-vars` on the
+already-deployed image:**
+
+1. **`NESTOR_TRIBUNAL_CLUSTER=false`** restores the pre-15.1 exact-key `ENTITY|ATTRIBUTE`
+   bucketing in `grouping.py`. Use this if LLM clustering misbehaves; `group_claims`'s signature
+   and five-key return shape are frozen across both paths, so nothing downstream notices.
+2. **`NESTOR_TRIBUNAL_GROUP_VERIFY=false`** (pre-existing, unchanged) still switches the verify
+   stage to the per-claim fallback branch. That branch was **rewired**, not deleted: it now selects
+   from `claim["gate"]["strict"]` instead of stakes triage, so the gates remain the selector in
+   both modes.
+
+There is deliberately **no lever that turns the gates off entirely.** The gates ARE the selector
+now (G-02); disabling them would leave the verify stage with no selection rule at all.
+
+```bash
+# Confirm-only read — do NOT re-set anything (a wrong value breaks the Phase-14 seam, Pitfall 4).
+# Expect: none of the NESTOR_TRIBUNAL_GATE_* / _CLUSTER* names appear. That is CORRECT — the
+# defaults are compiled into the image and no env is needed.
+gcloud run services describe tribunal-worker \
+  --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format="value(spec.template.spec.containers[0].env)" | tr ',' '\n' | grep -E 'NESTOR_TRIBUNAL' || true
+```
+
+### Step 15.1.c — REBUILD + deploy BOTH Tribunal images at ONE `$SHA`
+
+**BOTH images must rebuild.** The gate, cluster, funnel and accounting code all live in the shared
+`nestor_pulse_sdk` package, which is baked into both images:
+
+1. **`tribunal-worker`** runs the pipeline. It is the side that executes `apply_gates()`, does the
+   clustering, computes the funnel — and it is the **only** writer of `run.verification_summary`
+   (`runs/worker.py`, in the same statement as `status='completed'`). A stale worker means the gates
+   never run and the honesty marker is never written, no matter what the api image contains.
+2. **`tribunal-api`** serves the read surface. `verification/report.py`'s shaper — the three
+   accounting buckets, the degradation sentence, the `superseded` verdict class — is what the
+   superadmin verification report calls. A stale api serves the OLD two-way `unverified` arithmetic
+   over the new funnel, i.e. the P1 defect this phase closes, silently.
+
+The worker computes, the api serves — **so BOTH rebuild at one `$SHA`.** Same idiom as § Phase 13.e
+/ 14.b / 15.a; never a local `docker build` (downloads are blocked on the dev box).
+
+> ⚠️ **Image-pin: deploy the SPECIFIC tag just built, NEVER `:latest`.** This is the lesson carried
+> from § Phase 15 Step 15.b and § Phase 17 (hit live 2026-07-22 on `nestor-migrate`): an unpinned
+> reference resolves to whatever the registry last saw, which silently ships a different image than
+> the one you just tested. The retargeted deploy scripts pin `IMAGE_TAG=$SHA` for exactly this
+> reason.
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+# Rebuild tribunal-worker (bakes gates.py + the clusterer + _build_funnel + the
+# verification_summary write into the run-EXECUTING image).
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+# Rebuild tribunal-api (bakes the report shaper's accounting buckets + degradation text +
+# superseded verdict class + the widened pydantic schemas into the READ-surface image).
+gcloud builds submit tribunal \
+  --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+
+# Redeploy BOTH at the just-built tag via the retargeted deploy scripts (worker first, then api —
+# same order as § Phase 13.g / 15.a). The scripts pin IMAGE_TAG=$SHA and PRESERVE the Phase-14
+# lockdown (tribunal-run SA + --no-allow-unauthenticated + invoker=nestor-run ONLY — NOT re-granted
+# here). Do NOT hand-roll a `gcloud run deploy` for these two services.
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+```
+
+### Step 15.1.d — Verify the deploy (describe + `/readyz`) — NO live research run
+
+```bash
+# Both services must show a NEW revision serving 100% of traffic.
+gcloud run services describe tribunal-worker --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.latestReadyRevisionName)'
+gcloud run services describe tribunal-api --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.latestReadyRevisionName)'
+
+# Traffic must be 100% on the new revision (not split with the previous one).
+gcloud run services describe tribunal-api --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.traffic)'
+
+# Confirm the tribunal-api URL is UNCHANGED from Phase 14/15/16/17 (a redeploy of an existing
+# service keeps its URL). Capture read-only — do NOT re-set the seam env (Pitfall 4).
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+echo "tribunal-api URL: $TRIBUNAL_URL"   # expect the SAME https://tribunal-api-...-ew.a.run.app
+
+# /readyz — tribunal-api is --no-allow-unauthenticated (Phase-14 lockdown), so the probe carries an
+# identity token. A 200 proves the new revision boots and its DB connection is live.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$TRIBUNAL_URL/readyz"
+```
+
+> **NO live research run is triggered by this step.** The Anthropic monthly cap resets
+> **2026-08-01**; a run before then buys a red herring, not a proof. The gate code is proven by the
+> deterministic fixture replay recorded in `15.1-UAT.md` § Phase Gate (zero LLM calls). The live
+> confirmation — the gate classifier's agreement against the blind answer key, and whether the four
+> known contradiction pairs cluster together — is the operator's hand-run August calibration, and it
+> is **informational, never a gate** (G-01/G-05).
+
+### Step 15.1.e — Deferred operator UAT (batched, NOT run at deploy time)
+
+Per the operator's standing direction (2026-07-24), the Phase-15\* browser walkthroughs are run
+**once, combined**, against a real live Tribunal run after 2026-08-01 — not piecemeal per phase, and
+with **no live-DB seeding**. The Phase-15.1 checklist is written and waiting at
+`.planning/phases/15.1-research-engine-redesign-verification-gates-inserted-2026-07/15.1-UAT.md`
+§ Deferred Browser UAT. Do not run it in isolation.
+
+Failure triage for the deploy itself: the verification report shows the OLD `unverified` count with
+no gate funnel keys → the **tribunal-api** rebuild was skipped (stale read surface). A new run
+completes but `run.verification_summary` is NULL and no `gate` stage appears in the D15 feed → the
+**tribunal-worker** rebuild was skipped (the gates never ran). Either symptom means Step 15.1.c was
+not completed — re-run it; there is no env flip that fixes a stale image.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -2052,3 +2242,8 @@ STOP, this is a 16-D-08 breach — do not accept the phase.
 - [ ] Step 15.d — VERIFY without printing secrets: Phase-15 pytest targets green in Cloud Build (tribunal `cloudbuild.test.yaml` cost/verification/citation/chain + intake `cloudbuild.test.yaml` seam denial trios + superadmin funnel happy path); **`verify_chain` re-run GREEN on the DEPLOYED audit data (SC5 — T-15-17 gate)**; recorded-run `/verification` + enriched `/metrics` return 200 for a superadmin and 404 for a client (16-D-08 / T-15-18); CONFIRM-ONLY read that `TRIBUNAL_SERVICE_URL` present on `nestor-api`; NO new env/secret — explicitly NO `SERPAPI_API_KEY` (that is Phase 15.2 / D10)
 - [ ] Step 15.e — (conditional) `nestor-api` REBUILT via Cloud Build ONLY if the live revision predates the Plan 15-04 proxy routes (commit `ac6102d`) — else SKIP; NO intake `nestor` migration this phase (0011 is the tribunal line), so NO `nestor-migrate` Job run
 - [ ] Step 15.f — CHECKPOINT: operator RECORDED-RUN UAT (run-4cbb5311, NO live LLM run — Anthropic cap until 2026-08-01) per 15-UAT.md steps 1–5: D15 feed vs `replit view.png` + audit-body drill-down; verification report content; facts-only cost with pending state; every `[n]` resolves; CLIENT sees nothing (16-D-08); `verify_chain` green (SC5); V-02 operator sign-off recorded next to `docs/tribunal-run-reports/run-20260722-4cbb5311/`
+- [ ] Step 15.1.a — CONFIRM-ONLY: **NO migration this phase**; tribunal alembic head stays **0011** (`run.verification_summary` JSONB and `verification_verdict.verdict` free TEXT with NO CHECK both already exist); the `tribunal-migrate` Job is **NOT** executed
+- [ ] Step 15.1.b — CONFIRM-ONLY: **NO Cloud Run env change and NO new secret**; all ten `NESTOR_TRIBUNAL_GATE_*` / `_CLUSTER*` tunables read at import with production-safe defaults; the two rollback levers documented (`NESTOR_TRIBUNAL_CLUSTER=false` → exact-key bucketing; `NESTOR_TRIBUNAL_GROUP_VERIFY=false` → the rewired per-claim fallback, which still selects from the gate)
+- [ ] Step 15.1.c — BOTH Tribunal images REBUILT via Cloud Build at ONE `$SHA` (`cloudbuild.worker.yaml` — the worker EXECUTES the gates and is the sole writer of `run.verification_summary`; `cloudbuild.api.yaml` — the api SERVES the accounting buckets / degradation text / `superseded` verdict class) + redeployed worker-then-api at that `$SHA` via the retargeted deploy scripts (Phase-14 lockdown preserved, not re-granted); **the specific built tag, never `:latest`**. NO frontend rebuild, NO `nestor-api` rebuild
+- [ ] Step 15.1.d — VERIFY: `gcloud run services describe` shows a NEW revision on BOTH services with traffic 100% on it; tribunal-api URL confirmed UNCHANGED via `describe` WITHOUT a path (Pitfall 4); `/readyz` 200 with an identity token; **NO live research run triggered** (Anthropic cap until 2026-08-01)
+- [ ] Step 15.1.e — DEFERRED (not a deploy-time gate): the Phase-15.1 browser checklist in `15.1-UAT.md` § Deferred Browser UAT is batched into the ONE combined Phase-15\* operator session after 2026-08-01, against a real live run, with no live-DB seeding — do NOT run it piecemeal
