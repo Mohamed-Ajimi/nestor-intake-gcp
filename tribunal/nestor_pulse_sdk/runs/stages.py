@@ -41,6 +41,12 @@ ENGINE_STAGES: dict[str, list[dict[str, str]]] = {
         {"key": "research_division", "label": "Research division"},
         {"key": "deep_research",     "label": "Deep research"},
         {"key": "distill",           "label": "Claim distillation"},
+        # WR-03: the pipeline has been writing this key since Phase 15.1
+        # (pipeline.py:536-562) while the schema never declared it — so
+        # run.current_stage reported a stage RunMetrics.stages omitted, and the
+        # UI rendered the raw key with no label. Declared here, between distill
+        # and verify, which is where the gates actually run.
+        {"key": "gate",              "label": "Verification gates"},
         {"key": "verify",            "label": "Skeptic verification"},
         {"key": "adjudicate",        "label": "Adjudication"},
         {"key": "coverage",          "label": "Coverage gate"},
