@@ -64,6 +64,12 @@ function refToText(ref: unknown): string {
  * pre-CR-01 imaginary `claim`/`evidence`/`effect` keys the backend does not emit.
  * The evidence block lists `evidence_refs`; the effect/canonical block renders
  * `reconciliation.canonical`, with `reconciliation.note` as an inline caveat.
+ *
+ * CAVEAT FALLBACK (G-07 / 15.1): the amber caveat renders `reconciliation.note` OR, when
+ * there is none, `superseded_note`. A `superseded` verdict on a SINGLE-member group is the
+ * ordinary shape — `relation` defaults to "single" and `canonical` to "", so the group emits
+ * no reconciliation note at all. Without this fallback the skeptic's G-07 caveat ("was true,
+ * changed on <date>") would reach the browser on every such row and be displayed nowhere.
  */
 function VerdictItemRow({
   item,
@@ -84,7 +90,11 @@ function VerdictItemRow({
   const recon =
     item.reconciliation && typeof item.reconciliation === "object" ? item.reconciliation : null;
   const canonical = typeof recon?.canonical === "string" ? recon.canonical : "";
-  const note = typeof recon?.note === "string" ? recon.note : "";
+  const reconNote = typeof recon?.note === "string" ? recon.note : "";
+  const supersededNote = typeof item.superseded_note === "string" ? item.superseded_note : "";
+  // Reconciliation note first (it describes the whole group); otherwise the row's own G-07
+  // superseded caveat, which is all a single-member superseded group ever carries.
+  const note = reconNote || supersededNote;
   return (
     <li className="border-l-2 border-ink/15 pl-3">
       <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-ink/60">
@@ -293,6 +303,21 @@ export function VerificationReport({
           <VerdictSection
             title={t("verification.insufficientTitle")}
             items={report.verdicts?.insufficient}
+            citationsByClaim={citationsByClaim}
+            onOpenCitation={openCitationPanel}
+          />
+
+          {/* ── Superseded VERDICTS (G-06 verdict class: "was true, has since changed") ──
+                 ⚠ DISTINCT from the superseded/scoped section directly below: this one lists
+                 rows the skeptic CLASSED as superseded (report.verdicts.superseded), while
+                 that one lists reconciliation-derived scoped findings carrying a canonical
+                 value (report.superseded). Same word, different question — the backend
+                 documents the deliberate collision in verification/report.py. Do NOT merge
+                 them, and do NOT give them one shared heading. */}
+          <VerdictSection
+            title={t("verification.supersededVerdictsTitle")}
+            items={report.verdicts?.superseded}
+            showEffect
             citationsByClaim={citationsByClaim}
             onOpenCitation={openCitationPanel}
           />

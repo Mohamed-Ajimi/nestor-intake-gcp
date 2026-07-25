@@ -89,6 +89,15 @@ export type VerificationVerdictItem = {
     canonical?: string | null;
     [k: string]: unknown;
   } | null;
+  /**
+   * G-07 (15.1): the caveat the skeptic MUST supply with a `superseded` verdict — what
+   * changed, and from when. Persisted in `verification_verdict.superseded_note` and declared
+   * explicitly on the backend `VerificationVerdictItem` (runs/schemas.py) because that model
+   * has no `model_config`, so pydantic's default `extra="ignore"` would otherwise drop it.
+   * A single-member superseded group emits NO `reconciliation.note`, so this is the only
+   * carrier of the caveat for that (ordinary) shape — see VerdictItemRow's note fallback.
+   */
+  superseded_note?: string | null;
   [k: string]: unknown;
 };
 
@@ -98,6 +107,14 @@ export type VerificationReport = {
     support?: VerificationVerdictItem[];
     refute?: VerificationVerdictItem[];
     insufficient?: VerificationVerdictItem[];
+    /**
+     * G-06 (15.1): the fourth VERDICT CLASS the group skeptic can emit ("was true, has
+     * since changed"). ⚠ This is NOT the top-level `superseded` field two lines below,
+     * which carries reconciliation-derived scoped/temporal findings WITH a canonical value.
+     * Same word, different question — the backend documents the deliberate name collision
+     * on the classing branch in `verification/report.py`. Do NOT unify them.
+     */
+    superseded?: VerificationVerdictItem[];
   };
   /** Refute verdicts carrying real skeptic evidence_refs (the "why refuted" list). */
   refuted?: VerificationVerdictItem[];
