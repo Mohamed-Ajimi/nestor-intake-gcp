@@ -1,0 +1,61 @@
+# tribunal/cloudbuild.test-gates.yaml — Phase 15.1 verification-gate test gate.
+#
+# The FAST phase gate for 15.1. Unlike cloudbuild.test-critical.yaml, this config
+# provisions NO DATABASE and requires NO PROVIDER API KEYS. Every 15.1 gate test
+# is pure: the recorded fixture is built with session=None, LLM egress goes
+# through a hand-written fake `audited`, and nothing opens a connection. So the
+# whole POSTGRES preamble of the critical gate (image pull, container start,
+# pg_isready wait, role creation) and its connection-string env are absent here.
+#
+# The `not live` marker filter on the pytest line is LOAD-BEARING. pyproject.toml
+# only REGISTERS the `live` marker — it is listed under
+# [tool.pytest.ini_options] markers so that --strict-markers accepts it — and
+# registration does NOT deselect it. Without that filter the August gate
+# calibration test would fire a REAL LLM call from CI, against an Anthropic
+# account that is already at its monthly cap (resets 2026-08-01).
+#
+# The file list is built with `ls ... || true` because this config lands in
+# wave 1 while its target test files arrive across waves 1-5: files that do not
+# exist yet are skipped instead of failing pytest collection. The `|| true` is
+# required — under `set -e` a bare `FILES=$(ls missing-file)` aborts the script.
+#
+# INVOCATION:
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.test-gates.yaml \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  - id: pytest-gates
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        docker run --rm \
+          -v /workspace:/workspace -w /workspace \
+          python:3.11-slim bash -c '
+            set -e
+            pip install --no-cache-dir -q -r requirements.txt
+            FILES=$$(ls nestor_pulse_sdk/tests/test_gate_replay.py \
+                        nestor_pulse_sdk/tests/test_gate_selector.py \
+                        nestor_pulse_sdk/tests/test_gate_failure_modes.py \
+                        nestor_pulse_sdk/tests/test_gate_calibration.py \
+                        nestor_pulse_sdk/tests/test_superseded_verdict.py \
+                        nestor_pulse_sdk/tests/test_verification_buckets.py \
+                        nestor_pulse_sdk/tests/test_fail_loud.py \
+                        nestor_pulse_sdk/tests/test_tribunal_grouping.py \
+                        nestor_pulse_sdk/tests/test_claim_distiller.py \
+                        nestor_pulse_sdk/tests/test_tribunal_adjudicate.py 2>/dev/null || true)
+            if [ -z "$$FILES" ]; then
+              echo "no 15.1 gate test files present yet — nothing to run"
+              exit 0
+            fi
+            echo "collecting:"
+            echo "$$FILES"
+            python -m pytest $$FILES -v -rs --tb=short -m "not live"
+          '
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: "1800s"
