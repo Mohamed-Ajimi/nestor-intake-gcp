@@ -713,15 +713,40 @@ class TribunalPipeline:
                         _book_unchecked(grp["claims"], "group session crashed or timed out")
                         continue
                     vbi = res.get("verdicts_by_index", {})
+                    # ENGINE-10: harvested BEFORE the member loop (it used to be
+                    # read after it) so each verdict can carry it into the
+                    # Stage-7 writer. report.py builds the top-level `reconciled`
+                    # and `superseded` sections from the verdict ROW's
+                    # `reconciliation` column, so a recon that never reaches a
+                    # verdict leaves those sections empty however good the writer.
+                    recon = res.get("reconciliation") or {}
+                    # ...but ONLY when the recon carries meaning. `disputed`
+                    # defaults to False and `relation` to "single"/"agree"
+                    # (group_skeptic._parse_group_verdict), so an unconditional
+                    # attach would file every verdict of every group into those
+                    # two report sections.
+                    _recon_is_meaningful = bool(
+                        recon.get("disputed")
+                        or recon.get("relation") == "scoped"
+                        or str(recon.get("note") or "").strip()
+                        or str(recon.get("canonical") or "").strip()
+                    )
                     for i, c in enumerate(grp["claims"]):
                         v = vbi.get(i)
                         if v is not None:
+                            if _recon_is_meaningful:
+                                # dict(...) COPIES rather than aliases: a later
+                                # mutation of the group result must not reach a
+                                # verdict already built.
+                                v["reconciliation"] = dict(recon)
                             verdicts_by_claim[id(c)].append(v)
                     # CR-01: carry this group's superseded caveats out before the
                     # verdict dicts disappear into verdicts_by_claim, where G-07's
                     # note used to die. Merged into contested_notes below.
                     superseded_notes.extend(_collect_superseded_notes(grp["claims"], vbi))
-                    recon = res.get("reconciliation") or {}
+                    # Unchanged consumer — this one feeds contested_notes, and its
+                    # narrower condition is deliberate. Do not fold it into the
+                    # meaningfulness test above.
                     if recon.get("disputed") or recon.get("relation") == "scoped":
                         group_reconciliations.append({
                             "entity": grp.get("entity"), "attribute": grp.get("attribute"),
@@ -1072,8 +1097,18 @@ class TribunalPipeline:
             _sm = get_sessionmaker()
             async with _sm() as session:
                 async with session.begin():
+                    # ENGINE-10 / CR-02 — `dropped_claims` is NOT optional in
+                    # spirit. A refuted claim lives in `dropped`, never in
+                    # `survivors`, and gets no `claim` row; without this argument
+                    # its verdict is never persisted at all, so
+                    # report["verdicts"]["refute"] and report["refuted"] stay
+                    # structurally empty on every run no matter how many claims
+                    # the skeptic refuted. `dropped` here already covers BOTH
+                    # adjudication losers and conflict losers — it is the same
+                    # list the rejected_claims ledger just above was built from.
                     await persist_tribunal_claims(
                         claims=survivors,
+                        dropped_claims=dropped,
                         verdicts_by_claim=verdicts_by_claim,
                         run_id=run_id,
                         tenant_id=tenant_id,

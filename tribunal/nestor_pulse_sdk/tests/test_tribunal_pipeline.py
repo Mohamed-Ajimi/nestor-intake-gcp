@@ -13,7 +13,10 @@ Asserts:
   (d) dispatch_runner('sdk') returns SDKPipeline when NESTOR_SDK_ORCHESTRATOR is unset.
   (e) Final synthesis is called with survivors only (dropped claim absent from synthesis input).
   (f) PERSISTENCE-SHAPE GUARD: persist_tribunal_claims is called with claims= list of atomic
-      claim dicts (NOT provider_results); len(claims) == survivor count.
+      claim dicts (NOT provider_results); len(claims) == survivor count. Since 15.1-14 the
+      call ALSO carries dropped_claims= — the refuted / conflict-lost claims, which get no
+      claim row but whose verdicts are persisted with claim_id = NULL — so both doubles
+      below declare that keyword explicitly and the first records what it received.
   (g) extract_and_persist_citations is NOT called from TribunalPipeline.
 """
 from __future__ import annotations
@@ -241,10 +244,19 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
         fake_run_skeptic,
     )
 
-    # Monkeypatch persist_tribunal_claims — capture call args
+    # Monkeypatch persist_tribunal_claims — capture call args.
+    # WIDENED CONTRACT (15.1-14 / ENGINE-10): Stage 7 now also hands the writer the
+    # REFUTED / conflict-lost claims, whose verdicts are persisted with claim_id = NULL
+    # (they get no claim row). `dropped_claims` is named EXPLICITLY rather than absorbed
+    # by a **kwargs catch-all, so this double keeps documenting the real signature and
+    # the next widening surfaces here instead of passing silently.
     persist_calls: list[dict] = []
-    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session):
-        persist_calls.append({"claims": list(claims), "verdicts_by_claim": verdicts_by_claim})
+    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session, dropped_claims=None):
+        persist_calls.append({
+            "claims": list(claims),
+            "verdicts_by_claim": verdicts_by_claim,
+            "dropped_claims": list(dropped_claims or []),
+        })
         return {"claim_ids": [uuid.uuid4() for _ in claims], "source_ids": []}
 
     monkeypatch.setattr(
@@ -377,7 +389,10 @@ async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.run_skeptic",
         fake_run_skeptic,
     )
-    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session):
+    # Same widened contract as the double above (15.1-14 / ENGINE-10): Stage 7 also
+    # passes the refuted / conflict-lost claims, persisted with claim_id = NULL.
+    # Explicit parameter, never a **kwargs catch-all.
+    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session, dropped_claims=None):
         return {"claim_ids": [uuid.uuid4() for _ in claims], "source_ids": []}
     monkeypatch.setattr(
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.persist_tribunal_claims",
