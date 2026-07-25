@@ -129,6 +129,16 @@ def test_gate_errors_alone_do_not_hide_bucket_three():
     G-11 sends a gate batch that fails after retries toward MORE checking, with a
     visible gate-error line. That line is additional information, not a substitute
     for the count of claims that never got checked.
+
+    WR-02 (plan 15.1-12) -- the unit, not just the number. `gate_errors` is a
+    per-CLAIM counter: gates.py:557-558 bumps it once for every claim whose gate
+    decision was defaulted, and test_gate_failure_modes.py:168 pins that (3 claims
+    -> 3). The sentence used to render it in batch units, so at the default
+    _GATE_BATCH = 40 a single failed batch was reported to the operator as forty
+    of them -- a 40x overstatement of how much of the gate stage broke. The
+    original `"3" in text` assertion below could not catch that: the digit was
+    right and only the noun was wrong. The two assertions added at the end pin
+    the noun, so a regression fails here rather than reaching an operator.
     """
     funnel = _healthy_funnel()
     funnel.update(
@@ -149,6 +159,15 @@ def test_gate_errors_alone_do_not_hide_bucket_three():
     assert report["verification_degraded"] is True
     text = report["verification_degraded_text"]
     assert "80" in text and "3" in text
+    # WR-02: the counter is per CLAIM, so the sentence must say claims.
+    assert "claim(s) were sent for checking on a defaulted gate answer" in text, (
+        "the gate-error line must state the count in CLAIM units -- the counter "
+        "is incremented once per claim, not once per batch"
+    )
+    assert "gate batch" not in text, (
+        "reporting a per-claim count in batch units overstates the gate failure "
+        "by up to 40x at the default _GATE_BATCH = 40"
+    )
     # Buckets still account for every distilled claim.
     assert acc["checked"] + acc["not_checkable"]["total"] + acc["should_have_been_checked"] == (
         funnel["distilled"]
