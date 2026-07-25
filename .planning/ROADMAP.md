@@ -138,7 +138,7 @@ trail intact.
   - [x] 15.1-06-PLAN.md — G-08/G-09/G-10/G-14 report shaper: three buckets, `verification_degraded` in words, pydantic fields, client-appendix negative test
   - [x] 15.1-07-PLAN.md — G-02 pipeline wiring: gate stage insertion, gate-driven selector, corroboration ordering, low-stakes depth tier, bucket-3 counters
   - [x] 15.1-08-PLAN.md — Funnel persistence: `run.verification_summary` written in the worker's completion transaction (SC1 propagation)
-  - [ ] 15.1-09-PLAN.md — G-01 pair: deterministic answer-key replay CI gate + the `@pytest.mark.live` August calibration (no threshold)
+  - [x] 15.1-09-PLAN.md — G-01 pair: deterministic answer-key replay CI gate + the `@pytest.mark.live` August calibration (no threshold)
   - [ ] 15.1-10-PLAN.md — Phase gate (full suite, `verify_chain` green), dual Tribunal image rebuild + deploy, DEPLOY-RUNBOOK section, deferred Phase-15* UAT checklist
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
@@ -232,7 +232,7 @@ trail intact.
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
-| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 8/10 | In Progress|  |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 9/10 | In Progress|  |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
