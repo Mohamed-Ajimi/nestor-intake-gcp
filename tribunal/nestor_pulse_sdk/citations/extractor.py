@@ -33,6 +33,7 @@ canonical run.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import uuid
@@ -177,6 +178,119 @@ async def _insert_claim(
     return claim_id
 
 
+async def _insert_verdict(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    claim_id: Optional[uuid.UUID],
+    verdict: dict,
+) -> uuid.UUID:
+    """Write ONE `verification_verdict` row for one per-claim verdict dict.
+
+    ENGINE-10 / CR-02. Before this helper existed nothing in production wrote to
+    `verification_verdict` — the only writer in the repo was the recorded-fixture
+    loader — so `build_verification_report` queried zero rows on every real run
+    and published `verdicts.{support,refute,insufficient,superseded} == []` with
+    `counts.verdicts_total == 0` beside an honest gate-derived `checked` count.
+
+    TENANT CONTEXT — THIS HELPER PERFORMS NO TENANT SETUP OF ITS OWN.
+    It is called ONLY from inside `persist_tribunal_claims`, AFTER that
+    function's `set_tenant_context`, and inside the transaction the CALLER
+    opened. `set_tenant_context` issues `set_config('app.tenant_id', :tid, true)`
+    — transaction-local — so every statement executed after it in that same
+    transaction is governed by migration 0011's FORCE-RLS policy
+    `verification_verdict_tenant_isolation`. `tenant_id` is bound explicitly so
+    the policy's `WITH CHECK` clause governs the INSERT rather than the write
+    slipping around it. Calling this from anywhere without an established tenant
+    context would be a bug.
+
+    SOURCE ORDER IS NOT THE ORDERING THAT MATTERS. This `def` sits ABOVE
+    `persist_tribunal_claims` because it is grouped with the other write helpers
+    (`_upsert_source`, `_insert_claim`, `_link_claim_source`); it is only ever
+    CALLED below it. The runtime ordering proof is
+    `tests/test_verdict_write_path.py::test_tenant_context_is_set_before_any_verdict_insert`,
+    which asserts the recorded CALL order on the session.
+
+    Args:
+        claim_id: the `claim` row this verdict belongs to, or None. A refuted /
+                  conflict-lost claim has NO claim row (the claim table is the
+                  survivor recall mechanism for the PHASE1-05 gate), so its
+                  verdict is written with a NULL claim_id — the same shape the
+                  recorded fixture uses, and one `report.py` already handles by
+                  counting DISTINCT non-null claim_ids.
+        verdict:  a per-claim verdict dict from `verdicts_by_claim`
+                  (`group_skeptic._parse_group_verdict` shape, plus the
+                  `reconciliation` key the pipeline attaches in `_flush_groups`).
+
+    Every value is a BOUND PARAMETER on a `text()` statement — no model-authored
+    string is ever interpolated into SQL — and the two JSONB columns go through
+    `json.dumps` + `CAST(:p AS JSONB)`, the codebase's raw-SQL JSONB idiom.
+    """
+    verdict_id = uuid.uuid4()
+
+    # A malformed / unparseable verdict dict must not bind NULL into a NOT NULL
+    # column: default to the same "insufficient" the group skeptic uses.
+    raw_verdict = verdict.get("verdict")
+    verdict_value = (raw_verdict.strip() if isinstance(raw_verdict, str) else "") or "insufficient"
+
+    # The parser produces a float; the column is TEXT.
+    raw_confidence = verdict.get("confidence")
+    confidence = None if raw_confidence is None else str(raw_confidence)
+
+    raw_refs = verdict.get("evidence_refs")
+    evidence = json.dumps(raw_refs) if isinstance(raw_refs, list) and raw_refs else None
+
+    raw_recon = verdict.get("reconciliation")
+    recon = json.dumps(raw_recon) if isinstance(raw_recon, dict) and raw_recon else None
+
+    # Never write "" — the column is nullable precisely so "no caveat" is
+    # representable as NULL rather than as an empty string.
+    raw_note = verdict.get("superseded_note")
+    note = (raw_note.strip() if isinstance(raw_note, str) else "") or None
+
+    await session.execute(
+        text(
+            "INSERT INTO verification_verdict "
+            "(id, tenant_id, run_id, claim_id, verdict, confidence, "
+            "evidence_refs, reconciliation, superseded_note) "
+            "VALUES (:id, :tid, :rid, :cid, :verdict, :confidence, "
+            "CAST(:evidence AS JSONB), "
+            "CAST(:recon AS JSONB), "
+            ":note)"
+        ),
+        {
+            "id": str(verdict_id),
+            "tid": str(tenant_id),
+            "rid": str(run_id),
+            "cid": str(claim_id) if claim_id is not None else None,
+            "verdict": verdict_value,
+            "confidence": confidence,
+            "evidence": evidence,
+            "recon": recon,
+            "note": note,
+        },
+    )
+    return verdict_id
+
+
+def _verdicts_for(claim: dict, verdicts_by_claim: dict) -> list[dict]:
+    """Return one claim's verdicts as a list, whatever shape the map holds.
+
+    `verdicts_by_claim` is keyed by `id(claim)` — object identity, so the SAME
+    dict objects the `claims` / `survivors` / `dropped` lists hold — and a value
+    may be a single verdict dict or a list of them. ONE normalisation, used by
+    both the source-gathering block and the verdict writes, so the two cannot
+    drift apart.
+    """
+    raw = verdicts_by_claim.get(id(claim))
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        return [raw]
+    return [v for v in raw if isinstance(v, dict)]
+
+
 async def _link_claim_source(
     session: AsyncSession,
     *,
@@ -286,8 +400,9 @@ async def persist_tribunal_claims(
     run_id: uuid.UUID,
     tenant_id: uuid.UUID,
     session: AsyncSession,
+    dropped_claims: Optional[list[dict]] = None,
 ) -> dict:
-    """Persist fine-grained claim + claim_source rows for Tribunal survivors.
+    """Persist fine-grained claim + claim_source + verification_verdict rows.
 
     This is the RECALL MECHANISM for the Tribunal path (PHASE1-05 gate).
 
@@ -304,23 +419,37 @@ async def persist_tribunal_claims(
          claim.facet = focus_area label).
       3. For each source_url / evidence_ref attached by that claim's skeptics, upserts
          a source row and links a claim_source row.
+      4. Writes ONE verification_verdict row per verdict — survivors linked to the
+         claim row inserted for them in this same transaction, dropped claims with
+         claim_id = NULL (ENGINE-10 / CR-02).
 
     Args:
         claims:           Adjudicated survivors from claim_distiller output.
                           Each dict: {text|claim_text, facet, source_urls|evidence_refs, ...}
         verdicts_by_claim: Mapping of id(claim) -> verdict dict (or list of verdicts).
-                           Used to extract skeptic evidence_refs / citations for claim_source.
+                           Used to extract skeptic evidence_refs / citations for claim_source,
+                           and to write the verification_verdict rows.
         run_id:           UUID of the current run.
         tenant_id:        UUID of the current tenant.
         session:          Active AsyncSession (caller opens transaction).
+        dropped_claims:   Claims refuted by adjudication or lost as the weaker side of
+                          a conflict. They get NO `claim` row — the claim table is the
+                          survivor recall mechanism for the PHASE1-05 gate and must keep
+                          that meaning — but their verdicts ARE persisted, with
+                          `claim_id = NULL`, so report["verdicts"]["refute"] and
+                          report["refuted"] are not permanently empty. Keyword-optional
+                          and defaulted to None so every pre-existing call shape stays
+                          valid.
 
     Returns:
-        {"claim_ids": [uuid, ...], "source_ids": [uuid, ...]}
+        {"claim_ids": [uuid, ...], "source_ids": [uuid, ...],
+         "verdict_ids": [uuid, ...], "verdict_count": int}
     """
     await set_tenant_context(session, tenant_id)
 
     claim_ids: list[uuid.UUID] = []
     source_ids: list[uuid.UUID] = []
+    verdict_ids: list[uuid.UUID] = []
 
     for position, claim in enumerate(claims):
         # Support both 'text' (claim_distiller shape) and 'claim_text' (legacy)
@@ -342,6 +471,26 @@ async def persist_tribunal_claims(
         )
         claim_ids.append(claim_id)
 
+        claim_verdicts = _verdicts_for(claim, verdicts_by_claim)
+
+        # ENGINE-10 / CR-02: the verdict row is written HERE, carrying the
+        # claim_id of the row inserted a moment ago in this same transaction.
+        # That linkage is the point — it is what makes
+        # unverified.claims_with_verdict a real number instead of the
+        # claim_id-IS-NULL workaround report.py documents. The write runs after
+        # this function's set_tenant_context above, so migration 0011's
+        # FORCE-RLS WITH CHECK policy governs it.
+        for claim_verdict in claim_verdicts:
+            verdict_ids.append(
+                await _insert_verdict(
+                    session,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    claim_id=claim_id,
+                    verdict=claim_verdict,
+                )
+            )
+
         # Gather source URLs from the claim itself + from skeptic verdicts
         source_urls: list[str] = []
 
@@ -351,26 +500,21 @@ async def persist_tribunal_claims(
                 if url and isinstance(url, str):
                     source_urls.append(url)
 
-        # From skeptic verdict(s) for this claim
-        claim_id_key = id(claim)
-        raw_verdicts = verdicts_by_claim.get(claim_id_key)
-        if raw_verdicts is not None:
-            # verdicts_by_claim may contain a single verdict dict or a list
-            if isinstance(raw_verdicts, dict):
-                raw_verdicts = [raw_verdicts]
-            for verdict in raw_verdicts:
-                for ref in (verdict.get("evidence_refs") or []):
-                    if ref and isinstance(ref, str):
-                        source_urls.append(ref)
-                for citation in (verdict.get("citations") or []):
-                    if isinstance(citation, dict):
-                        url = citation.get("url") or citation.get("source_url") or ""
-                    elif isinstance(citation, str):
-                        url = citation
-                    else:
-                        url = ""
-                    if url:
-                        source_urls.append(url)
+        # From skeptic verdict(s) for this claim — SAME normalisation the verdict
+        # writes above use, so the two views of verdicts_by_claim cannot diverge.
+        for claim_verdict in claim_verdicts:
+            for ref in (claim_verdict.get("evidence_refs") or []):
+                if ref and isinstance(ref, str):
+                    source_urls.append(ref)
+            for citation in (claim_verdict.get("citations") or []):
+                if isinstance(citation, dict):
+                    url = citation.get("url") or citation.get("source_url") or ""
+                elif isinstance(citation, str):
+                    url = citation
+                else:
+                    url = ""
+                if url:
+                    source_urls.append(url)
 
         # De-duplicate while preserving order
         seen_urls: set[str] = set()
@@ -398,10 +542,35 @@ async def persist_tribunal_claims(
                 source_id=sid,
             )
 
+    # Dropped claims: refuted by adjudication or the weaker side of a conflict.
+    # No `claim` row is written for them (see the dropped_claims Arg note), but
+    # their verdicts ARE persisted with claim_id = NULL. Without this loop
+    # report["verdicts"]["refute"] and report["refuted"] would stay permanently
+    # empty, because Stage 7 passes only survivors as `claims` — the exact
+    # hollow surface CR-02 describes. Claims with no verdicts are skipped:
+    # conflict losers were never fact-checked.
+    for dropped_claim in (dropped_claims or []):
+        for claim_verdict in _verdicts_for(dropped_claim, verdicts_by_claim):
+            verdict_ids.append(
+                await _insert_verdict(
+                    session,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    claim_id=None,
+                    verdict=claim_verdict,
+                )
+            )
+
     log.info(
-        "persist_tribunal_claims done: %d claims / %d sources (run_id=%s)",
+        "persist_tribunal_claims done: %d claims / %d sources / %d verdicts (run_id=%s)",
         len(claim_ids),
         len(source_ids),
+        len(verdict_ids),
         str(run_id),
     )
-    return {"claim_ids": claim_ids, "source_ids": source_ids}
+    return {
+        "claim_ids": claim_ids,
+        "source_ids": source_ids,
+        "verdict_ids": verdict_ids,
+        "verdict_count": len(verdict_ids),
+    }
