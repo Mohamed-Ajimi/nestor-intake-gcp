@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Phase 15 COMPLETE (7/7 plans, REVIEW fixed, SC4 closed be3fc8a); next per order 15->15.1->15.2->19->20
-last_updated: "2026-07-24T23:00:00.000Z"
-last_activity: 2026-07-24 -- Phase 15 executed, reviewed, and closed
+status: Phase 15 closed AND DEPLOYED 2026-07-24 (frontend 00024-lwq, nestor-api 00040-8mw,
+stopped_at: Phase 15.1 context gathered
+last_updated: "2026-07-25T11:06:48.319Z"
+last_activity: "2026-07-25 -- Phase 15.1 context gathered (verification gates)"
 progress:
   total_phases: 10
   completed_phases: 6
   total_plans: 28
   completed_plans: 28
-  percent: 55
+  percent: 60
 ---
 
 # Project State
@@ -179,13 +179,13 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-24 (recovered abrupt stop; closed + deployed Phase 15; quick 260724-vyf gate fix live)
-Stopped at: Phase 15 (operator surfaces) COMPLETE + DEPLOYED (rev 00025-4w8). Gate fix shipped so the
-  surfaces render on delivered/archived. OPERATOR DIRECTION 2026-07-24: this part is done — proceed to
-  the other Phase-15* parts next (15.1 Verification Gates, 15.2 Engine Core), then run ONE combined
-  Phase-15* UAT once 15/15.1/15.2 are all ready (against a live run post-2026-08-01). Do NOT UAT
-  Phase 15 piecemeal.
-Resume file: /gsd-discuss-phase 15.1 (Verification Gates)
+Last session: 2026-07-25T11:06:48.307Z
+Stopped at: Phase 15.1 context gathered (12 decisions G-01..G-12; CONTEXT.md + DISCUSSION-LOG.md
+  committed 54dcc1e). Standing operator direction 2026-07-24 unchanged: run ONE combined Phase-15*
+  UAT once 15/15.1/15.2 are all ready (against a live run post-2026-08-01) — do NOT UAT piecemeal.
+  15.1 needs NO live LLM runs: its CI proof is a deterministic replay of the recorded 1,162-claim
+  fixture; the real-classifier calibration check is hand-run after the cap resets 2026-08-01.
+Resume file: .planning/phases/15.1-research-engine-redesign-verification-gates-inserted-2026-07/15.1-CONTEXT.md
 
 ## Operator Next Steps
 
