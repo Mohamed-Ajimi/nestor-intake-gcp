@@ -95,6 +95,12 @@ def build_web_fetch(
 #:   verdict      : "support" | "refute" | "insufficient"
 #:   confidence   : 0.0–1.0 numeric score
 #:   evidence_refs: list of cited evidence strings (short excerpts / URLs)
+#
+# DELIBERATE ASYMMETRY (plan 15.1-03 Task 1, G-06): this PER-CLAIM tool keeps its
+# three-value verdict enum while EMIT_GROUP_VERDICT_TOOL below gains a fourth value.
+# The only production callers of this tool are the NESTOR_TRIBUNAL_GROUP_VERIFY=false
+# fallback branch and the coverage-gate re-entry, whose fate plan 15.1-07 owns. Do NOT
+# "fix" the asymmetry by extending the enum below — it is intentional.
 EMIT_VERDICT_TOOL: dict[str, Any] = {
     "name": "emit_verdict",
     "description": (
@@ -163,7 +169,11 @@ EMIT_GROUP_VERDICT_TOOL: dict[str, Any] = {
         "variants relate: are they the same fact (agree), different scopes/tiers/dates "
         "(scoped — say which), or a genuine contradiction (disputed=true). Provide the "
         "best current canonical value when one exists. Only refute a claim with an "
-        "independent web_fetch citation — never on absence of evidence."
+        "independent web_fetch citation — never on absence of evidence. "
+        "Use 'superseded' when the claim was TRUE when written but has since been "
+        "overtaken by a later change — do NOT use 'refute' for an overtaken-but-once-true "
+        "fact. A superseded verdict MUST carry 'superseded_note' stating what changed and "
+        "from when, quoted from the fetched source and never phrased from memory."
     ),
     "input_schema": {
         "type": "object",
@@ -175,9 +185,19 @@ EMIT_GROUP_VERDICT_TOOL: dict[str, Any] = {
                     "type": "object",
                     "properties": {
                         "claim_index": {"type": "integer", "description": "0-based index of the claim within the group."},
-                        "verdict": {"type": "string", "enum": ["support", "refute", "insufficient"]},
+                        "verdict": {"type": "string", "enum": ["support", "refute", "insufficient", "superseded"]},
                         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "superseded_note": {
+                            "type": "string",
+                            "description": (
+                                "REQUIRED when verdict=superseded: what changed and from when "
+                                "(e.g. 'applied until 1 April 2026'). Stated from the fetched "
+                                "source, never from memory."
+                            ),
+                        },
                     },
+                    # superseded_note is deliberately NOT in `required`: every non-superseded
+                    # verdict would otherwise have to carry an empty string.
                     "required": ["claim_index", "verdict", "confidence"],
                 },
             },
