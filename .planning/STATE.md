@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.1 context gathered (12 decisions G-01..G-12; CONTEXT.md + DISCUSSION-LOG.md
-last_updated: "2026-07-25T22:19:35.353Z"
-last_activity: 2026-07-25 -- Phase 15.1 planning complete
+last_updated: "2026-07-25T22:43:25.218Z"
+last_activity: 2026-07-25 -- Phase 15.1 execution started
 progress:
   total_phases: 10
   completed_phases: 6
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.1 — Research Engine Redesign — Verification Gates
+**Current focus:** Phase 15.1 — research-engine-redesign-verification-gates
 
 ## Current Position
 
-Phase: 15.1 (Research Engine Redesign — Verification Gates) — EXECUTING
-Plan: 1 of 10
-Status: Ready to execute
+Phase: 15.1 (research-engine-redesign-verification-gates) — EXECUTING
+Plan: 1 of 16
+Status: Executing Phase 15.1
   tribunal images 20260724-214354, migration 0011 applied, suites green — see 15-UAT.md Deploy Record).
   Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
   UAT STATUS (2026-07-24): Gate fix (quick 260724-vyf, rev 00025-4w8) deployed — the "View
@@ -38,7 +38,7 @@ Status: Ready to execute
   browser walkthrough deferred to a live Tribunal run after the Anthropic monthly cap resets
   2026-08-01. No live-DB seeding will be done. This aligns with the existing end-of-Phase-15.2 UAT deferral.
 Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
-Last activity: 2026-07-25 -- Phase 15.1 planning complete
+Last activity: 2026-07-25 -- Phase 15.1 execution started
   (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT;
   DEPLOYED frontend rev nestor-frontend-00025-4w8 (image 20260724-231312)
   (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)

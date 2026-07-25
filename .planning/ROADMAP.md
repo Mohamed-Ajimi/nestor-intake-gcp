@@ -140,12 +140,12 @@ trail intact.
   - [x] 15.1-08-PLAN.md — Funnel persistence: `run.verification_summary` written in the worker's completion transaction (SC1 propagation)
   - [x] 15.1-09-PLAN.md — G-01 pair: deterministic answer-key replay CI gate + the `@pytest.mark.live` August calibration (no threshold)
   - [x] 15.1-10-PLAN.md — Phase gate (full suite, `verify_chain` green), dual Tribunal image rebuild + deploy, DEPLOY-RUNBOOK section, deferred Phase-15* UAT checklist
-  - [ ] 15.1-11-PLAN.md — GAP CLOSURE (wave 7): `superseded_note` storage — tribunal alembic `0012` + ORM mirror + three new test files pre-registered in the no-Postgres gate
-  - [ ] 15.1-12-PLAN.md — GAP CLOSURE (wave 7): publishing surface — `_verdict_dto` emits `superseded_note`, `verdicts_total == 0` funnel fallback so `unverified` can never contradict the funnel (CR-02), gate-error unit fixed (WR-02)
-  - [ ] 15.1-13-PLAN.md — GAP CLOSURE (wave 7): caveat reaches synthesis via `contested_notes` (CR-01a), `gate` stage declared in `ENGINE_STAGES` (WR-03), false "low-stakes supporting detail" appendix line replaced (WR-11)
+  - [x] 15.1-11-PLAN.md — GAP CLOSURE (wave 7): `superseded_note` storage — tribunal alembic `0012` + ORM mirror + three new test files pre-registered in the no-Postgres gate
+  - [x] 15.1-12-PLAN.md — GAP CLOSURE (wave 7): publishing surface — `_verdict_dto` emits `superseded_note`, `verdicts_total == 0` funnel fallback so `unverified` can never contradict the funnel (CR-02), gate-error unit fixed (WR-02)
+  - [x] 15.1-13-PLAN.md — GAP CLOSURE (wave 7): caveat reaches synthesis via `contested_notes` (CR-01a), `gate` stage declared in `ENGINE_STAGES` (WR-03), false "low-stakes supporting detail" appendix line replaced (WR-11)
   - [ ] 15.1-14-PLAN.md — GAP CLOSURE (wave 8): the production `verification_verdict` writer — `_insert_verdict` in `persist_tribunal_claims`, survivors linked by `claim_id`, dropped claims persisted with NULL (CR-02)
   - [ ] 15.1-15-PLAN.md — GAP CLOSURE (wave 9): three Cloud Build gates + SC3 re-proof, alembic `0012` applied live + dual Tribunal redeploy + frontend rebuild, runbook Steps 15.1.f/15.1.g, UAT Known-Gaps closure + WR-01/WR-10 deferred to 15.2
-  - [ ] 15.1-16-PLAN.md — GAP CLOSURE (wave 7): operator surface — render the `verdicts.superseded` class in its own section (new nl/en/fr key) + fall the amber caveat back to `superseded_note`; forces a frontend rebuild in 15.1-15
+  - [x] 15.1-16-PLAN.md — GAP CLOSURE (wave 7): operator surface — render the `verdicts.superseded` class in its own section (new nl/en/fr key) + fall the amber caveat back to `superseded_note`; forces a frontend rebuild in 15.1-15
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
 **Goal**: The pipeline core is restructured — question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller, SerpAPI-fueled researcher stream, LLM-based cross-provider merge, language tagging, reliability R1–R7, and report changes — validated by a live run compared against the recorded baseline plus operator sign-off, after which the old engine path is removed immediately.
@@ -244,7 +244,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
-| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 10/16 | Gap closure planned (SC2 `gaps_found`) | - |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 14/16 | In Progress|  |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
