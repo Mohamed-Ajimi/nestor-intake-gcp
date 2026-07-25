@@ -55,6 +55,10 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
 from nestor_pulse_sdk.pipeline.tribunal.triage import triage_claims
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import run_skeptic
 from nestor_pulse_sdk.pipeline.tribunal.grouping import group_claims
+# The gate stage (G-01/G-02/G-11) and ITS OWN key list. _FUNNEL_KEYS is imported
+# rather than re-typed here so the zero-claim early return and the computed path
+# cannot drift apart if gates.py ever gains a key (RESEARCH Pitfall 10).
+from nestor_pulse_sdk.pipeline.tribunal.gates import apply_gates, _FUNNEL_KEYS as _GATE_FUNNEL_KEYS
 from nestor_pulse_sdk.pipeline.tribunal.group_skeptic import run_group_skeptic
 from nestor_pulse_sdk.pipeline.tribunal.adjudicate import adjudicate_all
 from nestor_pulse_sdk.pipeline.tribunal.coverage_gate import check_coverage, MAX_REENTRY
@@ -106,10 +110,85 @@ _GROUP_DEPTH: dict[str, tuple[int, int, int]] = {
 def _group_passes(stakes: str) -> int:
     """Sessions for a group: 1 for med/high, 0 for low (wave through)."""
     return 0 if stakes == "low" else 1
+
+
+#: How much of the client's brief is handed to the gates as `decision_context`.
+#: "Load-bearing" is only meaningful relative to a decision, so the gate must see
+#: one — but a long brief would crowd the claims out of the 4096-token gate
+#: budget, so the text is bounded here (gates.py truncates again at its own
+#: _CONTEXT_MAX_CHARS ceiling; this is the tighter of the two).
+_GATE_DECISION_CONTEXT_CHARS = int(
+    os.environ.get("NESTOR_TRIBUNAL_GATE_BRIEF_CHARS", "1200")
+)
+
 #: Cost ceiling (USD) the budget governor enforces across the skeptic fan-out.
 _MAX_BUDGET_USD = float(
     os.environ.get("NESTOR_TRIBUNAL_MAX_BUDGET_USD", str(DEFAULT_MAX_BUDGET_USD))
 )
+
+
+def _gate_decision_context(mission_brief: dict[str, Any]) -> str:
+    """The client's decision, in words, for the gates' load-bearing test.
+
+    A claim is "load-bearing" only relative to a decision — the blind experiment
+    that produced the recorded 456/424 numbers judged materiality against "the
+    LUKOIL BeNeLux dynamic-pricing report", not in the abstract. So the gate is
+    handed the sharpened research prompt plus the focus-area labels. Bounded by
+    _GATE_DECISION_CONTEXT_CHARS: a long brief must never crowd the claims out of
+    the gate's own output budget.
+    """
+    parts: list[str] = []
+    prompt = (mission_brief.get("deep_research_prompt") or "").strip()
+    if prompt:
+        parts.append(prompt)
+    labels = [
+        (fa.get("focus_area") or "").strip()
+        for fa in (mission_brief.get("focus_areas") or [])
+    ]
+    labels = [lbl for lbl in labels if lbl]
+    if labels:
+        parts.append("Focus areas: " + " · ".join(labels))
+    return "\n".join(parts).strip()[:_GATE_DECISION_CONTEXT_CHARS]
+
+
+def _build_funnel(
+    gate_funnel: dict[str, Any] | None,
+    *,
+    unchecked_selected: int,
+    verify_sessions: int,
+) -> dict[str, Any]:
+    """The one funnel dict — the gates' nine keys plus the four this stage owns.
+
+    Built in ONE place so the zero-claim early return and the full path cannot
+    report different shapes (RESEARCH Pitfall 10): a downstream consumer must
+    never have to branch on which path produced the report.
+
+    The four pipeline-owned keys (G-08 / G-10 / G-13):
+      checked                  -- selected for checking AND actually checked
+      should_have_been_checked -- bucket 3: selected and NOT checked, whatever the
+                                  cause (crash, timeout, usage cap, budget cap).
+                                  This is the phase's most important number and
+                                  must be ZERO on a healthy run.
+      verification_degraded    -- the loud marker; true iff bucket 3 is non-empty.
+      verify_sessions          -- skeptic sessions actually launched. G-13: a
+                                  recorded pass-through measure of throughput, NOT
+                                  a gate assertion — never assert on it.
+
+    Keys are ADDITIVE ONLY. Phase-15 surfaces and test_hash_chain_replay.py assert
+    on the existing names; renaming one breaks them silently.
+    """
+    funnel: dict[str, Any] = {key: 0 for key in _GATE_FUNNEL_KEYS}
+    for key, value in (gate_funnel or {}).items():
+        funnel[key] = value
+    selected = int(funnel.get("selected_verify", 0) or 0)
+    # Clamped defensively: bucket 3 counts a SUBSET of the selected queue, so a
+    # count above it would be an accounting lie in the other direction.
+    unchecked = max(0, min(int(unchecked_selected), selected))
+    funnel["checked"] = selected - unchecked
+    funnel["should_have_been_checked"] = unchecked
+    funnel["verify_sessions"] = int(verify_sessions)
+    funnel["verification_degraded"] = unchecked > 0
+    return funnel
 
 
 class TribunalPipeline:
@@ -291,7 +370,17 @@ class TribunalPipeline:
                 "output_text": "(No claims could be distilled from the research reports.)",
                 "claim_count": 0,
                 "verdict": {"pass": None, "error": "no_claims"},
-                "verification_report": {"verdicts": {}, "dropped_count": 0, "budget_marker": "", "coverage": {"pass": True, "uncovered": []}},
+                "verification_report": {
+                    "verdicts": {},
+                    "dropped_count": 0,
+                    "budget_marker": "",
+                    "coverage": {"pass": True, "uncovered": []},
+                    # RESEARCH Pitfall 10: this hand-built skeleton used to carry no
+                    # funnel at all, so the zero-claim path reported a DIFFERENT
+                    # shape from the full path and every consumer had to branch on
+                    # which one it got. Same builder, all keys, all zero.
+                    "funnel": _build_funnel(None, unchecked_selected=0, verify_sessions=0),
+                },
             }
 
         # ------------------------------------------------------------------
@@ -302,6 +391,51 @@ class TribunalPipeline:
         # {text, facet, evidence} with NO stakes; without this every claim defaulted
         # to med (2 skeptics) and the ADR-006 high=3/low=0 tiering never fired.
         _propagate_stakes(claims, mission_brief)
+
+        # ------------------------------------------------------------------
+        # Stage 3.5: Verification gates (G-01 / G-02 / G-11)
+        # ------------------------------------------------------------------
+        # Two cheap per-claim gates decide WHICH claims are worth fact-checking:
+        # materiality (falsifiable-specific AND load-bearing for THIS client's
+        # decision) and error-likelihood (a stable, notorious fact is skipped).
+        # From here on the gate result is the SINGLE answer to "what gets
+        # checked" — stakes no longer selects, it only sets how deep a surviving
+        # session goes (G-02, _GROUP_DEPTH).
+        #
+        # G-04 ordering note: the gates run PER CLAIM and BEFORE the clusterer is
+        # consulted for survival, so the per-claim keep/drop numbers reproduce;
+        # clustering happens below and a cluster survives if ANY member survived.
+        #
+        # The gate is a cheap flash fan-out, but it is still a fan-out, and every
+        # other fan-out in this pipeline cancel-checks first.
+        await raise_if_cancelled(run_id, tenant_id)
+        await set_stage(
+            run_id, tenant_id, "gate",
+            detail={"items": [{
+                "name": f"gating {len(claims)} claims…", "status": "running",
+            }]},
+        )
+        gate_result = await apply_gates(
+            claims=claims,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            decision_context=_gate_decision_context(mission_brief),
+        )
+        gate_funnel: dict[str, Any] = gate_result["funnel"]
+        await set_stage(
+            run_id, tenant_id, "gate",
+            detail={"items": [{
+                "name": (
+                    f"{gate_funnel['selected_verify']} of {gate_funnel['distilled']} claims "
+                    f"selected for checking · {gate_funnel['dropped']} not checkable · "
+                    f"{gate_funnel['skipped_stable']} stable facts skipped"
+                    + (f" · {gate_funnel['gate_errors']} gate errors (sent for checking)"
+                       if gate_funnel["gate_errors"] else "")
+                ),
+                "status": "done",
+            }]},
+        )
 
         # Skeptic verification is the most expensive stage — check for a user cancel
         # before fanning out, and again between batches below.
