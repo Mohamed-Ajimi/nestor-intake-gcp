@@ -13,7 +13,8 @@ Why a group skeptic at all (vs N per-claim skeptics):
 
 Returns a dict:
     {
-      "verdicts_by_index": {i: {verdict, confidence, citations, evidence_refs}},
+      "verdicts_by_index": {i: {verdict, confidence, citations, evidence_refs,
+                                superseded_note}},
       "reconciliation":    {disputed, relation, note, canonical},
       "citations":         [url, ...],   # all evidence URLs the skeptic fetched
     }
@@ -75,6 +76,28 @@ all concern the same subject and property. Your job:
 Finish by calling emit_group_verdict exactly once.
 """
 
+#: The complete verdict vocabulary after G-06. Nothing outside this set may leave
+#: _parse_group_verdict.
+_VERDICT_VOCAB: frozenset[str] = frozenset({"support", "refute", "insufficient", "superseded"})
+
+
+def _normalise_verdict(raw: object) -> str:
+    """Clamp a model-supplied verdict string to the four-word vocabulary.
+
+    WHY (15.1 RESEARCH Pitfall 3): `verification_verdict.verdict` is free `Text()`
+    with no enum and no CHECK constraint, and the parser used to pass any string
+    straight through — so a model typo like "supersede" would reach the database
+    unvalidated and be miscounted by every downstream bucket. Anything unrecognised
+    (including non-strings) degrades to "insufficient", which survives adjudication.
+    """
+    if not isinstance(raw, str):
+        return "insufficient"
+    v = raw.strip().lower()
+    if v in _VERDICT_VOCAB:
+        return v
+    log.warning("group_skeptic: unknown verdict %r — normalised to 'insufficient'", raw)
+    return "insufficient"
+
 
 def _extract_group_verdict_block(content: list[Any]) -> Any | None:
     for block in content:
@@ -110,17 +133,26 @@ def _parse_group_verdict(block: Any, n_claims: int, citations: list[str]) -> dic
         except (TypeError, ValueError):
             continue
         if 0 <= idx < n_claims:
+            verdict = _normalise_verdict(v.get("verdict"))
+            note = v.get("superseded_note")
             by_index[idx] = {
-                "verdict": v.get("verdict", "insufficient"),
+                "verdict": verdict,
                 "confidence": float(v.get("confidence", 0.0) or 0.0),
                 "evidence_refs": evidence,
                 "citations": list(citations),
+                # G-07: the caveat travels as pipeline DATA so synthesis presents it
+                # rather than the writing model phrasing it from memory. Empty unless
+                # the verdict is actually superseded.
+                "superseded_note": (
+                    note.strip() if verdict == "superseded" and isinstance(note, str) else ""
+                ),
             }
     # Fill any missing claim with insufficient (so it survives, not silently dropped).
     for i in range(n_claims):
         by_index.setdefault(i, {
             "verdict": "insufficient", "confidence": 0.0,
             "evidence_refs": evidence, "citations": list(citations),
+            "superseded_note": "",
         })
 
     return {
@@ -139,7 +171,8 @@ def _insufficient_group(n_claims: int, citations: list[str]) -> dict[str, Any]:
     return {
         "verdicts_by_index": {
             i: {"verdict": "insufficient", "confidence": 0.0,
-                "evidence_refs": [], "citations": list(citations)}
+                "evidence_refs": [], "citations": list(citations),
+                "superseded_note": ""}
             for i in range(n_claims)
         },
         "reconciliation": {"disputed": False, "relation": "single" if n_claims == 1 else "agree",
