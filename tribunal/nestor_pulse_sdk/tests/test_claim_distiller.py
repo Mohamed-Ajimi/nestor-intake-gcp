@@ -9,10 +9,38 @@ Coverage:
   4. Stub removal: claim_distiller is NOT _phase2_stub (no NotImplementedError).
   5. Grep gate: no direct provider client construction (audited path only).
   6. Other 8 stubs remain: raising NotImplementedError as expected.
+
+G-12 (phase 15.1) — stop deleting the corroboration signal that already exists.
+Two live bugs closed here, both proven by SYNTHETIC multi-provider inputs:
+
+  Bug 1: `claim_distiller` builds `units: list[(provider_name, chunk)]` and knows
+         exactly which researcher produced each chunk — then discarded the name.
+         Claims came back as {text, facet, evidence} only, and `facet` is not a
+         usable substitute (it falls back to the provider name only when no
+         focus-area label matched). Now every claim carries `found_by`.
+
+  Bug 2: `_dedupe_claims` collapsed near-identical facts from DIFFERENT
+         researchers and threw the duplicates away (2,976 raw -> 1,162). Three
+         researchers independently confirming a fact looked identical to one
+         researcher asserting it alone. Now duplicates MERGE into `found_by`.
+
+Corroboration = len(claim["found_by"]). Consumed by the queue ordering in plan
+15.1-07, where LOW corroboration is checked FIRST.
+
+The recorded run fixture has no provider column and holds only post-dedupe
+claims, so it CANNOT prove `found_by` — hence the synthetic fakes below. Count
+preservation against the recorded run is proven in plan 15.1-09's replay test.
+
+Cloud Build invocation (no Postgres needed — these tests touch no DB):
+  gcloud builds submit tribunal \\
+    --config=tribunal/cloudbuild.test-gates.yaml \\
+    --project="$GOOGLE_PROJECT"
 """
 from __future__ import annotations
 
 import asyncio
+import copy
+import re
 import uuid
 
 import pytest
@@ -21,6 +49,7 @@ import pytest
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     claim_distiller,
     extract_focus_areas,
+    _dedupe_claims,
     # The remaining stubs — still should raise NotImplementedError
     chunker_prime,
     chunk_guard,
@@ -284,3 +313,215 @@ class TestMalformedLineTolerance:
         for claim in result:
             assert "text" in claim
             assert "facet" in claim
+
+
+# ---------------------------------------------------------------------------
+# G-12: provenance (found_by) + merging dedupe
+# ---------------------------------------------------------------------------
+
+G12_MISSION_BRIEF = {"focus_areas": [{"focus_area": "general"}]}
+
+
+class ProviderTaggingAudited:
+    """Content-aware fake: answers each chunk with one claim naming the researcher
+    whose report that chunk came from.
+
+    Mirrors test_distiller_coverage.py's fake — it reads the `### Provider: {name}`
+    header the real prompt builder emits, so the REAL claim_distiller is driven end
+    to end. Hand-written duck-typed fake, per the suite convention.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.calls.append(contents)
+        m = re.search(r"### Provider: (\w+)", contents)
+        name = m.group(1) if m else "unknown"
+        return _FakeResponse(
+            f"general\tFact reported by {name} about the Belgian IT market\t"
+            f"verbatim {name} evidence sentence"
+        )
+
+
+class EchoAudited:
+    """Fake that replays one canned response for EVERY chunk, so the same fact
+    arrives from each researcher — the corroboration case."""
+
+    def __init__(self, canned_text: str) -> None:
+        self._canned_text = canned_text
+        self.calls: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.calls.append(contents)
+        return _FakeResponse(self._canned_text)
+
+
+def _old_dedupe(claims: list[dict]) -> list[dict]:
+    """Verbatim pre-15.1 DISCARD implementation, kept as the property-test oracle.
+
+    Do not "improve" this — its only job is to reproduce the behaviour the merge
+    rewrite must not change.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for c in claims:
+        norm = re.sub(r"[^a-z0-9 ]", "", (c.get("text") or "").lower())
+        norm = re.sub(r"\s+", " ", norm).strip()
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(c)
+    return out
+
+
+def _claim(text: str, found_by: list[str] | None = None) -> dict:
+    return {
+        "text": text,
+        "facet": "general",
+        "evidence": "",
+        **({"found_by": list(found_by)} if found_by is not None else {}),
+    }
+
+
+# Exercises every branch the merge touches: exact duplicates, whitespace-only
+# variants, punctuation/casing-only variants, an empty-text claim, a text that
+# normalises to nothing, a claim with NO found_by key at all, and uniques.
+MIXED_CLAIMS = [
+    _claim("Cronos holds 18% of the Belgian IT market.", ["gemini"]),
+    _claim("Cronos holds 18% of the Belgian IT market.", ["claude"]),      # exact dup
+    _claim("Cronos  holds   18%  of the Belgian IT market.", ["openai"]),  # whitespace
+    _claim("cronos holds 18 of the belgian it market!!!", ["gemini"]),     # punctuation
+    _claim("Capgemini Belgium grew its public sector practice.", ["claude"]),
+    _claim("", ["gemini"]),                                                # empty text
+    _claim("!!! ??? ...", ["claude"]),                                     # normalises away
+    _claim("Accenture Belgium targets the mid-market with AI."),           # no found_by
+    _claim("Accenture Belgium targets the mid-market with AI.", ["openai"]),
+]
+
+
+class TestClaimProvenance:
+    """G-12 bug 1: every claim names the researcher that produced it."""
+
+    def test_claims_carry_producing_provider(self):
+        audited = ProviderTaggingAudited()
+        reports = [
+            ("gemini", {"status": "success", "report": "Gemini research prose."}),
+            ("claude", {"status": "success", "report": "Claude research prose."}),
+            ("openai", {"status": "success", "report": "OpenAI research prose."}),
+        ]
+        claims = _run(claim_distiller(
+            provider_reports=reports,
+            mission_brief=G12_MISSION_BRIEF,
+            audited=audited,
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+        ))
+
+        assert claims, "three provider reports must produce claims"
+        for c in claims:
+            assert c.get("found_by"), f"claim has no provenance: {c}"
+
+        union = {p for c in claims for p in c["found_by"]}
+        assert union == {"gemini", "claude", "openai"}, (
+            f"every researcher must be named in found_by, got {union}"
+        )
+
+    def test_single_source_claim_has_corroboration_one(self):
+        """A fact seen once ends with len(found_by) == 1, so the 15.1-07 queue
+        ordering can tell it apart from a multiply-corroborated fact."""
+        audited = ProviderTaggingAudited()
+        reports = [("gemini", {"status": "success", "report": "Gemini research prose."})]
+        claims = _run(claim_distiller(
+            provider_reports=reports,
+            mission_brief=G12_MISSION_BRIEF,
+            audited=audited,
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+        ))
+
+        assert claims, "one provider report must still produce claims"
+        for c in claims:
+            assert len(c["found_by"]) == 1, (
+                f"single-source claim must have corroboration 1, got {c['found_by']}"
+            )
+            assert c["found_by"] == ["gemini"]
+
+
+class TestDedupeMerges:
+    """G-12 bug 2: duplicates merge into found_by instead of vanishing."""
+
+    def test_dedupe_merges_preserving_count(self):
+        # RESEARCH Pitfall 5: the discard->merge rewrite must not change WHICH
+        # claims survive, only what provenance they carry. If this drifts, the
+        # recorded-run replay premise of the whole phase collapses (1,162 must
+        # stay 1,162). Compared against the verbatim old implementation.
+        new_out = _dedupe_claims(copy.deepcopy(MIXED_CLAIMS))
+        old_out = _old_dedupe(copy.deepcopy(MIXED_CLAIMS))
+
+        assert len(new_out) == len(old_out), (
+            f"merge changed the surviving claim count: "
+            f"{len(new_out)} vs {len(old_out)}"
+        )
+        assert [c["text"] for c in new_out] == [c["text"] for c in old_out], (
+            "merge changed which claims survived, or their order"
+        )
+
+    def test_dedupe_unions_found_by(self):
+        """The same fact from three researchers collapses to ONE claim naming all
+        three, in first-seen order, with no duplicates."""
+        claims = [
+            _claim("Cronos holds 18% of the Belgian IT market.", ["gemini"]),
+            _claim("cronos holds 18 of the belgian it market", ["claude"]),
+            _claim("Cronos  holds  18%  of the Belgian IT market!!", ["openai"]),
+            _claim("Cronos holds 18% of the Belgian IT market.", ["gemini"]),  # repeat
+        ]
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 1, f"all four variants normalise to one fact, got {out}"
+        assert out[0]["found_by"] == ["gemini", "claude", "openai"], (
+            f"found_by must be the first-seen-order union, got {out[0]['found_by']}"
+        )
+        assert out[0]["text"] == "Cronos holds 18% of the Belgian IT market.", (
+            "the FIRST occurrence must be the one kept"
+        )
+
+    def test_dedupe_merges_corroboration_across_providers_end_to_end(self):
+        """Drive the REAL distiller: three researchers all report the same fact,
+        so one claim survives carrying all three names."""
+        same_fact = (
+            "general\tCronos holds 18% of the Belgian IT services market\t"
+            "verbatim evidence sentence"
+        )
+        audited = EchoAudited(same_fact)
+        reports = [
+            ("gemini", {"status": "success", "report": "Gemini research prose."}),
+            ("claude", {"status": "success", "report": "Claude research prose."}),
+            ("openai", {"status": "success", "report": "OpenAI research prose."}),
+        ]
+        claims = _run(claim_distiller(
+            provider_reports=reports,
+            mission_brief=G12_MISSION_BRIEF,
+            audited=audited,
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+        ))
+
+        assert len(claims) == 1, f"one fact reported thrice is ONE claim, got {claims}"
+        assert sorted(claims[0]["found_by"]) == ["claude", "gemini", "openai"], (
+            f"corroboration lost: {claims[0]['found_by']}"
+        )
+        assert len(claims[0]["found_by"]) == 3, "corroboration count must be 3"
+
+    def test_dedupe_tolerates_claims_without_found_by(self):
+        """Defensive: some call paths build claims by hand with no provenance."""
+        claims = [
+            _claim("A fact with no provenance attached at all."),
+            _claim("A fact with no provenance attached at all.", ["gemini"]),
+        ]
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 1
+        assert out[0]["found_by"] == ["gemini"], (
+            f"a later provider must still register on the kept claim, got {out[0]}"
+        )
