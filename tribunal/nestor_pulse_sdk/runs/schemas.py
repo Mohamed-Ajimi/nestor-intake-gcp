@@ -318,6 +318,15 @@ class VerificationReport(BaseModel):
     superseded: list[VerificationVerdictItem] = []
     reconciled: list[VerificationVerdictItem] = []
     unverified: VerificationUnverified = VerificationUnverified()
+    # CR-02 (15.1): when a run carries ZERO verdict rows but DOES carry gate data,
+    # the shaper derives the unverified figure from the funnel's `checked` count so
+    # it cannot contradict `accounting` -- the operator must never read
+    # "checked: 380" beside "unverified: 1162 of 1162" in one payload -- and states
+    # that in words here. DECLARED rather than left to ride on `extra="allow"`, per
+    # this file's own "Declare, don't assume" rule: a caveat that silently vanishes
+    # at the API boundary reads to the operator as "there is no caveat".
+    unverified_from_accounting: bool = False
+    unverified_note: str | None = None
     true_cost: VerificationTrueCost = VerificationTrueCost()
     # SC4 / D13: the numbered [n] citations list (DB-generated, all-resolving).
     citations: list[VerificationCitation] = []
