@@ -52,15 +52,56 @@ RECORDED_AUDIT_BUCKET = (
 # ~24 sessions returned reconciliation-as-string (BUG:recon-as-str) and were
 #   DISCARDED by the live pipeline; the loader reproduces that by skipping
 #   malformed emit blocks (see verdict_extract._parse_one_extract).
+#
+# 15.1 ADDITIVE keys -- G-08 accounting buckets, G-10 marker, G-11 gate errors.
+# The six keys above are NEVER renamed: Phase-15 surfaces and
+# test_hash_chain_replay.py assert on them. Sources, per key:
+#   not_falsifiable 358 / not_load_bearing 320 / both 28
+#       `reason` column tallies of claims-classified-full.tsv. They sum to
+#       `dropped`: 358 + 320 + 28 == 706.
+#   checked 198
+#       summed `#claims` across the 176 rows of recorded/GROUPS.md -- per
+#       recorded/REPORT.md §3.5 the 176 COMPLETED group-skeptic passes covered
+#       198 claim slots.
+#   should_have_been_checked 226
+#       DERIVED ARITHMETIC, not a directly recorded number:
+#       selected_verify 424 - checked 198 == 226. These are the claims the gates
+#       selected that the 776 cap-rejected passes never reached. G-08 bucket 3 --
+#       MUST be 0 on a healthy run.
+#   gate_errors 0
+#       zero by construction: the recorded run had no gate stage at all.
+#   verification_degraded True
+#       G-10 marker. The recorded run WAS degraded (776 Anthropic cap-400s in
+#       55 seconds).
+#
+# Invariants these values satisfy:
+#   distilled == kept + dropped                            1162 == 456 + 706
+#   kept      == selected_verify + skipped_stable            456 == 424 + 32
+#   dropped   == not_falsifiable + not_load_bearing + both   706 == 358 + 320 + 28
+#   distilled == checked + (dropped + skipped_stable) + should_have_been_checked
+#                                                          1162 == 198 + 738 + 226
+#   verification_degraded == (should_have_been_checked > 0)
+#
 # These constants let downstream funnel tests assert the EXACT recorded numbers.
 # ---------------------------------------------------------------------------
-RECORDED_FUNNEL_COUNTS: dict[str, int] = {
+RECORDED_FUNNEL_COUNTS: dict[str, int | bool] = {
     "distilled": 1162,
     "kept": 456,
     "dropped": 706,
     "selected_verify": 424,
     "skipped_stable": 32,
-    "verify_sessions": 176,
+    # G-13: 176 counts the group-skeptic calls that RETURNED on 2026-07-22 (776
+    # more were hard-400'd by the Anthropic usage cap). It measures an outage,
+    # not the funnel -- a recorded pass-through constant only.
+    "verify_sessions": 176,  # incident-derived (G-13) -- NOT a gate assertion
+    # --- 15.1 additive keys (per-key sources in the block above) ---
+    "not_falsifiable": 358,
+    "not_load_bearing": 320,
+    "both": 28,
+    "checked": 198,
+    "should_have_been_checked": 226,
+    "gate_errors": 0,
+    "verification_degraded": True,
 }
 
 
@@ -186,9 +227,131 @@ def _mtime_span_seconds(sorted_mtimes: list[str]) -> int:
     return int((_parse(sorted_mtimes[-1]) - _parse(sorted_mtimes[0])).total_seconds())
 
 
-def build_verification_summary() -> dict[str, int]:
-    """The run-level verification funnel (recorded counts) for run.verification_summary."""
+def build_verification_summary() -> dict[str, int | bool]:
+    """The run-level verification funnel (recorded counts) for run.verification_summary.
+
+    Carries all 13 contract keys: the six original funnel counts, the G-08
+    accounting buckets (not_falsifiable / not_load_bearing / both / checked /
+    should_have_been_checked), the G-11 gate_errors line, and the G-10
+    `verification_degraded` marker.
+
+    Returns a COPY so callers cannot mutate the constant. The body is
+    deliberately just `dict(RECORDED_FUNNEL_COUNTS)`: two tests compare this
+    against RECORDED_FUNNEL_COUNTS by FULL DICT EQUALITY
+    (test_hash_chain_replay.py, test_verification_report_endpoint.py), so
+    keeping the builder a pure copy makes both hold by construction whenever the
+    constant gains keys.
+    """
     return dict(RECORDED_FUNNEL_COUNTS)
+
+
+# ---------------------------------------------------------------------------
+# The blind selection experiment (documented fixture contract).
+#
+# Three committed TSVs under `_report_dir()/selection-experiment/` -- resolved
+# through _report_dir() so Cloud Build, which ships only the tribunal/ subtree,
+# finds the in-package `recorded/` copy (a repo-root docs/ path would NOT exist
+# in /workspace):
+#
+#   claims-distilled-full.tsv   1162 rows, NO HEADER (line 1 is data), CRLF.
+#       columns: facet <TAB> claim_text <TAB> evidence
+#       74 of the 1162 rows carry LITERAL TABS inside `evidence` -- it is a
+#       verbatim copy of report prose and sometimes a flattened table row. The
+#       reader MUST therefore use split("\t", 2) (maxsplit 2), exactly like the
+#       production parser `_parse_distiller_response`
+#       (pipeline/synthesis/steps.py:690). A bare split("\t") or a
+#       csv.reader(delimiter="\t") mis-shapes those 74 rows.
+#
+#   claims-classified-full.tsv  header `id/decision/reason` + 1162 rows, CRLF.
+#       Gates 1+2 answer key. Use the `reason` column, NOT `decision`: `reason`
+#       is literally KEEP on KEEP rows (456), and DROP rows (706) carry
+#       NOT_FALSIFIABLE (358) / NOT_LOAD_BEARING (320) / BOTH (28).
+#
+#   keep-strict.tsv             header `id/decision` + 456 rows, LF-only.
+#       Gate 3 (error-likelihood) answer key over exactly the 456 KEEP ids.
+#       decision is VERIFY (424) or SKIP_STABLE (32).
+#
+# CLAIM ID = the 1-BASED LINE NUMBER of claims-distilled-full.tsv. That file has
+# no id column; the other two TSVs join on that line number (ids span 1..1162
+# with no gaps).
+#
+# Line endings DIFFER across the three files (CRLF vs LF-only) and a Windows
+# checkout may renormalise either way, so every line is rstrip("\r")-ed
+# individually rather than trusting one file-level convention. Encoding is
+# always explicit utf-8: the TSVs carry em-dashes, `€` and accented Dutch.
+#
+# This is the phase's SINGLE fixture parser -- one correct reader instead of
+# eight subtly-wrong ones.
+# ---------------------------------------------------------------------------
+
+
+def _read_headed_tsv(path: Path) -> list[list[str]]:
+    r"""Rows of a HEADED tsv: header dropped, blank lines skipped, CR-tolerant.
+
+    Only for the two answer-key files, which have a FIXED small column count
+    (3 and 2), so a plain split("\t") is safe. NEVER use this for
+    claims-distilled-full.tsv -- that file needs maxsplit=2 (see the block above).
+    """
+    raw = path.read_text(encoding="utf-8")
+    rows: list[list[str]] = []
+    for line in raw.split("\n")[1:]:  # [1:] drops the header line
+        line = line.rstrip("\r")
+        if not line.strip():
+            continue
+        rows.append(line.split("\t"))
+    return rows
+
+
+def load_selection_experiment() -> tuple[list[dict], dict[int, str], dict[int, str]]:
+    """Load the blind selection experiment: claims + both gate answer keys.
+
+    Returns `(claims, classified, strict)`:
+      - `claims`     list of 1162 dicts in the EXACT shape `claim_distiller`
+                     emits, plus the join key:
+                     {"id": int, "text": str, "facet": str, "evidence": str}.
+                     `id` is the 1-BASED LINE NUMBER in claims-distilled-full.tsv.
+      - `classified` {id -> reason} for all 1162 claims; reason is one of
+                     KEEP / NOT_FALSIFIABLE / NOT_LOAD_BEARING / BOTH.
+      - `strict`     {id -> decision} for exactly the 456 KEEP ids; decision is
+                     one of VERIFY / SKIP_STABLE.
+
+    Pure: no DB, no GCS, no network -- mirrors the `load_recorded_run(session=None)`
+    convention so no-DB unit tests can assert on the returned objects directly.
+    """
+    exp_dir = _report_dir() / "selection-experiment"
+
+    # --- claims-distilled-full.tsv: NO header; id = 1-based line number. ---
+    # Enumerate BEFORE skipping blanks so a blank line could never renumber ids.
+    claims: list[dict] = []
+    distilled_raw = (exp_dir / "claims-distilled-full.tsv").read_text(encoding="utf-8")
+    for lineno, line in enumerate(distilled_raw.split("\n"), start=1):
+        line = line.rstrip("\r")
+        if not line.strip():
+            continue
+        # maxsplit=2 is load-bearing: 74 rows have literal tabs inside `evidence`.
+        parts = line.split("\t", 2)
+        claims.append(
+            {
+                "id": lineno,
+                "facet": parts[0].strip(),
+                "text": parts[1].strip() if len(parts) > 1 else "",
+                "evidence": parts[2].strip() if len(parts) > 2 else "",
+            }
+        )
+
+    # --- claims-classified-full.tsv: header id/decision/reason -> use `reason`. ---
+    classified: dict[int, str] = {
+        int(row[0]): row[2].strip()
+        for row in _read_headed_tsv(exp_dir / "claims-classified-full.tsv")
+    }
+
+    # --- keep-strict.tsv: header id/decision, the 456 KEEP ids only. ---
+    strict: dict[int, str] = {
+        int(row[0]): row[1].strip()
+        for row in _read_headed_tsv(exp_dir / "keep-strict.tsv")
+    }
+
+    return claims, classified, strict
 
 
 def load_recorded_run(session: Any, tenant_id: uuid.UUID) -> "Run":  # noqa: F821

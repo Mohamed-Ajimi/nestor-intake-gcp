@@ -7,6 +7,11 @@
 # The carried test_rls_isolation.py is EXCLUDED here: this harness connects as a Postgres
 # superuser and RLS never applies to superusers — running it faithfully needs a
 # non-superuser DSN harness (full-suite triage chore, see 13-PROOF-RESULTS.md).
+#
+# Phase 15.1 ADDED the verification-report-endpoint test to the pytest file list below. It
+# holds the SECOND full-dict-equality assertion against RECORDED_FUNNEL_COUNTS
+# (report["funnel"] == RECORDED_FUNNEL_COUNTS), which must stay green as that constant gains
+# the G-08 accounting keys, plus an RLS-denial half that needs the Postgres provisioned here.
 steps:
   - id: pytest-hostnet
     name: "gcr.io/cloud-builders/docker"
@@ -24,7 +29,7 @@ steps:
         docker run --rm --network=host \
           -v /workspace:/workspace -w /workspace \
           -e DATABASE_URL="postgresql+asyncpg://postgres:testpw@localhost:5432/postgres" \
-          python:3.11-slim bash -c "pip install --no-cache-dir -q -r requirements.txt && python -m pytest nestor_pulse_sdk/tests/test_schema_isolation.py nestor_pulse_sdk/tests/test_advisory_lock_exactly_once.py nestor_pulse_sdk/tests/test_hash_chain_replay.py -v -rs --tb=short"
+          python:3.11-slim bash -c "pip install --no-cache-dir -q -r requirements.txt && python -m pytest nestor_pulse_sdk/tests/test_schema_isolation.py nestor_pulse_sdk/tests/test_advisory_lock_exactly_once.py nestor_pulse_sdk/tests/test_hash_chain_replay.py nestor_pulse_sdk/tests/test_verification_report_endpoint.py -v -rs --tb=short"
 options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
