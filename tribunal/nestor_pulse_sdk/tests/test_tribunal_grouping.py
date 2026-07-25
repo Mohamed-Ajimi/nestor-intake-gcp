@@ -3,22 +3,29 @@
 All tests use fakes — no Cloud SQL, no real provider keys, no network.
 
 Covers:
-  - group_claims: tags claims and buckets by entity|attribute; untagged claims
-    become their own singleton (never merged blindly, never dropped); a group
-    inherits its members' HIGHEST stakes.
+  - group_claims: tags claims, blocks them by entity and CLUSTERS same-fact claims
+    within each block (G-03); untagged and unclustered claims become their own
+    singleton (never merged blindly, never dropped); a group inherits its members'
+    HIGHEST stakes; NESTOR_TRIBUNAL_CLUSTER=false restores exact-key bucketing.
   - _parse_group_verdict: maps per-index verdicts; fills missing claims with
     'insufficient' (never silently drops a claim); surfaces reconciliation.
   - run_group_skeptic: server/client tool protocol; emit_group_verdict
     terminates and produces one verdict per claim.
+
+Cloud Build gate:
+  pytest nestor_pulse_sdk/tests/test_tribunal_grouping.py -v
+(no Postgres, no provider keys, no network -- every LLM call is a hand-written fake)
 """
 from __future__ import annotations
 
 import asyncio
 import uuid
 from typing import Any
-from unittest.mock import MagicMock
 
-from nestor_pulse_sdk.pipeline.tribunal.grouping import group_claims, _norm, _parse_tag_lines
+from nestor_pulse_sdk.pipeline.tribunal import grouping
+from nestor_pulse_sdk.pipeline.tribunal.grouping import (
+    group_claims, _norm, _parse_cluster_lines, _parse_tag_lines,
+)
 from nestor_pulse_sdk.pipeline.tribunal.group_skeptic import run_group_skeptic, _parse_group_verdict
 
 
@@ -45,6 +52,57 @@ class _FakeGrouperAudited:
         return _FakeGeminiResp(self._text)
 
 
+# Cluster answers the fake can COMPUTE from the block the clusterer actually sent,
+# so a test never has to know how production chunked the block.
+_ALL_ONE = "ALL_ONE"      # every claim in the chunk -> cluster 0 (same fact)
+_EACH_OWN = "EACH_OWN"    # every claim in the chunk -> its own cluster
+
+
+class _PromptAwareGrouperAudited:
+    """Answers TAG calls and CLUSTER calls separately, recording both.
+
+    The clusterer makes two DIFFERENT kinds of call (tag, then cluster), so one
+    canned response is no longer enough. `cluster` is either _ALL_ONE / _EACH_OWN
+    (computed from the block sent), a canned string (to inject garbage or omit an
+    index), or a list of canned strings -- one per cluster call, in call order.
+    """
+
+    def __init__(self, tag_text: str, cluster: Any = _ALL_ONE) -> None:
+        self._tag_text = tag_text
+        self._cluster = cluster
+        self.tag_calls: list[str] = []
+        self.cluster_calls: list[str] = []
+
+    @staticmethod
+    def _block_indices(contents: str) -> list[int]:
+        """The claim indices the prompt's block actually carries."""
+        out: list[int] = []
+        for line in contents.splitlines():
+            head = line.split("|", 1)[0].strip() if "|" in line else ""
+            if head.isdigit():
+                out.append(int(head))
+        return out
+
+    def _cluster_answer(self, contents: str) -> str:
+        spec = self._cluster
+        if isinstance(spec, list):
+            i = len(self.cluster_calls) - 1
+            spec = spec[i] if i < len(spec) else (spec[-1] if spec else "")
+        idxs = self._block_indices(contents)
+        if spec == _ALL_ONE:
+            return "\n".join(f"{i} | 0" for i in idxs)
+        if spec == _EACH_OWN:
+            return "\n".join(f"{i} | {i}" for i in idxs)
+        return spec
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        if "CLUSTER_ID" in contents:          # _CLUSTER_PROMPT's output contract
+            self.cluster_calls.append(contents)
+            return _FakeGeminiResp(self._cluster_answer(contents))
+        self.tag_calls.append(contents)       # _TAG_PROMPT
+        return _FakeGeminiResp(self._tag_text)
+
+
 class _FakeBlock:
     def __init__(self, type: str, **kw: Any) -> None:
         self.type = type
@@ -52,12 +110,21 @@ class _FakeBlock:
             setattr(self, k, v)
 
 
+class _FakeUsage:
+    """Token-usage stand-in. Hand-rolled: this suite uses no mocking library."""
+
+    def __init__(self) -> None:
+        self.input_tokens = 10
+        self.output_tokens = 10
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+
+
 class _FakeResp:
     def __init__(self, stop_reason: str, content: list[Any]) -> None:
         self.stop_reason = stop_reason
         self.content = content
-        self.usage = MagicMock(input_tokens=10, output_tokens=10,
-                               cache_read_input_tokens=0, cache_creation_input_tokens=0)
+        self.usage = _FakeUsage()
 
 
 class _FakeSkepticAudited:
@@ -85,9 +152,11 @@ class TestGroupClaims:
         ]
 
     def test_groups_same_entity_attribute_together(self):
-        # Tagger maps the two FootballGPT pricing claims to the same entity|attribute.
+        # Tagger maps the two FootballGPT pricing claims to the same entity; the
+        # cluster pass then confirms they are the same fact. (Prompt-aware fake:
+        # the clusterer makes a second, different call the canned fake can't serve.)
         tag_text = "0 | FootballGPT | pricing\n1 | Football GPT | pricing\n2 | Wyscout | capability"
-        audited = _FakeGrouperAudited(tag_text)
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
         groups = _run(group_claims(claims=self._claims(), audited=audited,
                                    run_id=uuid.uuid4(), tenant_id=uuid.uuid4()))
         # FootballGPT pricing (2 claims) + Wyscout capability (1 claim) = 2 groups
@@ -112,6 +181,188 @@ class TestGroupClaims:
                                  run_id=uuid.uuid4(), tenant_id=uuid.uuid4())) == []
 
 
+class TestClustering:
+    """G-03: same-fact claims must reach ONE skeptic session.
+
+    INCIDENT (live run 4cbb5311, 2026-07-22): exact-string bucketing on
+    `entity│attribute` left the overwhelming majority of groups as singletons,
+    because near-miss labels across languages never met -- e.g.
+    `lukoil|verkoop_internationale_operaties` vs `lukoil benelux|status_rapport`.
+    FOUR flat contradictions shipped to the client as a result: Aral 16% vs 21%
+    market share; LUKOIL NL 46 vs ~70/75 stations; the Zeeland refinery "sold to
+    Carlyle" vs "bought by TotalEnergies"; and the Gunvor-vs-Carlyle buyer
+    conflict. Every test below is a guard on one link of that failure chain.
+    """
+
+    @staticmethod
+    def _ids():
+        return {"run_id": uuid.uuid4(), "tenant_id": uuid.uuid4()}
+
+    def test_differently_worded_same_fact_claims_merge(self):
+        # The exact near-miss pattern that shipped the buyer contradiction: ONE
+        # entity, THREE different attribute labels in two languages. Exact-key
+        # bucketing gives three lonely groups; clustering gives one session.
+        claims = [
+            {"text": "LUKOIL verkoopt zijn internationale operaties",
+             "facet": "market", "stakes": "high"},
+            {"text": "Lukoil's international operations are being sold, per the status report",
+             "facet": "market", "stakes": "med"},
+            {"text": "De overname van Lukoil's buitenlandse activiteiten loopt",
+             "facet": "market", "stakes": "low"},
+        ]
+        tag_text = ("0 | lukoil | verkoop_internationale_operaties\n"
+                    "1 | LUKOIL | status_rapport\n"
+                    "2 | Lukoil | overname")
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        assert len(groups) == 1, \
+            "contradictory variants must meet in one skeptic session or the contradiction ships"
+        assert len(groups[0]["claims"]) == 3, \
+            "a variant left outside the group finds its own supporting source and 'passes'"
+        assert len(audited.cluster_calls) == 1, \
+            "one entity block of three claims must cost exactly one clustering call"
+
+    def test_conflicting_values_share_a_group(self):
+        # The Aral 16%-vs-21% shape: same fact, incompatible numbers, different
+        # attribute words. Split apart, BOTH pass; together, the skeptic must pick.
+        claims = [
+            {"text": "Aral heeft een marktaandeel van 16%", "facet": "market", "stakes": "high"},
+            {"text": "Aral's market share is 21 percent", "facet": "market", "stakes": "high"},
+        ]
+        tag_text = "0 | Aral | marktaandeel\n1 | Aral | market_share"
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        assert len(groups) == 1, \
+            "two incompatible values for the same fact must be judged side by side, not separately"
+        assert len(groups[0]["claims"]) == 2, \
+            "both values must reach the skeptic; one alone always finds a source that agrees"
+
+    def test_every_claim_survives_clustering(self):
+        # The never-drop contract. A claim that leaves grouping is never verified
+        # and never appears in the report -- silently.
+        claims = [
+            {"text": "Aral heeft een marktaandeel van 16%", "facet": "market", "stakes": "high"},
+            {"text": "Aral's market share is 21 percent", "facet": "market", "stakes": "med"},
+            {"text": "Een claim die de tagger niet kon labelen", "facet": "market", "stakes": "low"},
+            {"text": "Shell operates a network of stations", "facet": "market", "stakes": "low"},
+            {"text": "Nog een ongelabelde claim", "facet": "market", "stakes": "high"},
+        ]
+        # Indices 2 and 4 come back untagged; the rest tag and cluster normally.
+        tag_text = "0 | Aral | share\n1 | Aral | share\n3 | Shell | stations"
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == len(claims), \
+            "clustering must conserve claims exactly; a lost claim is silently never verified"
+        for claim in claims:
+            assert any(claim is member for member in flat), \
+                "every input claim object must still be reachable in some group"
+
+    def test_unclustered_claim_becomes_singleton(self):
+        # The model omits index 1 and emits a junk line. That claim must still be
+        # verified -- on its own -- rather than vanish.
+        claims = [
+            {"text": "Aral A", "facet": "market", "stakes": "low"},
+            {"text": "Aral B", "facet": "market", "stakes": "low"},
+            {"text": "Aral C", "facet": "market", "stakes": "low"},
+        ]
+        tag_text = "0 | Aral | share\n1 | Aral | share\n2 | Aral | share"
+        audited = _PromptAwareGrouperAudited(tag_text, "0 | 0\n2 | 0\nI refuse to answer")
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == 3, "an unplaceable claim must still be verified, not dropped"
+        singletons = [g for g in groups if g["key"].startswith("__singleton__")]
+        assert len(singletons) == 1, "exactly the unplaced claim gets its own group"
+        assert singletons[0]["claims"][0] is claims[1], \
+            "the singleton must be the claim the model failed to place"
+
+    def test_cluster_call_failure_does_not_lose_claims(self):
+        # A provider 500 on the cluster call must degrade to 'everyone is their own
+        # singleton' -- more sessions, never fewer verified claims.
+        class _ClusterFailsAudited(_PromptAwareGrouperAudited):
+            async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+                if "CLUSTER_ID" in contents:
+                    raise RuntimeError("provider 500")
+                return await super().gemini_generate(
+                    run_id=run_id, tenant_id=tenant_id, model=model,
+                    contents=contents, **kwargs,
+                )
+
+        claims = [
+            {"text": "Aral A", "facet": "market", "stakes": "low"},
+            {"text": "Aral B", "facet": "market", "stakes": "low"},
+            {"text": "Aral C", "facet": "market", "stakes": "low"},
+        ]
+        tag_text = "0 | Aral | share\n1 | Aral | share\n2 | Aral | share"
+        audited = _ClusterFailsAudited(tag_text)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == 3, "a failed clustering call must never cost a claim its verification"
+        assert all(g["key"].startswith("__singleton__") for g in groups), \
+            "the neutral default is 'own singleton', so every claim is still checked"
+
+    def test_oversized_block_is_chunked(self):
+        # Blob guard: one runaway entity must not become a single unreadable
+        # mega-group, and cluster id 0 from two chunks must not silently merge.
+        claims = [{"text": f"Aral fact {i}", "facet": "market", "stakes": "low"}
+                  for i in range(5)]
+        tag_text = "\n".join(f"{i} | Aral | share" for i in range(5))
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        old_max, old_batch = grouping._CLUSTER_MAX_BLOCK, grouping._CLUSTER_BATCH
+        grouping._CLUSTER_MAX_BLOCK, grouping._CLUSTER_BATCH = 2, 2
+        try:
+            groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        finally:
+            grouping._CLUSTER_MAX_BLOCK, grouping._CLUSTER_BATCH = old_max, old_batch
+        assert len(audited.cluster_calls) == 2, \
+            "a 5-claim block over the cap splits 2+2+1; the lone chunk costs no call"
+        keys = [g["key"] for g in groups]
+        assert len(set(keys)) == len(keys), \
+            "chunk namespacing must keep two chunks' cluster id 0 from colliding into one group"
+        assert all("#" in key for key in keys), \
+            "clustered keys carry the block#chunk#id namespace that makes them collision-proof"
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == 5, "chunking must not lose a claim"
+
+    def test_stakes_inheritance_is_max(self):
+        # Depth (turns / searches / fetches) follows group stakes: a high-stakes
+        # claim buried in a low-stakes group would be checked shallowly.
+        claims = [
+            {"text": "Aral A", "facet": "market", "stakes": "low"},
+            {"text": "Aral B", "facet": "market", "stakes": "high"},
+        ]
+        tag_text = "0 | Aral | share\n1 | Aral | share"
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        assert len(groups) == 1
+        assert groups[0]["stakes"] == "high", \
+            "a group is only as low-stakes as its most important claim, or that claim gets checked shallowly"
+
+    def test_cluster_disabled_falls_back_to_exact_key_bucketing(self):
+        # The A/B baseline stays reachable without a code change.
+        claims = [
+            {"text": "FootballGPT costs $4.99/mo", "facet": "competitors", "stakes": "high"},
+            {"text": "Football GPT pricing starts at $9.99/mo", "facet": "competitors", "stakes": "med"},
+            {"text": "Wyscout has 600 competitions", "facet": "competitors", "stakes": "low"},
+        ]
+        tag_text = "0 | FootballGPT | pricing\n1 | Football GPT | pricing\n2 | Wyscout | capability"
+        audited = _PromptAwareGrouperAudited(tag_text, _ALL_ONE)
+        old_enabled = grouping._CLUSTER_ENABLED
+        grouping._CLUSTER_ENABLED = False
+        try:
+            groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        finally:
+            grouping._CLUSTER_ENABLED = old_enabled
+        assert len(groups) == 2, \
+            "with clustering off, grouping must reproduce the old entity-attribute bucketing exactly"
+        assert audited.cluster_calls == [], \
+            "the disabled path must cost nothing extra, or the A/B comparison is meaningless"
+        assert all("│" in g["key"] for g in groups), \
+            "the fallback path emits the old exact-match key, not a cluster key"
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == 3, "the fallback path must not lose a claim either"
+
+
 class TestNormAndParse:
     def test_norm_merges_variants(self):
         assert _norm("FootballGPT") == _norm("football gpt") == "footballgpt" or \
@@ -122,6 +373,15 @@ class TestNormAndParse:
         assert out[0] == ("A", "x")
         assert out[1] == ("", "")   # missing -> empty -> singleton downstream
         assert out[2] == ("C", "z")
+
+    def test_parse_cluster_lines_is_bounds_checked(self):
+        # Untrusted model text: an out-of-range index must not write into another
+        # claim's slot, and garbage must not raise.
+        out = _parse_cluster_lines("0 | 7\n99 | 3\nnot a line\n2 | oops", 3)
+        assert out[0] == 7
+        assert out[1] == -1, "an unaddressed claim keeps the sentinel and becomes a singleton"
+        assert out[2] == -1, "a non-numeric cluster id is ignored, not guessed"
+        assert len(out) == 3, "the result is always exactly one entry per claim"
 
 
 # ---------------------------------------------------------------------------
