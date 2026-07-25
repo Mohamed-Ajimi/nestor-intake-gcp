@@ -63,7 +63,7 @@ trail intact.
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
 - [x] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs (completed 2026-07-24)
-- [x] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture (completed 2026-07-25)
+- [ ] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture. Plans 01-10 executed 2026-07-25; verification returned `gaps_found` on SC2 (no production writer for `verification_verdict`; `superseded_note` dead data) — GAP CLOSURE in progress via plans 11-15 (scoped 2026-07-25)
 - [ ] **Phase 15.2: Research Engine Redesign — Engine Core** (INSERTED 2026-07-24) - question workshop + pairwise tournament (absorbs ENGINE-05), per-provider fact lists, SerpAPI researcher stream, LLM-based merge, reliability R1–R7 — live-validated vs the recorded baseline after 2026-08-01; old engine path removed on acceptance
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
 - [x] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path (completed 2026-07-22)
@@ -129,7 +129,7 @@ trail intact.
   1. The gate pipeline replays the recorded 1,162-claim fixture (`docs/tribunal-run-reports/run-20260722-4cbb5311/selection-experiment/`) in tests and reproduces the recorded keep/drop numbers.
   2. Materiality + error-likelihood gates, canonical grouping, and corroboration prioritization run in the verification stage (STAKEHOLDER-NOTES package + D9/D11), with fail-loud on gate errors and a "superseded" verdict available.
   3. `verify_chain` stays green — frozen payload fields unchanged.
-**Plans**: 10 plans (6 waves)
+**Plans**: 16 plans (9 waves — plans 11-16 are the 2026-07-25 gap-closure set, waves 7-9)
   - [x] 15.1-01-PLAN.md — Fixture reader `load_selection_experiment()` + 13-key `RECORDED_FUNNEL_COUNTS` (G-13) + no-Postgres `cloudbuild.test-gates.yaml`
   - [x] 15.1-02-PLAN.md — G-12 corroboration: `found_by` provenance in the distiller + merging `_dedupe_claims` (1,162 stays 1,162)
   - [x] 15.1-03-PLAN.md — G-06/G-07 `superseded` producer side: tool enum, skeptic prompt, normalising parse boundary, adjudicate regression
@@ -140,6 +140,12 @@ trail intact.
   - [x] 15.1-08-PLAN.md — Funnel persistence: `run.verification_summary` written in the worker's completion transaction (SC1 propagation)
   - [x] 15.1-09-PLAN.md — G-01 pair: deterministic answer-key replay CI gate + the `@pytest.mark.live` August calibration (no threshold)
   - [x] 15.1-10-PLAN.md — Phase gate (full suite, `verify_chain` green), dual Tribunal image rebuild + deploy, DEPLOY-RUNBOOK section, deferred Phase-15* UAT checklist
+  - [ ] 15.1-11-PLAN.md — GAP CLOSURE (wave 7): `superseded_note` storage — tribunal alembic `0012` + ORM mirror + three new test files pre-registered in the no-Postgres gate
+  - [ ] 15.1-12-PLAN.md — GAP CLOSURE (wave 7): publishing surface — `_verdict_dto` emits `superseded_note`, `verdicts_total == 0` funnel fallback so `unverified` can never contradict the funnel (CR-02), gate-error unit fixed (WR-02)
+  - [ ] 15.1-13-PLAN.md — GAP CLOSURE (wave 7): caveat reaches synthesis via `contested_notes` (CR-01a), `gate` stage declared in `ENGINE_STAGES` (WR-03), false "low-stakes supporting detail" appendix line replaced (WR-11)
+  - [ ] 15.1-14-PLAN.md — GAP CLOSURE (wave 8): the production `verification_verdict` writer — `_insert_verdict` in `persist_tribunal_claims`, survivors linked by `claim_id`, dropped claims persisted with NULL (CR-02)
+  - [ ] 15.1-15-PLAN.md — GAP CLOSURE (wave 9): three Cloud Build gates + SC3 re-proof, alembic `0012` applied live + dual Tribunal redeploy + frontend rebuild, runbook Steps 15.1.f/15.1.g, UAT Known-Gaps closure + WR-01/WR-10 deferred to 15.2
+  - [ ] 15.1-16-PLAN.md — GAP CLOSURE (wave 7): operator surface — render the `verdicts.superseded` class in its own section (new nl/en/fr key) + fall the amber caveat back to `superseded_note`; forces a frontend rebuild in 15.1-15
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
 **Goal**: The pipeline core is restructured — question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller, SerpAPI-fueled researcher stream, LLM-based cross-provider merge, language tagging, reliability R1–R7, and report changes — validated by a live run compared against the recorded baseline plus operator sign-off, after which the old engine path is removed immediately.
@@ -152,6 +158,12 @@ trail intact.
   4. V-01/V-02 acceptance passes: live run on a test intake compared against the recorded 4cbb5311 baseline; hard checklist green (workshop questions visible in feed, per-provider fact lists present, gate funnel recorded, citations resolve, `verify_chain` green, cost fully itemized per C1, feed complete with per-row cost) PLUS operator sign-off next to the recorded baseline.
   5. On acceptance the old engine path (adaptive_intake one-call → distiller-as-shredder → exact-key grouping) is removed immediately (V-03 — no fallback flag), and the first live run validates the deployed F-01 skeptic fix by construction.
 **Plans**: TBD
+**Carried in from Phase 15.1 gap closure (2026-07-25, operator-approved deferrals):** review finding
+WR-01 (the coverage gate is unreachable dead code — `adjudications` is seeded `True` for every claim,
+so the re-entry mechanism never fires) and WR-10 (verdicts attributed to gate-DROPped group members
+can break the "every claim lands in exactly one bucket" funnel invariant). Both live in
+`pipeline/tribunal/pipeline.py`'s verify stage, which this phase restructures. Full context in
+`phases/15.1-*/15.1-UAT.md` § Deferred to Phase 15.2.
 
 ### Phase 16: Research Trigger + Progress Bridge
 **Goal**: A superadmin can trigger a research run on a `decomposed` intake and watch live stage-by-stage progress with running cost in the intake admin UI, receiving an email when it finishes — the milestone spine.
@@ -232,7 +244,7 @@ trail intact.
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
-| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 10/10 | Complete   | 2026-07-25 |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 10/16 | Gap closure planned (SC2 `gaps_found`) | - |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
