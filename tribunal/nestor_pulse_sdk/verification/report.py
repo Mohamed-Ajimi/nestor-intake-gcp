@@ -59,13 +59,32 @@ def _evidence_refs(row: Any) -> list | None:
 
 
 def _verdict_dto(row: Any) -> dict[str, Any]:
-    """A single verdict row in the report shape (never leaks tenant_id/hashes)."""
+    """A single verdict row in the report shape, SIX keys (never leaks tenant_id/hashes).
+
+    The sixth key, `superseded_note`, is the G-07 caveat the group skeptic must
+    supply alongside a `superseded` verdict -- WHAT changed, and FROM WHEN --
+    persisted in the `verification_verdict.superseded_note` column added by
+    migration 0012. `runs/schemas.py` has DECLARED the field on
+    VerificationVerdictItem since 15.1-03, but this DTO never emitted it, so
+    pydantic's `extra="ignore"` had nothing to carry and the wire value was
+    unconditionally None no matter what was stored (CR-01 leg b). The DTO is the
+    gate: a key it does not emit cannot reach the API response.
+
+    `getattr(..., None)` rather than a bare attribute access is load-bearing.
+    Rows arrive here in three shapes: ORM rows that carry the column; ORM rows
+    built by tests/fixtures/run_4cbb5311/loader.py, whose constructor omits it
+    (attribute present, value None); and SimpleNamespace fakes in
+    test_verification_buckets.py that set exactly the five legacy attributes and
+    nothing else. A bare attribute access would AttributeError on the third.
+    """
     return {
         "claim_id": str(row.claim_id) if getattr(row, "claim_id", None) else None,
         "verdict": row.verdict,
         "confidence": getattr(row, "confidence", None),
         "evidence_refs": _evidence_refs(row),
         "reconciliation": _reconciliation(row),
+        # G-07 caveat (CR-01 leg b) -- getattr default, see the docstring note.
+        "superseded_note": getattr(row, "superseded_note", None),
     }
 
 
@@ -170,7 +189,15 @@ def _degradation(funnel: dict | None, accounting: dict | None) -> tuple[bool, st
         "verification is incomplete -- do not read it as green."
     )
     if gate_errors:
-        text += f" {gate_errors} gate batch(es) also errored."
+        # WR-02: `gate_errors` is a per-CLAIM counter -- gates.py:557-558 bumps it
+        # once for every claim whose gate decision was defaulted, and
+        # test_gate_failure_modes.py:168 pins that (3 claims -> 3). This sentence
+        # used to render it in batch units, so at the default _GATE_BATCH = 40 one
+        # failed batch was reported to the operator as forty of them: a 40x
+        # overstatement of how much of the gate stage broke. pipeline.py:297
+        # already words the same counter correctly ("gate errors (sent for
+        # checking)"); only this line was wrong. State CLAIMS, in claim units.
+        text += f" {gate_errors} claim(s) were sent for checking on a defaulted gate answer."
     return True, text
 
 
@@ -208,7 +235,15 @@ def shape_verification_report(
       funnel, accounting, verification_degraded, verification_degraded_text,
       verdicts{support,refute,insufficient,superseded}, refuted, superseded,
       reconciled, unverified{count,claims_with_verdict,total_claims},
+      unverified_from_accounting, unverified_note,
       true_cost{cost_usd_total,cost_pending}, citations, counts.
+
+    CR-02: `unverified` keeps its exact three keys, but when a run carries ZERO
+    verdict rows AND real gate data its VALUES are derived from the same funnel
+    `accounting` reads, and `unverified_note` says so in words. That makes it
+    impossible to publish "checked: 380" beside "unverified: 1162 of 1162" in
+    one payload. A run WITH verdict rows, and a pre-15.1 run with no gate data,
+    both keep the row-derived arithmetic untouched.
 
     `verdicts["superseded"]` (the G-06 VERDICT CLASS) and the top-level
     `superseded` (a reconciliation-derived scoped/temporal finding) are two
@@ -317,6 +352,55 @@ def shape_verification_report(
     accounting = _accounting(funnel)
     verification_degraded, verification_degraded_text = _degradation(funnel, accounting)
 
+    # -----------------------------------------------------------------------
+    # CR-02 (the 15.1 SC2 gap): the unverified block must never contradict the
+    # accounting block it sits next to.
+    #
+    # Nothing in production wrote a `verification_verdict` row before plan
+    # 15.1-14's writer -- the only writer in the repo was the fixture loader. On
+    # a real run that made `claim_ids_with_verdict` empty, so this shaper
+    # published `unverified.count == total_claims` in the SAME payload as the
+    # honest `accounting.checked`: the operator read "checked: 380" directly
+    # beside "unverified: 1162 of 1162" with no way to tell which number to
+    # believe. Two sibling numbers that disagree destroy trust in the whole
+    # surface, so the report must not be ABLE to emit them.
+    #
+    # 15.1-14's writer is the PRIMARY fix. This is the regression guard that
+    # holds even if that writer breaks, or for a run that predates it: with zero
+    # verdict rows and real gate data, the unverified figure is derived from the
+    # SAME funnel `_accounting` reads, so the two agree by construction.
+    #
+    # Both guards are ANDed and both are load-bearing:
+    #   * verdict rows present -> the row-derived arithmetic above stands
+    #     untouched (test_verification_report_endpoint::test_unverified_is_honest_count
+    #     depends on it for the recorded claim_id-NULL fixture).
+    #   * `accounting is None` (a pre-15.1 run carrying no gate data) -> report
+    #     the legacy figure rather than invent one from numbers we do not have.
+    #
+    # The two new keys are TOP-LEVEL SIBLINGS of `unverified`. Nothing is added
+    # INSIDE `unverified`: two tests assert its key set is exactly
+    # {count, claims_with_verdict, total_claims} and the shipped operator
+    # surface binds to that shape.
+    # -----------------------------------------------------------------------
+    verdicts_total = len(rows)
+    unverified_from_accounting = False
+    unverified_note: str | None = None
+
+    if verdicts_total == 0 and accounting is not None:
+        unverified_from_accounting = True
+        # The clamp is load-bearing: `claim_count` counts persisted survivor
+        # `claim` rows while `checked` counts gated claims -- two different
+        # denominators, so an unclamped subtraction could go negative.
+        claims_with_verdict = min(int(claim_count), int(accounting["checked"]))
+        unverified_count = max(0, int(claim_count) - claims_with_verdict)
+        unverified_note = (
+            "No verification_verdict row was persisted for this run, so the "
+            "unverified figure is derived from the gate funnel's checked count "
+            "and therefore agrees with the accounting block above it. The "
+            "per-claim verdict lists are empty because nothing wrote them -- "
+            "not because nothing was checked."
+        )
+
     return {
         "funnel": dict(funnel) if isinstance(funnel, dict) else None,
         # G-08: the three honest buckets (None when the run carries no gate data).
@@ -339,6 +423,11 @@ def shape_verification_report(
             "claims_with_verdict": claims_with_verdict,
             "total_claims": int(claim_count),
         },
+        # CR-02: the fallback is VISIBLE, not silent. These two are siblings of
+        # `unverified` (never keys inside it) and are declared explicitly on
+        # VerificationReport so they cannot be dropped at the API boundary.
+        "unverified_from_accounting": unverified_from_accounting,
+        "unverified_note": unverified_note,
         "true_cost": {
             "cost_usd_total": (
                 str(cost_usd_total) if cost_usd_total is not None else None
@@ -349,7 +438,7 @@ def shape_verification_report(
         # as clickable markers -- every [n] resolves (generated from the DB).
         "citations": list(citations) if citations else [],
         "counts": {
-            "verdicts_total": len(rows),
+            "verdicts_total": verdicts_total,
             "support": len(support),
             "refute": len(refute),
             "insufficient": len(insufficient),
