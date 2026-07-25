@@ -70,6 +70,111 @@ def _verdict_dto(row: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# G-08 three-bucket accounting (15.1) -- FUNNEL-driven, never a row join.
+#
+# The old two-way arithmetic (`total_claims - claims_with_verdict`) lumps "this
+# claim was never checkable" together with "this claim should have been checked
+# and the fact-checker died" -- the exact P1 defect. The three buckets are:
+#
+#   1. CHECKED                          -- a fact-checker actually looked at it.
+#   2. NOT CHECKABLE                    -- gated out, WITH the specific reason.
+#   3. SHOULD HAVE BEEN CHECKED BUT WASN'T -- crash, usage cap, budget
+#      exhaustion, gate error. This is the phase's most important number: an
+#      unchecked claim leaves its passage STANDING in the delivered prose
+#      (only a refutation triggers scrubbing), so bucket 3 counts passages that
+#      shipped unexamined. It must be ZERO on a healthy run.
+#
+# Why the funnel and not a join over `verification_verdict` -> `claim`:
+# `claim_id` is NULL on every recorded verdict row (the recorded run predates
+# claim linkage, see verification_verdict.py and loader.py), so a join reports
+# `claims_with_verdict == 0` and dumps all 1,162 claims into bucket 3. The gate
+# stage owns the funnel; the funnel is the honest source.
+# ---------------------------------------------------------------------------
+
+# Bucket-2 reasons, in funnel-key form. `skipped_stable` is the error-likelihood
+# gate's "stable known fact" skip; the other three are the materiality gates'.
+_NOT_CHECKABLE_KEYS = ("not_falsifiable", "not_load_bearing", "both", "skipped_stable")
+
+# Every funnel key the accounting block needs. A funnel missing ANY of them is a
+# pre-15.1 run: we report `accounting = None` (no gate data) rather than a dict
+# of zeros, which would read as a clean bucket 3 and lie about an old run.
+_ACCOUNTING_KEYS = ("checked", "should_have_been_checked", "gate_errors") + _NOT_CHECKABLE_KEYS
+
+
+def _accounting(funnel: dict | None) -> dict | None:
+    """G-08's three buckets, derived from the funnel. None when there is no gate data."""
+    if not isinstance(funnel, dict):
+        return None
+    if any(key not in funnel for key in _ACCOUNTING_KEYS):
+        return None
+
+    not_falsifiable = int(funnel["not_falsifiable"] or 0)
+    not_load_bearing = int(funnel["not_load_bearing"] or 0)
+    both = int(funnel["both"] or 0)
+    stable_known_fact = int(funnel["skipped_stable"] or 0)
+
+    return {
+        # Bucket 1.
+        "checked": int(funnel["checked"] or 0),
+        # Bucket 2 -- never a bare total; every gated-out claim carries its reason.
+        "not_checkable": {
+            "total": not_falsifiable + not_load_bearing + both + stable_known_fact,
+            "not_falsifiable": not_falsifiable,
+            "not_load_bearing": not_load_bearing,
+            "both": both,
+            "stable_known_fact": stable_known_fact,
+        },
+        # Bucket 3 -- the headline. Zero on a healthy run.
+        "should_have_been_checked": int(funnel["should_have_been_checked"] or 0),
+        # Gate batches that errored out (G-11 records them; they never absorb
+        # bucket 3, they are reported alongside it).
+        "gate_errors": int(funnel["gate_errors"] or 0),
+    }
+
+
+def _degradation(funnel: dict | None, accounting: dict | None) -> tuple[bool, str | None]:
+    """G-10's loud marker: (verification_degraded, verification_degraded_text).
+
+    The run KEEPS status `completed` -- four API endpoints gate on that string and
+    15.2's R6 owns the real terminal-state vocabulary. What changes is that the
+    verification report says, in WORDS and at the top, that its own fact-checking
+    was gutted. Not an icon, not a colour: a sentence.
+    """
+    if not isinstance(funnel, dict):
+        return False, None
+
+    if accounting is not None:
+        shortfall = accounting["should_have_been_checked"]
+        gate_errors = accounting["gate_errors"]
+    else:
+        shortfall = int(funnel.get("should_have_been_checked") or 0)
+        gate_errors = int(funnel.get("gate_errors") or 0)
+
+    # The gate stage sets the marker explicitly; derive it when the funnel predates
+    # the key, so an old-but-gated run cannot read as green by omission.
+    if "verification_degraded" in funnel:
+        degraded = bool(funnel["verification_degraded"])
+    else:
+        degraded = shortfall > 0
+
+    if not degraded:
+        return False, None
+
+    distilled = funnel.get("distilled")
+    scope = f"{shortfall} of {int(distilled)} claims" if distilled else f"{shortfall} claims"
+    text = (
+        f"VERIFICATION DEGRADED -- {scope} were selected for fact-checking but were "
+        "not checked (crash, usage cap, budget exhaustion or gate error). Their "
+        "supporting passages are still in the research text: only a refutation "
+        "removes a passage, so an unchecked claim ships unexamined. This run's "
+        "verification is incomplete -- do not read it as green."
+    )
+    if gate_errors:
+        text += f" {gate_errors} gate batch(es) also errored."
+    return True, text
+
+
+# ---------------------------------------------------------------------------
 # Pure shaper -- NO DB, NO GCS. Unit-testable from the recorded fixture rows.
 # ---------------------------------------------------------------------------
 
@@ -100,9 +205,38 @@ def shape_verification_report(
                       shaper stays DB-free; defaults to an empty list.
 
     Returns a JSON-safe dict with keys:
-      funnel, verdicts{support,refute,insufficient}, refuted, superseded,
+      funnel, accounting, verification_degraded, verification_degraded_text,
+      verdicts{support,refute,insufficient,superseded}, refuted, superseded,
       reconciled, unverified{count,claims_with_verdict,total_claims},
       true_cost{cost_usd_total,cost_pending}, citations, counts.
+
+    `verdicts["superseded"]` (the G-06 VERDICT CLASS) and the top-level
+    `superseded` (a reconciliation-derived scoped/temporal finding) are two
+    different things that happen to share a word -- see the classing branch.
+
+    G-08's three buckets (`accounting`):
+      1. `checked`                     -- a fact-checker looked at it.
+      2. `not_checkable`               -- gated out, with the SPECIFIC reason
+         (not_falsifiable / not_load_bearing / both / stable_known_fact).
+      3. `should_have_been_checked`    -- selected for checking and never
+         checked (crash, usage cap, budget, gate error). ZERO on a healthy run;
+         non-zero means passages shipped unexamined.
+    They are derived from the FUNNEL, not from a verdict-row join: `claim_id` is
+    NULL on the recorded rows, so a join would put every claim in bucket 3.
+
+    `accounting` is a SIBLING of `unverified`, which keeps its exact shape (the
+    operator surface binds to it). When `funnel` is None -- or is missing any
+    gate key, i.e. a pre-15.1 run -- `accounting` is **None**, never a dict of
+    zeros: "no gate data" must not read as "a clean bucket 3".
+
+    G-10: `verification_degraded` / `verification_degraded_text` say in a full
+    sentence that a run whose status is still `completed` had its fact-checking
+    gutted. No status changes here (15.2's R6 owns that).
+
+    Deliberately absent: any coverage percentage. The delivered report is written
+    from SCRUBBED PROSE, not from the claim list, so "X of Y statements verified"
+    has a false denominator -- which is exactly why G-09 keeps this surface
+    superadmin-only rather than client-facing.
     """
     rows = list(verdict_rows)
 
@@ -112,6 +246,10 @@ def shape_verification_report(
     refuted: list[dict] = []       # refute WITH evidence (the operator's "why refuted")
     superseded: list[dict] = []    # scoped / temporal findings with a canonical
     reconciled: list[dict] = []    # disputed contradictions with a chosen canonical
+
+    # G-06 (15.1): the VERDICT CLASS bucket. NOT the same thing as `superseded`
+    # above -- see the name-collision note on the classing branch below.
+    superseded_verdicts: list[dict] = []
 
     claim_ids_with_verdict: set[str] = set()
 
@@ -129,6 +267,24 @@ def shape_verification_report(
             # rule); surface those refute rows carrying real evidence_refs.
             if dto["evidence_refs"]:
                 refuted.append(dto)
+        elif v == "superseded":
+            # G-06 (15.1): the fourth verdict class the group skeptic can emit
+            # (plan 15.1-03 added it to EMIT_VERDICT_TOOL). Before this branch
+            # existed it fell through to `else: insufficient` and was silently
+            # swallowed -- a claim the skeptic said "was true, has since changed"
+            # was reported as "we could not tell".
+            #
+            # ⚠ NAME COLLISION -- TWO DIFFERENT `superseded` KEYS, ON PURPOSE:
+            #   report["verdicts"]["superseded"]  (THIS list, counted as
+            #       counts["superseded_verdicts"]) = the VERDICT CLASS.
+            #   report["superseded"]              (the TOP-LEVEL list built from
+            #       `reconciliation` a few lines below) = a reconciliation-derived
+            #       scoped/temporal finding carrying a canonical value. It is bound
+            #       by runs/schemas.py, the frontend VerificationReport.tsx and
+            #       test_verification_report_endpoint.py.
+            # Do NOT unify them: they answer different questions and one of them
+            # is a shipped surface.
+            superseded_verdicts.append(dto)
         else:
             insufficient.append(dto)
 
@@ -155,12 +311,25 @@ def shape_verification_report(
     claims_with_verdict = len(claim_ids_with_verdict)
     unverified_count = max(0, int(claim_count) - claims_with_verdict)
 
+    # G-08 / G-10 (15.1). `accounting` is a SIBLING of `unverified`, not a
+    # replacement: the operator surface binds to unverified.{count,
+    # claims_with_verdict,total_claims} and keeps working untouched.
+    accounting = _accounting(funnel)
+    verification_degraded, verification_degraded_text = _degradation(funnel, accounting)
+
     return {
         "funnel": dict(funnel) if isinstance(funnel, dict) else None,
+        # G-08: the three honest buckets (None when the run carries no gate data).
+        "accounting": accounting,
+        # G-10: stated in words, at the top, for a run that still says `completed`.
+        "verification_degraded": verification_degraded,
+        "verification_degraded_text": verification_degraded_text,
         "verdicts": {
             "support": support,
             "refute": refute,
             "insufficient": insufficient,
+            # G-06 verdict class -- distinct from the top-level "superseded" key.
+            "superseded": superseded_verdicts,
         },
         "refuted": refuted,
         "superseded": superseded,
@@ -185,7 +354,11 @@ def shape_verification_report(
             "refute": len(refute),
             "insufficient": len(insufficient),
             "refuted_with_evidence": len(refuted),
+            # "superseded" counts the reconciliation-derived findings (unchanged);
+            # "superseded_verdicts" counts the G-06 verdict class. Two keys because
+            # they are two different things (see the classing branch above).
             "superseded": len(superseded),
+            "superseded_verdicts": len(superseded_verdicts),
             "reconciled": len(reconciled),
         },
     }
