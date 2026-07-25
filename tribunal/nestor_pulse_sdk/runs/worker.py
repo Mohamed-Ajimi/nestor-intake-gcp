@@ -181,6 +181,24 @@ async def execute_run(claimed: dict) -> None:
         output_text = ""
         if isinstance(result, dict):
             output_text = result.get("output_text") or result.get("text") or ""
+
+        # The 15.1 verification funnel (plan 15.1-08). Read with the same defensive
+        # shape as output_text / rejected_claims above: an engine that does not
+        # fact-check (ADK) and any pipeline that returned no funnel simply omits it.
+        import json as _json
+        _summary = result.get("verification_summary") if isinstance(result, dict) else None
+        _has_summary = isinstance(_summary, dict) and bool(_summary)
+        if _has_summary and _summary.get("should_have_been_checked"):
+            # The operator's SERVER-SIDE trace that a completed run was degraded --
+            # independent of the UI, so a feed nobody was watching cannot lose it.
+            log.warning(
+                "run_verification_degraded",
+                run_id=str(claimed["id"]),
+                should_have_been_checked=_summary.get("should_have_been_checked"),
+                selected_verify=_summary.get("selected_verify"),
+                checked=_summary.get("checked"),
+            )
+
         # SUCCESS: update status to completed
         async with sessionmaker() as session:
             async with session.begin():
@@ -190,9 +208,25 @@ async def execute_run(claimed: dict) -> None:
                 # run.cost_usd_total so the A/B Compare screen + Report show a real
                 # cost (was always NULL otherwise -- review finding). RLS-scoped:
                 # set_tenant_context above limits the SUM to this tenant's rows.
+                #
+                # The verification funnel is set in the SAME STATEMENT as the status
+                # (G-10, T-15.1-36): a run must never be able to say 'completed'
+                # while its degradation marker is missing, and two statements -- or
+                # two transactions -- is exactly how that split happens. When there
+                # is no funnel the column is left NULL rather than zeroed: report.py
+                # renders NULL as "this run has no gate data", while a zeroed funnel
+                # would certify a clean bucket 3 that nobody ever measured
+                # (T-15.1-38). No new status is introduced (G-10; 15.2's R6 owns it).
+                _set_summary = (
+                    "verification_summary = CAST(:vsummary AS JSONB), " if _has_summary else ""
+                )
+                _params = {"id": claimed["id"]}
+                if _has_summary:
+                    _params["vsummary"] = _json.dumps(_summary, ensure_ascii=False)
                 completed = await session.execute(
                     text(
                         "UPDATE run SET status='completed', completed_at=NOW(), "
+                        + _set_summary +
                         "cost_usd_total = COALESCE("
                         "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "
                         # Guard: only a still-running run completes. A user cancel
@@ -200,7 +234,7 @@ async def execute_run(claimed: dict) -> None:
                         # state — and the cancel verdict — sticks.
                         "WHERE id=:id AND status='running'"
                     ),
-                    {"id": claimed["id"]},
+                    _params,
                 )
                 # Persist the synthesized report body so GET /api/runs/{id}/report
                 # can serve it (the Output table was never written before -- the
@@ -223,7 +257,7 @@ async def execute_run(claimed: dict) -> None:
                 # Persist the rejected-claims ledger (Tribunal verification drops) so
                 # the Deep Content Compare cross-check can show what this engine threw
                 # out. Best-effort; engines that don't verify (ADK) emit nothing.
-                import json as _json
+                # (_json is imported above, alongside the verification funnel read.)
                 _rejected = result.get("rejected_claims") if isinstance(result, dict) else None
                 if _rejected and completed.rowcount:
                     await session.execute(
