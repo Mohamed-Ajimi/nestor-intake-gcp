@@ -52,7 +52,6 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
     conflict_detector,
     scrub_research,
 )
-from nestor_pulse_sdk.pipeline.tribunal.triage import triage_claims
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import run_skeptic
 from nestor_pulse_sdk.pipeline.tribunal.grouping import group_claims
 # The gate stage (G-01/G-02/G-11) and ITS OWN key list. _FUNNEL_KEYS is imported
@@ -96,7 +95,8 @@ _GROUP_VERIFY = os.environ.get("NESTOR_TRIBUNAL_GROUP_VERIFY", "true").lower() =
 
 #: ONE thorough group-skeptic session per group. Stakes controls the DEPTH of that
 #: single session (max_turns, web_search uses, web_fetch uses), NOT the number of
-#: sessions. Low-stakes groups (supporting colour) still wave through unverified.
+#: sessions. Under G-02 stakes no longer decides WHETHER a group is checked — the
+#: gates do — so this map is the only surviving job stakes has.
 #: A single group skeptic that refutes WITH an independent citation is authoritative
 #: — adjudicate's majority-independent rule already drops a 1/1 refute-with-source,
 #: so no adjudication change is needed.
@@ -104,12 +104,74 @@ _GROUP_DEPTH: dict[str, tuple[int, int, int]] = {
     # stakes: (max_turns, max_search_uses, max_fetch_uses)
     "high": (6, 8, 5),
     "med": (4, 5, 3),
+    # "low" exists BY DECISION, not by accident (RESEARCH Pitfall 9). Low-stakes
+    # groups used to be waved through unchecked, so this map never needed the key.
+    # Now the gates let a load-bearing low-stakes claim into the queue, and the
+    # `.get(stakes, _GROUP_DEPTH["med"])` fallback below would have silently given
+    # it MED depth — quietly eroding the "~6× cheaper" bar this phase is measured
+    # against. A shallow tier checks it honestly and cheaply instead.
+    "low": (2, 3, 2),
 }
 
 
 def _group_passes(stakes: str) -> int:
-    """Sessions for a group: 1 for med/high, 0 for low (wave through)."""
+    """Sessions for a group: 1 for med/high, 0 for low (wave through).
+
+    RETAINED AS THE A/B REFERENCE ONLY — as of 15.1/G-02 this is NO LONGER the
+    selector. Returning 0 for every low-stakes group is exactly the hidden second
+    filter this phase removed: those claims were never checked and nothing in the
+    report said so. `_group_selected()` — driven by the gate result — decides what
+    gets checked now. Kept so the old rule stays readable beside the new one.
+    """
     return 0 if stakes == "low" else 1
+
+
+def _group_selected(group: dict[str, Any]) -> bool:
+    """True when ANY member claim survived the gates as VERIFY (G-04 step 3).
+
+    The cluster is the unit of WORK (one skeptic session reconciles the whole
+    entity|attribute cluster at once), but the gate decision is per claim. So a
+    cluster is worth a session as soon as one member is worth checking — checking
+    a load-bearing claim would otherwise be skipped because it happened to be
+    clustered with stable, notorious ones.
+
+    A group with no selected member is skipped, and that skip is NOT a bucket-3
+    event: those claims were deliberately gated out with a named reason and are
+    already counted in bucket 2 (not_falsifiable / not_load_bearing / both /
+    stable_known_fact).
+    """
+    for claim in group.get("claims") or ():
+        if (claim.get("gate") or {}).get("strict") == "VERIFY":
+            return True
+    return False
+
+
+def _group_corroboration(group: dict[str, Any]) -> int:
+    """How many DISTINCT researchers found this cluster's facts (G-12 `found_by`)."""
+    providers: set[str] = set()
+    for claim in group.get("claims") or ():
+        for provider in claim.get("found_by") or ():
+            if provider:
+                providers.add(str(provider))
+    return len(providers)
+
+
+def _corroboration_order(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Queue order: LOWEST corroboration FIRST (G-04 step 4, decision D9).
+
+    The direction is counter-intuitive and deliberate. A fact that only ONE
+    researcher found is the one most likely to be wrong and the one no other
+    source can back up, so it goes to the head of the queue; a fact three
+    researchers independently reported is the safest thing to leave until last.
+    This matters because the budget governor truncates the queue from the TAIL —
+    so what survives an early cap must be the checks that were worth most.
+
+    Ties keep their original index, so the order is deterministic run to run.
+    """
+    return [g for _, _, g in sorted(
+        ((_group_corroboration(g), i, g) for i, g in enumerate(groups)),
+        key=lambda t: (t[0], t[1]),
+    )]
 
 
 #: How much of the client's brief is handed to the gates as `decision_context`.
@@ -120,6 +182,12 @@ def _group_passes(stakes: str) -> int:
 _GATE_DECISION_CONTEXT_CHARS = int(
     os.environ.get("NESTOR_TRIBUNAL_GATE_BRIEF_CHARS", "1200")
 )
+
+#: Skeptic sessions per SELECTED claim in the per-claim A/B fallback branch
+#: (NESTOR_TRIBUNAL_GROUP_VERIFY=false). Flat by design: under G-02 the gate
+#: decides whether a claim is checked at all, so this is a depth knob and no
+#: longer the stakes-derived selector triage.py used to supply.
+_PER_CLAIM_SKEPTICS = 2
 
 #: Cost ceiling (USD) the budget governor enforces across the skeptic fan-out.
 _MAX_BUDGET_USD = float(
@@ -451,6 +519,39 @@ class TribunalPipeline:
         _sm = get_sessionmaker()
         sem = asyncio.Semaphore(_SKEPTIC_CONCURRENCY)
 
+        # G-08 BUCKET 3 — claims the gates SELECTED for checking that did not get
+        # checked: a crashed or timed-out session, the budget cap, a failed
+        # coverage re-entry. Before this existed all three losses were a bare
+        # `continue` and the run reported them as if they had been verified.
+        #
+        # This is the phase's most important number and must be ZERO on a healthy
+        # run. It is not a bookkeeping line: only a REFUTATION scrubs a passage out
+        # of the research prose, so an unchecked claim's passage ships unexamined —
+        # which is how one run published Aral's share at both 16% and 21%.
+        #
+        # Tracked by identity as well as counted so a claim lost twice (crashed
+        # group, then a failed re-entry) is booked once.
+        unchecked_ids: set[int] = set()
+        unchecked_selected = 0
+
+        def _book_unchecked(lost_claims, cause: str) -> None:
+            """Count + LOG selected-but-unchecked claims (V7: never swallowed)."""
+            nonlocal unchecked_selected
+            newly = [
+                c for c in lost_claims
+                if (c.get("gate") or {}).get("strict") == "VERIFY"
+                and id(c) not in unchecked_ids
+            ]
+            if not newly:
+                return
+            unchecked_ids.update(id(c) for c in newly)
+            unchecked_selected = len(unchecked_ids)
+            log.warning(
+                "tribunal_pipeline: %d selected claim(s) NOT checked (%s) — bucket 3 "
+                "now %d; their passages ship unexamined",
+                len(newly), cause, unchecked_selected,
+            )
+
         # Per-claim skeptic caller — used by the per-claim branch AND by the
         # coverage-gate re-entry (which targets specific uncovered high-stakes
         # claims one at a time, in either verification mode). Defined once here so
@@ -476,7 +577,9 @@ class TribunalPipeline:
             # thorough skeptic session that also reconciles contradictions. Stakes
             # controls the DEPTH of that single session (searches/fetches), NOT the
             # number of sessions — so the call count drops from ~3-per-claim to
-            # ~1-session-per-GROUP. Low-stakes groups wave through unverified.
+            # ~1-session-per-GROUP. WHICH groups run is the gates' call (G-02), not
+            # stakes': a low-stakes group with a load-bearing claim is now checked
+            # (shallowly), and a high-stakes group of unfalsifiable claims is not.
             await set_stage(
                 run_id, tenant_id, "verify",
                 detail={"items": [{"name": f"grouping {len(claims)} claims…", "status": "running"}]},
@@ -486,7 +589,10 @@ class TribunalPipeline:
             )
             n_groups = len(groups)
             multi = sum(1 for g in groups if len(g["claims"]) > 1)
-            total_passes = sum(_group_passes(g["stakes"]) for g in groups)
+            # G-02: the QUEUE is what the gates selected, not what stakes allowed.
+            # `queue` is also the iteration order — single-source clusters first.
+            queue = [g for g in _corroboration_order(groups) if _group_selected(g)]
+            total_passes = len(queue)
             done_passes = 0
 
             async def _verify_detail(done: int) -> None:
@@ -494,7 +600,8 @@ class TribunalPipeline:
                     run_id, tenant_id, "verify",
                     detail={"items": [{
                         "name": (f"{min(done, total_passes)} / {total_passes} group checks · "
-                                 f"{n_groups} groups ({multi} multi-claim) · {len(claims)} claims"),
+                                 f"{n_groups} groups ({multi} multi-claim) · "
+                                 f"{gate_funnel['selected_verify']} of {len(claims)} claims selected"),
                         "status": "running",
                     }]},
                 )
@@ -529,6 +636,9 @@ class TribunalPipeline:
                 results = await asyncio.gather(*pending)
                 for grp, res in zip(owners, results):
                     if res is None:
+                        # Bucket-3 site (a): the session crashed or timed out. Its
+                        # selected claims got no verdict and never will.
+                        _book_unchecked(grp["claims"], "group session crashed or timed out")
                         continue
                     vbi = res.get("verdicts_by_index", {})
                     for i, c in enumerate(grp["claims"]):
@@ -546,15 +656,20 @@ class TribunalPipeline:
                 done_passes += n
                 await _verify_detail(done_passes)
 
-            for group in groups:
-                npass = _group_passes(group["stakes"])
-                if npass <= 0 or budget_exceeded:
+            # `queue` is gate-selected and corroboration-ascending: single-source
+            # clusters are checked first (D9), so if the budget cap truncates the
+            # tail, what got dropped is the best-corroborated work.
+            for group in queue:
+                if budget_exceeded:
+                    # Bucket-3 site (b): the budget governor stopped the spend. The
+                    # shortfall lands here honestly instead of reading as verified.
+                    _book_unchecked(group["claims"], "budget cap reached")
                     continue
                 sources = _extract_sources_for_group(group, provider_results)
-                for _ in range(npass):
-                    pending.append(_one_group_pass(group, sources))
-                    owners.append(group)
-                    total_skeptics += 1
+                # ONE thorough session per selected group; stakes sets its depth.
+                pending.append(_one_group_pass(group, sources))
+                owners.append(group)
+                total_skeptics += 1
                 if len(pending) >= _SKEPTIC_CONCURRENCY:
                     await _flush_groups()
                     await raise_if_cancelled(run_id, tenant_id)
@@ -570,20 +685,34 @@ class TribunalPipeline:
             await _flush_groups()
 
             log.info(
-                "tribunal_pipeline: GROUP verify — %d group-checks over %d groups "
-                "(%d multi-claim) / %d claims, %d reconciliations (capped=%s)",
-                total_skeptics, n_groups, multi, len(claims),
-                len(group_reconciliations), budget_exceeded,
+                "tribunal_pipeline: GROUP verify — %d group-checks over %d selected "
+                "of %d groups (%d multi-claim) / %d selected of %d claims, "
+                "%d reconciliations (capped=%s, unchecked_selected=%d)",
+                total_skeptics, total_passes, n_groups, multi,
+                gate_funnel["selected_verify"], len(claims),
+                len(group_reconciliations), budget_exceeded, unchecked_selected,
             )
 
         else:
             # --- Per-claim verification (legacy fallback / A/B baseline) -------
-            triaged = triage_claims(claims)
+            # G-02: the queue is the gate's selection, NOT triage.py's stakes map.
+            # This branch held the stakes triage's ONLY production call, and that
+            # triage returned 0 skeptics for every low-stakes claim — the hidden
+            # filter this phase removed. The BRANCH survives (it is the A/B
+            # baseline, and `_one_skeptic` above is shared with the coverage-gate
+            # re-entry in BOTH modes); only its selector changed.
+            selected_claims = [
+                c for c in claims if (c.get("gate") or {}).get("strict") == "VERIFY"
+            ]
+            n_selected = len(selected_claims)
             _verified_count = 0
 
             await set_stage(
                 run_id, tenant_id, "verify",
-                detail={"items": [{"name": f"0 / {len(claims)} claims verified", "status": "running"}]},
+                detail={"items": [{
+                    "name": f"0 / {n_selected} selected claims verified",
+                    "status": "running",
+                }]},
             )
 
             pending = []
@@ -604,16 +733,19 @@ class TribunalPipeline:
                 await set_stage(
                     run_id, tenant_id, "verify",
                     detail={"items": [{
-                        "name": f"{min(_verified_count, len(claims))} / {len(claims)} claims verified",
+                        "name": (f"{min(_verified_count, n_selected)} / {n_selected} "
+                                 f"selected claims verified"),
                         "status": "running",
                     }]},
                 )
 
-            for claim, n_skeptics in triaged:
-                if n_skeptics <= 0 or budget_exceeded:
+            for claim in selected_claims:
+                if budget_exceeded:
+                    # Bucket-3 site (b), per-claim mode.
+                    _book_unchecked([claim], "budget cap reached")
                     continue
                 sources = _extract_sources_for_claim(claim, provider_results)
-                for _ in range(n_skeptics):
+                for _ in range(_PER_CLAIM_SKEPTICS):
                     pending.append(_one_skeptic(claim, sources))
                     owners.append(claim)
                     total_skeptics += 1
@@ -632,8 +764,10 @@ class TribunalPipeline:
             await _flush_batch()
 
             log.info(
-                "tribunal_pipeline: PER-CLAIM verify — ran %d skeptics over %d claims (capped=%s)",
-                total_skeptics, len(triaged), budget_exceeded,
+                "tribunal_pipeline: PER-CLAIM verify — ran %d skeptics over %d "
+                "gate-selected of %d claims (capped=%s, unchecked_selected=%d)",
+                total_skeptics, n_selected, len(claims), budget_exceeded,
+                unchecked_selected,
             )
 
         # ------------------------------------------------------------------
@@ -689,6 +823,13 @@ class TribunalPipeline:
             for claim, verdict in zip(reentry_owners, reentry_results):
                 if verdict is not None:
                     verdicts_by_claim[id(claim)].append(verdict)
+
+            # Bucket-3 site (c): a re-entry that came back with nothing. This is the
+            # last chance a selected claim gets, so a still-empty verdict list here
+            # is a permanent loss and must be counted, not retried into silence.
+            for claim in coverage["uncovered"]:
+                if not verdicts_by_claim.get(id(claim)):
+                    _book_unchecked([claim], "coverage-gate re-entry returned no verdict")
 
             coverage = check_coverage(claims, adjudications)
 
@@ -829,6 +970,25 @@ class TribunalPipeline:
             ckey = claim.get("text", "")[:80]
             per_claim_verdicts[ckey] = verdicts_by_claim.get(id(claim), [])
         n_unverified = sum(1 for c in claims if not verdicts_by_claim.get(id(c)))
+
+        # Bucket 3, reconciled against GROUND TRUTH before it is published: a claim
+        # the gates selected that ended with no verdict was not checked, whatever
+        # the cause — including causes the three counted sites do not name (a group
+        # session that returned but skipped an index, a claim lost between batches).
+        # The counters above exist to LOG the cause at the moment of loss; this line
+        # decides the number, so no unnamed path can quietly read as verified.
+        _observed_unchecked = sum(
+            1 for c in claims
+            if (c.get("gate") or {}).get("strict") == "VERIFY"
+            and not verdicts_by_claim.get(id(c))
+        )
+        if _observed_unchecked != unchecked_selected:
+            log.warning(
+                "tribunal_pipeline: bucket-3 reconciliation — counted %d at the loss "
+                "sites, observed %d selected claims with no verdict; publishing the "
+                "observed number", unchecked_selected, _observed_unchecked,
+            )
+        unchecked_selected = _observed_unchecked
         claims_per_facet: dict[str, int] = {}
         for c in claims:
             f = c.get("facet") or "?"
@@ -855,6 +1015,14 @@ class TribunalPipeline:
                 "conflicts": conflicts,
                 "claims_per_facet": claims_per_facet,
                 "budget_exceeded": budget_exceeded,
+                # The 15.1 funnel — the gates' nine keys plus this stage's four.
+                # Carried on the bundle so it survives the interactive-report pause
+                # (plan 15.1-09 persists it onto run.verification_summary from here).
+                "funnel": _build_funnel(
+                    gate_funnel,
+                    unchecked_selected=unchecked_selected,
+                    verify_sessions=total_skeptics,
+                ),
             },
         }
         # Cache the scrubbed-research bundle so a "Rewrite report" — or the
@@ -998,6 +1166,12 @@ async def _write_final_report(
         "reentry_count": v.get("reentry_count", 0),
         "conflicts": v.get("conflicts") or [],
         "contested_count": v.get("contested_count", 0),
+        # The 15.1 funnel travels with the report so the superadmin surface can
+        # show the three honest buckets. Same key, same shape, on the zero-claim
+        # path too (RESEARCH Pitfall 10) — a consumer never branches on the path.
+        "funnel": v.get("funnel") or _build_funnel(
+            None, unchecked_selected=0, verify_sessions=0
+        ),
     }
 
     synthesis_text = synthesis_text + _verification_appendix(
