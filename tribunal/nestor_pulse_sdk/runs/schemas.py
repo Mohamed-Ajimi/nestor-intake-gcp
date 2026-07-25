@@ -304,6 +304,15 @@ class VerificationReport(BaseModel):
     field-by-field mirror.
     """
     funnel: dict | None = None
+    # G-08 (15.1): the three honest buckets -- checked / not_checkable (with the
+    # specific reason) / should_have_been_checked. None for a pre-15.1 run that
+    # carries no gate data, which is NOT the same as a clean bucket 3.
+    accounting: dict | None = None
+    # G-10 (15.1): a run whose fact-checking was gutted keeps status `completed`
+    # (four endpoints gate on that literal; 15.2's R6 promotes the marker into a
+    # real terminal state) but says so here, in words, at the top of the report.
+    verification_degraded: bool = False
+    verification_degraded_text: str | None = None
     verdicts: VerificationVerdictGroups = VerificationVerdictGroups()
     refuted: list[VerificationVerdictItem] = []
     superseded: list[VerificationVerdictItem] = []
