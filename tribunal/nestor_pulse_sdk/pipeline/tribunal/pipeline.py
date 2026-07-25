@@ -199,6 +199,16 @@ _MAX_BUDGET_USD = float(
     os.environ.get("NESTOR_TRIBUNAL_MAX_BUDGET_USD", str(DEFAULT_MAX_BUDGET_USD))
 )
 
+#: How many `[SUPERSEDED]` caveats may be merged into contested_notes (CR-01).
+#: This cap exists to BOUND THE SYNTHESIS PROMPT, not to hide anything: when it
+#: truncates, the drop is logged at WARNING with the exact count (fail-loud rule),
+#: never silently shortened.
+_SUPERSEDED_NOTE_CAP = 40
+
+#: Claim text kept in a `[SUPERSEDED]` line before truncation. Long enough to
+#: identify the claim, short enough that 40 caveats cannot dominate the prompt.
+_SUPERSEDED_CLAIM_CHARS = 120
+
 
 def _gate_decision_context(mission_brief: dict[str, Any]) -> str:
     """The client's decision, in words, for the gates' load-bearing test.
@@ -571,6 +581,12 @@ class TribunalPipeline:
         budget_exceeded = False
         total_skeptics = 0
         group_reconciliations: list[dict] = []  # scoped/disputed notes from group skeptics
+        # CR-01 / G-07: `[SUPERSEDED] <claim>: <note>` caveats harvested during group
+        # flushing and merged into contested_notes below, so the note reaches synthesis.
+        # ONLY the grouped path fills this: `superseded_note` is produced exclusively by
+        # group_skeptic._parse_group_verdict — the per-claim EMIT_VERDICT_TOOL keeps the
+        # three-word vocabulary — so the per-claim branch is deliberately left alone.
+        superseded_notes: list[str] = []
         n_groups = 0
         _sm = get_sessionmaker()
         sem = asyncio.Semaphore(_SKEPTIC_CONCURRENCY)
@@ -701,6 +717,10 @@ class TribunalPipeline:
                         v = vbi.get(i)
                         if v is not None:
                             verdicts_by_claim[id(c)].append(v)
+                    # CR-01: carry this group's superseded caveats out before the
+                    # verdict dicts disappear into verdicts_by_claim, where G-07's
+                    # note used to die. Merged into contested_notes below.
+                    superseded_notes.extend(_collect_superseded_notes(grp["claims"], vbi))
                     recon = res.get("reconciliation") or {}
                     if recon.get("disputed") or recon.get("relation") == "scoped":
                         group_reconciliations.append({
@@ -972,6 +992,22 @@ class TribunalPipeline:
             if note:
                 tag = "DISPUTED" if r.get("disputed") else "scope-dependent"
                 contested_notes.append(f"[{tag}] {label}: {note}")
+        # CR-01 / G-07: the superseded caveats collected in _flush_groups join the
+        # SAME list, because contested_notes is what synthesize_report actually
+        # receives (see _write_final_report). De-duplicated so a claim checked twice
+        # (e.g. a coverage re-entry) does not repeat its caveat, and capped at
+        # _SUPERSEDED_NOTE_CAP to bound the synthesis prompt — NOT to hide anything:
+        # a truncation is logged loudly with the exact number dropped.
+        _deduped_superseded = list(dict.fromkeys(superseded_notes))
+        if len(_deduped_superseded) > _SUPERSEDED_NOTE_CAP:
+            log.warning(
+                "tribunal_pipeline: %d superseded caveat(s) DROPPED — %d collected, "
+                "cap is %d; the dropped claims ship without their caveat",
+                len(_deduped_superseded) - _SUPERSEDED_NOTE_CAP,
+                len(_deduped_superseded), _SUPERSEDED_NOTE_CAP,
+                extra={"run_id": str(run_id)},
+            )
+        contested_notes.extend(_deduped_superseded[:_SUPERSEDED_NOTE_CAP])
         await set_stage(
             run_id, tenant_id, "conflict",
             detail={"items": [{
@@ -1369,6 +1405,67 @@ def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
     if not items:
         items = [{"name": "no focus areas extracted", "status": "failed"}]
     return {"items": items}
+
+
+def _one_line(text: Any) -> str:
+    """Collapse ALL whitespace (newlines included) to single spaces, then strip.
+
+    The prompt-block containment primitive for `_collect_superseded_notes`: a
+    caveat is untrusted model output pasted into a prompt another model reads, so
+    it must never be able to open a new line there.
+    """
+    return " ".join(str(text or "").split())
+
+
+def _collect_superseded_notes(
+    claims: Any,
+    verdicts_by_index: Any,
+) -> list[str]:
+    """Format a group's `superseded` verdicts as `[SUPERSEDED] <claim>: <note>` lines.
+
+    CR-01 / G-07. `group_skeptic._parse_group_verdict` produces `superseded_note`,
+    and until this helper existed nothing consumed it: the caveat died inside
+    `verdicts_by_claim` while the report body went on asserting the obsolete fact
+    as current (the KPAnG failure, live run 4cbb5311). The lines returned here are
+    merged into `contested_notes` — the list `synthesize_report` actually receives
+    — so the caveat reaches synthesis as DATA the writing model PRESENTS, rather
+    than something it phrases from memory.
+
+    Tag convention imitates the existing `[DISPUTED]` / `[scope-dependent]` notes
+    built from `group_reconciliations`.
+
+    PROMPT-INJECTION CONTAINMENT (T-15.1-63): both the claim text and the note are
+    untrusted model output about to be concatenated into a prompt block a second
+    model reads. Newlines in either are collapsed to spaces and the claim text is
+    truncated to `_SUPERSEDED_CLAIM_CHARS`, so a single note can neither open a new
+    prompt line nor impersonate another entry.
+
+    PURE by construction — plain data in, list of strings out; no DB, no LLM, no
+    closure over pipeline state, which is what makes it testable without a run.
+    NEVER raises: a malformed verdict dict yields no line rather than an exception,
+    because this runs inside the verify stage's gather loop where one bad dict
+    would otherwise cost a whole batch of group results.
+    """
+    notes: list[str] = []
+    if not claims or not isinstance(verdicts_by_index, dict):
+        return notes
+    for i, c in enumerate(claims):
+        try:
+            v = verdicts_by_index.get(i)
+            if not isinstance(v, dict) or v.get("verdict") != "superseded":
+                continue
+            raw_note = v.get("superseded_note")
+            if not isinstance(raw_note, str):
+                continue
+            note = _one_line(raw_note)
+            if not note:
+                continue
+            raw_text = (c.get("text") or c.get("claim_text") or "") if isinstance(c, dict) else ""
+            text = _one_line(raw_text)[:_SUPERSEDED_CLAIM_CHARS]
+            notes.append(f"[SUPERSEDED] {text}: {note}")
+        except Exception:  # noqa: BLE001 — a bad verdict costs one line, not the batch
+            continue
+    return notes
 
 
 def _verification_appendix(
