@@ -100,9 +100,13 @@ def shape_verification_report(
                       shaper stays DB-free; defaults to an empty list.
 
     Returns a JSON-safe dict with keys:
-      funnel, verdicts{support,refute,insufficient}, refuted, superseded,
-      reconciled, unverified{count,claims_with_verdict,total_claims},
+      funnel, verdicts{support,refute,insufficient,superseded}, refuted,
+      superseded, reconciled, unverified{count,claims_with_verdict,total_claims},
       true_cost{cost_usd_total,cost_pending}, citations, counts.
+
+    `verdicts["superseded"]` (the G-06 VERDICT CLASS) and the top-level
+    `superseded` (a reconciliation-derived scoped/temporal finding) are two
+    different things that happen to share a word -- see the classing branch.
     """
     rows = list(verdict_rows)
 
@@ -112,6 +116,10 @@ def shape_verification_report(
     refuted: list[dict] = []       # refute WITH evidence (the operator's "why refuted")
     superseded: list[dict] = []    # scoped / temporal findings with a canonical
     reconciled: list[dict] = []    # disputed contradictions with a chosen canonical
+
+    # G-06 (15.1): the VERDICT CLASS bucket. NOT the same thing as `superseded`
+    # above -- see the name-collision note on the classing branch below.
+    superseded_verdicts: list[dict] = []
 
     claim_ids_with_verdict: set[str] = set()
 
@@ -129,6 +137,24 @@ def shape_verification_report(
             # rule); surface those refute rows carrying real evidence_refs.
             if dto["evidence_refs"]:
                 refuted.append(dto)
+        elif v == "superseded":
+            # G-06 (15.1): the fourth verdict class the group skeptic can emit
+            # (plan 15.1-03 added it to EMIT_VERDICT_TOOL). Before this branch
+            # existed it fell through to `else: insufficient` and was silently
+            # swallowed -- a claim the skeptic said "was true, has since changed"
+            # was reported as "we could not tell".
+            #
+            # ⚠ NAME COLLISION -- TWO DIFFERENT `superseded` KEYS, ON PURPOSE:
+            #   report["verdicts"]["superseded"]  (THIS list, counted as
+            #       counts["superseded_verdicts"]) = the VERDICT CLASS.
+            #   report["superseded"]              (the TOP-LEVEL list built from
+            #       `reconciliation` a few lines below) = a reconciliation-derived
+            #       scoped/temporal finding carrying a canonical value. It is bound
+            #       by runs/schemas.py, the frontend VerificationReport.tsx and
+            #       test_verification_report_endpoint.py.
+            # Do NOT unify them: they answer different questions and one of them
+            # is a shipped surface.
+            superseded_verdicts.append(dto)
         else:
             insufficient.append(dto)
 
@@ -161,6 +187,8 @@ def shape_verification_report(
             "support": support,
             "refute": refute,
             "insufficient": insufficient,
+            # G-06 verdict class -- distinct from the top-level "superseded" key.
+            "superseded": superseded_verdicts,
         },
         "refuted": refuted,
         "superseded": superseded,
@@ -185,7 +213,11 @@ def shape_verification_report(
             "refute": len(refute),
             "insufficient": len(insufficient),
             "refuted_with_evidence": len(refuted),
+            # "superseded" counts the reconciliation-derived findings (unchanged);
+            # "superseded_verdicts" counts the G-06 verdict class. Two keys because
+            # they are two different things (see the classing branch above).
             "superseded": len(superseded),
+            "superseded_verdicts": len(superseded_verdicts),
             "reconciled": len(reconciled),
         },
     }

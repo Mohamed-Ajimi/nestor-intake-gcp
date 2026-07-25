@@ -220,19 +220,38 @@ class RunMetrics(BaseModel):
 
 
 class VerificationVerdictItem(BaseModel):
-    """One verdict row in the verification report (never leaks tenant_id/hashes)."""
+    """One verdict row in the verification report (never leaks tenant_id/hashes).
+
+    NOTE (15.1): this model has NO `model_config`, so pydantic v2's default
+    `extra="ignore"` applies -- any key the shaper emits that is not declared
+    HERE is silently dropped on the way out of the API. Declare, don't assume.
+    """
     claim_id: str | None = None
     verdict: str
     confidence: str | None = None
     evidence_refs: list | None = None
     reconciliation: dict | None = None
+    # G-07 (plan 15.1-03): the caveat the skeptic must supply with a `superseded`
+    # verdict (what changed, and when). Declared so it survives the round trip
+    # rather than being dropped by extra="ignore".
+    superseded_note: str | None = None
 
 
 class VerificationVerdictGroups(BaseModel):
-    """Verdicts split by verdict class (support / refute / insufficient)."""
+    """Verdicts split by verdict class (support / refute / insufficient / superseded).
+
+    NOTE (15.1): no `model_config` here either -- pydantic v2 defaults to
+    `extra="ignore"`, so a new verdict class needs an EXPLICIT field or the API
+    response silently loses it even though the shaper produced it.
+
+    `superseded` here is the G-06 VERDICT CLASS. It is NOT the top-level
+    `VerificationReport.superseded` list, which carries reconciliation-derived
+    scoped/temporal findings. Same word, different question.
+    """
     support: list[VerificationVerdictItem] = []
     refute: list[VerificationVerdictItem] = []
     insufficient: list[VerificationVerdictItem] = []
+    superseded: list[VerificationVerdictItem] = []
 
 
 class VerificationUnverified(BaseModel):
