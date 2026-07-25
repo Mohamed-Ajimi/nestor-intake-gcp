@@ -668,11 +668,19 @@ def _build_distiller_prompt(
     )
 
 
-def _parse_distiller_response(text: str, focus_area_labels: list[str]) -> list[dict]:
+def _parse_distiller_response(text: str, focus_area_labels: list[str], *, provider: str = "") -> list[dict]:
     """Parse plain-text tab-separated lines into claim dicts.
 
     Format: "FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE" (EVIDENCE optional for back-compat).
     Skips blank lines and malformed lines (no tab separator) defensively.
+
+    ``provider`` (G-12) names the researcher whose report this chunk came from. It
+    is supplied by the pipeline from ``provider_reports`` and is NEVER parsed out of
+    model output, so a model cannot set its own attribution. Every claim carries it
+    as ``found_by``; claim-level corroboration is ``len(claim["found_by"])`` once
+    duplicates have been merged by ``_dedupe_claims``. ``facet`` is not a usable
+    substitute — it falls back to the provider name only when no focus-area label
+    matched, so provenance is not reliably recoverable from it.
     """
     valid_facets = set(focus_area_labels) if focus_area_labels else set()
     claims: list[dict] = []
@@ -699,7 +707,15 @@ def _parse_distiller_response(text: str, focus_area_labels: list[str]) -> list[d
         elif valid_facets and facet not in valid_facets:
             # Use as-is — don't drop claims just because the model used a near-match
             log.debug("claim_distiller: facet %r not in known facets %r", facet, valid_facets)
-        claims.append({"text": claim_text, "facet": facet, "evidence": evidence})
+        claims.append({
+            "text": claim_text,
+            "facet": facet,
+            "evidence": evidence,
+            # G-12: the producing researcher, threaded in from the pipeline. A fact
+            # found independently by three researchers must be distinguishable from
+            # one asserted by a single researcher.
+            "found_by": [provider] if provider else [],
+        })
 
     return claims
 
@@ -812,7 +828,10 @@ async def claim_distiller(
                 parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
                 if parts:
                     text = getattr(parts[0], "text", None) or ""
-        return _parse_distiller_response(text or "", focus_area_labels)
+        # G-12: `name` is the researcher that produced this chunk. It was previously
+        # used only for the prompt header and then thrown away — thread it through so
+        # every claim keeps its provenance.
+        return _parse_distiller_response(text or "", focus_area_labels, provider=name)
 
     per_unit = await asyncio.gather(*(_distill_unit(n, c) for n, c in units))
     claims = [c for unit_claims in per_unit for c in unit_claims]
@@ -849,9 +868,15 @@ async def claim_distiller(
         )
         claims = claims[:max_claims]
 
+    # One closing input->output INFO line (grouping.py convention). The old form passed
+    # len(claims) twice, so the "atomic claims" and "after dedupe" slots always rendered
+    # the same number and the raw->deduped ratio was invisible. The distinct-provider
+    # count makes G-12 corroboration coverage observable in run logs.
+    distinct_providers = len({p for c in claims for p in (c.get("found_by") or [])})
     log.info(
-        "claim_distiller: %d atomic claims (%d after dedupe from %d raw) from %d providers",
-        len(claims), len(claims), before, len(provider_reports),
+        "claim_distiller: %d raw claims -> %d after dedupe, from %d providers "
+        "(%d distinct providers named in found_by)",
+        before, len(claims), len(provider_reports), distinct_providers,
     )
     return claims
 
