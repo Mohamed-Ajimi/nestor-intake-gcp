@@ -18,6 +18,57 @@ Design constraints carried from the rest of the pipeline:
     sees slightly more context (harmless); UNDER-merging splits a contradiction
     across groups and makes it invisible again (the failure we are fixing).
   - All LLM egress through audited.gemini_generate (audit hash chain, D-07).
+
+Cross-batch cluster identity (G-03, Phase 15.1 — block-then-cluster)
+-------------------------------------------------------------------
+Exact-string bucketing under-merged badly on the 2026-07-22 run: 163 of 177 groups
+were singletons and four flat contradictions shipped, because near-miss labels
+across languages (`lukoil|verkoop_internationale_operaties` vs
+`lukoil benelux|status_rapport`) never met. Real clustering fixes that, but it is
+not embarrassingly parallel the way tagging is: the `ENTITY|ATTRIBUTE` key space is
+GLOBAL, so any two claims meet regardless of which batch tagged them, whereas
+cluster ids invented by a model inside one call mean nothing in another call. And
+1,162 claims do not fit in one 4096-token call.
+
+STRATEGY — block, then cluster within the block:
+  Stage 1  Tag every claim `ENTITY | ATTRIBUTE` in batches of `_GROUPER_BATCH`
+           (unchanged; ceil(1162/40) = 30 calls, matching the recorded run's
+           `grouping: 30` tally).
+  Stage 2  BLOCK by `_norm(entity)` ALONE — deliberately coarser than the old
+           `entity│attribute` key, so `lukoil|verkoop_internationale_operaties`
+           and `lukoil benelux|status_rapport` can still meet.
+  Stage 3  For each block holding more than one claim, ONE clustering call assigns
+           each claim a block-local cluster id. A block of size 1, and any claim
+           whose entity tag came back empty, skip stage 3 entirely (no call).
+
+WHY THE ENTITY TAG IS THE BLOCKING KEY: it already exists, it is already tested,
+and it is already merge-happy (`_norm` strips case, spaces and punctuation). Using
+it as a pre-filter is the smallest change from the previous code and keeps the
+clustering call count proportional to distinct entities rather than to claims.
+Cluster ids therefore only ever have to be unique WITHIN one call — the hard
+cross-batch reconciliation problem is designed out rather than solved.
+
+NAMESPACING: a block larger than `_CLUSTER_MAX_BLOCK` is split into consecutive
+chunks of `_CLUSTER_BATCH` (the blob guard — one runaway entity must not produce a
+single unreadable mega-group, and must not blow the output token budget). Chunked
+or not, every cluster key is `{block_key}#{chunk_index}#{cluster_id}`, so the id
+`0` returned by two different chunks can never collide.
+
+ACCEPTED LIMITATION (one, stated plainly): two claims that state the same fact will
+NOT merge if their entity tags normalise differently (e.g. `lukoil` vs
+`lukoilbenelux`), or if they land in different chunks of an oversized block. This
+is a recall limit, not a correctness bug — an unmerged claim is still verified, it
+just gets its own session. How often it bites is MEASURED by the hand-run August
+calibration (G-05), never asserted by a CI gate: CI proves the plumbing (no claim
+lost, chunks never collide, disabled path unchanged); the calibration run measures
+merge quality on real claims.
+
+NEVER-DROP: every failure mode here degrades to "this claim is its own singleton
+and still gets verified" — an empty entity tag, a failed cluster call and an
+unparseable cluster id all take that path. Clustering may never lose a claim.
+
+A/B: `NESTOR_TRIBUNAL_CLUSTER=false` restores the old exact-key
+`entity│attribute` bucketing without a code change.
 """
 from __future__ import annotations
 
@@ -36,6 +87,17 @@ log = logging.getLogger(__name__)
 _GROUPER_MODEL = "gemini-2.5-flash"
 _GROUPER_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_BATCH", "40"))
 _GROUPER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_CONCURRENCY", "4"))
+
+# Clustering pass (G-03). Same NESTOR_TRIBUNAL_* + default idiom as above, so a
+# tuning change needs no Cloud Run env change to deploy.
+#   _CLUSTER_BATCH       chunk size when an oversized block is split.
+#   _CLUSTER_MAX_BLOCK   blob guard: above this a block is chunked, never sent whole.
+#   _CLUSTER_CONCURRENCY in-flight clustering calls.
+#   _CLUSTER_ENABLED     false -> the pre-15.1 exact-key bucketing (A/B baseline).
+_CLUSTER_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_BATCH", "40"))
+_CLUSTER_MAX_BLOCK = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_MAX_BLOCK", "60"))
+_CLUSTER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_CONCURRENCY", "4"))
+_CLUSTER_ENABLED = os.environ.get("NESTOR_TRIBUNAL_CLUSTER", "true").lower() == "true"
 
 # Stakes ordering so a group inherits the HIGHEST stakes of its members (a group
 # is only as low-stakes as its most important claim).
@@ -146,6 +208,65 @@ async def _tag_batch(
     return _parse_tag_lines(text or "", len(claims))
 
 
+def _exact_keys(claims: list[dict[str, Any]], flat_tags: list[tuple[str, str]]) -> list[str]:
+    """The pre-15.1 bucketing key: normalized `entity│attribute`, exact match.
+
+    Kept as the `_CLUSTER_ENABLED=false` fallback so the old behaviour stays
+    reachable for A/B without a code change. Untagged (entity == '') -> a unique
+    singleton key, so the claim is still verified on its own."""
+    keys: list[str] = []
+    for i in range(len(claims)):
+        entity, attribute = flat_tags[i] if i < len(flat_tags) else ("", "")
+        ne, na = _norm(entity), _norm(attribute)
+        keys.append(f"{ne}│{na}" if ne else f"__singleton__:{i}")
+    return keys
+
+
+def _assemble_groups(
+    claims: list[dict[str, Any]],
+    flat_tags: list[tuple[str, str]],
+    keys: list[str],
+) -> list[dict[str, Any]]:
+    """Build the frozen group dicts from a per-claim key assignment.
+
+    Shared by both bucketing paths so the return shape can only ever be built one
+    way. Groups appear in first-member order (deterministic); `entity` and
+    `attribute` are the first NON-EMPTY values seen in the group; `stakes` is the
+    MAX over members (a group is only as low-stakes as its most important claim).
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for i, claim in enumerate(claims):
+        entity, attribute = flat_tags[i] if i < len(flat_tags) else ("", "")
+        key = keys[i]
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "key": key,
+                "entity": "",
+                "attribute": "",
+                "claims": [],
+                "stakes": "low",
+            }
+            order.append(key)
+        if not g["entity"] and entity.strip():
+            g["entity"] = entity.strip()
+        if not g["attribute"] and attribute.strip():
+            g["attribute"] = attribute.strip()
+        g["claims"].append(claim)
+        # Inherit the highest stakes of any member.
+        cs = (claim.get("stakes") or "med")
+        if _STAKES_ORDER.get(cs, 1) > _STAKES_ORDER.get(g["stakes"], 0):
+            g["stakes"] = cs
+    for g in groups.values():
+        # Display fallbacks when the tagger gave the whole group nothing.
+        if not g["entity"]:
+            g["entity"] = (g["claims"][0].get("facet") or "?")
+        if not g["attribute"]:
+            g["attribute"] = "general"
+    return [groups[k] for k in order]
+
+
 async def group_claims(
     *,
     claims: list[dict[str, Any]],
@@ -181,34 +302,15 @@ async def group_claims(
     tagged = await asyncio.gather(*(_run(b) for b in batches))
     flat_tags: list[tuple[str, str]] = [t for batch in tagged for t in batch]
 
-    # Bucket by normalized (entity, attribute). Untagged -> unique singleton key.
-    groups: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
-    for i, claim in enumerate(claims):
-        entity, attribute = flat_tags[i] if i < len(flat_tags) else ("", "")
-        ne, na = _norm(entity), _norm(attribute)
-        if ne:
-            key = f"{ne}│{na}"
-        else:
-            # Untagged: keep it isolated (singleton) so it still gets verified.
-            key = f"__singleton__:{i}"
-        if key not in groups:
-            groups[key] = {
-                "key": key,
-                "entity": entity.strip() or (claim.get("facet") or "?"),
-                "attribute": attribute.strip() or "general",
-                "claims": [],
-                "stakes": "low",
-            }
-            order.append(key)
-        g = groups[key]
-        g["claims"].append(claim)
-        # Inherit the highest stakes of any member.
-        cs = (claim.get("stakes") or "med")
-        if _STAKES_ORDER.get(cs, 1) > _STAKES_ORDER.get(g["stakes"], 0):
-            g["stakes"] = cs
+    if not _CLUSTER_ENABLED:
+        # A/B baseline: the pre-15.1 exact-key `entity│attribute` bucketing.
+        result = _assemble_groups(claims, flat_tags, _exact_keys(claims, flat_tags))
+    else:
+        # Stages 2+3 (block, then cluster within the block) land in the next
+        # commit of this plan; until then the enabled path is byte-identical to
+        # the fallback, so the module is never in a broken intermediate state.
+        result = _assemble_groups(claims, flat_tags, _exact_keys(claims, flat_tags))
 
-    result = [groups[k] for k in order]
     multi = sum(1 for g in result if len(g["claims"]) > 1)
     log.info(
         "group_claims: %d claims -> %d groups (%d multi-claim, %d singletons)",
