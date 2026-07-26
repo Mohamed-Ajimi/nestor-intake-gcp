@@ -1,0 +1,17 @@
+{#
+  Research-parked notification (EN) — F-03 / RUN-02 / 16-D-10 / 16-D-11.
+  A parked run is NOT a failed run: it is paused and waiting on one click.
+  Short body: why it paused (park_reason) + ONE admin CTA.
+  NOTIF-01: cta_url = {app_base_url}/admin/pulse/intakes/{intake_id} — no token.
+  autoescape ON (T-16-05 / T-15.2-194); never `| safe`. park_reason arrives already
+  redacted and clamped by the engine (15.2-16) — this layer escapes it, it does not
+  sanitise it a second time.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Research{% endblock %}
+{% block content %}
+<h1>The research is paused</h1>
+<p>The research for <strong>{{ project_title }}</strong> is paused and waiting for you.</p>
+<p>Reason: {{ park_reason }}</p>
+<p>Resuming is free: the work already paid for is saved and will not be run again.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Resume research in admin →</a></p>
+{% endblock %}

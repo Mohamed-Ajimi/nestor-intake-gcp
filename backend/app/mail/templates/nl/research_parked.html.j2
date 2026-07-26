@@ -1,0 +1,17 @@
+{#
+  Research-parked notification (NL, canonical) — F-03 / RUN-02 / 16-D-10 / 16-D-11.
+  Een geparkeerde run is GEEN mislukte run: hij staat op pauze en wacht op één klik.
+  Short body: waarom hij pauzeerde (park_reason) + ÉÉN CTA naar de admin-route.
+  NOTIF-01: cta_url is {app_base_url}/admin/pulse/intakes/{intake_id} — geen token.
+  autoescape ON (T-16-05 / T-15.2-194); geen `| safe`. park_reason komt al
+  geredigeerd en afgekapt binnen van de engine (15.2-16) — hier wordt hij alleen
+  ge-escaped, niet opnieuw geschoond.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Onderzoek{% endblock %}
+{% block content %}
+<h1>Het onderzoek staat op pauze</h1>
+<p>Het onderzoek voor <strong>{{ project_title }}</strong> is gepauzeerd en wacht op jou.</p>
+<p>Reden: {{ park_reason }}</p>
+<p>Hervatten is gratis: het werk waarvoor al betaald is, blijft bewaard en wordt niet opnieuw gedaan.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Hervat onderzoek in admin →</a></p>
+{% endblock %}
