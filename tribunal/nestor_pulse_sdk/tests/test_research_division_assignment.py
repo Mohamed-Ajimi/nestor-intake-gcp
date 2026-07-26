@@ -198,7 +198,7 @@ async def test_run_angles_defaults_provider_from_stakes_when_missing(monkeypatch
     await rd.run_angles(
         angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
     )
-    assert calls.get("gemini") == ["q1"]
+    assert _briefs(calls, "gemini") == ["q1"]
 
 
 # ---------------------------------------------------------------------------
