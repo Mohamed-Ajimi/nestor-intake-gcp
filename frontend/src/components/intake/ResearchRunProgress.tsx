@@ -37,7 +37,10 @@ import { VerificationReport } from "@/components/intake/VerificationReport";
 // SECURITY (T-16-12): this component lives ONLY on the admin detail route. No client route
 // or component imports it — the client-facing UI is unchanged during in_research (D-08).
 
-const RESEARCH_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+// D-12: `completed_degraded` is terminal here AND must be handled by the success branch
+// below — adding it to this set alone would route a degraded run into the cancelled card.
+// `parked` is deliberately absent pending plan 15.2-16 (the Resume affordance).
+const RESEARCH_TERMINAL = new Set(["completed", "completed_degraded", "failed", "cancelled"]);
 
 /**
  * One row of the D15 activity feed. An `item` row is an agent card (task title, expandable
@@ -581,25 +584,37 @@ export function ResearchRunProgress({
 
   // ── Terminal: summary / failure card ─────────────────────────────────────────────
   if (isTerminal) {
-    if (status === "completed") {
+    // D-09/D-12: a `completed_degraded` run deliberately renders the FINISHED card,
+    // not the failure card. Reaching the failure card would strip the raw-output
+    // download, the verification-report button and the frozen feed from a ~$45 run —
+    // the exact opposite of D-09. Only the border, icon, title and body differ; every
+    // affordance below stays unconditional. The degradation REASONS are not listed
+    // here: 15.2-08 shapes them into the verification report, reached from the
+    // "View verification report" button already in this card.
+    if (status === "completed" || status === "completed_degraded") {
+      const isDegraded = status === "completed_degraded";
       return (
         <div
           className="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5"
-          style={{ borderLeftColor: "#DFF940" }}
+          style={{ borderLeftColor: isDegraded ? "#D97706" : "#DFF940" }}
           role="status"
           aria-live="polite"
         >
           <div className="mb-2 flex items-center gap-2">
-            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            {isDegraded ? (
+              <AlertTriangle className="h-5 w-5 text-emerald-600" />
+            ) : (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            )}
             <span
               className="font-mono text-[11px] uppercase tracking-wider"
               style={{ color: "#7A8B00" }}
             >
-              {t("research.completedTitle")}
+              {isDegraded ? t("research.degradedTitle") : t("research.completedTitle")}
             </span>
           </div>
           <div className="mb-3 font-sans text-[15px] leading-relaxed text-ink">
-            {t("research.completedBody")}
+            {isDegraded ? t("research.degradedBody") : t("research.completedBody")}
           </div>
           <div className="flex flex-wrap gap-x-6 gap-y-1 font-mono text-[12px] text-ink/70">
             <span>{t("research.completedAt", { date: fmtDate(run?.completed_at ?? null, dateFallback) })}</span>

@@ -498,6 +498,8 @@
     "stagesTitle": "Phases",
     "completedTitle": "Research completed",
     "completedBody": "The deep research is complete. All phases have been worked through.",
+    "degradedTitle": "Research completed — degraded",
+    "degradedBody": "The deep research finished, but part of the output fell short. Open the verification report below to see exactly what was lost.",
     "completedAt": "Completed on {{date}}",
     "totalCost": "Total cost: {{cost}}",
     "duration": "Duration: {{duration}}",

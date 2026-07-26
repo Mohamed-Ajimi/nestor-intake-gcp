@@ -498,6 +498,8 @@
     "stagesTitle": "Fases",
     "completedTitle": "Research voltooid",
     "completedBody": "De deep research is afgerond. Alle fases zijn doorlopen.",
+    "degradedTitle": "Research voltooid — beperkt",
+    "degradedBody": "De deep research is afgerond, maar een deel van het resultaat is tekortgeschoten. Open het verificatierapport hieronder om precies te zien wat verloren is gegaan.",
     "completedAt": "Voltooid op {{date}}",
     "totalCost": "Totale kosten: {{cost}}",
     "duration": "Duur: {{duration}}",

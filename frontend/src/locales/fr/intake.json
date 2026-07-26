@@ -498,6 +498,8 @@
     "stagesTitle": "Phases",
     "completedTitle": "Recherche terminée",
     "completedBody": "La recherche approfondie est terminée. Toutes les phases ont été parcourues.",
+    "degradedTitle": "Recherche terminée — dégradée",
+    "degradedBody": "La recherche approfondie est terminée, mais une partie du résultat est incomplète. Ouvrez le rapport de vérification ci-dessous pour voir exactement ce qui a été perdu.",
     "completedAt": "Terminé le {{date}}",
     "totalCost": "Coût total : {{cost}}",
     "duration": "Durée : {{duration}}",
