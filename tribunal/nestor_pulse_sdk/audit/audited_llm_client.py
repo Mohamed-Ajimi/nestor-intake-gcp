@@ -458,6 +458,206 @@ class AuditedLLMClient:
 
         return resp
 
+    async def serpapi_search(
+        self,
+        *,
+        run_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        q: str,
+        hl: str = "",
+        gl: str = "",
+        google_domain: str = "",
+        location: str = "",
+        num: int = 10,
+        plan: Any = None,
+        client: Any = None,
+        audit_out: Optional[dict[str, Any]] = None,
+    ) -> dict:
+        """Run ONE audited SerpApi search for the D10 own-researcher (15.2-12).
+
+        THE ONLY SANCTIONED SerpApi EGRESS. Phase rule 1 routes all provider
+        egress through `audited.*`; SerpApi is not a model endpoint, but its calls
+        are audited anyway for C1 cost truth -- the run total is
+        `SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id`
+        (`runs/worker.py:150/172/231`), so an audited SerpApi row lands in the
+        run's cost with zero extra wiring, and an UN-audited one would be an
+        untracked cost class (T-15.2-36).
+
+        A SerpApi row is a new ROW, not a new FIELD. `_build_payload_dict`'s 11
+        frozen chain fields are passed exactly as they stand and nothing is added
+        to them, so `verify_chain` and `test_hash_chain_replay.py` are unaffected
+        (EU AI Act Art. 12; see the Canonical JSON rule in the module docstring).
+
+        COST (D-16). Billable is `search_metadata.status == "Success"` and
+        nothing else -- SerpApi does not bill cached, errored or failed searches,
+        so a non-billable search costs exactly `Decimal("0")`, and that zero is a
+        FACT rather than an absence. When the plan's unit price is unknown,
+        `compute` returns None, this method flags the run `cost_pending` through
+        the same defensive `getattr` the deep-research path uses, and the row is
+        written with a NULL cost. No tier price is ever guessed.
+
+        SECRET HYGIENE (T-15.2-31). The SerpApi key rides in the QUERY STRING, so
+        the audit request blob is built from a whitelist that contains no
+        `api_key` under any spelling and no full URL at all -- only the path. The
+        `gcs_blob` redactor is belt-and-braces here, not the control.
+
+        Args:
+          plan:   a `serpapi.SerpApiPlan` (or None). Supplies the published unit
+                  price in force for this run.
+          client: test seam forwarded to `serpapi.search`; None uses real httpx.
+
+        Returns:
+          {"billable", "status", "results", "metadata", "cost_usd", "audit_id"}
+
+        Raises:
+          SerpApiError (or any other provider exception) after recording the
+          failure on the SerpApi breaker and writing a failure audit row. The
+          agent loop -- not this method -- owns the retry/degrade decision.
+        """
+        # Local import: keeps module load light and avoids an import cycle
+        # (pipeline.tribunal imports audit). Same idiom as the httpx import at
+        # gemini_deep_research_raw.
+        from nestor_pulse_sdk.pipeline.tribunal import serpapi as _serpapi  # noqa: PLC0415
+
+        async with _SEMAPHORE:
+            started = time.monotonic()
+            started_dt = datetime.now(tz=timezone.utc)
+
+            try:
+                result = await _serpapi.search(
+                    q=q,
+                    hl=hl,
+                    gl=gl,
+                    google_domain=google_domain,
+                    location=location,
+                    num=num,
+                    client=client,
+                )
+            except Exception as exc:
+                # Let the breaker see it FIRST, so a hard wall is booked even if
+                # the failure-row write itself has trouble.
+                try:
+                    _serpapi.note_failure(exc)
+                except Exception:  # noqa: BLE001 -- bookkeeping never masks the real error
+                    log.warning("serpapi_search: could not record failure on the breaker")
+                await self.write_failure(
+                    run_id=run_id, tenant_id=tenant_id, provider="serpapi", error=exc
+                )
+                raise
+
+            duration_ms = int((time.monotonic() - started) * 1000)
+
+            billable_count = 1 if result.get("billable") else 0
+            unit = getattr(plan, "unit_price_usd", None) if plan is not None else None
+            cost_usd = self._costs.compute(
+                provider="serpapi",
+                model="google",
+                prompt_tokens=0,
+                completion_tokens=0,
+                cached_tokens=0,
+                serpapi_search_count=billable_count,
+                serpapi_unit_price_usd=unit,
+            )
+
+            if cost_usd is None:
+                # The SerpApi plan could not be established, so the exact fee is
+                # not knowable yet. Flag it, never estimate it (C1 / D-16).
+                mark_pending = getattr(self._audit, "mark_cost_pending", None)
+                if callable(mark_pending):
+                    try:
+                        await mark_pending(run_id=run_id, tenant_id=tenant_id)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "serpapi_search: mark_cost_pending failed (run=%s): %s",
+                            run_id,
+                            exc,
+                        )
+                log.warning(
+                    "serpapi_search: no published unit price for this run's SerpApi "
+                    "plan -- writing NULL cost_usd + cost_pending rather than a guess"
+                )
+
+            # WHITELIST. No api_key under any spelling, and no full URL -- only
+            # the path. What we never carry, we can never leak (T-15.2-31).
+            request_dict = {
+                "url_path": "/search.json",
+                "engine": "google",
+                "q": str(q or "")[:2000],
+                "hl": hl,
+                "gl": gl,
+                "google_domain": google_domain,
+                "location": location,
+                "num": num,
+            }
+            response_dict = {
+                "status": result.get("status"),
+                "billable": result.get("billable"),
+                "search_id": result.get("search_id"),
+                "result_count": len(result.get("results") or []),
+                # Already coerced, truncated and http(s)-filtered by _clean_results.
+                "results": result.get("results") or [],
+            }
+
+            audit_id = uuid.uuid4()
+            gcs_uri = await self._gcs.upload_audit_body(
+                run_id=run_id,
+                audit_id=audit_id,
+                provider="serpapi",
+                model="google",
+                request_dict=request_dict,
+                response_dict=response_dict,
+            )
+
+            # Critical section: seq+hash assignment serialized per run (T-16-01).
+            async with self._run_lock(run_id):
+                prev_hash, seq = await self._audit.get_prev_hash_and_seq(run_id, tenant_id)
+                payload = _build_payload_dict(
+                    provider="serpapi", model="google", started_dt=started_dt,
+                    duration_ms=duration_ms, prompt_tokens=0,
+                    completion_tokens=0, cached_tokens=0,
+                    gcs_uri=gcs_uri, seq=seq, tenant_id=tenant_id, run_id=run_id,
+                )
+                row_hash = self._chain.link_hash(prev_hash, payload)
+
+                await self._audit.write_full_row(
+                    audit_id=audit_id,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    seq=seq,
+                    provider="serpapi",
+                    model="google",
+                    started_at=started_dt,
+                    duration_ms=duration_ms,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cached_tokens=0,
+                    cache_creation_tokens=0,
+                    cost_usd=cost_usd,
+                    gcs_uri=gcs_uri,
+                    prev_hash=prev_hash,
+                    hash=row_hash,
+                )
+
+            # F4 -- the SHARED helper from 15.2-03. Additive, post-write, never
+            # read back, and it touches neither the row nor the frozen payload.
+            self._fill_audit_out(
+                audit_out,
+                audit_id=audit_id,
+                cost_usd=cost_usd,
+                provider="serpapi",
+                model="google",
+                duration_ms=duration_ms,
+            )
+
+        return {
+            "billable": bool(result.get("billable")),
+            "status": result.get("status") or "",
+            "results": result.get("results") or [],
+            "metadata": result.get("metadata") or {},
+            "cost_usd": cost_usd,
+            "audit_id": str(audit_id),
+        }
+
     async def gemini_generate(
         self,
         *,

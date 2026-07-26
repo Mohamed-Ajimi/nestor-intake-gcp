@@ -332,3 +332,179 @@ def force_emit_orientation() -> dict[str, Any]:
         {"type": "tool", "name": "emit_orientation"}
     """
     return {"type": "tool", "name": "emit_orientation"}
+
+
+# ---------------------------------------------------------------------------
+# Client-side tools: serpapi_search + emit_fact_list
+# (Phase 15.2 plan 12 — the D10 own-researcher, our fourth research stream)
+#
+# THE PROTOCOL SPLIT THAT GOVERNS THE OWN-RESEARCHER'S LOOP. Everything above
+# this line is either a SERVER tool (web_search / web_fetch, resolved by the API
+# inside the turn) or a TERMINAL client tool (emit_*, forced on the final turn
+# and never answered). `serpapi_search` is neither: it is a client-side tool the
+# model calls MID-LOOP and expects an ANSWER to. So the own-researcher's loop has
+# to do BOTH things in the same turn and must never confuse them:
+#
+#   * a `serpapi_search` tool_use block MUST get a real `tool_result` block back,
+#     with a matching `tool_use_id`, in a following user message — otherwise the
+#     conversation is malformed and the model cannot continue;
+#   * a `web_fetch` block MUST NOT get a synthetic `tool_result` — that is the
+#     HTTP 400 trap stated at lines 11-14 of this module.
+#
+# A single turn can legitimately contain both kinds. When it does, the API returns
+# stop_reason "tool_use" and defers the remaining server-tool work to the next
+# request; `own_researcher.py` handles both branches explicitly, appending ONE
+# assistant turn plus ONE user message carrying only the CLIENT tool results.
+# ---------------------------------------------------------------------------
+
+#: Client-side search tool backed by OUR SerpApi account (D10).
+#:
+#: Deliberately offered INSTEAD OF Anthropic's server-side web search, not
+#: alongside it: the whole point of the D10 stream is that we control the search,
+#: and offering both would double-pay for the same turn and blur which provider
+#: the run's search spend belongs to.
+SERPAPI_SEARCH_TOOL: dict[str, Any] = {
+    "name": "serpapi_search",
+    "description": (
+        "Search Google through our own SerpApi account and get back the organic "
+        "results (title, link, snippet) for one query. Use it to FIND sources; "
+        "then use web_fetch to actually READ the promising ones before you assert "
+        "anything — a snippet is a pointer, not evidence. "
+        "Only 'q' is required. Every other field is optional and is clamped on our "
+        "side, so a value outside its range is corrected rather than rejected: "
+        "'num' is clamped to 1-10, and 'hl'/'gl' must be two-letter codes or they "
+        "are dropped. Searching costs money, so make each query count: prefer a "
+        "few precise, differently-angled queries over many near-identical ones."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "q": {
+                "type": "string",
+                "description": "The search query. One question or phrase, not a list.",
+            },
+            "hl": {
+                "type": "string",
+                "description": (
+                    "UI language as a two-letter code (e.g. 'nl', 'fr'), taken from "
+                    "the question's language tags. Omit if unsure."
+                ),
+            },
+            "gl": {
+                "type": "string",
+                "description": (
+                    "Two-letter country code to bias results (e.g. 'be', 'nl'). "
+                    "Omit if unsure."
+                ),
+            },
+            "num": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "How many organic results to return (1-10, default 10).",
+            },
+        },
+        # Only `q` is required, for the same reason superseded_note and source_url
+        # are optional above: forcing the model to emit a value it does not have
+        # produces a fabricated one, and every optional field here has a safe
+        # Python-side default.
+        "required": ["q"],
+    },
+}
+
+
+#: The forced client tool that ENDS an own-researcher session. Its output is the
+#: same D8 fact-list shape the other three research streams produce, so the
+#: downstream merge sees four identical streams rather than a special case.
+EMIT_FACT_LIST_TOOL: dict[str, Any] = {
+    "name": "emit_fact_list",
+    "description": (
+        "Emit everything you established in this research session, exactly once, "
+        "as a structured fact list. Call this when you have read enough pages — "
+        "and you will be required to call it on the final turn regardless. "
+        "Each fact must be ONE self-contained assertion (no conjunctions joining "
+        "two facts), stated with the statistics, named entities and dates you "
+        "actually found. "
+        "'source_url' MUST be a page you fetched IN THIS SESSION. Never invent a "
+        "URL, never cite a page you only saw as a search snippet, and never cite "
+        "from memory: a statement you cannot trace to a page you read in this "
+        "session does not belong in this list at all. "
+        "'quality' describes the SOURCE: official = government, regulator, "
+        "standards body, official filing or academic; press = established press "
+        "or a recognised data provider; other = anything else. "
+        "'certainty' is 'certain' only when two or more INDEPENDENT sources "
+        "corroborate the fact; otherwise 'single'. If in doubt, say 'single'. "
+        "'evidence' is the shortest VERBATIM sentence copied EXACTLY, word for "
+        "word, from the page you fetched — it is used to LOCATE and remove the "
+        "passage if the fact is later discredited, so a paraphrase or a "
+        "translation is useless. "
+        "'not_found' is what you looked for and could NOT establish. Say it "
+        "plainly rather than omitting it: a named gap is information, silence is "
+        "not. Return an empty list only if there genuinely was nothing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "facts": {
+                "type": "array",
+                "description": "One entry per fact you established in this session.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "statement": {
+                            "type": "string",
+                            "description": "One self-contained factual assertion.",
+                        },
+                        "source_url": {
+                            "type": "string",
+                            "description": (
+                                "The http(s) URL of the page you FETCHED that "
+                                "supports this fact."
+                            ),
+                        },
+                        "quality": {
+                            "type": "string",
+                            "enum": ["official", "press", "other"],
+                            "description": "Your assessment of the source's standing.",
+                        },
+                        "certainty": {
+                            "type": "string",
+                            "enum": ["certain", "single"],
+                            "description": (
+                                "'certain' only with two or more independent "
+                                "corroborating sources; else 'single'."
+                            ),
+                        },
+                        "evidence": {
+                            "type": "string",
+                            "description": (
+                                "The shortest VERBATIM sentence from the fetched "
+                                "page stating this fact, copied word for word."
+                            ),
+                        },
+                    },
+                    # quality / certainty / evidence are deliberately NOT required.
+                    # A missing value must CLAMP to the safe default ("other" /
+                    # "single" — fail toward more checking, G-11) rather than force
+                    # the model to emit an empty string or invent a grade it does
+                    # not have. Same reasoning as superseded_note above.
+                    "required": ["statement", "source_url"],
+                },
+            },
+            "not_found": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Short plain-words lines: things you looked for and could not "
+                    "establish. Empty list when nothing was missing."
+                ),
+            },
+        },
+        "required": ["facts"],
+    },
+}
+
+
+def force_emit_fact_list() -> dict[str, Any]:
+    """tool_choice that forces emit_fact_list on the final own-researcher turn."""
+    return {"type": "tool", "name": "emit_fact_list"}
