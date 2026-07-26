@@ -37,6 +37,23 @@
 # It deliberately never matches the bare enum value `in_research`, component
 # names like `ResearchArtifacts`, or the prose word "Tribunal".
 #
+# The same precision rule governs the SerpAPI tokens added in v1.1: the guard
+# matches SERPAPI_API_KEY / serpapi.com / a serpapi package import /
+# google-search-results — real egress syntax — and deliberately NOT the bare
+# word "SerpAPI", which appears legitimately as a display label for legacy
+# artifact source types in frontend/src/components/intake/ResearchArtifacts.tsx.
+#
+# MILESTONE NOTE (v1.1 "Tribunal Integration", 2026-07-26 — phase 15.2):
+# INTAKE-05 was a v1.0 scope ceiling: the deep-research stage had to be
+# unreachable from the intake tier, full stop. v1.1 deliberately supersedes that
+# — invoking Tribunal from the backend IS the milestone. Since phase 16-02 this
+# guard therefore failed on `from app.research import tribunal_client`, a
+# sanctioned import, and stayed red (a false positive, not a violation).
+# Rather than retire the guard, it is NARROWED to the risk that still matters:
+# the intake tier must not perform deep-research egress ITSELF — no direct
+# SerpAPI call, no run-research invocation, no reach into engine internals. All
+# engine traffic goes through the single audited HTTP seam. See $ALLOW below.
+#
 # Usage:
 #   scripts/ci_no_run_research.sh [SCAN_DIR]
 
@@ -52,7 +69,15 @@ else
 fi
 
 # Forbidden deep-research-stage invocations (see header for the precision note).
-PATTERN='invoke\([^)]*run-research|invoke\([^)]*run_research|invoke\([^)]*tribunal|/run-research|run_research[[:space:]]*\(|\.run_research|tg_bump_to_in_research|tg_bump_to_delivered|persist_questions_on_research_start|from[[:space:]]+[A-Za-z0-9_.]*tribunal|import[[:space:]]+[A-Za-z0-9_.]*tribunal'
+PATTERN='invoke\([^)]*run-research|invoke\([^)]*run_research|invoke\([^)]*tribunal|/run-research|run_research[[:space:]]*\(|\.run_research|tg_bump_to_in_research|tg_bump_to_delivered|persist_questions_on_research_start|from[[:space:]]+[A-Za-z0-9_.]*tribunal|import[[:space:]]+[A-Za-z0-9_.]*tribunal|SERPAPI_API_KEY|serpapi\.com|from[[:space:]]+serpapi|import[[:space:]]+serpapi|google-search-results'
+
+# SANCTIONED SEAM ALLOWLIST (v1.1 — see header "Milestone note").
+# The ONLY permitted way the intake tier may reach the engine is the HTTP seam
+# client `app.research.tribunal_client`, which speaks to the Tribunal API over
+# authenticated HTTP and imports no engine code (it pulls httpx + google.auth
+# only). Importing THAT module is allowed; importing engine internals is not.
+# Anchored to import syntax so it can never whitelist a call site.
+ALLOW='from[[:space:]]+app\.research[[:space:]]+import[[:space:]]+tribunal_client|from[[:space:]]+app\.research\.tribunal_client[[:space:]]+import|import[[:space:]]+app\.research\.tribunal_client|from[[:space:]]+\.tribunal_client[[:space:]]+import|from[[:space:]]+\.[[:space:]]+import[[:space:]]+tribunal_client'
 
 for dir in "${SCAN_DIRS[@]}"; do
   if [ ! -d "$dir" ]; then
@@ -66,7 +91,10 @@ done
 # scan dir yields a match, the guard fails. Scanning backend/app AND frontend/src.
 FOUND=1
 for dir in "${SCAN_DIRS[@]}"; do
-  if grep -rEn --include='*.py' --include='*.ts' --include='*.tsx' "$PATTERN" "$dir"; then
+  # Match the forbidden pattern, then drop the sanctioned seam imports. grep -v
+  # exits 1 when every line was filtered out, so `if` still means "offender found".
+  if grep -rEn --include='*.py' --include='*.ts' --include='*.tsx' "$PATTERN" "$dir" \
+     | grep -Ev "$ALLOW"; then
     FOUND=0
   fi
 done

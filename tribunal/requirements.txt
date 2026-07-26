@@ -67,7 +67,7 @@ jcs==0.2.1
 pytest==8.4.2
 pytest-asyncio==0.26.0
 pytest-cov==6.3.0
-testcontainers[postgresql]==4.14.2
+testcontainers[postgres]==4.14.2
 
 # --- Plan 01-08 (ADR-005 LLM-judge quality gate) ---
 # PyYAML is a transitive dep of google-adk; pinning explicitly because
