@@ -16,6 +16,23 @@ here stubs `apply_gates`: the production code path is what is under test, becaus
 gate that is right in principle and mis-wired in practice produces exactly the
 silent verification loss this phase exists to close.
 
+HOW THE POPULATION IS FED, since 15.2 (D-04). "1,162 claims distilled" is the
+HISTORY of this population, not the shape it arrives in any more. Phase 15.2's D8
+asks every research stream for a machine-readable fact list and D11 moves the
+cross-provider merge ABOVE the gates, so what the gates receive today is MERGED
+PROVIDER FACTS — the same statements, now carrying `found_by`, `certainty`,
+`provider_quality` and `source_urls`. `_replay()` therefore feeds
+`load_merged_fact_claims()`. The claim TEXT is byte-identical either way and the
+gates key on text alone, so the recorded funnel must reproduce EXACTLY through the
+new shape; `test_gates_are_indifferent_to_claim_provenance` proves that directly
+by running both shapes and comparing.
+
+`claim_distiller` IS NOT GONE. D-15 keeps its full-extraction mode as D-14's
+per-provider safety net — the path a stream takes when it ignores the fact-list
+instruction — and its own two test files (`test_claim_distiller.py`,
+`test_distiller_coverage.py`) stay green through V-03. What changed is that it is
+no longer this engine's PRIMARY claim source.
+
 THIS FILE MAKES ZERO LLM CALLS. Every provider call is served by
 `_AnswerKeyGateAudited`, a hand-written duck-typed fake that reads the gate's own
 prompt and answers it from the committed answer key. No network, no database, no
@@ -25,6 +42,8 @@ twice over while the Anthropic account sits at its monthly cap.
 Coverage:
   1. the fixture still carries the recorded population and both answer keys
   2. THE PHASE GATE — the replay reproduces the five gate-computed funnel numbers
+  2b. D-04 — the two input shapes yield the SAME funnel, and the gate stage
+      preserves the merge's provenance keys instead of stripping them
   3. every claim carries an accountable gate decision (nothing is unaccounted for)
   4. G-04 step 3 — a cluster survives if ANY member survives
   5. the funnel reaches the pipeline's result carrier and the verification report
@@ -64,6 +83,7 @@ from nestor_pulse_sdk.pipeline.tribunal.gates import apply_gates
 from nestor_pulse_sdk.pipeline.tribunal.pipeline import _group_selected
 from nestor_pulse_sdk.tests.fixtures.run_4cbb5311 import (
     RECORDED_FUNNEL_COUNTS,
+    load_merged_fact_claims,
     load_recorded_run,
     load_selection_experiment,
 )
@@ -264,9 +284,16 @@ _REPLAY: dict[str, Any] = {}
 
 
 def _replay() -> tuple[dict[str, Any], _AnswerKeyGateAudited]:
-    """Drive the REAL `apply_gates` over the fixture; cache the single result."""
+    """Drive the REAL `apply_gates` over the fixture; cache the single result.
+
+    D-04: the input is the MERGED PROVIDER FACT shape the 15.2 engine actually
+    hands the gates, not the pre-15.2 distilled shape. Same population, same
+    texts, same ids — plus the provenance the merge attaches. `_CLASSIFIED` and
+    `_STRICT` are unchanged: the answer keys are keyed on the claim id, which the
+    decoration does not touch.
+    """
     if "result" not in _REPLAY:
-        claims = [dict(c) for c in _CLAIMS]
+        claims = load_merged_fact_claims()
         audited = _AnswerKeyGateAudited()
         _REPLAY["result"] = _run(apply_gates(
             claims=claims,
@@ -293,11 +320,20 @@ def _diagnostics(audited: _AnswerKeyGateAudited) -> str:
 def _pipeline_funnel(gate_funnel: dict[str, Any], *, unchecked: int) -> dict[str, Any]:
     """The gates' nine keys plus the accounting keys the verify stage adds.
 
-    Mirrors what the pipeline publishes for the three keys the REPORT consumes
-    (`checked`, `should_have_been_checked`, `verification_degraded`). The fourth
-    pipeline-owned key is a recorded throughput pass-through that the report shaper
-    never reads and that G-13 keeps out of every gate assertion, so it is not
-    referenced here; `test_gate_selector.py` owns the full builder's shape.
+    Mirrors what the pipeline publishes for the keys the REPORT consumes
+    (`checked`, `should_have_been_checked`, `verification_degraded`, and since
+    15.2-08 the five WR-10 `checked_incidentally*` counts). The remaining
+    pipeline-owned key is a recorded throughput pass-through that the report
+    shaper never reads and that G-13 keeps out of every gate assertion, so it is
+    not referenced here; `test_gate_selector.py` owns the full builder's shape.
+
+    THE TRAP, in one line: `verification/report.py::_accounting` returns None when
+    a key it REQUIRES is missing, and that is how it recognises a pre-15.1 run and
+    reports "no gate data" rather than a dict of zeros. So `checked_incidentally`
+    is read there with `.get(..., 0)` and is deliberately NOT a member of
+    `_ACCOUNTING_KEYS` — adding it would blank the accounting block on every run
+    already in the database. This helper publishes it for the same reason the
+    pipeline does (the operator surface reads it), never as a membership gate.
     """
     funnel = dict(gate_funnel)
     selected = int(funnel["selected_verify"])
@@ -305,6 +341,17 @@ def _pipeline_funnel(gate_funnel: dict[str, Any], *, unchecked: int) -> dict[str
     funnel["checked"] = selected - unchecked
     funnel["should_have_been_checked"] = unchecked
     funnel["verification_degraded"] = unchecked > 0
+    # WR-10. Zero on a replay by construction: incidental checking is "the gates
+    # did not select it, yet a skeptic checked it anyway", and this file runs the
+    # gates alone — no skeptic stage exists here to check anything incidentally.
+    for key in (
+        "checked_incidentally",
+        "checked_incidentally_not_falsifiable",
+        "checked_incidentally_not_load_bearing",
+        "checked_incidentally_both",
+        "checked_incidentally_stable",
+    ):
+        funnel[key] = int(gate_funnel.get(key, 0) or 0)
     return funnel
 
 
@@ -410,6 +457,85 @@ def test_replay_reproduces_the_recorded_funnel():
     assert len(result["selected"]) == RECORDED_FUNNEL_COUNTS["selected_verify"], (
         "the selected list and the funnel must describe the SAME queue, or the "
         "report describes a queue that was never run"
+    )
+
+
+# ===========================================================================
+# 2b. D-04 — the gates do not read provenance, and do not strip it
+# ===========================================================================
+
+def test_gates_are_indifferent_to_claim_provenance():
+    """The same population, two input shapes, one funnel — and nothing lost.
+
+    THE FIRST HALF is what makes D-04 safe to do at all. If the funnel moved when
+    the claims gained `found_by` / `certainty` / `provider_quality`, the gates
+    would be reading provenance, and the selection this phase is measured against
+    would change with whichever engine happened to feed it. The recorded blind
+    experiment would then be unreproducible by construction.
+
+    THE SECOND HALF is what makes it safe DOWNSTREAM. The gate stage may LABEL a
+    claim — it adds `claim["gate"]` — but it may never strip the merge's
+    provenance, because `persist_tribunal_claims` reads exactly those keys (D-13)
+    on the far side of it. A gate that returned tidy `{text, gate}` dicts would
+    silently empty `claim.found_by` and `claim.certainty` for every run.
+
+    Both `apply_gates` runs get their OWN fake, so neither can be answered from
+    the other's state."""
+    pre_15_2, _classified, _strict = load_selection_experiment()
+    pre_claims = [dict(c) for c in pre_15_2]
+    merged_claims = load_merged_fact_claims()
+
+    assert [c["text"] for c in pre_claims] == [c["text"] for c in merged_claims], (
+        "the two input shapes no longer carry the same claim texts, so any funnel "
+        "comparison between them would be meaningless"
+    )
+
+    pre_audited = _AnswerKeyGateAudited()
+    merged_audited = _AnswerKeyGateAudited()
+    pre_result = _run(apply_gates(
+        claims=pre_claims, audited=pre_audited,
+        run_id=uuid.uuid4(), tenant_id=uuid.uuid4(),
+        decision_context=_DECISION_CONTEXT,
+    ))
+    merged_result = _run(apply_gates(
+        claims=merged_claims, audited=merged_audited,
+        run_id=uuid.uuid4(), tenant_id=uuid.uuid4(),
+        decision_context=_DECISION_CONTEXT,
+    ))
+
+    assert not pre_audited.unmatched and not merged_audited.unmatched, (
+        f"claim texts stopped mapping back to fixture ids: "
+        f"{_diagnostics(pre_audited)} · {_diagnostics(merged_audited)}"
+    )
+    assert pre_result["funnel"] == merged_result["funnel"], (
+        f"the gates produced a DIFFERENT funnel for the same claims in two input "
+        f"shapes, so they are reading the merge's provenance. The 15.1 selection "
+        f"experiment would no longer be reproducible against the 15.2 engine.\n"
+        f"pre-15.2: {pre_result['funnel']}\nmerged:   {merged_result['funnel']}"
+    )
+    for key in ("distilled", "kept", "dropped", "selected_verify", "skipped_stable",
+                "not_falsifiable", "not_load_bearing", "both"):
+        assert merged_result["funnel"][key] == RECORDED_FUNNEL_COUNTS[key], (
+            f"fed as merged provider facts, the gates computed {key}="
+            f"{merged_result['funnel'][key]} against the recorded "
+            f"{RECORDED_FUNNEL_COUNTS[key]}"
+        )
+
+    # PRESERVATION. Read off the objects the gate stage actually returned.
+    for claim in merged_result["claims"]:
+        for key in ("found_by", "certainty", "provider_quality", "source_urls"):
+            assert key in claim, (
+                f"the gate stage stripped {key!r} from a claim. Persistence reads "
+                f"it (D-13), so every claim row would lose its corroboration "
+                f"signal and its provider-stated confidence: {sorted(claim)}"
+            )
+        assert isinstance(claim.get("gate"), dict), (
+            f"a claim left the gate stage with no decision: {claim.get('id')}"
+        )
+    corroborated = [c for c in merged_result["claims"] if len(c["found_by"]) > 1]
+    assert corroborated, (
+        "no claim in the merged population carries more than one stream, so the "
+        "preservation assertion above cannot tell a kept list from a truncated one"
     )
 
 

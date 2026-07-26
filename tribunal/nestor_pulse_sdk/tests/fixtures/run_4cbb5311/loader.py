@@ -415,6 +415,73 @@ def load_selection_experiment() -> tuple[list[dict], dict[int, str], dict[int, s
     return claims, classified, strict
 
 
+#: The four peer research streams, in `degraded_parallel.ALL_PROVIDERS` order.
+#: Written here rather than imported so this fixture stays importable with no
+#: pipeline dependency; the ORDER is what makes the rotation below replayable.
+_MERGED_STREAMS: tuple[str, ...] = ("gemini", "claude", "openai", "own")
+
+#: Every Nth claim is credited to a SECOND stream, so the decorated population
+#: carries a realistic mix of corroborated and single-source facts. 3 is chosen
+#: for no reason beyond "not 2, not 10" — the exact ratio is not asserted
+#: anywhere and must never become load-bearing.
+_MERGED_CORROBORATION_EVERY = 3
+
+
+def load_merged_fact_claims() -> list[dict]:
+    """The recorded 1,162 claims in the POST-MERGE provider-fact shape (D-04).
+
+    THE LOAD-BEARING CONTRACT, and the only reason this function is safe: the
+    claim TEXT is byte-identical to `load_selection_experiment()`'s, and so are
+    `id`, `facet` and `evidence`. The gates key on TEXT and on nothing else, so
+    the recorded funnel MUST reproduce EXACTLY through this input. A different
+    funnel does not mean the fixture drifted — it means the GATES started reading
+    provenance, which they must not: the selection this phase is measured against
+    would then change with whichever engine happened to feed it.
+
+    WHY IT EXISTS. Before 15.2 the gates' input was prose shredded by
+    `claim_distiller`, so a claim was `{id, facet, text, evidence}` and nothing
+    else. After D8/D11 the gates are fed the CROSS-PROVIDER MERGE's output, which
+    additionally carries D-13's provenance: which streams stated the fact, how
+    confident each was, how it graded its own source, and the source URLs
+    themselves. D-04 rewires the replay onto that shape so the 15.1 phase gate
+    keeps proving the thing it was built to prove, against the input the engine
+    actually produces today.
+
+    The decoration is derived DETERMINISTICALLY from each claim's own 1-based id,
+    so two calls return equal data and the replay stays byte-reproducible. Nothing
+    here is a recorded fact about run 4cbb5311 — that run predates D8 entirely and
+    emitted no provenance at all — and nothing here is asserted as one.
+    `RECORDED_FUNNEL_COUNTS` remains the single source of the recorded numbers
+    (G-13 unchanged).
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
+        CERTAINTY_VALUES,
+        QUALITY_VALUES,
+    )
+
+    claims, _classified, _strict = load_selection_experiment()
+    out: list[dict] = []
+    for claim in claims:
+        cid = int(claim["id"])
+        primary = _MERGED_STREAMS[cid % len(_MERGED_STREAMS)]
+        found_by = [primary]
+        if cid % _MERGED_CORROBORATION_EVERY == 0:
+            second = _MERGED_STREAMS[(cid + 1) % len(_MERGED_STREAMS)]
+            if second != primary:
+                found_by.append(second)
+        # `dict(claim)` FIRST, then decorate: the four original keys are copied
+        # verbatim and never recomputed, so no edit here can reach them.
+        merged = dict(claim)
+        merged.update({
+            "found_by": found_by,
+            "certainty": CERTAINTY_VALUES[cid % len(CERTAINTY_VALUES)],
+            "provider_quality": QUALITY_VALUES[cid % len(QUALITY_VALUES)],
+            "source_urls": [f"https://example.invalid/run4cbb5311/claim/{cid}"],
+        })
+        out.append(merged)
+    return out
+
+
 def load_recorded_run(session: Any, tenant_id: uuid.UUID) -> "Run":  # noqa: F821
     """Reconstruct + seed the recorded run 4cbb5311 for a tenant.
 
