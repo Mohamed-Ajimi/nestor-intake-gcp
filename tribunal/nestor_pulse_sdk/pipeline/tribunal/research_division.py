@@ -33,6 +33,25 @@ run_angles(angles, audited, run_id, tenant_id):
   - Preserves PHASE1-07: each run_all_with_degradation call requires >=2-of-3
     providers to succeed; InsufficientProvidersError propagates to the pipeline.
 
+D8 FACT LISTS (plan 15.2-14). Every angle routed to one of the THREE third-party
+deep-research streams (gemini / claude / openai) is dispatched with the
+machine-readable fact-list instruction block from
+`nestor_pulse_sdk.pipeline.tribunal.facts` appended to its query. Those three
+streams cannot be given a response schema — a deep-research call that asks for
+grounded citations may not also ask for structured output — so a prompt
+instruction is the only lever there is, and it is one a model may simply ignore.
+
+D-14 is the answer to a stream that ignores it: the stream is NOT dropped and it
+is NOT re-researched (a corrective deep-research call is among the most expensive
+calls in the run). Its prose is instead run through the full-extraction distiller
+by `synthesis.steps.collect_provider_facts`, which records the fallback PER
+PROVIDER in words. Degrade one stream, never the run.
+
+The fourth stream — the own-researcher registered below — is deliberately NOT in
+`_D8_PROMPT_PROVIDERS`: it emits its facts through a forced client tool (15.2-12),
+which is tool use and therefore citation-compatible, so also sending it the prose
+block would be a second, weaker instruction for the same data.
+
 Note: run_all_with_degradation is IMPORTED VERBATIM — we do NOT reimplement the
       fan-out logic here. The grep gate verifies this:
         grep -c "run_all_with_degradation" nestor_pulse_sdk/pipeline/tribunal/research_division.py
@@ -137,6 +156,47 @@ if own_research is not None:
     # TypeError inside the timeout block rather than a clean three-stream run.
     _PROVIDER_RUNNERS["own"] = own_research
 
+# --- D8: which streams are ASKED for a machine-readable fact list (15.2-14) ---
+#
+# The three third-party deep-research streams. Their only lever is a prompt
+# instruction: structured-output mode is closed to them, because a call that asks
+# for grounded citations may not also ask for a JSON schema
+# ("citations x structured-outputs = HTTP 400", recorded twice in
+# `pipeline/synthesis/steps.py`). So we ask, and we handle being ignored (D-14).
+#
+# The own-researcher stream is DELIBERATELY ABSENT: 15.2-12 gives it a forced
+# `emit_fact_list` client tool, which is tool use and therefore citation-
+# compatible, so handing it the prose block as well would be a second, weaker
+# instruction competing for the same data.
+#
+# This is an ALLOW-LIST, not a deny-list. A provider added later gets no block
+# until someone opts it in, and the worst case of that omission is a D-14
+# fallback — a named, recorded, non-fatal path — never a silently unasked stream
+# that looks compliant.
+_D8_PROMPT_PROVIDERS: tuple[str, ...] = ("gemini", "claude", "openai")
+
+# Kill switch, resolved at IMPORT TIME so a test patches the resolved boolean
+# rather than the environment (the `degraded_parallel._flag` convention). With
+# this false no angle is asked, every stream takes the D-14 fallback path, and
+# the run still completes — which is exactly what makes it a clean switch.
+_D8_BLOCK_ENABLED = os.environ.get("NESTOR_TRIBUNAL_D8_FACT_LIST", "true").lower() == "true"
+
+# The size the block is expected to respect (T-15.2-64). The three adapters record
+# `request={"query": query[:5000]}` in the audit row, so every character of block
+# is a character of the research brief that does not reach the AUDIT RECORD — the
+# CALL itself always receives the full query and is unaffected.
+#
+# MEASURED, not guessed, against the merged 15.2-04 implementation:
+#   len(build_fact_list_prompt_block())              = 2159
+#   len(build_fact_list_prompt_block(language="Dutch")) = 2399
+# The plan's provisional 2000 predated that module and is below both, so it is set
+# here to 2600 — above the measured worst case with headroom for a longer language
+# name, and still less than half the adapters' 5000-char audit ceiling. Exceeding
+# it only logs; the block is a correctness feature and is never dropped for size.
+# The block is deterministic and reproducible from `build_fact_list_prompt_block()`,
+# so the audit record stays reconstructable either way.
+_D8_BLOCK_MAX_CHARS = 2600
+
 _PROVIDER_TIMEOUTS: dict[str, int] = {
     # The own-researcher is a BOUNDED tool-use loop (8 turns, 6 searches), not a
     # 35-minute deep-research poll. Handing it `_DEFAULT_TIMEOUT_S` would let one
@@ -202,6 +262,47 @@ def _filter_langs(raw: Any) -> list[str]:
         if len(out) >= _D7_MAX_LANGS:
             break
     return out
+
+
+def _with_fact_list_block(query: str, provider: str, language: str) -> tuple[str, bool]:
+    """Append the D8 fact-list instruction block to ONE angle's query.
+
+    Returns ``(query_to_send, was_asked)``. The original query is never rewritten,
+    reordered or truncated — the block is APPENDED after a blank line, so the
+    researcher's brief is still the prefix of everything the provider reads and
+    the D7 report-language sentence still precedes any provider-authored text.
+
+    Returns the query untouched, with ``False``, when the kill switch is off, when
+    the provider is not one of the three prose-instructed streams, or when there
+    is no query to decorate.
+
+    NEVER RAISES. A failure to build a prompt DECORATION must degrade to D-14 —
+    where the stream's prose is fully distilled instead — not abort a paid angle.
+    """
+    if not _D8_BLOCK_ENABLED or provider not in _D8_PROMPT_PROVIDERS or not query:
+        return query, False
+    try:
+        # Function-local, exactly as `pipeline.py` imports
+        # `strip_unresolved_cite_markers`: this module keeps its current
+        # module-scope import surface and stays importable without `facts`.
+        from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
+            build_fact_list_prompt_block,
+        )
+        block = build_fact_list_prompt_block(language=language or "")
+        if len(block) > _D8_BLOCK_MAX_CHARS:
+            log.warning(
+                "research_division: D8 fact-list block is %d chars, above the "
+                "%d-char expectation — sending it anyway (the block is a "
+                "correctness feature; the bound only concerns how much of the "
+                "query survives the adapters' 5000-char audit truncation)",
+                len(block), _D8_BLOCK_MAX_CHARS,
+            )
+        return f"{query}\n\n{block}", True
+    except Exception as exc:  # noqa: BLE001 — a decoration must never kill an angle
+        log.warning(
+            "research_division: D8 fact-list block unavailable for %s: %r", provider, exc
+        )
+        return query, False
 
 
 def _run_language_code(run_language: str) -> str:
@@ -689,6 +790,10 @@ def _divide_from_winners(
             "sub_question": w["text"],
             "rank": w["rank"],
             "langs": langs,
+            # D8 (15.2-14): the run's REPORT language, dispatcher metadata only.
+            # Distinct from `langs`, which is the SEARCH surface — the D8 block
+            # needs the one language the STATEMENT cells must be written in.
+            "language": run_language,
             "corroboration": corroboration,
             "corroboration_key": key,
         }
@@ -749,6 +854,13 @@ def divide(
                 "stakes":      str,   # "low"|"med"|"high"
                 "focus_area":  str,   # original focus_area label
                 "provider":    str,   # preferred provider (stakes-based mapping)
+                "language":    str,   # the run's REPORT language (D8 dispatcher
+                                      # metadata, 15.2-14). Does NOT alter the
+                                      # query text and plays no part in the trim
+                                      # rule; `run_angles` reads it to build the
+                                      # fact-list block in the right language.
+                                      # Distinct from the D6 path's `langs`, which
+                                      # is the SEARCH surface, not the output.
             }
         High-stakes angles appear TWICE (for 2-provider redundancy):
         the focused copy is assigned to gemini, the broad copy to claude.
@@ -758,6 +870,10 @@ def divide(
 
     base_prompt = (mission_brief.get("deep_research_prompt") or "").strip()
     focus_areas: list[dict[str, Any]] = mission_brief.get("focus_areas") or []
+    # D8 (15.2-14): the run's REPORT language, carried as dispatcher metadata so
+    # `run_angles` can build the fact-list block in the right language. It does not
+    # change the query text and it plays no part in the trim rule.
+    run_language = (mission_brief.get("language") or "").strip()
 
     if not focus_areas:
         # Fallback: single broadcast angle (control-path compatibility)
@@ -768,6 +884,7 @@ def divide(
                 "stakes": "med",
                 "focus_area": "general",
                 "provider": _STAKES_PROVIDER["med"],
+                "language": run_language,
             }
         ]
 
@@ -799,6 +916,7 @@ def divide(
             "stakes": stakes,
             "focus_area": label,
             "provider": _STAKES_PROVIDER.get(stakes, _STAKES_PROVIDER["med"]),
+            "language": run_language,
         }
         angles.append(angle)
 
@@ -821,6 +939,7 @@ def divide(
                     "stakes": stakes,
                     "focus_area": label,
                     "provider": _HIGH_REDUNDANCY_PROVIDER,
+                    "language": run_language,
                 }
             )
             log.debug("research_division.divide: doubled high-stakes angle %r", label)
@@ -834,6 +953,7 @@ def divide(
                 "stakes": "med",
                 "focus_area": "general",
                 "provider": _STAKES_PROVIDER["med"],
+                "language": run_language,
             }
         ]
 
@@ -958,15 +1078,22 @@ async def run_angles(
             )
         runner = _PROVIDER_RUNNERS[provider]
         timeout = _PROVIDER_TIMEOUTS.get(provider, _DEFAULT_TIMEOUT_S)
-        query = angle.get("query", "")
+        base_query = angle.get("query", "")
+        # D8 (15.2-14): the fact-list block is attached AFTER the provider has been
+        # resolved. That ordering is load-bearing, not stylistic — it is what makes
+        # the coverage retry below (`force_provider=alt`) attach the block for the
+        # provider it ACTUALLY retried on rather than the originally preferred one.
+        query, prompted = _with_fact_list_block(
+            base_query, provider, str(angle.get("language") or "")
+        )
         fa = angle.get("focus_area", "")
         stakes = angle.get("stakes", "med")
         async with sem:
             log.info(
                 "research_division.run_angles: angle %d/%d -> %s (timeout=%ss) "
-                "stakes=%s focus_area=%r corroboration=%s",
+                "stakes=%s focus_area=%r corroboration=%s d8=%s",
                 i + 1, len(angles), provider, timeout, stakes, fa,
-                bool(angle.get("corroboration")),
+                bool(angle.get("corroboration")), prompted,
             )
             try:
                 async with asyncio.timeout(timeout):
@@ -988,7 +1115,16 @@ async def run_angles(
                 return None
         if isinstance(result, dict) and result.get("status") == "success":
             await _notify(i, True)
-            return (provider, {**result, "_angle": fa, "_stakes": stakes})
+            # `_d8_prompted` is read by `synthesis.steps.collect_provider_facts`
+            # to tell TWO different things apart that must never be worded alike:
+            # "this stream was asked for a fact list and did not comply" (a real
+            # D-14 fallback) versus "this stream was never asked" (the kill switch,
+            # or the forced-tool own-researcher). It changes the wording of the
+            # recorded reason an operator reads, not the behaviour.
+            return (
+                provider,
+                {**result, "_angle": fa, "_stakes": stakes, "_d8_prompted": prompted},
+            )
         reason = result.get("error_message") if isinstance(result, dict) else repr(result)
         log.warning(
             "research_division.run_angles: angle %d (%s) did not succeed: %s",
