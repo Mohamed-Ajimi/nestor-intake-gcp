@@ -13,6 +13,14 @@ after). This suite is the HTTP-level proof that both new surfaces deny cross-ten
 | ``stream_cross_tenant_404``            | space-B user GET of space-A's intake stream → EXACTLY 404|
 |                                         | (raised pre-stream; never 403/200).                      |
 | ``stream_null_space_403``               | a null-space user's stream pre-flight → EXACTLY 403.     |
+| ``resume_cross_tenant_404``             | space-B user POST of space-A's resume → EXACTLY 404,     |
+|                                         | NO seam call, space-A run still ``parked``.              |
+| ``resume_user_role_404``                | a user-role caller in the RIGHT space → EXACTLY 404      |
+|                                         | (never 403 — the role gate is existence-hidden).         |
+| ``resume_null_space_404``               | a null-space user → EXACTLY 404 from ``_superadmin_gate``|
+|                                         | (never the null-space 403).                              |
+| ``resume_superadmin_happy_path_...``    | superadmin resume of a ``parked`` run → 202, row         |
+|                                         | ``queued``, ``attempt`` UNCHANGED (F-02 free resume).    |
 
 DESIGN mirrors ``test_intake_cross_tenant.py``: the engine FACTORIES that ``session.py`` /
 ``ai_session.py`` import are patched to the conftest engines so the REAL ``get_tenant_repo``
@@ -986,6 +994,232 @@ def test_source_seam_5xx_maps_to_502(
             f"a non-404 seam failure must map to 502, got {r.status_code} "
             f"(body={r.text!r})."
         )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# resume (POST) denial + happy path — F-01 / F-02 (plan 15.2-19). The Resume verb
+# is the ONE new tenant-crossing surface this plan adds, so its denial trio lands
+# WITH it (Pitfall 5), each case pinning ONE exact status code. Every run is
+# seeded ``parked`` so the 404 is the SCOPE / ROLE wall and never the 409 state
+# gate.
+# ===========================================================================
+
+
+def _capture_resume(monkeypatch):
+    """Record every ``tribunal_client.resume_run`` call; return the recorder list.
+
+    A denial MUST make no seam call at all: an engine run re-queued behind a 404
+    would be a cross-tenant write dressed up as a denial.
+    """
+    from app.research import tribunal_client as tc_mod
+
+    calls: list = []
+
+    def _fake_resume(**kwargs):
+        calls.append(kwargs)
+        return {"id": kwargs.get("run_id"), "status": "queued"}
+
+    monkeypatch.setattr(tc_mod, "resume_run", _fake_resume, raising=False)
+    return calls
+
+
+def _read_run_row(engine, set_space, space_id, run_id) -> dict:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        row = conn.execute(
+            text(
+                f"SELECT status, attempt, error_message, completed_at "
+                f"FROM {SCHEMA}.research_runs WHERE id = :id"
+            ),
+            {"id": run_id},
+        ).one()
+    return {
+        "status": row[0],
+        "attempt": row[1],
+        "error_message": row[2],
+        "completed_at": row[3],
+    }
+
+
+def test_resume_cross_tenant_404(engine, set_space, two_spaces, monkeypatch):
+    """space-B user POST of space-A's resume → EXACTLY 404, no seam call, row untouched."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (resume denial)")
+    _seed_space(engine, space_b, "Space B (resume denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a, status="parked")
+    _patch_engines(monkeypatch, engine)
+    resume_calls = _capture_resume(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/resume",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"cross-tenant resume must be EXACTLY 404, got {r.status_code} "
+            f"(body={r.text!r}); 403/200 leaks existence."
+        )
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+        assert resume_calls == [], "a denied resume must make NO seam call."
+        assert (
+            _read_run_row(engine, set_space, space_a, run_a)["status"] == "parked"
+        ), "the space-A run must still be parked after a denied resume."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_resume_user_role_404(engine, set_space, two_spaces, monkeypatch):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (never 403, RUN-03)."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (resume user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a, status="parked")
+    _patch_engines(monkeypatch, engine)
+    resume_calls = _capture_resume(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/resume",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a user-role caller must be existence-hidden 404 (superadmin-only), "
+            f"got {r.status_code} (body={r.text!r}); 403 leaks existence."
+        )
+        assert str(run_a) not in r.text, "404 body leaked the run id."
+        assert resume_calls == [], "a denied resume must make NO seam call."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_resume_null_space_404(engine, set_space, monkeypatch):
+    """A null-space ``user`` → EXACTLY 404 from _superadmin_gate, never the 403."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (resume null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="parked")
+    _patch_engines(monkeypatch, engine)
+    resume_calls = _capture_resume(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/resume",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 404, (
+            f"a null-space user hits the superadmin role gate FIRST → 404, "
+            f"got {r.status_code} (body={r.text!r})."
+        )
+        assert str(run_id) not in r.text, "404 body leaked the run id."
+        assert resume_calls == [], "a denied resume must make NO seam call."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_resume_superadmin_happy_path_requeues_without_consuming_an_attempt(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """A superadmin resuming a parked run → 202, row queued, attempt UNCHANGED (F-02).
+
+    A checkpoint resume is free and unlimited: it must NOT increment
+    ``research_runs.attempt`` and must NOT consult the 3-attempt cap. The seam is
+    called exactly once with the seeded ``tribunal_run_id`` (the SAME engine run —
+    a new one would re-charge everything), and the driver is scheduled, not run.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (resume happy-path)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="parked")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    resume_calls = _capture_resume(monkeypatch)
+
+    # The driver must be SCHEDULED, never executed, in a test.
+    scheduled: list = []
+    monkeypatch.setattr(
+        research_mod,
+        "run_poll_driver",
+        lambda *a, **k: scheduled.append(a),
+        raising=False,
+    )
+    # The resume recomposes the brief only to satisfy the driver's signature.
+    monkeypatch.setattr(
+        research_mod,
+        "read_brief_inputs",
+        lambda identity, iid: {
+            "intake": {"id": str(iid)},
+            "questions": [],
+            "decomposition": {},
+            "context_pack_text": None,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        research_mod.brief_mod, "validated_questions", lambda i, q: ["Q1"], raising=False
+    )
+    monkeypatch.setattr(
+        research_mod.brief_mod,
+        "assemble_brief",
+        lambda *a, **k: "brief text",
+        raising=False,
+    )
+
+    before = _read_run_row(engine, set_space, space, run_id)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/resume",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 202, (
+            f"a superadmin resume of a parked run must be 202, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        assert len(resume_calls) == 1, (
+            f"the resume must make EXACTLY one seam call, got {len(resume_calls)}."
+        )
+        assert resume_calls[0]["run_id"] == f"trib-{run_id}", (
+            "the seam must be called with the SEEDED tribunal_run_id — resuming the "
+            "SAME engine run is what makes the checkpoints reusable."
+        )
+        after = _read_run_row(engine, set_space, space, run_id)
+        assert after["status"] == "queued", after
+        assert after["error_message"] is None, "the park reason must be cleared on resume."
+        assert after["completed_at"] is None
+        assert after["attempt"] == before["attempt"], (
+            f"F-02: a checkpoint resume is FREE and must not consume an attempt "
+            f"({before['attempt']} -> {after['attempt']})."
+        )
+        assert len(scheduled) == 1, "exactly one fresh poll driver must be scheduled."
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
