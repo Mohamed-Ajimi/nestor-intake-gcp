@@ -79,6 +79,7 @@ async def _upsert_source(
     url: str,
     provider: str,
     snapshot_text: str,
+    title: str | None = None,
 ) -> uuid.UUID:
     """INSERT a source row, deduping by (tenant_id, content_hash).
 
@@ -87,24 +88,40 @@ async def _upsert_source(
       WHERE content_hash IS NOT NULL
 
     On conflict, returns the id of the existing row rather than the new uuid.
+
+    `title` (Phase 15.2 F10) is ADDITIVE and defaults to None, so every existing
+    call site stays valid unchanged. Three rules govern it:
+
+    * It is NOT part of `content_hash` -- the dedupe key is computed from
+      `snapshot_capped` alone and is unchanged by this parameter. An existing row
+      therefore still wins on conflict (`DO NOTHING`) and KEEPS whatever title it
+      already had; a later, better title never silently rewrites history.
+    * The one production call site (the skeptic-evidence upsert below) passes
+      NOTHING in 15.2-05. A title invented from the URL would be a fabrication;
+      the graded `## Sources` renderer falls back to the display domain at render
+      time instead, which is honest.
+    * 15.2-15 threads the real D8 provider-supplied titles through this
+      parameter.
     """
     snapshot_capped = (snapshot_text or "")[:_SNAPSHOT_MAX_CHARS]
     chash = _content_hash(snapshot_capped) if snapshot_capped else None
     new_id = uuid.uuid4()
+    title_value = (title or "").strip() or None
 
     if chash is None:
         # No snapshot to hash -- skip dedupe and insert plainly.
         await session.execute(
             text(
                 "INSERT INTO source "
-                "(id, tenant_id, url, provider, snapshot_text, content_hash) "
-                "VALUES (:id, :tid, :url, :provider, :snapshot, NULL)"
+                "(id, tenant_id, url, provider, title, snapshot_text, content_hash) "
+                "VALUES (:id, :tid, :url, :provider, :title, :snapshot, NULL)"
             ),
             {
                 "id": str(new_id),
                 "tid": str(tenant_id),
                 "url": url,
                 "provider": provider,
+                "title": title_value,
                 "snapshot": snapshot_capped or None,
             },
         )
@@ -114,8 +131,8 @@ async def _upsert_source(
     result = await session.execute(
         text(
             "INSERT INTO source "
-            "(id, tenant_id, url, provider, snapshot_text, content_hash) "
-            "VALUES (:id, :tid, :url, :provider, :snapshot, :chash) "
+            "(id, tenant_id, url, provider, title, snapshot_text, content_hash) "
+            "VALUES (:id, :tid, :url, :provider, :title, :snapshot, :chash) "
             "ON CONFLICT (tenant_id, content_hash) "
             "WHERE content_hash IS NOT NULL DO NOTHING "
             "RETURNING id"
@@ -125,6 +142,7 @@ async def _upsert_source(
             "tid": str(tenant_id),
             "url": url,
             "provider": provider,
+            "title": title_value,
             "snapshot": snapshot_capped,
             "chash": chash,
         },

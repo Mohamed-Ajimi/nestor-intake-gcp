@@ -60,6 +60,117 @@ class TestDeriveQualityTier:
 
 
 # ---------------------------------------------------------------------------
+# Layer 1b: the PURE assignment loop (Phase 15.2, D-05) -- NO DB.
+#
+# `_assign_numbers` is the extracted body of `number_citations`. Proving it with
+# hand-built rows is what lets the claim -> [n] map (the thing the anchor
+# post-pass resolves against) be verified on a box with no Postgres.
+# ---------------------------------------------------------------------------
+
+
+def _row(claim_id: str, source_id: str, position: int, url: str = "https://x.example/a"):
+    """One ordered claim -> source row, in the shape _CLAIM_SOURCE_SQL returns."""
+    return {
+        "claim_id": claim_id,
+        "position": position,
+        "source_id": source_id,
+        "title": None,
+        "url": url,
+        "provider": "google",
+        "fetched_at": None,
+    }
+
+
+class TestAssignNumbers:
+    def test_numbers_sources_at_first_appearance(self):
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        rows = [
+            _row("c1", "s1", 0, "https://www.sec.gov/a"),
+            _row("c1", "s2", 0, "https://www.reuters.com/b"),
+            _row("c2", "s1", 1, "https://www.sec.gov/a"),  # re-use, not re-numbered
+            _row("c3", "s3", 2, "https://blog.example/c"),
+        ]
+        numbered, _ = _assign_numbers(rows)
+
+        assert [e["n"] for e in numbered] == [1, 2, 3]
+        assert [e["source_id"] for e in numbered] == ["s1", "s2", "s3"]
+        # Documented entry shape.
+        assert set(numbered[0]) == {
+            "n", "source_id", "title", "url", "provider", "publication_date",
+            "quality_tier", "single_source", "first_claim_id",
+            "first_claim_position",
+        }
+        # s1/s2 first appear on c1, which cites TWO sources -> not single_source.
+        assert numbered[0]["single_source"] is False
+        assert numbered[1]["single_source"] is False
+        # s3 first appears on c3, which cites exactly one -> single_source.
+        assert numbered[2]["single_source"] is True
+        # The tier heuristic rides through unchanged.
+        assert [e["quality_tier"] for e in numbered] == [1, 2, 3]
+
+    def test_is_deterministic(self):
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        rows = [_row("c1", "s1", 0), _row("c2", "s2", 1), _row("c3", "s1", 2)]
+        first = _assign_numbers(rows)
+        for _ in range(10):
+            assert _assign_numbers(rows) == first
+
+    def test_claim_map_covers_EVERY_claim_not_just_first_appearances(self):
+        """The whole point of the map (D-05).
+
+        c2 and c3 introduce no new source -- a map keyed off `first_claim_id`
+        would contain only c1 and leave two thirds of the model's anchors
+        unresolvable.
+        """
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        rows = [
+            _row("c1", "s1", 0),
+            _row("c2", "s1", 1),
+            _row("c3", "s1", 2),
+        ]
+        numbered, claim_to_n = _assign_numbers(rows)
+
+        assert len(numbered) == 1, "one distinct source"
+        assert set(claim_to_n) == {"c1", "c2", "c3"}
+        first_claim_ids = {e["first_claim_id"] for e in numbered}
+        assert first_claim_ids == {"c1"}
+        assert set(claim_to_n) - first_claim_ids == {"c2", "c3"}
+
+    def test_a_claim_reusing_an_earlier_source_maps_to_that_earlier_n(self):
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        rows = [_row("c1", "s1", 0), _row("c2", "s2", 1), _row("c3", "s1", 2)]
+        _, claim_to_n = _assign_numbers(rows)
+        assert claim_to_n == {"c1": 1, "c2": 2, "c3": 1}
+
+    def test_a_claim_citing_two_sources_maps_to_the_first_in_row_order(self):
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        rows = [_row("c1", "s1", 0), _row("c1", "s2", 0)]
+        _, claim_to_n = _assign_numbers(rows)
+        assert claim_to_n == {"c1": 1}
+
+    def test_empty_rows(self):
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        assert _assign_numbers([]) == ([], {})
+        assert _assign_numbers(None) == ([], {})
+
+    def test_fetched_at_is_carried_as_an_iso_retrieval_date(self):
+        from datetime import datetime, timezone
+
+        from nestor_pulse_sdk.citations.numbering import _assign_numbers
+
+        row = _row("c1", "s1", 0)
+        row["fetched_at"] = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
+        numbered, _ = _assign_numbers([row])
+        assert numbered[0]["publication_date"].startswith("2026-07-26")
+
+
+# ---------------------------------------------------------------------------
 # Layer 2: DB-backed numbering -- integration, skip-clean without DATABASE_URL.
 # ---------------------------------------------------------------------------
 
@@ -241,5 +352,74 @@ async def test_single_source_flag_is_correct(live_engine):
         assert by_url["https://www.sec.gov/b"]["quality_tier"] == 1
         assert by_url["https://www.reuters.com/a"]["quality_tier"] == 2
         assert by_url["https://some-blog.example/c"]["quality_tier"] == 3
+    finally:
+        await _drop_org(live_engine, tenant_id)
+
+
+async def test_with_claims_returns_the_identical_numbered_list(live_engine):
+    """15.2 D-05: the anchor path must not fork the numbering.
+
+    `number_citations_with_claims` and `number_citations` share
+    `_CLAIM_SOURCE_SQL` + `_assign_numbers`, so the `## Sources` list and the
+    body's `[n]` markers come from ONE computation. Byte equality is the proof.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from nestor_pulse_sdk.citations.numbering import (
+        number_citations,
+        number_citations_with_claims,
+    )
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+
+    tenant_id = uuid.uuid4()
+    run_id = await _seed_run_with_citations(live_engine, tenant_id)
+    try:
+        Session = async_sessionmaker(live_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as session:
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                plain = await number_citations(session, run_id)
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                numbered, claim_to_n = await number_citations_with_claims(session, run_id)
+
+        assert numbered == plain, "the with-claims variant must not fork the numbering"
+
+        # The seed has 3 claims; EVERY one must be mapped -- including c2, which
+        # introduces no new source (it only re-uses s0, already numbered by c0).
+        assert len(claim_to_n) == 3
+
+        # c0 is first in position order, so it takes n=1. c1 cites only the blog
+        # source; c2 cites only the reuters source. s0/s1 are ordered by source
+        # id inside c0, so reuters is 1 or 2 -- the point is that c2 REUSES it
+        # rather than being handed a fresh number.
+        n_blog = next(e["n"] for e in numbered if e["url"] == "https://some-blog.example/c")
+        n_reuters = next(e["n"] for e in numbered if e["url"] == "https://www.reuters.com/a")
+        assert n_blog == 3
+        assert n_reuters in (1, 2)
+        assert sorted(claim_to_n.values()) == sorted([1, n_blog, n_reuters])
+    finally:
+        await _drop_org(live_engine, tenant_id)
+
+
+async def test_list_run_claims_is_in_position_order(live_engine):
+    """The ledger order and the numbering order are the SAME ordering key."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from nestor_pulse_sdk.citations.numbering import list_run_claims
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+
+    tenant_id = uuid.uuid4()
+    run_id = await _seed_run_with_citations(live_engine, tenant_id)
+    try:
+        Session = async_sessionmaker(live_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as session:
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                claims = await list_run_claims(session, run_id)
+
+        assert [c["position"] for c in claims] == [0, 1, 2]
+        assert [c["text"] for c in claims] == ["claim 0", "claim 1", "claim 2"]
+        assert set(claims[0]) == {"claim_id", "text", "facet", "position"}
     finally:
         await _drop_org(live_engine, tenant_id)

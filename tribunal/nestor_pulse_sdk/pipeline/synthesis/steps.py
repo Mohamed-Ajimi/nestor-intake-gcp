@@ -38,6 +38,14 @@ import re
 import uuid
 from typing import Any, Optional, TYPE_CHECKING
 
+from nestor_pulse_sdk.citations.anchors import (
+    ANCHOR_RE,
+    ANCHOR_RULE_SECTION,
+    ANCHOR_RULE_WRAP,
+    render_fact_ledger,
+)
+from nestor_pulse_sdk.citations.numbering import _domain
+
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
 
@@ -285,6 +293,85 @@ def _extract_sources_section(*texts: str) -> str:
     return "## Sources\n\n" + "\n".join(lines)
 
 
+#: quality_tier -> the words the operator reads. Anything unrecognised is
+#: "other source" -- never a guess dressed up as a grade.
+_TIER_LABELS = {1: "official source", 2: "established press"}
+
+
+def build_graded_sources_section(numbered: Optional[list[dict]], *texts: str) -> str:
+    """The graded `## Sources` list (Phase 15.2, D13/D-07).
+
+    WRAPS `_extract_sources_section`, never replaces it. With no numbering data
+    (`numbered` falsy) this returns today's output byte-for-byte -- the
+    link-scraped list stays the fallback for every path that has no claim rows.
+
+    With numbering, each entry is rendered in `n` order as
+    `n. [label](url) — tier · retrieved DATE · single-source`, where:
+
+    * `label` is the stored title, else the display domain (`numbering._domain`
+      -- reused, NOT a second URL parser), else the raw URL. Using the DISPLAY
+      DOMAIN rather than the link host also keeps Gemini `vertexaisearch`
+      redirect URLs from rendering as "vertexaisearch.cloud.google.com".
+    * the date word is ALWAYS "retrieved". `publication_date` carries
+      `source.fetched_at`, a retrieval-date proxy (numbering.py docstring); the
+      operator's C1 bar ("NO ESTIMATES -- facts and correct calculations only")
+      forbids presenting a proxy as a publication fact.
+    * `single-source` is shown only when true; an entry with no URL renders as
+      plain text rather than as a broken link.
+
+    Then an APPEND-ONLY RESCUE: any URL found in the prose that is not in the
+    numbered set is still listed, under a line saying in words that it carries no
+    verified claim link. A URL that `_extract_sources_section` would have shown
+    today is never lost.
+    """
+    # Anchors are STILL PRESENT in `texts` here: the post-pass runs later, in
+    # pipeline.py. `_MD_LINK_RE` needs `](` adjacency, so an anchor the model
+    # dropped between a link's label and its URL (`[Aral][[c:9f2a41bd]](http...)`)
+    # would hide that URL from the scan entirely. Scan a CLEANED COPY -- the
+    # report text itself is not touched by this.
+    cleaned = tuple(ANCHOR_RE.sub("", t or "") for t in texts)
+
+    if not numbered:
+        return _extract_sources_section(*cleaned)
+
+    lines: list[str] = []
+    numbered_urls: set[str] = set()
+    for entry in numbered:
+        url = str((entry or {}).get("url") or "").strip()
+        title = str((entry or {}).get("title") or "").strip()
+        label = title or _domain(url) or url or "source"
+        tier = _TIER_LABELS.get((entry or {}).get("quality_tier"), "other source")
+        published = (entry or {}).get("publication_date")
+        date = str(published)[:10] if published else "date unknown"
+        segments = [tier, f"retrieved {date}"]
+        if (entry or {}).get("single_source"):
+            segments.append("single-source")
+        meta = " · ".join(segments)
+        n = (entry or {}).get("n")
+        if url:
+            numbered_urls.add(url)
+            lines.append(f"{n}. [{label}]({url}) — {meta}")
+        else:
+            lines.append(f"{n}. {label} — {meta}")
+
+    extra: list[str] = []
+    extra_seen: set[str] = set()
+    for text_value in cleaned:
+        for label, url in _MD_LINK_RE.findall(text_value):
+            if url in numbered_urls or url in extra_seen:
+                continue
+            extra_seen.add(url)
+            extra.append(f"*   [{label}]({url})")
+
+    out = "## Sources\n\n" + "\n".join(lines)
+    if extra:
+        out += (
+            "\n\nThese links appear in the report text but carry no verified claim "
+            "link, so they are listed without a number:\n\n" + "\n".join(extra)
+        )
+    return out
+
+
 def _spec_directives(report_spec: Optional[dict]) -> str:
     """Turn a user report_spec (length / tables / instructions) into a prompt block.
 
@@ -336,6 +423,8 @@ async def synthesize_report(
     tenant_id: uuid.UUID,
     contested_notes: Optional[list[str]] = None,
     report_spec: Optional[dict] = None,
+    anchor_ledger: Optional[list[dict]] = None,
+    numbered_citations: Optional[list[dict]] = None,
 ) -> str:
     """Write the final report with one LLM call per focus-area section.
 
@@ -345,6 +434,17 @@ async def synthesize_report(
     report_spec (optional, from the interactive report planner): narrows which
     focus areas get a section (included_focus_areas) and carries length / table /
     free-text style directives. None => today's full, default-shaped report.
+
+    anchor_ledger / numbered_citations (optional, Phase 15.2 D-05): the run's
+    fact ledger and its `[n]` -> source numbering, both read once from the DB by
+    `pipeline.py::_load_citation_context`. When BOTH are None/empty this function
+    emits byte-identical prompts and a byte-identical report to the pre-15.2
+    behaviour -- pinned by a back-compat test.
+
+    The anchor rule deliberately lands in the prompts this function ACTUALLY
+    SENDS: `_one_section` and `wrap_prompt`. It is NOT added to
+    `final_synthesis_audited`, which only runs on the zero-focus-area fallback
+    below and would therefore be a silent no-op on every real run.
     """
     focus_areas = extract_focus_areas(mission_brief)
 
@@ -388,7 +488,18 @@ async def synthesize_report(
             f"{contested_lines}\n"
         )
 
+    # Is the ledger actually live? render_fact_ledger returns "" both for an empty
+    # ledger and when the NESTOR_TRIBUNAL_ANCHORS kill switch is off, so this one
+    # check makes the kill switch complete: no ledger in the section prompts AND
+    # no anchor rule in the wrap prompt (which would otherwise talk about tokens
+    # that were never emitted).
+    anchors_on = bool(render_fact_ledger(anchor_ledger))
+
     async def _one_section(idx: int, fa: str) -> str:
+        # Facet-scoped so a 300-600 survivor run does not paste the whole ledger
+        # into every section prompt (T-15.2-25 cost control).
+        ledger_block = render_fact_ledger(anchor_ledger, facet=fa)
+        anchor_rule = ANCHOR_RULE_SECTION if ledger_block else ""
         prompt = (
             f"CLIENT BRIEF / RESEARCH REQUEST:\n{brief_prompt or '(see focus area)'}\n\n"
             f"YOUR ASSIGNMENT: write ONE markdown section of the final report — the "
@@ -412,8 +523,10 @@ async def synthesize_report(
             "or risk in the same sentence.\n"
             "\n"
             "Answer ONLY this focus area (other sections are written separately).\n"
+            f"{anchor_rule}"
             f"{spec_block}"
             f"{lang_rule}\n\n"
+            f"{ledger_block}"
             f"--- Fact-checked research ---\n\n{reports_concatenated}\n\n"
             "--- End research ---\n\nWrite the section now."
         )
@@ -481,6 +594,11 @@ async def synthesize_report(
         "\n"
         "Ground every statement in the body sections — no new facts. Do NOT rewrite "
         "or repeat the body sections.\n\n"
+        # NO ledger block here, on purpose: the body sections below already carry
+        # the anchor tokens (the post-pass runs later, in pipeline.py), so the
+        # wrap REUSES them instead of re-deriving them from a second copy of the
+        # ledger. That is the T-15.2-25 cost control.
+        f"{ANCHOR_RULE_WRAP if anchors_on else ''}"
         f"{spec_block}"
         f"{lang_rule}\n\n"
         f"--- Report body ---\n\n{sections_joined}\n\n--- End body ---"
@@ -517,7 +635,9 @@ async def synthesize_report(
     except Exception as exc:
         log.error("synthesize_report: wrap call failed: %s", exc)
 
-    sources_section = _extract_sources_section(*sections, exec_part, tail_part)
+    sources_section = build_graded_sources_section(
+        numbered_citations, *sections, exec_part, tail_part
+    )
 
     parts_out = [p for p in (exec_part, sections_joined, tail_part, sources_section) if p]
     report = "\n\n".join(parts_out)
