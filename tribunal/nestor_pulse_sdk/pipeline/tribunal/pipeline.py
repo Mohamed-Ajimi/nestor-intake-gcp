@@ -2104,6 +2104,7 @@ def _dr_model_display(provider: str | None) -> str:
         "gemini": f"Gemini {GEMINI_DEEP_RESEARCH_AGENT}",
         "claude": "Claude claude-sonnet-4-6 +web",
         "openai": f"OpenAI {OPENAI_DEEP_RESEARCH_MODEL}",
+        "own": "Own researcher (web search + Claude)",
     }.get(p, provider or "?")
 
 

@@ -52,6 +52,8 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
     gemini_research,
     claude_research,
     openai_research,
+    own_research,
+    ALL_PROVIDERS,
     _enabled_providers,
 )
 
@@ -129,7 +131,18 @@ _PROVIDER_RUNNERS = {
     "claude": claude_research,
     "openai": openai_research,
 }
-_PROVIDER_TIMEOUTS: dict[str, int] = {}  # no per-provider cap — all use _DEFAULT_TIMEOUT_S
+if own_research is not None:
+    # OMITTED, not bound to None, when the fourth stream is absent: `_one_angle`
+    # indexes this dict directly and a None runner would be an unhandled
+    # TypeError inside the timeout block rather than a clean three-stream run.
+    _PROVIDER_RUNNERS["own"] = own_research
+
+_PROVIDER_TIMEOUTS: dict[str, int] = {
+    # The own-researcher is a BOUNDED tool-use loop (8 turns, 6 searches), not a
+    # 35-minute deep-research poll. Handing it `_DEFAULT_TIMEOUT_S` would let one
+    # hung stream hold the whole run open for forty minutes for no reason.
+    "own": int(os.environ.get("NESTOR_TRIBUNAL_OWN_TIMEOUT_S", str(15 * 60))),
+}  # the three deep-research providers keep _DEFAULT_TIMEOUT_S
 
 #: ISO 639-1 -> English name. THIS MAP IS AN ALLOWLIST, not a lookup convenience:
 #: the language codes come from a model, and a code absent from this map is
@@ -884,7 +897,7 @@ async def run_angles(
     # Round-robin is only the fallback when the preferred provider is disabled.
     enabled = [name for name, _ in _enabled_providers()]
     if not enabled:
-        raise InsufficientProvidersError(failed=["gemini", "claude", "openai"])
+        raise InsufficientProvidersError(failed=list(ALL_PROVIDERS))
 
     sem = asyncio.Semaphore(_ANGLE_CONCURRENCY)
 
@@ -900,8 +913,42 @@ async def run_angles(
         preferred = force_provider or angle.get("provider") or _STAKES_PROVIDER.get(
             angle.get("stakes", "med"), _STAKES_PROVIDER["med"]
         )
+        key = angle.get("corroboration_key") or ""
         if preferred in enabled:
             provider = preferred
+        elif angle.get("corroboration") and key:
+            # A CORROBORATION COPY IS NOT REASSIGNABLE. It exists to obtain THAT
+            # stream's independent view of the sub-question; moving it onto a
+            # stream that already holds a copy buys the same provider's opinion
+            # twice — double spend, zero corroboration gain, and, if both copies
+            # come back with the same text, a FALSE agreement signal in the merge.
+            # So the copy is skipped when a sibling copy still has an enabled
+            # stream, and only falls through to the round-robin when it is the
+            # group's last chance to be researched at all.
+            siblings = [
+                a for a in angles
+                if a is not angle and (a.get("corroboration_key") or "") == key
+            ]
+            survivors = [a for a in siblings if (a.get("provider") or "") in enabled]
+            if survivors:
+                log.warning(
+                    "research_division.run_angles: stream %r is unavailable, so the "
+                    "%r copy of sub-question %r is not researched — %d independent "
+                    "stream(s) still cover it, and reassigning the copy would only "
+                    "ask one provider the same question twice",
+                    preferred, preferred,
+                    str(angle.get("sub_question") or angle.get("focus_area") or "")[:80],
+                    len(survivors),
+                )
+                await _notify(i, False)
+                return None
+            provider = enabled[i % len(enabled)]
+            log.warning(
+                "research_division.run_angles: stream %r is unavailable and this is "
+                "the LAST copy of its corroboration group — angle %d falls back to "
+                "%s rather than leaving the sub-question unresearched",
+                preferred, i + 1, provider,
+            )
         else:
             provider = enabled[i % len(enabled)]
             log.warning(
@@ -916,8 +963,10 @@ async def run_angles(
         stakes = angle.get("stakes", "med")
         async with sem:
             log.info(
-                "research_division.run_angles: angle %d/%d -> %s (timeout=%ss) stakes=%s focus_area=%r",
+                "research_division.run_angles: angle %d/%d -> %s (timeout=%ss) "
+                "stakes=%s focus_area=%r corroboration=%s",
                 i + 1, len(angles), provider, timeout, stakes, fa,
+                bool(angle.get("corroboration")),
             )
             try:
                 async with asyncio.timeout(timeout):
@@ -984,9 +1033,10 @@ async def run_angles(
 
     log.info(
         "research_division.run_angles: %d/%d angles produced results "
-        "(split-the-work: 1 provider/angle, stakes-based high=gemini/med=openai/low=claude, "
-        "enabled=%s, concurrency=%d)",
-        len(all_results), len(angles), enabled, _ANGLE_CONCURRENCY,
+        "(1 stream per angle over up to %d peer streams; the top-ranked "
+        "sub-questions are deliberately copied across streams for corroboration, "
+        "the rest are dealt one stream each; enabled=%s, concurrency=%d)",
+        len(all_results), len(angles), len(ALL_PROVIDERS), enabled, _ANGLE_CONCURRENCY,
     )
     if not all_results:
         raise InsufficientProvidersError(

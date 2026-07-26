@@ -428,3 +428,145 @@ def test_adapter_output_still_drives_propagate_stakes():
 
     assert claims[0]["stakes"] == "high"
     assert claims[1]["stakes"] == "med"
+
+
+# ---------------------------------------------------------------------------
+# --- fourth stream (15.2-13) ---
+#
+# The own-researcher is a first-class peer stream, and a run without a
+# web-search credential completes cleanly on three streams. That degraded path
+# is exercisable TODAY precisely because the secret does not exist yet.
+# ---------------------------------------------------------------------------
+
+def _four_runners(calls: dict) -> dict:
+    return {n: _runner_recording(calls, n) for n in ("gemini", "claude", "openai", "own")}
+
+
+@pytest.mark.asyncio
+async def test_run_angles_routes_to_all_four_streams(monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(rd, "_PROVIDER_RUNNERS", _four_runners(calls))
+    monkeypatch.setattr(
+        rd, "_enabled_providers",
+        lambda: [("gemini", None), ("openai", None), ("claude", None), ("own", None)],
+    )
+
+    angles = [
+        {"query": f"q-{s}", "stakes": "high", "focus_area": "A", "provider": s,
+         "corroboration": True, "corroboration_key": "w01", "sub_question": "sub"}
+        for s in ("gemini", "openai", "claude", "own")
+    ]
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
+    )
+
+    for stream in ("gemini", "openai", "claude", "own"):
+        assert calls[stream] == [f"q-{stream}"]
+    assert len(results) == 4
+    assert sorted(p for p, _ in results) == ["claude", "gemini", "openai", "own"]
+
+
+@pytest.mark.asyncio
+async def test_run_angles_degrades_cleanly_to_three_streams(monkeypatch):
+    """No web-search credential: the `own` copy is skipped, nothing raises."""
+    calls: dict = {}
+    monkeypatch.setattr(rd, "_PROVIDER_RUNNERS", _four_runners(calls))
+    monkeypatch.setattr(
+        rd, "_enabled_providers",
+        lambda: [("gemini", None), ("openai", None), ("claude", None)],
+    )
+
+    angles = [
+        {"query": f"q-{s}", "stakes": "high", "focus_area": "A", "provider": s,
+         "corroboration": True, "corroboration_key": "w01", "sub_question": "sub"}
+        for s in ("gemini", "openai", "claude", "own")
+    ]
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
+    )
+
+    assert len(results) == 3, "the run completes on three streams"
+    assert "own" not in calls, "the unavailable stream is never called"
+    # The copy was SKIPPED, not reassigned: no other stream saw q-own.
+    assert all("q-own" not in queries for queries in calls.values())
+
+
+@pytest.mark.asyncio
+async def test_run_angles_never_drops_a_corroboration_groups_last_copy(monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(rd, "_PROVIDER_RUNNERS", _four_runners(calls))
+    monkeypatch.setattr(rd, "_enabled_providers", lambda: [("claude", None)])
+
+    angles = [
+        {"query": "q-own", "stakes": "high", "focus_area": "A", "provider": "own",
+         "corroboration": True, "corroboration_key": "w01", "sub_question": "sub"},
+    ]
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
+    )
+
+    assert len(results) == 1, "the skip rule must never starve a group"
+    assert calls["claude"] == ["q-own"]
+
+
+@pytest.mark.asyncio
+async def test_run_angles_fallback_still_fires_for_non_corroboration_angles(monkeypatch):
+    """The new skip branch must not leak into the ordinary fallback path."""
+    calls: dict = {}
+    monkeypatch.setattr(rd, "_PROVIDER_RUNNERS", _four_runners(calls))
+    monkeypatch.setattr(
+        rd, "_enabled_providers", lambda: [("claude", None), ("openai", None)],
+    )
+
+    angles = [
+        {"query": "q-high", "stakes": "high", "focus_area": "A", "provider": "gemini",
+         "corroboration": False, "corroboration_key": ""},
+    ]
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
+    )
+
+    assert len(results) == 1
+    assert "gemini" not in calls
+    assert sum(len(v) for v in calls.values()) == 1
+
+
+def test_insufficient_providers_error_counts_four_streams():
+    from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
+        ALL_PROVIDERS, InsufficientProvidersError,
+    )
+
+    assert ALL_PROVIDERS == ("gemini", "claude", "openai", "own")
+    assert "Only 3 of 4" in str(InsufficientProvidersError(failed=["gemini"]))
+    assert "Only 2 of 3" in str(InsufficientProvidersError(failed=["gemini"], total=3))
+
+
+def test_own_stream_unavailable_reason_names_the_condition_and_leaks_nothing(monkeypatch):
+    from nestor_pulse_sdk.pipeline.deep_researchers import degraded_parallel as dp
+
+    monkeypatch.setattr(dp, "ALLOW_DEEP_RESEARCH_OWN", False)
+    reason = dp.own_stream_unavailable_reason()
+    assert reason is not None
+    assert len(reason) > 40, "a plain-words sentence, never a code"
+    for forbidden in ("api_key", "serpapi.com/search", "?"):
+        assert forbidden not in reason
+
+    # All three conditions satisfied -> the stream is enabled and there is no reason.
+    monkeypatch.setattr(dp, "ALLOW_DEEP_RESEARCH_OWN", True)
+    monkeypatch.setattr(dp, "_own_stream_available", lambda: True)
+
+    class _Probe:
+        REASON_KEY_MISSING = "k"
+        REASON_BREAKER_OPEN = "b"
+
+        @staticmethod
+        def unavailable_reason():
+            return None
+
+    monkeypatch.setattr(dp, "_own_search", _Probe)
+    monkeypatch.setattr(dp, "own_research", lambda **kw: None)
+    assert dp.own_stream_unavailable_reason() is None
+
+
+def test_own_stream_has_its_own_shorter_timeout():
+    assert rd._PROVIDER_TIMEOUTS["own"] < rd._DEFAULT_TIMEOUT_S
