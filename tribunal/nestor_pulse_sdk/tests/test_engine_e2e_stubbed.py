@@ -317,6 +317,7 @@ _M_SECTION = "YOUR ASSIGNMENT: write ONE markdown section"
 _M_WRAP = "Below are the finished body sections"
 _M_CANDIDATES = "CANDIDATE: <one sharp"
 _M_EVOLVE = "sharpening the winning research sub-questions"
+_M_DISTILLER = "You are a claim distiller."
 
 #: The 240-character truncation `gates._gate_batch`, `grouping._cluster_block`
 #: and `workshop_rank._candidate_block` all apply to an item before it enters a
@@ -445,12 +446,33 @@ class _ScriptedProvidersAudited:
         #: session and turn the shared-session assertion into a tautology.
         self.group_claim_blocks: list[list[str]] = []
         self._own_turns = 0
+        #: Route names whose FIRST call raises a transient error and whose second
+        #: succeeds — D-12's recovered-retry carve-out, driven without a mocking
+        #: library. `forced_failures` is what keeps the assertion non-vacuous: a
+        #: test that never actually tripped the failure proves nothing.
+        self.fail_once_on: set[str] = set()
+        self.forced_failures = 0
+        self._already_failed: set[str] = set()
 
     # -- bookkeeping --------------------------------------------------------
 
     def _book(self, route: str) -> None:
+        """Count the call, then apply any scripted once-only transient failure.
+
+        Counted BEFORE the failure is raised, on purpose: a retried call really
+        did reach the provider twice, and a counter that hid the failed attempt
+        would understate what the run cost.
+        """
         self.calls += 1
         self.routes[route] = self.routes.get(route, 0) + 1
+        if route in self.fail_once_on and route not in self._already_failed:
+            self._already_failed.add(route)
+            self.forced_failures += 1
+            # "503" is in `reliability._TRANSIENT_MARKERS`, so `classify` calls it
+            # transient and `with_retry` retries it. A cap/billing wording would
+            # be a HARD wall and would be re-raised after ONE attempt — which is
+            # the OTHER carve-out, and not the one this drives.
+            raise RuntimeError(f"503 Service Unavailable (scripted, route={route})")
 
     def _unexpected(self, kind: str, prompt: str) -> None:
         self.unexpected.append(f"{kind}: {prompt[:160]!r}")
@@ -488,6 +510,13 @@ class _ScriptedProvidersAudited:
         if _M_TOURNAMENT in prompt:
             self._book("workshop_tournament")
             return _FakeTextResponse(self._answer_tournament(prompt))
+        if _M_DISTILLER in prompt:
+            # D-14's per-provider safety net. Reached only when a stream returned
+            # no usable fact list; the clean run never gets here, which is why
+            # the route counter is asserted as ZERO there and non-zero in the
+            # degraded test.
+            self._book("distiller_fallback")
+            return _FakeTextResponse(self._answer_distiller())
         if _M_CONFLICT in prompt:
             self._book("conflict_detector")
             return _FakeTextResponse("[]")
@@ -564,6 +593,25 @@ class _ScriptedProvidersAudited:
         return "\n".join(
             f"{idx} | A" for idx, _ in _indexed_items(prompt, "\nMatches:\n")
         )
+
+    def _answer_distiller(self) -> str:
+        """`FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE`, the distiller's own line format.
+
+        The facet MUST be a real focus-area label — `_parse_distiller_response`
+        validates it against the labels the prompt listed, and an unmatched facet
+        silently falls back to the provider name, which would make the
+        stakes-propagation join miss.
+
+        The two claims are the SAME two the factless stream states in prose, so
+        the contradictory pair still meets at the merge even when one side of it
+        arrived through the fallback rather than through a fact list. That is the
+        point of D-14: a fallback degrades ONE STREAM's metadata, not the run's
+        ability to catch a contradiction.
+        """
+        return "\n".join([
+            "\t".join([_CLIENT_QUESTION, _FACT_CARLYLE, _FACT_CARLYLE]),
+            "\t".join([_CLIENT_QUESTION, _FACT_MARGIN, _FACT_MARGIN]),
+        ])
 
     def _answer_section(self) -> str:
         """One report section, carrying real markdown links and ONE anchor.
@@ -823,6 +871,45 @@ def _group_block_texts(prompt: str) -> list[str]:
         if match:
             out.append(match.group(2).strip())
     return out
+
+
+#: A report that IGNORED the D8 instruction: prose, then a plain numbered
+#: markdown source list, and no FACTS_START anywhere. That is precisely the shape
+#: every deep-research provider produced in the recorded 4cbb5311 run, i.e. the
+#: shape D-14's fallback exists for.
+_CLAUDE_PROSE_ONLY_REPORT = "\n".join([
+    "## Findings",
+    "",
+    f"- {_FACT_CARLYLE}",
+    f"- {_FACT_MARGIN}",
+    "",
+    "## Sources",
+    "",
+    f"1. [bloomberg.com]({_URL_PRESS_CARLYLE})",
+    f"2. [cbs.nl]({_URL_OFFICIAL_NL})",
+])
+
+
+class _LostStreamProvidersAudited(_ScriptedProvidersAudited):
+    """The same run, with ONE third-party stream returning no fact list at all.
+
+    A thin subclass overriding exactly one hook, in the shape
+    `test_gate_replay.py`'s `_OutageAnswerKeyGateAudited` uses: everything else —
+    the workshop, the merge, the gates, the skeptic, the report — is inherited
+    unchanged, so any difference in the outcome is attributable to the one thing
+    that changed.
+    """
+
+    #: Which stream ignores the D8 instruction. Named rather than hard-coded into
+    #: the override so the assertion can quote it.
+    FACTLESS_PROVIDER = "claude"
+
+    def _third_party_report(self, provider: str, report: str) -> str:
+        if provider != self.FACTLESS_PROVIDER:
+            return report
+        if provider not in self.factless_providers:
+            self.factless_providers.append(provider)
+        return _CLAUDE_PROSE_ONLY_REPORT
 
 
 def _anthropic_prompt_text(kwargs: dict) -> str:
@@ -1149,6 +1236,18 @@ def _output_body(statements: list[tuple[str, Any]], fmt: str) -> Optional[dict]:
         return json.loads(bodies[-1])
     except Exception:  # noqa: BLE001 — an unparseable body is a real failure
         return None
+
+
+def _stage_detail_entries(statements: list[tuple[str, Any]], stage_key: str) -> list[str]:
+    """The raw `:entry` JSON of every `set_stage` write for one stage key."""
+    return [
+        str(params["entry"])
+        for sql, params in statements
+        if _STAGE_UPDATE in sql
+        and isinstance(params, dict)
+        and params.get("stage") == stage_key
+        and params.get("entry")
+    ]
 
 
 def _terminal_state_of(result: dict) -> str:
@@ -1510,3 +1609,242 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
     )
     assert result["verification_summary"]["distilled"] > 0
     assert statements, "the run executed no statement at all"
+
+    # D-15 / D-03: the distiller is DEMOTED, not primary. On a run where every
+    # stream supplied its own fact list it must not be called at all — a
+    # fallback that fires on the healthy path is a paid re-read of data the
+    # provider already handed over structured.
+    assert audited.routes.get("distiller_fallback", 0) == 0, (
+        "the fallback distiller ran on a run where all four streams returned a "
+        "usable fact list — D-03's unwiring has come undone and every stream's "
+        "prose is being re-shredded at full cost"
+    )
+
+
+# ===========================================================================
+# 3. THE DEGRADED RUN — a lost stream, a D-14 fallback, an honest terminal state
+# ===========================================================================
+
+
+async def test_lost_stream_and_fallback_run_completes_degraded(monkeypatch):
+    """Two independent losses, one honest deliverable, both named out loud.
+
+    The own-researcher is refused before any call (no search credential) and one
+    third-party stream ignores the D8 fact-list instruction. Neither is fatal, so
+    D-17's answer is `completed_degraded` — NOT a park, and emphatically not a
+    silent `completed`.
+    """
+    audited = _LostStreamProvidersAudited()
+    result, statements = await _engine_run(
+        audited, monkeypatch=monkeypatch, serpapi_key=None
+    )
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+
+    # -- it completed, and it did NOT park ----------------------------------
+    assert "park" not in result, (
+        f"the run PARKED. Two losses that each still permit an honest deliverable "
+        f"are D-17's `completed_degraded`; parking them puts a Resume button in "
+        f"front of an operator whose report is already finished. {result.get('park')}"
+    )
+    text = result.get("output_text") or ""
+    assert text.strip(), "a degraded run must still ship a report, not an empty one"
+    for heading in (_DISPUTED_H, _COULD_NOT_H, _VERIFICATION_H):
+        assert heading in text, f"the degraded report is missing {heading!r}"
+
+    assert _terminal_state_of(result) == "completed_degraded", (
+        f"terminal_state() returned {_terminal_state_of(result)!r} on a run that "
+        f"lost one of four research streams. `completed` would hide the loss; "
+        f"`parked` would overstate it. inputs={result['terminal_inputs']}"
+    )
+    assert result["terminal_inputs"]["streams_lost"] == 1, (
+        f"exactly one stream (the own-researcher) should be recorded as lost: "
+        f"{result['terminal_inputs']}"
+    )
+
+    # -- the loss is stated in WORDS a human reads --------------------------
+    reasons = result["verification_summary"]["degradation_reasons"]
+    assert reasons, (
+        "the run degraded and named no reason. `terminal_state` degrades anyway "
+        "and logs the inconsistency, but the operator is told a run is degraded "
+        "with nothing to act on — the alarm without the cause."
+    )
+    # The availability PROBE returns the machine-readable code; the operator
+    # surface returns a SENTENCE. Both are asserted, because the plan's
+    # expectation that the literal code reaches `degradation_reasons` is not what
+    # the merged tree does — and must not be, per T-15.2-65 (a reason string may
+    # never quote the credential, its variable name or the endpoint URL).
+    assert _serpapi_mod.unavailable_reason() == _serpapi_mod.REASON_KEY_MISSING, (
+        "with no credential the availability probe must refuse the stream BEFORE "
+        "any call — zero HTTP, zero LLM, zero spend"
+    )
+    stream_loss = [
+        r for r in reasons if "three streams instead of four" in r
+    ]
+    assert stream_loss, (
+        f"no reason names the lost research stream in plain words: {reasons}"
+    )
+    assert len(stream_loss[0]) > 40, (
+        f"the degradation reason must be a sentence a human reads, not a code: "
+        f"{stream_loss[0]!r}"
+    )
+    assert audited.routes.get("serpapi_search", 0) == 0, (
+        "the own-researcher searched despite having no credential — the refusal "
+        "must happen BEFORE any call is made"
+    )
+    assert audited.routes.get("own_research_facts", 0) == 0, (
+        "the refused stream still ran its model loop, which is spend on a stream "
+        "that cannot produce evidence"
+    )
+
+    # -- the D-14 fallback is surfaced, and is NOT a degradation ------------
+    assert audited.factless_providers == [_LostStreamProvidersAudited.FACTLESS_PROVIDER], (
+        f"the scripted factless stream never fired: {audited.factless_providers}"
+    )
+    assert audited.routes.get("distiller_fallback", 0) == 1, (
+        f"the stream that returned no fact list was not distilled "
+        f"({audited.routes.get('distiller_fallback', 0)} call(s)) — its whole "
+        f"report would contribute nothing and the loss would be silent"
+    )
+    bundle = _output_body(statements, "synthesis_cache")
+    assert bundle is not None, "no synthesis_cache row was written"
+    fallbacks = (bundle.get("verification") or {}).get("factlist_fallbacks") or []
+    assert len(fallbacks) == 1, (
+        f"the fallback is not recorded on the surface an operator reads: {fallbacks}"
+    )
+    entry = fallbacks[0]
+    assert entry["provider"] == _LostStreamProvidersAudited.FACTLESS_PROVIDER
+    note = entry.get("note") or ""
+    assert len(note) > 40 and entry["provider"] in note, (
+        f"the fallback note must be a sentence naming the provider, not a code: "
+        f"{note!r}"
+    )
+    # THE THREE-WAY VOCABULARY. A distiller fallback degrades ONE STREAM, not the
+    # run (D-14): the provider's research still reached the merge in full. Letting
+    # it into `degradation_reasons` would mean nearly every real run is degraded,
+    # which drains `completed_degraded` of the meaning D-12 gives it.
+    for reason in reasons:
+        assert "distill" not in reason.lower(), (
+            f"a D-14 fact-list fallback was promoted into the run's degradation "
+            f"reasons: {reason!r}. It is not one of D-12's degrading conditions."
+        )
+
+    # -- the fallback stream's claims still reached the gates ---------------
+    funnel = result["verification_summary"]
+    assert funnel["distilled"] > 0
+    inserts = _claim_inserts(statements)
+    by_text = {p["text"]: p for p in inserts}
+    assert _FACT_MARGIN in by_text, (
+        "a claim extracted by the FALLBACK distiller never reached persistence — "
+        "the fallback ran and its output was then dropped, which is the worst of "
+        "both worlds: paid for and unused"
+    )
+    fallback_claim = by_text[_FACT_MARGIN]
+    assert fallback_claim["certainty"] is None, (
+        f"the fallback path invented a certainty ({fallback_claim['certainty']!r}). "
+        f"A distilled claim carries no provider-stated confidence, and filling one "
+        f"in would present a guess as the provider's own word (D-13)."
+    )
+    assert fallback_claim["found_by"] == [_LostStreamProvidersAudited.FACTLESS_PROVIDER], (
+        f"the fallback claim lost its attribution: {fallback_claim['found_by']!r}"
+    )
+
+    # -- three streams, not four, and the funnel still reconciles -----------
+    stages = _stage_sequence(statements)
+    assert "deep_research" in stages and "merge" in stages, (
+        f"a degraded run still researches and still merges: {stages}"
+    )
+    assert not (set(stages) - _DECLARED_STAGE_KEYS), (
+        f"undeclared stage key(s): {sorted(set(stages) - _DECLARED_STAGE_KEYS)}"
+    )
+    report = shape_verification_report(
+        verdict_rows=[], funnel=funnel, claim_count=funnel["distilled"],
+        cost_usd_total=None, cost_pending=True,
+    )
+    accounting = report["accounting"]
+    assert accounting is not None, "a degraded run must still produce accounting"
+    total = (
+        accounting["checked"]
+        + accounting["checked_incidentally"]["total"]
+        + accounting["not_checkable"]["total"]
+        + accounting["should_have_been_checked"]
+    )
+    assert total == funnel["distilled"], (
+        f"one-claim-one-bucket broke on the degraded path: {total} of "
+        f"{funnel['distilled']}. {accounting}"
+    )
+
+    # -- the contradiction STILL met, even across the fallback --------------
+    shared = [
+        block for block in audited.group_claim_blocks
+        if _FACT_GUNVOR in block and _FACT_CARLYLE in block
+    ]
+    assert len(shared) == 1, (
+        f"losing a stream's fact list also lost the contradiction: the two "
+        f"incompatible claims reached {len(shared)} shared session(s). D-14 is "
+        f"supposed to degrade a stream's METADATA, not the engine's ability to "
+        f"catch a contradiction."
+    )
+
+
+async def test_recovered_retry_and_cost_pending_do_not_degrade(monkeypatch):
+    """D-12's two explicit carve-outs, and why the degraded marker keeps meaning.
+
+    A retry that RECOVERED is recovery, and a pending cost is the designed
+    pending-then-backfill-exact path. Neither is a shortfall. A marker that is
+    always on is a marker the operator learns to ignore — so both must leave the
+    run `completed` while still being VISIBLE (R5: recovery is shown, not
+    punished, and not hidden either).
+    """
+    audited = _ScriptedProvidersAudited()
+    audited.fail_once_on = {"workshop_critique"}
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert audited.forced_failures == 1, (
+        "the scripted transient failure never fired, so this test proves nothing "
+        "about retries"
+    )
+    assert audited.routes.get("workshop_critique", 0) >= 2, (
+        f"the failed call was not retried at all "
+        f"({audited.routes.get('workshop_critique', 0)} call(s)) — a transient "
+        f"503 must be retried, or every blip becomes a lost stage"
+    )
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+
+    reasons = result["verification_summary"]["degradation_reasons"]
+    assert reasons == [], (
+        f"a RECOVERED retry degraded the run: {reasons}. Demoting recovery would "
+        f"make nearly every run degraded and drain `completed_degraded` of its "
+        f"meaning — the alarm fatigue D-12 explicitly rejects."
+    )
+    assert _terminal_state_of(result) == "completed", (
+        f"terminal_state() returned {_terminal_state_of(result)!r} after a retry "
+        f"that succeeded. inputs={result['terminal_inputs']}"
+    )
+
+    # R5: the recovery is SHOWN. A retried call otherwise looks stalled — a row
+    # sitting at `running` with no explanation while a backoff sleeps.
+    workshop_entries = _stage_detail_entries(statements, "workshop")
+    assert workshop_entries, "the workshop stage wrote no feed detail at all"
+    assert any('"retry"' in entry for entry in workshop_entries), (
+        "the retry is invisible in the operator's feed. R5 requires recovery to "
+        "be shown, not silently absorbed: without it the operator sees a stalled "
+        "row and cannot tell a slow call from a wedged one."
+    )
+
+    # cost_pending: this run's SerpApi plan is deliberately UNKNOWN, so the spend
+    # is recorded as pending rather than guessed (D-16). That is a designed path,
+    # not a shortfall, and it must not add a reason either.
+    for reason in reasons:
+        assert "cost" not in reason.lower(), (
+            f"a pending cost was reported as a degradation: {reason!r}"
+        )
+    report = shape_verification_report(
+        verdict_rows=[], funnel=result["verification_summary"],
+        claim_count=result["verification_summary"]["distilled"],
+        cost_usd_total=None, cost_pending=True,
+    )
+    assert report["verification_degraded"] is False, (
+        "a run whose only anomalies were a recovered retry and a pending cost "
+        "raised the verification-degraded marker"
+    )
