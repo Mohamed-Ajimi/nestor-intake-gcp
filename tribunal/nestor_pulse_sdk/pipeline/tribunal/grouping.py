@@ -67,8 +67,15 @@ NEVER-DROP: every failure mode here degrades to "this claim is its own singleton
 and still gets verified" — an empty entity tag, a failed cluster call and an
 unparseable cluster id all take that path. Clustering may never lose a claim.
 
-A/B: `NESTOR_TRIBUNAL_CLUSTER=false` restores the old exact-key
-`entity│attribute` bucketing without a code change.
+A/B (UNWIRED — Phase 15.2 plan 15, decision D-03): `NESTOR_TRIBUNAL_CLUSTER=false`
+used to restore the old exact-key `entity│attribute` bucketing without a code
+change. It no longer does anything. D9/D11 make LLM clustering the ONLY merge in
+the engine — the cross-provider merge now runs BEFORE the verification gates and
+is the mechanism by which a contradiction reaches one skeptic session — so an
+exact-key baseline is no longer a behaviour this pipeline can be in. `_exact_keys`
+and `_CLUSTER_ENABLED` remain defined, importable and unchanged in body, and are
+deleted by 15.2-18's V-03 cleanup commit after operator sign-off. Do not
+re-reference them.
 """
 from __future__ import annotations
 
@@ -93,10 +100,15 @@ _GROUPER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_CONCURRENCY", "
 #   _CLUSTER_BATCH       chunk size when an oversized block is split.
 #   _CLUSTER_MAX_BLOCK   blob guard: above this a block is chunked, never sent whole.
 #   _CLUSTER_CONCURRENCY in-flight clustering calls.
-#   _CLUSTER_ENABLED     false -> the pre-15.1 exact-key bucketing (A/B baseline).
 _CLUSTER_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_BATCH", "40"))
 _CLUSTER_MAX_BLOCK = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_MAX_BLOCK", "60"))
 _CLUSTER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_CLUSTER_CONCURRENCY", "4"))
+
+# UNWIRED by 15.2-15 under D-03 — read by nothing, kept in-tree on purpose.
+# `group_claims` no longer branches on this flag: D9/D11 make LLM clustering the
+# only merge in the engine (B-04), so the exact-key A/B baseline is no longer a
+# reachable behaviour. Deleted by 15.2-18's V-03 cleanup commit after operator
+# sign-off. Do not re-reference.
 _CLUSTER_ENABLED = os.environ.get("NESTOR_TRIBUNAL_CLUSTER", "true").lower() == "true"
 
 # Stakes ordering so a group inherits the HIGHEST stakes of its members (a group
@@ -303,11 +315,16 @@ async def _tag_batch(
     return _parse_tag_lines(text or "", len(claims))
 
 
+# UNWIRED by 15.2-15 under D-03 — called by nothing in the executing path, kept
+# in-tree, importable and unchanged in body so the old rule stays readable beside
+# the new one and so a comparison run can still call it directly. D9/D11 make LLM
+# clustering the only merge (B-04); this key can no longer be reached through
+# `group_claims`. Deleted by 15.2-18's V-03 cleanup commit after operator
+# sign-off. Do not re-reference.
 def _exact_keys(claims: list[dict[str, Any]], flat_tags: list[tuple[str, str]]) -> list[str]:
     """The pre-15.1 bucketing key: normalized `entity│attribute`, exact match.
 
-    Kept as the `_CLUSTER_ENABLED=false` fallback so the old behaviour stays
-    reachable for A/B without a code change. Untagged (entity == '') -> a unique
+    WAS the `_CLUSTER_ENABLED=false` fallback. Untagged (entity == '') -> a unique
     singleton key, so the claim is still verified on its own."""
     keys: list[str] = []
     for i in range(len(claims)):
@@ -450,11 +467,12 @@ async def group_claims(
           "stakes":    "low"|"med"|"high",   # MAX stakes across members
         }
 
-    The key is `{normalized_entity}#{chunk_index}#{cluster_id}` on the clustering
-    path, `entity│attribute` on the `NESTOR_TRIBUNAL_CLUSTER=false` fallback path,
-    and `__singleton__:{i}` for any claim that could not be placed. Only the five
-    keys above are a contract — group_skeptic and pipeline read those; the key
-    STRING is opaque to them.
+    The key is `{normalized_entity}#{chunk_index}#{cluster_id}`, and
+    `__singleton__:{i}` for any claim that could not be placed. (There is no
+    longer a second key shape: the `NESTOR_TRIBUNAL_CLUSTER=false` exact-key
+    fallback was unwired by 15.2-15 under D-03 — see the module docstring.) Only
+    the five keys above are a contract — group_skeptic and pipeline read those;
+    the key STRING is opaque to them.
 
     A claim that fails to tag (entity == ''), or that the clusterer fails to place,
     becomes its OWN singleton group — never merged blindly, never dropped.
@@ -473,13 +491,11 @@ async def group_claims(
     tagged = await asyncio.gather(*(_run(b) for b in batches))
     flat_tags: list[tuple[str, str]] = [t for batch in tagged for t in batch]
 
-    if not _CLUSTER_ENABLED:
-        # A/B baseline: the pre-15.1 exact-key `entity│attribute` bucketing.
-        keys, n_blocks, n_calls = _exact_keys(claims, flat_tags), 0, 0
-    else:
-        keys, n_blocks, n_calls = await _cluster_keys(
-            claims, flat_tags, audited, run_id, tenant_id,
-        )
+    # D-03 (15.2-15): there is no longer a branch here. Clustering is the ONLY
+    # merge — see the module docstring's A/B paragraph.
+    keys, n_blocks, n_calls = await _cluster_keys(
+        claims, flat_tags, audited, run_id, tenant_id,
+    )
 
     result = _assemble_groups(claims, flat_tags, keys)
     multi = sum(1 for g in result if len(g["claims"]) > 1)

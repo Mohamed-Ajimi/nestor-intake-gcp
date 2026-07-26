@@ -1290,9 +1290,37 @@ def _dedupe_claims(claims: list[dict]) -> list[dict]:
     G-12 contract: a duplicate is MERGED into the first occurrence's ``found_by``
     rather than discarded, so the output length, order and claim texts are identical
     to the pre-15.1 behaviour while the corroboration signal survives.
+
+    THE CROSS-STREAM MERGE POINT (15.2-15, D9/D-13)
+    ----------------------------------------------
+    Since 15.2-14 this function is called ONCE over every stream's claims at
+    once, so "a duplicate" now usually means "two different research streams
+    stated the same fact". That makes it the place where four streams' views of
+    one fact become one claim, and three more things have to survive the collapse
+    besides ``found_by``:
+
+    * **``source_urls`` are UNIONED.** Without this the corroborating provider's
+      source link is silently discarded and never becomes a ``claim_source`` row
+      — the citation for the second, independent confirmation of a fact would be
+      the one thing the merge threw away.
+    * **``provider_quality_by_url``** is maintained as a plain ``dict[str, str]``
+      so a URL is always graded by the provider that SUPPLIED it. Each side seeds
+      the map lazily from its own scalar ``provider_quality`` applied to its own
+      ``source_urls``; an existing entry is never overwritten, so the first
+      provider to introduce a URL owns its grading. (A plain dict, not a set or a
+      tuple key: this rides into ``synthesis_cache`` JSON.)
+    * **``certainty`` takes the CAUTIOUS value.** If either side says ``single``,
+      the merged claim is ``single``. G-11, fail toward more checking: a fact one
+      provider only found once does not become ``certain`` because another
+      provider was confident about its own copy.
+
+    Every one of those branches is guarded on the key being present, because
+    ``claim_distiller`` claims carry no ``source_urls``, no ``provider_quality``
+    and no ``certainty`` — their behaviour here is byte-identical to before.
     """
     seen: dict[str, dict] = {}
     out: list[dict] = []
+    n_merged = 0
     for c in claims:
         norm = re.sub(r"[^a-z0-9 ]", "", (c.get("text") or "").lower())
         norm = re.sub(r"\s+", " ", norm).strip()
@@ -1300,6 +1328,7 @@ def _dedupe_claims(claims: list[dict]) -> list[dict]:
             continue
         kept = seen.get(norm)
         if kept is not None:
+            n_merged += 1
             # MERGE, do not discard (G-12 bug 2). Three researchers independently
             # confirming a fact used to collapse to one indistinguishable claim.
             # Order-stable and duplicate-free: found_by is serialised into
@@ -1313,10 +1342,81 @@ def _dedupe_claims(claims: list[dict]) -> list[dict]:
                 for provider in incoming:
                     if provider not in kept_found_by:
                         kept_found_by.append(provider)
+
+            # --- D-13: per-URL provider-stated quality, seeded from both sides.
+            # Seeded BEFORE the URL union so each side's map is built from its own
+            # urls with its own scalar grade; after the union the sides are no
+            # longer distinguishable.
+            _seed_provider_quality_by_url(kept)
+            incoming_urls = c.get("source_urls")
+            if isinstance(incoming_urls, list) and incoming_urls:
+                _seed_provider_quality_by_url(c)
+                incoming_map = c.get("provider_quality_by_url")
+                if isinstance(incoming_map, dict) and incoming_map:
+                    kept_map = kept.get("provider_quality_by_url")
+                    if not isinstance(kept_map, dict):
+                        kept_map = {}
+                        kept["provider_quality_by_url"] = kept_map
+                    for url, quality in incoming_map.items():
+                        # NEVER overwrite: the provider that introduced a URL is
+                        # the one whose grading of it is meaningful.
+                        kept_map.setdefault(url, quality)
+
+                # --- Union the source urls, order-stable and duplicate-free.
+                kept_urls = kept.get("source_urls")
+                if not isinstance(kept_urls, list):
+                    kept_urls = []
+                    kept["source_urls"] = kept_urls
+                for url in incoming_urls:
+                    if url and url not in kept_urls:
+                        kept_urls.append(url)
+
+            # --- G-11: the cautious certainty wins. The `== "single"` test IS
+            # the guard — a claim pair that never stated a certainty (the
+            # distiller's shape) can never satisfy it, so no key is invented.
+            if c.get("certainty") == "single" or kept.get("certainty") == "single":
+                kept["certainty"] = "single"
             continue
         seen[norm] = c
         out.append(c)
+    if n_merged:
+        # The collapse is a LOSS of one statement into another and is named as
+        # such in the run log, not only in the stage feed (fail loud, in words).
+        log.info(
+            "_dedupe_claims: %d duplicate statement(s) merged into %d distinct "
+            "claim(s) — found_by, source_urls and per-url provider quality were "
+            "carried over; the cautious certainty won",
+            n_merged, len(out),
+        )
     return out
+
+
+def _seed_provider_quality_by_url(claim: dict) -> None:
+    """Lazily give one claim a ``{url: provider_quality}`` map of its OWN urls.
+
+    A no-op for a claim that already has a (non-empty) map, that has no urls, or
+    that has no provider-stated quality — a distiller-produced claim has none of
+    the three and comes out of here untouched.
+
+    WHY A MAP AT ALL: ``provider_quality`` is a SCALAR on the claim ("this
+    provider says its source is official"), but after the cross-stream merge one
+    claim carries several providers' urls, and grading them all by the surviving
+    scalar would attribute one provider's judgement to another provider's source.
+    """
+    if not isinstance(claim, dict):
+        return
+    existing = claim.get("provider_quality_by_url")
+    if isinstance(existing, dict) and existing:
+        return
+    quality = claim.get("provider_quality")
+    if not quality or not isinstance(quality, str):
+        return
+    urls = claim.get("source_urls")
+    if not isinstance(urls, list) or not urls:
+        return
+    claim["provider_quality_by_url"] = {
+        str(url): quality for url in urls if url and isinstance(url, str)
+    }
 
 
 async def claim_distiller(
@@ -1565,6 +1665,15 @@ class ProviderFactsResult:
         is none of those — the provider's research still reached the merge in
         full. Promoting it would drain ``completed_degraded`` of meaning in
         exactly the way D-12 warns about for recovered retries.
+
+    (d) ``not_found_by_provider`` is (c)'s SAME couldn't-find material with the
+        attribution kept (15.2-15). ``not_found`` is a flat, text-deduped union
+        for prose; the ``research_gap`` TABLE has a NOT NULL ``provider`` column
+        and 15.2-06's reader groups its "What we could not establish" section BY
+        PROVIDER, so the union alone cannot be persisted without inventing an
+        attribution. Entries are ``{"provider": str, "text": str}``, deduped on
+        the PAIR (two streams reporting the same gap is two honest rows, not a
+        duplicate) and capped by the same ``_NOT_FOUND_TOTAL_MAX``, loudly.
     """
 
     claims: list[dict] = field(default_factory=list)
@@ -1572,6 +1681,9 @@ class ProviderFactsResult:
     not_found: list[str] = field(default_factory=list)
     records: list[ProviderFactsRecord] = field(default_factory=list)
     fallback_notes: list[str] = field(default_factory=list)
+    #: ADDITIVE (15.2-15). Appended last so every positional construction of this
+    #: dataclass that predates it stays valid.
+    not_found_by_provider: list[dict] = field(default_factory=list)
 
 
 def _normalise_fact_claim(
@@ -1701,6 +1813,10 @@ async def collect_provider_facts(
     d8_claims: list[dict] = []
     fallback_units: list[tuple[str, dict]] = []
     not_found_raw: list[str] = []
+    #: The SAME couldn't-find lines with the provider kept — see
+    #: ``ProviderFactsResult.not_found_by_provider``. Filled from the same
+    #: ``parsed.not_found`` in the same place, so the two views cannot drift.
+    not_found_pairs_raw: list[tuple[str, str]] = []
     unusable_claims = 0
 
     entries = list(provider_reports or [])
@@ -1823,6 +1939,9 @@ async def collect_provider_facts(
             rec["rejected_urls"] += parsed.rejected_urls
             rec["dropped_over_cap"] += parsed.dropped_over_cap
             not_found_raw.extend(parsed.not_found)
+            # Attribution kept for the research_gap write path (15.2-15). `name`
+            # is caller-supplied, never read out of report text (T-15.2-60).
+            not_found_pairs_raw.extend((name, item) for item in parsed.not_found)
 
             if not parsed.needs_distiller_fallback:
                 rec["reports_with_fact_list"] += 1
@@ -1920,6 +2039,33 @@ async def collect_provider_facts(
         )
         not_found = not_found[:_NOT_FOUND_TOTAL_MAX]
 
+    # --- The same lines, attribution kept: (provider, text) pairs -------------
+    # Deduped on the PAIR, not on the text: two streams independently reporting
+    # that they could not establish the same thing is two honest research_gap
+    # rows, and collapsing them would silently erase one provider's report of its
+    # own limits. Capped by the same constant, and just as loudly.
+    seen_pair: set = set()
+    not_found_pairs: list[dict] = []
+    for provider_name, item in not_found_pairs_raw:
+        gap_text = str(item or "").strip()
+        gap_provider = str(provider_name or "").strip()
+        if not gap_text or not gap_provider:
+            continue
+        pair_key = (gap_provider, gap_text)
+        if pair_key in seen_pair:
+            continue
+        seen_pair.add(pair_key)
+        not_found_pairs.append({"provider": gap_provider, "text": gap_text})
+    if len(not_found_pairs) > _NOT_FOUND_TOTAL_MAX:
+        log.warning(
+            "collect_provider_facts: %d attributed 'could not establish' entries "
+            "exceed the %d cap — %d dropped before they could become research_gap "
+            "rows (raise NESTOR_TRIBUNAL_NOT_FOUND_TOTAL_MAX to keep them all)",
+            len(not_found_pairs), _NOT_FOUND_TOTAL_MAX,
+            len(not_found_pairs) - _NOT_FOUND_TOTAL_MAX,
+        )
+        not_found_pairs = not_found_pairs[:_NOT_FOUND_TOTAL_MAX]
+
     # --- Per-provider records, plain-words notes, and one feed row each -------
     records: list[ProviderFactsRecord] = []
     fallback_notes: list[str] = []
@@ -1977,6 +2123,7 @@ async def collect_provider_facts(
         not_found=not_found,
         records=records,
         fallback_notes=fallback_notes,
+        not_found_by_provider=not_found_pairs,
     )
 
 

@@ -6,7 +6,8 @@ Covers:
   - group_claims: tags claims, blocks them by entity and CLUSTERS same-fact claims
     within each block (G-03); untagged and unclustered claims become their own
     singleton (never merged blindly, never dropped); a group inherits its members'
-    HIGHEST stakes; NESTOR_TRIBUNAL_CLUSTER=false restores exact-key bucketing.
+    HIGHEST stakes; the NESTOR_TRIBUNAL_CLUSTER=false exact-key path is UNWIRED
+    (D-03, 15.2-15) but `_exact_keys` is still in-tree and still callable.
   - _parse_group_verdict: maps per-index verdicts; fills missing claims with
     'insufficient' (never silently drops a claim); surfaces reconciliation.
   - run_group_skeptic: server/client tool protocol; emit_group_verdict
@@ -338,8 +339,29 @@ class TestClustering:
         assert groups[0]["stakes"] == "high", \
             "a group is only as low-stakes as its most important claim, or that claim gets checked shallowly"
 
-    def test_cluster_disabled_falls_back_to_exact_key_bucketing(self):
-        # The A/B baseline stays reachable without a code change.
+    def test_exact_key_path_is_unwired_but_still_in_tree(self):
+        """D-03: `NESTOR_TRIBUNAL_CLUSTER=false` no longer changes anything.
+
+        UPDATED, NOT DELETED (15.2-15). This test used to be
+        `test_cluster_disabled_falls_back_to_exact_key_bucketing`, and it asserted
+        the OPPOSITE: that flipping `_CLUSTER_ENABLED` off reproduced the pre-15.1
+        `entity│attribute` bucketing exactly, at no extra cost. That was a real
+        guarantee and this file kept it honest.
+
+        D9/D11 removed the guarantee on purpose. The cross-provider merge now runs
+        BEFORE the verification gates and LLM clustering is the ONLY merge in the
+        engine (B-04) — an exact-key baseline is no longer a behaviour this
+        pipeline can be in, so `group_claims` no longer branches on the flag.
+
+        The test is FLIPPED rather than removed, the same treatment
+        `test_fail_loud.py:95` gave its own deliberate negative, because "the A/B
+        path is gone" is a claim that deserves an executable assertion of its own.
+        It pins BOTH halves of D-03: unreferenced, and still in-tree —
+        `_exact_keys` stays importable and still computes the old keys when called
+        directly, so 15.2-18's V-03 cleanup commit has something real to delete
+        and an operator comparison run can still reach the old rule. The original
+        claim fixture is kept verbatim so the two versions are comparable.
+        """
         claims = [
             {"text": "FootballGPT costs $4.99/mo", "facet": "competitors", "stakes": "high"},
             {"text": "Football GPT pricing starts at $9.99/mo", "facet": "competitors", "stakes": "med"},
@@ -353,14 +375,32 @@ class TestClustering:
             groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
         finally:
             grouping._CLUSTER_ENABLED = old_enabled
-        assert len(groups) == 2, \
-            "with clustering off, grouping must reproduce the old entity-attribute bucketing exactly"
-        assert audited.cluster_calls == [], \
-            "the disabled path must cost nothing extra, or the A/B comparison is meaningless"
-        assert all("│" in g["key"] for g in groups), \
-            "the fallback path emits the old exact-match key, not a cluster key"
+
+        # 1. UNWIRED: the flag is dead. Clustering ran anyway.
+        assert audited.cluster_calls, \
+            "the exact-key path is unwired (D-03) — clustering must run even with " \
+            "_CLUSTER_ENABLED=False, or the flag is still reachable"
+        assert all("│" not in g["key"] for g in groups), \
+            "every key must be a CLUSTER key; a `entity│attribute` key means the " \
+            "exact-key branch is still wired into group_claims"
+
+        # 2. NOT DELETED: `_exact_keys` still exists and still does its old job.
+        assert hasattr(grouping, "_exact_keys"), \
+            "D-03 is unreference-then-delete-later: _exact_keys must stay in-tree " \
+            "until 15.2-18's V-03 cleanup commit"
+        old_keys = grouping._exact_keys(
+            claims,
+            [("FootballGPT", "pricing"), ("Football GPT", "pricing"), ("Wyscout", "capability")],
+        )
+        assert len(old_keys) == 3
+        assert all("│" in k for k in old_keys), \
+            "called directly, _exact_keys still emits the old entity│attribute key"
+        assert old_keys[0] == old_keys[1] != old_keys[2], \
+            "and still buckets by exact normalised match"
+
+        # 3. NEVER-DROP holds on the one surviving path.
         flat = [c for g in groups for c in g["claims"]]
-        assert len(flat) == 3, "the fallback path must not lose a claim either"
+        assert len(flat) == 3, "clustering must not lose a claim"
 
 
 class TestNormAndParse:

@@ -88,7 +88,18 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
 )
 from nestor_pulse_sdk.runs.stage_feed import StageFeed
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
-    claim_distiller,
+    # D8/D-14 (15.2-14): the per-stream fact-list collector that REPLACED the
+    # whole-corpus `claim_distiller` call as this pipeline's primary claim
+    # source. `claim_distiller` is deliberately NO LONGER IMPORTED here — that
+    # import WAS the distiller-as-primary-source wiring D-03 unwires. The
+    # function itself lives on, with its two test files, as the per-provider
+    # fallback INSIDE `collect_provider_facts` (D-15; see its docstring).
+    collect_provider_facts,
+    # The G-12 deduper, imported for the merge stage's deterministic half. A
+    # private helper crossing a module boundary already has precedent two
+    # imports below (`_FUNNEL_KEYS`), and the alternative — a second deduper —
+    # is the exact duplication this phase forbids.
+    _dedupe_claims,
     synthesize_report,
     conflict_detector,
     scrub_research,
@@ -937,26 +948,111 @@ class TribunalPipeline:
         )
 
         # ------------------------------------------------------------------
-        # Stage 3: Claim distillation
+        # Stage 3: Claim collection — the streams' own fact lists come first
         # ------------------------------------------------------------------
+        # D8/D-03/D-14 (15.2-14 + 15.2-15). This stage USED to hand the entire
+        # `provider_results` corpus to `claim_distiller`, which shredded every
+        # provider's prose into claims whether or not the provider had supplied a
+        # structured list of its own facts. That is the distiller-as-primary-
+        # source wiring, and it is what D-03 unwires: a provider that states
+        # "Aral's German fuel market share is 16%, certainty: single, source:
+        # official" knows more about its own finding than a paraphrase of its
+        # prose ever will, and that extra — certainty, per-source quality, the
+        # display label — is exactly D-13's metadata.
+        #
+        # `collect_provider_facts` reads each stream D8-first and falls back to
+        # `claim_distiller` PER PROVIDER (one-element report list, full-extraction
+        # mode) only for a stream that produced no usable list. The distiller is
+        # therefore demoted, never deleted (D-15).
         n_ok_angles = sum(1 for _, r in provider_results if r and r.get("status") == "success")
+        n_streams = len({str(name or "") for name, _ in provider_results})
         await set_stage(
             run_id, tenant_id, "distill",
             detail={"items": [{
-                "name": f"extracting claims from {n_ok_angles} research report(s)…",
+                "name": (
+                    f"reading the fact lists of {n_streams} research stream(s) "
+                    f"across {n_ok_angles} report(s)…"
+                ),
                 "status": "running",
             }]},
         )
-        claims = await claim_distiller(
+        facts_result = await collect_provider_facts(
             provider_reports=provider_results,
             mission_brief=mission_brief,
             audited=audited,
             run_id=run_id,
             tenant_id=tenant_id,
         )
+        claims = list(facts_result.claims)
+
+        # 15.2-14 contract (b): `reports` is a DROP-IN replacement for
+        # `provider_results` — same length, same order, same tuple/dict shape —
+        # with the machine-readable fact block already stripped out of the prose.
+        # Rebinding the name ONCE here is what makes every downstream consumer
+        # (`_extract_sources_for_group`, `_extract_sources_for_claim`,
+        # `scrub_research`, synthesis) see clean report text. Leaving the block in
+        # would double-count every fact and render as tab-salad in the deliverable.
+        provider_results = list(facts_result.reports)
+
+        # The couldn't-find lines, ATTRIBUTED, on their way to `research_gap`
+        # (Stage 7 hands them to persist_tribunal_claims; 15.2-06 reads them back
+        # into the report's "What we could not establish" section). A run where
+        # every stream established everything it looked for writes no rows.
+        research_gaps: list[dict] = list(facts_result.not_found_by_provider)
+
+        # Which streams fell back to the distiller, and 15.2-04's own plain-English
+        # reason, verbatim. NOT a degradation: per D-14 a fallback degrades one
+        # stream, not the run, so this list is deliberately kept OUT of
+        # `_note_degradation` / `degradation_reasons` / `terminal_state()`. The
+        # provider's research still reached the merge in full.
+        _fallen_back_records = [r for r in facts_result.records if r.reports_fell_back > 0]
+        # `fallback_notes` is built by the SAME filter over the SAME iteration
+        # order, so the two line up one-to-one — but that is a coupling between
+        # two loops in another module, so it is CHECKED rather than assumed. A
+        # mismatch costs the sentence, never the record.
+        _notes = list(facts_result.fallback_notes)
+        if len(_notes) != len(_fallen_back_records):
+            log.warning(
+                "tribunal_pipeline: %d fallback note(s) for %d fallen-back stream(s) "
+                "— the per-provider sentences are omitted rather than mis-attributed",
+                len(_notes), len(_fallen_back_records),
+            )
+            _notes = []
+        factlist_fallbacks: list[dict] = []
+        for _i, _record in enumerate(_fallen_back_records):
+            _entry = {"provider": _record.provider, "reason": _record.reason or ""}
+            if _i < len(_notes):
+                # The count-bearing sentence an operator reads, built by 15.2-14
+                # from the provider name and integers only (T-15.2-66).
+                _entry["note"] = _notes[_i]
+            factlist_fallbacks.append(_entry)
+
+        _n_from_lists = sum(r.facts_from_list for r in facts_result.records)
+        _n_from_fallback = sum(r.claims_from_fallback for r in facts_result.records)
+        _fell_back = [r.provider for r in _fallen_back_records]
         await set_stage(
             run_id, tenant_id, "distill",
-            detail={"items": [{"name": f"{len(claims)} claims distilled", "status": "done"}]},
+            detail={"items": [{
+                "name": (
+                    f"{len(claims)} claims collected · {_n_from_lists} stated by the "
+                    f"streams themselves · {_n_from_fallback} extracted from prose by "
+                    f"the fallback distiller"
+                    + (
+                        " · no stream had to fall back"
+                        if not _fell_back
+                        else (
+                            " · these streams returned no usable fact list and were "
+                            f"distilled instead: {', '.join(_fell_back)}"
+                        )
+                    )
+                    + (
+                        f" · {len(research_gaps)} thing(s) a stream said it could not "
+                        "establish"
+                        if research_gaps else ""
+                    )
+                ),
+                "status": "done",
+            }]},
         )
 
         if not claims:
@@ -994,10 +1090,136 @@ class TribunalPipeline:
         # adaptive triage actually differentiates effort. claim_distiller emits
         # {text, facet, evidence} with NO stakes; without this every claim defaulted
         # to med (2 skeptics) and the ADR-006 high=3/low=0 tiering never fired.
+        #
+        # THIS RUNS BEFORE THE MERGE, deliberately: a group inherits the MAX stakes
+        # of its members, so a group formed before stakes were propagated would
+        # inherit `med` for everything and the tiering would be dead again.
         _propagate_stakes(claims, mission_brief)
 
         # ------------------------------------------------------------------
-        # Stage 3.5: Verification gates (G-01 / G-02 / G-11)
+        # Stage 3.5: CROSS-PROVIDER MERGE (D9 / D11)
+        # ------------------------------------------------------------------
+        # THE ORDERING DECISION, recorded here because it is the whole point of
+        # this stage. Until 15.2 the clusterer ran AFTER the gates, inside the
+        # grouped-verify branch. That meant the gates judged claims one research
+        # stream at a time, and two providers contradicting each other were two
+        # unrelated claims that were checked in two unrelated skeptic sessions,
+        # each of which found its own supporting source and passed. That is
+        # exactly how run 4cbb5311 published Aral's German fuel market share at
+        # both 16% and 21%, and LUKOIL's international operations as sold to both
+        # Gunvor and Carlyle. D11 inverts the order: all four streams' claims are
+        # merged into ONE clustered list FIRST, so a contradiction lands in one
+        # group and therefore in one skeptic session that can reconcile it.
+        #
+        # WHAT DID NOT CHANGE:
+        #  * The gates stay PER CLAIM (G-04). Only their position moved. A cluster
+        #    is still worth a session as soon as ANY member survived the gates —
+        #    `_group_selected` — and `apply_gates` MUTATES the same claim dicts the
+        #    groups hold by identity, so gating after clustering still gives every
+        #    group its members' gate decisions.
+        #    The regression that proves the semantics did not change is
+        #    `test_gate_replay.py::test_cluster_survives_if_any_member_survives`.
+        #  * The COST. `group_claims` always ran over the full claim list, never
+        #    the gate-selected subset, so moving it earlier changes zero clustering
+        #    calls. This is a reorder, not a cost increase.
+        #  * The clusterer itself. `group_claims` is called, not modified, not
+        #    wrapped and not duplicated (B-04) — there is one clusterer.
+        await raise_if_cancelled(run_id, tenant_id)
+        await set_stage(
+            run_id, tenant_id, "merge",
+            detail={"items": [{
+                "name": (
+                    f"merging {len(claims)} facts from {n_streams} research "
+                    f"stream(s) into one clustered list…"
+                ),
+                "status": "running",
+            }]},
+        )
+
+        # --- Deterministic half -------------------------------------------------
+        # `collect_provider_facts` already ran this exact function once over all
+        # streams at collection time, so this call is normally a no-op and is here
+        # as the merge's own guarantee rather than as the primary collapse: nothing
+        # downstream of this line may see two copies of one statement. The number
+        # an operator wants is the WHOLE path's collapse, so it is measured against
+        # what the streams produced, not against this call's input.
+        _n_stream_claims = sum(
+            r.facts_from_list + r.claims_from_fallback for r in facts_result.records
+        )
+        claims = _dedupe_claims(claims)
+        n_dupes_merged = max(0, _n_stream_claims - len(claims))
+
+        # --- LLM half, gated exactly as the clusterer was gated before ----------
+        groups: list[dict[str, Any]] = []
+        multi = 0
+        if _GROUP_VERIFY:
+            try:
+                groups = await group_claims(
+                    claims=claims, audited=audited, run_id=run_id, tenant_id=tenant_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # NEVER-DROP, at the pipeline level this time: a failed merge must
+                # not fail the run and must not lose a claim. One singleton group
+                # per claim is the same degradation `grouping.py` applies
+                # internally — every claim is still gated, still verifiable, and
+                # still gets its own session.
+                log.warning(
+                    "tribunal_pipeline: cross-provider merge failed (%s) — falling "
+                    "back to one singleton group per claim; no claim was lost",
+                    exc, exc_info=True,
+                )
+                groups = [
+                    {
+                        "key": f"__singleton__:{i}",
+                        "entity": "",
+                        "attribute": "general",
+                        "claims": [claim],
+                        "stakes": claim.get("stakes", "med"),
+                    }
+                    for i, claim in enumerate(claims)
+                ]
+            multi = sum(1 for g in groups if len(g["claims"]) > 1)
+        n_groups = len(groups)
+
+        # D9's priority rule is `_group_corroboration` and `_corroboration_order`,
+        # which are already in production above. Nothing new counts corroboration.
+        n_corroborated = sum(1 for g in groups if _group_corroboration(g) >= 2)
+
+        _merge_row = (
+            f"{len(claims)} facts merged into {n_groups} cluster(s) "
+            f"({multi} holding more than one stream's version of the same fact) · "
+            f"{n_corroborated} cluster(s) corroborated by two or more streams · "
+            f"{n_dupes_merged} duplicate statement(s) collapsed into one"
+        )
+        if not _GROUP_VERIFY:
+            # FAIL LOUD, IN WORDS. Skipping the clusterer is not a neutral
+            # configuration detail: it is the difference between a contradiction
+            # being reconciled and a contradiction shipping.
+            _merge_row = (
+                f"{len(claims)} facts deduplicated, but cross-provider clustering "
+                f"was SKIPPED because the per-claim A/B baseline is selected "
+                f"(NESTOR_TRIBUNAL_GROUP_VERIFY=false) — contradicting facts from "
+                f"different research streams will NOT share a skeptic session and "
+                f"can both survive into the report · "
+                f"{n_dupes_merged} duplicate statement(s) collapsed into one"
+            )
+        if factlist_fallbacks:
+            _merge_row += (
+                " · these streams stated no facts of their own and were distilled "
+                "from prose instead: "
+                + ", ".join(
+                    f"{f['provider']} ({f['reason']})" if f.get("reason") else f["provider"]
+                    for f in factlist_fallbacks
+                )
+            )
+        await set_stage(
+            run_id, tenant_id, "merge",
+            detail={"items": [{"name": _merge_row, "status": "done"}]},
+        )
+        log.info("tribunal_pipeline: merge stage — %s", _merge_row)
+
+        # ------------------------------------------------------------------
+        # Stage 3.6: Verification gates (G-01 / G-02 / G-11)
         # ------------------------------------------------------------------
         # Two cheap per-claim gates decide WHICH claims are worth fact-checking:
         # materiality (falsifiable-specific AND load-bearing for THIS client's
@@ -1006,9 +1228,14 @@ class TribunalPipeline:
         # checked" — stakes no longer selects, it only sets how deep a surviving
         # session goes (G-02, _GROUP_DEPTH).
         #
-        # G-04 ordering note: the gates run PER CLAIM and BEFORE the clusterer is
-        # consulted for survival, so the per-claim keep/drop numbers reproduce;
-        # clustering happens below and a cluster survives if ANY member survived.
+        # G-04 ordering note (REVISED by D11, 15.2-15): clustering now happens
+        # ABOVE, in the merge stage, so the gates see one merged four-stream claim
+        # list instead of one stream's at a time. The gate DECISION is still PER
+        # CLAIM and still the only thing consulted for survival, so the per-claim
+        # keep/drop numbers reproduce exactly as before; a cluster survives if ANY
+        # member survived. `apply_gates` mutates the same claim dicts the groups
+        # already hold by identity, which is why gating after clustering still
+        # gives `_group_selected` every member's decision.
         #
         # The gate is a cheap flash fan-out, but it is still a fan-out, and every
         # other fan-out in this pipeline cancel-checks first.
@@ -1057,7 +1284,10 @@ class TribunalPipeline:
         # group_skeptic._parse_group_verdict — the per-claim EMIT_VERDICT_TOOL keeps the
         # three-word vocabulary — so the per-claim branch is deliberately left alone.
         superseded_notes: list[str] = []
-        n_groups = 0
+        # `n_groups` / `multi` are NOT re-initialised here: D11 moved the clusterer
+        # to the merge stage ABOVE the gates, so both are already final by the time
+        # this block runs and a re-init would zero the numbers the verify feed rows
+        # and the closing log line report.
         _sm = get_sessionmaker()
         sem = asyncio.Semaphore(_SKEPTIC_CONCURRENCY)
 
@@ -1151,15 +1381,14 @@ class TribunalPipeline:
             # ~1-session-per-GROUP. WHICH groups run is the gates' call (G-02), not
             # stakes': a low-stakes group with a load-bearing claim is now checked
             # (shallowly), and a high-stakes group of unfalsifiable claims is not.
-            await set_stage(
-                run_id, tenant_id, "verify",
-                detail={"items": [{"name": f"grouping {len(claims)} claims…", "status": "running"}]},
-            )
-            groups = await group_claims(
-                claims=claims, audited=audited, run_id=run_id, tenant_id=tenant_id,
-            )
-            n_groups = len(groups)
-            multi = sum(1 for g in groups if len(g["claims"]) > 1)
+            #
+            # THE CLUSTERING NO LONGER HAPPENS HERE (D11, 15.2-15). `groups`,
+            # `n_groups` and `multi` were all computed by the merge stage above,
+            # BEFORE the gates ran — that reordering is the whole of D11 and the
+            # reason a cross-provider contradiction now reaches one session. This
+            # branch is a pure consumer of them; the "grouping N claims…" feed row
+            # moved with the work it described.
+            #
             # G-02: the QUEUE is what the gates selected, not what stakes allowed.
             # `queue` is also the iteration order — single-source clusters first.
             queue = [g for g in _corroboration_order(groups) if _group_selected(g)]
@@ -1799,6 +2028,27 @@ class TribunalPipeline:
                 # `_FUNNEL_KEYS` are frozen because `RECORDED_FUNNEL_COUNTS` is
                 # compared by FULL DICT EQUALITY in two tests.
                 "degradation_reasons": degradation_reasons,
+                # D-14 (15.2-15): which research streams stated no facts of their
+                # own and had their prose distilled instead, with 15.2-04's plain
+                # reason and 15.2-14's count-bearing sentence. Entries are
+                # `{"provider", "reason", "note"?}`.
+                #
+                # THIS IS NOT A DEGRADATION AND MUST NOT BECOME ONE. It rides here
+                # beside `funnel` so it survives the interactive-report pause and
+                # is available to 15.2-08/15.2-09's D-12 reason list — but it is
+                # deliberately NOT in `degradation_reasons` above and must never be
+                # fed to `_note_degradation` or `terminal_state()`. Per D-14 a
+                # distiller fallback degrades ONE STREAM, not the run: the
+                # provider's research still reached the merge in full. D-12's
+                # degrading conditions are a non-zero bucket 3, a stream lost to a
+                # tripped breaker, a workshop fallback, or a skipped stage — this
+                # is none of them, and promoting it would drain
+                # `completed_degraded` of meaning exactly as D-12 warns.
+                #
+                # ADDITIVE, and deliberately NOT on the funnel: `_build_funnel` /
+                # `_FUNNEL_KEYS` are frozen because `RECORDED_FUNNEL_COUNTS` is
+                # compared by FULL DICT EQUALITY.
+                "factlist_fallbacks": factlist_fallbacks,
                 # The 15.1 funnel — the gates' nine keys plus this stage's four.
                 # Carried on the bundle so it survives the interactive-report pause:
                 # the resume path rebuilds the result from this cache, and
