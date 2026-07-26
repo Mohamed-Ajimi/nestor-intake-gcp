@@ -276,7 +276,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
 | 15.1. Research Engine Redesign — Verification Gates | v1.1 | 16/16 | Complete   | 2026-07-26 |
-| 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
+| 15.2. Research Engine Redesign — Engine Core | v1.1 | 13/19 | In Progress|  |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
