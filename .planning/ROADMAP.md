@@ -63,7 +63,7 @@ trail intact.
 - [x] **Phase 13: Tribunal Re-home + Infra Baseline** - Tribunal live in the intake project with isolated schema, verified audit chain (legal gate), concurrency lock, and one proven E2E run (completed 2026-07-20)
 - [x] **Phase 14: Auth Retirement + Integration Seam** - Tribunal's standalone auth/orgs/UI retired; intake backend drives it server-to-server, space-scoped (completed 2026-07-20)
 - [x] **Phase 15: Research Engine Redesign — Operator Surfaces** - REDEFINED 2026-07-24 (replaces "Engine Enhancements"; draft tournament dropped): superadmin-only verification report, live agent-feed foundation (D15), facts-only cost (C1), numbered clickable citations (D13) — built on recorded run-4cbb5311 data, no live LLM runs (completed 2026-07-24)
-- [ ] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture. Plans 01-10 executed 2026-07-25; verification returned `gaps_found` on SC2 (no production writer for `verification_verdict`; `superseded_note` dead data) — GAP CLOSURE in progress via plans 11-15 (scoped 2026-07-25)
+- [x] **Phase 15.1: Research Engine Redesign — Verification Gates** (INSERTED 2026-07-24) - materiality + error-likelihood gates, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture. Plans 01-10 executed 2026-07-25; verification returned `gaps_found` on SC2 (no production writer for `verification_verdict`; `superseded_note` dead data) — GAP CLOSURE in progress via plans 11-15 (scoped 2026-07-25) (completed 2026-07-26)
 - [ ] **Phase 15.2: Research Engine Redesign — Engine Core** (INSERTED 2026-07-24) - question workshop + pairwise tournament (absorbs ENGINE-05), per-provider fact lists, SerpAPI researcher stream, LLM-based merge, reliability R1–R7 — live-validated vs the recorded baseline after 2026-08-01; old engine path removed on acceptance
 - [x] **Phase 16: Research Trigger + Progress Bridge** - Superadmin triggers a run on a `decomposed` intake; live stage progress + running cost in the admin UI; completion/failure email; cost cap re-enabled (completed 2026-07-22)
 - [x] **Phase 17: Raw Output + Audit Chain Guard** - Full raw research output as a superadmin-only, space-scoped download; audit chain guarded on the completion path (completed 2026-07-22)
@@ -144,7 +144,7 @@ trail intact.
   - [x] 15.1-12-PLAN.md — GAP CLOSURE (wave 7): publishing surface — `_verdict_dto` emits `superseded_note`, `verdicts_total == 0` funnel fallback so `unverified` can never contradict the funnel (CR-02), gate-error unit fixed (WR-02)
   - [x] 15.1-13-PLAN.md — GAP CLOSURE (wave 7): caveat reaches synthesis via `contested_notes` (CR-01a), `gate` stage declared in `ENGINE_STAGES` (WR-03), false "low-stakes supporting detail" appendix line replaced (WR-11)
   - [x] 15.1-14-PLAN.md — GAP CLOSURE (wave 8): the production `verification_verdict` writer — `_insert_verdict` in `persist_tribunal_claims`, survivors linked by `claim_id`, dropped claims persisted with NULL (CR-02)
-  - [ ] 15.1-15-PLAN.md — GAP CLOSURE (wave 9): three Cloud Build gates + SC3 re-proof, alembic `0012` applied live + dual Tribunal redeploy + frontend rebuild, runbook Steps 15.1.f/15.1.g, UAT Known-Gaps closure + WR-01/WR-10 deferred to 15.2
+  - [x] 15.1-15-PLAN.md — GAP CLOSURE (wave 9): three Cloud Build gates + SC3 re-proof, alembic `0012` applied live + dual Tribunal redeploy + frontend rebuild, runbook Steps 15.1.f/15.1.g, UAT Known-Gaps closure + WR-01/WR-10 deferred to 15.2
   - [x] 15.1-16-PLAN.md — GAP CLOSURE (wave 7): operator surface — render the `verdicts.superseded` class in its own section (new nl/en/fr key) + fall the amber caveat back to `superseded_note`; forces a frontend rebuild in 15.1-15
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
@@ -244,7 +244,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 13. Tribunal Re-home + Infra Baseline | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
-| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 15/16 | In Progress|  |
+| 15.1. Research Engine Redesign — Verification Gates | v1.1 | 16/16 | Complete   | 2026-07-26 |
 | 15.2. Research Engine Redesign — Engine Core | v1.1 | 0/TBD | Not started | - |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
