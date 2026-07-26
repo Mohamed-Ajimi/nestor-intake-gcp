@@ -1,0 +1,112 @@
+# tribunal/cloudbuild.test-rls.yaml — Phase 15.2 ENGINE-11 non-superuser RLS gate (15.2-01).
+#
+# WHAT GAP THIS CLOSES: `nestor_pulse_sdk/tests/test_rls_isolation.py` has NEVER actually
+# executed with RLS in force. It is the project's headline cross-tenant isolation suite, and
+# until this config existed every harness either skipped it or ran it vacuously:
+#   * cloudbuild.test-critical.yaml connects as the `postgres` SUPERUSER, and RLS is bypassed
+#     UNCONDITIONALLY by a superuser — its own header (lines 7-9) records that this is exactly
+#     why test_rls_isolation.py is EXCLUDED there. Adding the file back would be a guaranteed
+#     false green: every assertion would pass even with a completely broken policy.
+#   * cloudbuild.test.yaml (full suite) sets no DATABASE_URL, so `_require_database_url()`
+#     skips the whole module.
+#   * cloudbuild.test-engine.yaml (owned exclusively by plan 15.2-02) is deliberately DB-less
+#     and keyless; an RLS test needs a real Postgres. Do not edit it from here.
+#   * cloudbuild.seam-gate.yaml is Phase 14's gate and its anti-false-green line greps for
+#     exactly "8 passed". Adding files to it would break that count. Do not edit it.
+# Hence a NEW config rather than an edit to any existing one.
+#
+# WHY IT IS FAITHFUL:
+#   * `DATABASE_URL` IS set, which is what stops `_require_database_url()` from skipping the
+#     module outright.
+#   * migrations run as `app_user`, the TABLE OWNER (mirroring the tribunal-migrate job's
+#     app_user DSN, runbook Step 13.f), and the pytest step connects as that same
+#     NON-superuser role — so `FORCE ROW LEVEL SECURITY` is genuinely binding on the
+#     connecting role instead of being silently bypassed.
+#   * the suite's own `require_non_superuser` fixture would SKIP on a superuser DSN, and a
+#     skip fails this gate (see the anti-false-green block), so a vacuous pass is impossible.
+#
+# A SKIP IS A FAILURE HERE. pytest exits 0 on a skip; the grep block below does not.
+#
+# INVOCATION (repo root):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.test-rls.yaml \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  # One step, host networking (same daemon-host pattern proven by cloudbuild.seam-gate.yaml):
+  # postgres:15 publishes 5432 on the daemon host; the python container reaches it at
+  # localhost:5432 via --network=host. No docker.sock mount needed (no testcontainers here).
+  - id: rls-gate-nonsuperuser
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+
+        docker pull -q postgres:15
+
+        # 1. Real Postgres. The superuser is used ONLY for bootstrap role creation,
+        #    exactly as the Cloud SQL admin does out-of-band; never for the tests.
+        docker run -d --name rls-pg --network=host \
+          -e POSTGRES_PASSWORD=ci-bootstrap-pw \
+          postgres:15
+
+        for i in $$(seq 1 30); do
+          docker exec rls-pg pg_isready -U postgres && break
+          sleep 1
+        done
+
+        # 2. Out-of-band role creation — mirrors `gcloud sql users create app_user/worker_user`
+        #    (runbook Step 13.d). Both NON-superuser LOGIN roles; worker_user must exist
+        #    before migration 0008 GRANTs to it. app_user OWNS the database so that
+        #    FORCE ROW LEVEL SECURITY is exercised against the owner (the T-15.2-02 case).
+        docker exec rls-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "CREATE ROLE app_user LOGIN PASSWORD 'ci-app-pw' NOSUPERUSER" \
+          -c "CREATE ROLE worker_user LOGIN PASSWORD 'ci-worker-pw' NOSUPERUSER" \
+          -c "CREATE DATABASE tribunal OWNER app_user"
+
+        # 3. Role-level search_path so the tests' plain create_async_engine (no
+        #    server_settings) resolves the `tribunal` schema the migrations create —
+        #    mirrors db/base.py's runtime search_path=tribunal,public.
+        docker exec rls-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "ALTER ROLE app_user SET search_path = tribunal, public"
+
+        # 4. Migrations AS app_user, then the RLS isolation suite AS app_user (non-superuser,
+        #    so RLS genuinely applies; FORCE RLS binds app_user as table owner).
+        #    `-m "not live"` is carried for consistency with Pitfall 9: no test in this file
+        #    is live-marked today, and the filter keeps a future one out of this gate.
+        docker run --rm --network=host \
+          -v /workspace:/workspace -w /workspace \
+          -e DATABASE_URL="postgresql+asyncpg://app_user:ci-app-pw@localhost:5432/tribunal" \
+          python:3.11-slim bash -c '
+            set -euo pipefail
+            pip install --no-cache-dir -q -r requirements.txt
+            (cd nestor_pulse_sdk && python -m alembic upgrade head)
+            python -m pytest \
+              nestor_pulse_sdk/tests/test_rls_isolation.py \
+              -q -rs -m "not live" | tee /tmp/rls-gate.out
+            # ANTI-FALSE-GREEN: all four must PASS. A skip exits pytest 0 but fails the gate
+            # here — a skipped cross-tenant denial test is precisely the false assurance this
+            # config exists to eliminate (threat T-15.2-07).
+            # NOTE FOR FUTURE EDITS: this count tracks the number of tests in
+            # test_rls_isolation.py, and it is 4 as of Task 2 of plan 15.2-01. Task 3 of the
+            # SAME plan adds two research_gap tests and updates this to 6. If you add a test
+            # to that file, update BOTH the grep and the success echo below.
+            SUMMARY_LINE=$$(grep -E "[0-9]+ (passed|failed|skipped|error)" /tmp/rls-gate.out | tail -n 1)
+            echo "pytest summary: $$SUMMARY_LINE"
+            echo "$$SUMMARY_LINE" | grep -E "(^| )4 passed"
+            if echo "$$SUMMARY_LINE" | grep -E "skipped|failed|error"; then
+              echo "RLS GATE RED: skips/failures in the pytest summary" >&2
+              exit 1
+            fi
+            echo "RLS GATE GREEN: 4/4 executed and passed as non-superuser"
+          '
+
+        docker rm -f rls-pg
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: "1200s"
