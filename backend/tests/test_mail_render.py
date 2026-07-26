@@ -218,6 +218,83 @@ def test_research_failed_autoescapes_hostile_error():
     assert "&lt;script&gt;" in html
 
 
+# ---------------------------------------------------------------------------
+# F-03 / D-17 park mail (plan 15.2-19). A parked run is NOT a failed run: it is a
+# pause a superadmin resumes for free. These mirror the render_research_failed
+# pair above, plus a 3-locale render sweep, because the park mail is the ONLY
+# notification the operator gets that a walled run stopped with its paid work
+# intact.
+# ---------------------------------------------------------------------------
+
+
+def test_research_parked_body_has_reason_and_cta():
+    """render_research_parked renders the park reason + exactly ONE admin CTA (F-03)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_parked(
+        project_title="Project Phoenix",
+        park_reason="Anthropic monthly cap reached",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "Anthropic monthly cap reached" in html
+    assert cta in html
+    # NOTIF-01: the CTA is an admin app route, never a token link.
+    assert "/admin/pulse/intakes/" in html
+    for token in _TOKEN_SUBSTRINGS:
+        assert token not in html
+    assert "token" not in html
+    # EXACTLY one anchor — one decision, one button (16-D-11). _base.html.j2
+    # contributes no <a>, so this counts the template's own CTA alone.
+    assert html.count("<a ") == 1
+
+
+def test_research_parked_autoescapes_hostile_reason():
+    """A <script> in park_reason is HTML-escaped by autoescape (T-15.2-194).
+
+    The reason arrives ALREADY error_signature()-redacted from the engine
+    (15.2-16); this layer escapes it, it does not sanitise it a second time.
+    """
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_parked(
+        project_title="Project Phoenix",
+        park_reason="<script>x</script>",
+        cta_url=cta,
+        app_base_url=_BASE,
+    )
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_research_parked_unknown_locale_falls_back_to_nl():
+    """An unknown locale resolves to the nl park variant rather than raising (RUN-02)."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_parked(
+        project_title="Project Phoenix",
+        park_reason="geen enkele stroom leverde bruikbaar materiaal",
+        cta_url=cta,
+        app_base_url=_BASE,
+        locale="xx",
+    )
+    # The nl heading proves the fallback resolved to a real template.
+    assert "Het onderzoek staat op pauze" in html
+
+
+@pytest.mark.parametrize("locale", ["nl", "en", "fr"])
+def test_research_parked_all_three_locales_render(locale):
+    """All three park templates render non-empty HTML carrying the reason."""
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    html = render.render_research_parked(
+        project_title="Project Phoenix",
+        park_reason="Anthropic monthly cap reached",
+        cta_url=cta,
+        app_base_url=_BASE,
+        locale=locale,
+    )
+    assert html.strip()
+    assert "Anthropic monthly cap reached" in html
+    assert cta in html
+
+
 def test_research_unknown_locale_falls_back_to_nl():
     """An unknown locale resolves to the nl variant (D-07 fallback chain)."""
     cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
