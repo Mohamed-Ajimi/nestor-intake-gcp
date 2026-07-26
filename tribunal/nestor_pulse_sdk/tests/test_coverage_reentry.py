@@ -30,6 +30,7 @@ owns exclusively and no later plan edits.)
 Coverage:
   TestCoverageSurface        — D-07-B, the WR-01 cost trap
   TestReentryDispatch        — D-07-A (F7), D-07-C (the breaker gate), D-07-D
+  TestGroupSkepticPauseTurn  — F8, the bounded pause_turn continuation
 """
 from __future__ import annotations
 
@@ -44,7 +45,11 @@ from nestor_pulse_sdk.pipeline.tribunal.pipeline import (
     _coverage_reentry_pass,
     _recon_is_meaningful,
 )
-from nestor_pulse_sdk.pipeline.tribunal.reliability import CircuitBreaker
+from nestor_pulse_sdk.pipeline.tribunal.group_skeptic import run_group_skeptic
+from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+    MAX_PAUSE_CONTINUATIONS,
+    CircuitBreaker,
+)
 from nestor_pulse_sdk.pipeline.tribunal.tools import EMIT_VERDICT_TOOL
 
 
@@ -452,3 +457,99 @@ class TestReentryDispatch:
         assert _recon_is_meaningful({"relation": "scoped"}) is True
         assert _recon_is_meaningful({"note": "different tiers"}) is True
         assert _recon_is_meaningful({"canonical": "16%"}) is True
+
+
+# ---------------------------------------------------------------------------
+# F8 — a pause_turn is a CONTINUATION, not a failure
+# ---------------------------------------------------------------------------
+
+def _text_block(text: str = "still searching…") -> dict:
+    return {"type": "text", "text": text}
+
+
+async def _run_group(
+    audited: _ScriptedGroupAudited, *, max_turns: int = 4
+) -> dict:
+    """Call the REAL run_group_skeptic against the scripted model fake."""
+    return await run_group_skeptic(
+        group={
+            "key": "e|a",
+            "entity": "Aral",
+            "attribute": "market share",
+            "claims": [{"text": "Aral holds a 21% share"}],
+            "stakes": "high",
+        },
+        sources=[],
+        audited=audited,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        model="claude-sonnet-4-6",
+        max_turns=max_turns,
+    )
+
+
+def _is_insufficient_shape(result: dict) -> bool:
+    """The `_insufficient_group` fallback: every index insufficient at 0.0."""
+    vbi = result.get("verdicts_by_index") or {}
+    return bool(vbi) and all(
+        v.get("verdict") == "insufficient" and v.get("confidence") == 0.0
+        for v in vbi.values()
+    )
+
+
+class TestGroupSkepticPauseTurn:
+
+    async def test_a_pause_continues_the_session(self):
+        """Turn 1 pauses, turn 2 emits — the verdict is PARSED, not defaulted."""
+        audited = _ScriptedGroupAudited([
+            ("pause_turn", [_text_block()]),
+            ("tool_use", [_verdict_block(verdict="refute", confidence=0.7)]),
+        ])
+        result = await _run_group(audited)
+
+        assert result["verdicts_by_index"][0]["verdict"] == "refute"
+        assert result["verdicts_by_index"][0]["confidence"] == 0.7
+        assert audited.calls == 2
+        # The paused assistant message was echoed back UNCHANGED — plan 02's caller
+        # contract, and what makes the continuation a continuation.
+        second_call_messages = audited.seen_messages[1]
+        assert second_call_messages[-1]["role"] == "assistant"
+
+    async def test_the_pause_does_not_eat_the_turn_budget(self):
+        """max_turns=2 with a pause on turn 1 still reaches the emit on turn 2.
+
+        Before F8 this session had two turns; if the paused one had consumed one of
+        them the emit would have been forced into the last slot at best, and with a
+        single-turn budget it would never have happened at all. The verdict below
+        proves `budget` was EXTENDED rather than the turn consumed.
+        """
+        audited = _ScriptedGroupAudited([
+            ("pause_turn", [_text_block()]),
+            ("tool_use", [_verdict_block(verdict="support")]),
+        ])
+        result = await _run_group(audited, max_turns=2)
+
+        assert result["verdicts_by_index"][0]["verdict"] == "support"
+        assert audited.calls == 2
+
+    async def test_pauses_are_bounded(self):
+        """An unending pause_turn stream terminates — T-15.2-73.
+
+        `stop_reason` is provider-controlled text, so a malformed or hostile stream
+        must not be able to drive an unbounded, billed loop. The bound is asserted
+        against the IMPORTED constant, never a hard-coded 5, so retuning the
+        env-tunable cap does not silently invalidate this proof.
+        """
+        audited = _ScriptedGroupAudited([("pause_turn", [_text_block()])])
+        result = await _run_group(audited, max_turns=2)
+
+        assert _is_insufficient_shape(result)
+        assert audited.calls <= 2 + MAX_PAUSE_CONTINUATIONS
+
+    async def test_an_ordinary_unexpected_stop_reason_is_still_a_failure(self):
+        """F8 did not widen the failure handling — only pause_turn continues."""
+        audited = _ScriptedGroupAudited([("end_turn", [_text_block("done")])])
+        result = await _run_group(audited, max_turns=4)
+
+        assert _is_insufficient_shape(result)
+        assert audited.calls == 1

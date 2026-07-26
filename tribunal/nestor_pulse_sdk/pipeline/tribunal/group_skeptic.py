@@ -42,6 +42,10 @@ from nestor_pulse_sdk.pipeline.tribunal.skeptic import (
     _block_get,
     _coerce_json,
 )
+# F8 — plan 15.2-02's shared, BOUNDED pause_turn continuation. Imported, never
+# re-implemented: there is one pause handler in this engine and plans 15.2-10 and
+# 15.2-12 apply the same one to their own loops.
+from nestor_pulse_sdk.pipeline.tribunal.reliability import PauseContinuation
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -237,9 +241,25 @@ async def run_group_skeptic(
     ]
     collected: list[str] = []
 
-    for turn in range(1, max_turns + 1):
+    # F8 — the pause_turn continuation budget for THIS session. One instance per
+    # loop, never at module level (plan 02's docstring). `budget` starts at
+    # max_turns and is extended by one for each paused turn, because a paused turn
+    # is not a reasoning turn: the provider simply needs another round trip to
+    # finish a long server-side tool run. `PauseContinuation` caps the extensions at
+    # MAX_PAUSE_CONTINUATIONS (3, env-tunable), so `budget` can exceed `max_turns`
+    # by at most 3 and a hostile or buggy stream cannot drive an unbounded billed
+    # loop (T-15.2-73 — `stop_reason` is provider-controlled text).
+    pauses = PauseContinuation(label=f"group_skeptic {entity}|{attribute}")
+    turn = 0
+    budget = max_turns
+
+    while turn < budget:
+        turn += 1
         call_kwargs: dict[str, Any] = {"system": _GROUP_SYSTEM}
-        if turn == max_turns:
+        # Force the client tool on the last turn ACTUALLY AVAILABLE, which moves
+        # with the budget rather than sitting at a fixed max_turns.
+        is_final_turn = turn >= budget
+        if is_final_turn:
             call_kwargs["tool_choice"] = force_emit_group_verdict()
 
         resp = await audited.anthropic_messages(
@@ -257,7 +277,30 @@ async def run_group_skeptic(
                 return _parse_group_verdict(vblock, n, collected)
             # server tools used — append assistant turn, no synthetic tool_result
             msgs.append({"role": "assistant", "content": _content_to_serialisable(content)})
+        elif pauses.consume(resp):
+            # F8. Anthropic server tools end a long turn with
+            # stop_reason: "pause_turn", and the documented continuation is to send
+            # the paused assistant message back UNCHANGED and go round again. This
+            # loop used to score ANY non-tool_use stop reason as failure, so a
+            # healthy long search was silently turned into `insufficient` for EVERY
+            # claim in the group — a paid, half-finished adversarial session thrown
+            # away, and a verification loss that read as a verdict.
+            #
+            # The append is the SAME call the tool_use branch makes above; the
+            # budget extension is plan 02's caller contract ("the paused turn does
+            # not consume the tool-use turn budget"). Plans 15.2-10 and 15.2-12
+            # apply this same helper to their own loops.
+            msgs.append({"role": "assistant", "content": _content_to_serialisable(content)})
+            budget += 1
+            log.info(
+                "group_skeptic: pause_turn on turn %d (%s|%s, %d claims) — continuing "
+                "the session (continuation %d/%d)",
+                turn, entity, attribute, n, pauses.used, pauses.max_pauses,
+            )
+            continue
         else:
+            # A genuinely unexpected stop reason, OR a pause_turn whose continuation
+            # budget is spent. Unchanged: fail loudly, in words.
             log.warning(
                 "group_skeptic: unexpected stop_reason %r on turn %d (%s|%s, %d claims) — insufficient",
                 resp.stop_reason, turn, entity, attribute, n,
