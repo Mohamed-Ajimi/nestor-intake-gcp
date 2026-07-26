@@ -372,6 +372,421 @@ def build_graded_sources_section(numbered: Optional[list[dict]], *texts: str) ->
     return out
 
 
+# ---------------------------------------------------------------------------
+# D-08 report sections: "Disputed & changed" and "What we could not establish".
+#
+# Built in Python for the SAME reason the Sources section was moved here (see the
+# block at :265-275): a writing model handed a list to "present" truncates,
+# merges, reorders and paraphrases it — the LUKOIL validation report was
+# observably truncated mid-URL. D-08 requires that the writing model NEVER SEES
+# OR REWRITES these two sections, so they are rendered from pipeline data and
+# appended AFTER synthesize_report has already returned. The append site is
+# pipeline.py::_write_final_report; nothing here is ever put in a prompt.
+#
+# That rule is also what makes them provable in CI with ZERO LLM calls, no DB and
+# no network — the proof bar D-02 puts on this deliverable, and the only bar that
+# can be met at all while the Anthropic account sits at its monthly cap.
+#
+# Same shape as _extract_sources_section throughout: heading first, "*   "
+# bullets, and a NAMED PLACEHOLDER on the empty path rather than "" — a consumer
+# never has to branch on whether the section exists.
+# ---------------------------------------------------------------------------
+
+#: Item/subgroup bounds — NESTOR_TRIBUNAL_* idiom (gates.py:76-81 register), read
+#: at import so August can retune with an env change and no code change.
+#:
+#: T-15.2-35: a provider (or a hostile page steering one) could emit thousands of
+#: "couldn't find" lines or one multi-megabyte note, inflating the report, the
+#: output row and the PDF export. Bounding is never SILENT — _truncated_items
+#: names the loss in the report itself (phase rule 6).
+_SECTION_ITEM_CHARS = int(os.environ.get("NESTOR_TRIBUNAL_SECTION_ITEM_CHARS", "400"))
+_SECTION_MAX_ITEMS = int(os.environ.get("NESTOR_TRIBUNAL_SECTION_MAX_ITEMS", "200"))
+
+#: The tag _collect_superseded_notes puts on every caveat line it emits
+#: (pipeline.py). Stripped for display: the reader wants the caveat, not our
+#: internal marker.
+_SUPERSEDED_PREFIX = "[SUPERSEDED] "
+
+#: Fallback wording when a subgroup is capped. English by default and localisable
+#: by adding a "truncated" key to a _SECTION_STRINGS entry — the same one-entry
+#: map edit that adds a language.
+_TRUNCATED_TEMPLATE = "*   … and {k} further item(s) not listed here (list truncated at {cap})."
+
+
+def _flatten(value: Any) -> str:
+    """Collapse ALL whitespace (newlines included) to single spaces, then strip.
+
+    Mirrors `pipeline.py::_one_line`, and deliberately does not import it:
+    `steps.py` is imported BY `pipeline.py`, so the dependency only runs one way.
+
+    This is the MARKDOWN CONTAINMENT CONTROL (T-15.2-31), not formatting. Every
+    string these builders render is model-authored, several of them derived from
+    arbitrary web pages a provider read. Flattened onto one line after a "*   "
+    bullet, an item can no longer open a heading, a nested list or a "---" rule of
+    its own and forge a section in the operator's report.
+    """
+    return " ".join(str(value or "").split())
+
+
+def _sanitize(value: Any) -> str:
+    """Flatten, strip citation markers, then truncate. NEVER raises.
+
+    The reuse chain, in order — no stripper and no regex is written here:
+
+    1. `_flatten` (containment, above).
+    2. `strip_unresolved_cite_markers` — the PROVIDER's `[cite: N]` mechanism,
+       already owned by `audit/audited_llm_client.py`.
+    3. the anchor pattern exported by `citations/anchors.py` — OUR mechanism.
+    4. truncation to `_SECTION_ITEM_CHARS`, with a single "…" marking the cut.
+    """
+    flat = _flatten(value)
+    if not flat:
+        return ""
+    try:
+        # Function-local imports: the audited client imports this module's peers,
+        # so a module-level import would close a cycle. Precedent:
+        # pipeline.py's own function-local import of the same symbol.
+        from nestor_pulse_sdk.audit.audited_llm_client import (  # noqa: PLC0415
+            strip_unresolved_cite_markers,
+        )
+        # The COUNT is discarded on purpose. These markers sit inside pipeline
+        # DATA (reconciliation notes, gap text), not in report prose, so counting
+        # them here would pollute D-06's orphan-marker number — which 15.2-05
+        # measures on the report body and 15.2-08 surfaces.
+        flat, _n_cites = strip_unresolved_cite_markers(flat)
+        # Anchor tokens. These sections are appended AFTER 15.2-05's anchor
+        # post-pass has already run, so an anchor-shaped token that arrived via a
+        # scraped page and rode through a claim into a note is past every existing
+        # stripper and would ship as literal garbage (T-15.2-32). Reuse the ONE
+        # existing pattern; a second regex here could drift from it.
+        from nestor_pulse_sdk.citations.anchors import ANCHOR_RE as _anchor_re  # noqa: PLC0415
+        flat = _flatten(_anchor_re.sub("", flat))
+    except Exception as exc:  # noqa: BLE001 — a sanitizer must never break a report
+        log.warning("report sections: sanitize fell back to flatten-only: %r", exc)
+        return _flatten(value)
+    if _SECTION_ITEM_CHARS > 0 and len(flat) > _SECTION_ITEM_CHARS:
+        flat = flat[:_SECTION_ITEM_CHARS].rstrip() + "…"
+    return flat
+
+
+#: Alias -> canonical language token. `mission_brief["language"]` carries an
+#: ENGLISH LANGUAGE NAME emitted by intake.py's `LANGUAGE:` line ("English",
+#: "Dutch", "French", "German"), or "" when undetected.
+_LANG_ALIASES = {
+    "": "english",
+    "en": "english",
+    "engels": "english",
+    "english": "english",
+    "nl": "dutch",
+    "nederlands": "dutch",
+    "dutch": "dutch",
+    "de": "german",
+    "deutsch": "german",
+    "german": "german",
+    "fr": "french",
+    "français": "french",
+    "francais": "french",
+    "french": "french",
+}
+
+
+def _norm_lang(language: Any) -> str:
+    """Normalise a run language to a `_SECTION_STRINGS` key, English on anything else.
+
+    A one-call flash translation of these headings is REJECTED: it would put an
+    LLM back in the loop of a section whose entire point is that no model touches
+    it, and it would break byte-stability across two renders of the same data.
+
+    The English fallback is the house precedent — `_verification_appendix` and
+    `_extract_sources_section` already emit English headings on every run
+    regardless of the run language. Adding a language is a ONE-ENTRY EDIT to
+    `_SECTION_STRINGS` (plus its aliases here); no code changes.
+    """
+    try:
+        token = str(language or "").strip().lower()
+    except Exception:  # noqa: BLE001 — a hostile __str__ must not break a report
+        return "english"
+    hit = _LANG_ALIASES.get(token)
+    if hit:
+        return hit
+    log.warning(
+        "report sections: no heading translation for language %r — using English headings",
+        language,
+    )
+    return "english"
+
+
+#: Every fixed string of both D-08 sections, per language. Deterministic by
+#: construction: same input, same bytes, no model, no clock.
+_SECTION_STRINGS: dict[str, dict[str, str]] = {
+    "english": {
+        "disputed_h": "## Disputed & changed",
+        "sub_contradictions": "### Contradictions settled during fact-checking",
+        "sub_superseded": "### Findings overtaken by newer information",
+        "sub_brief": "### Where the brief did not match what the research found",
+        "disputed_empty": (
+            "*(No contradiction was settled and no finding was overtaken during "
+            "fact-checking.)*"
+        ),
+        "gaps_h": "## What we could not establish",
+        "gaps_empty": "*(No provider reported a research gap.)*",
+        "gaps_none_for_provider": "reported no research gaps.",
+        "gaps_unreadable": (
+            "*(The research-gap list could not be read from the database while this "
+            "report was written — see the run log. This is a reporting failure, NOT a "
+            "statement that no gaps exist.)*"
+        ),
+    },
+    "dutch": {
+        "disputed_h": "## Betwist & gewijzigd",
+        "sub_contradictions": "### Tegenstrijdigheden opgelost tijdens de feitencontrole",
+        "sub_superseded": "### Bevindingen achterhaald door nieuwere informatie",
+        "sub_brief": "### Waar de briefing niet overeenkwam met wat het onderzoek vond",
+        "disputed_empty": (
+            "*(Er zijn geen tegenstrijdigheden opgelost en geen bevindingen achterhaald "
+            "tijdens de feitencontrole.)*"
+        ),
+        "gaps_h": "## Wat we niet hebben kunnen vaststellen",
+        "gaps_empty": "*(Geen enkele provider heeft een onderzoekslacune gemeld.)*",
+        "gaps_none_for_provider": "heeft geen onderzoekslacunes gemeld.",
+        "gaps_unreadable": (
+            "*(De lijst met onderzoekslacunes kon bij het schrijven van dit rapport niet "
+            "uit de database worden gelezen — zie het runlogboek. Dit is een "
+            "rapportagefout, GEEN bevestiging dat er geen lacunes zijn.)*"
+        ),
+    },
+    "german": {
+        "disputed_h": "## Strittig & geändert",
+        "sub_contradictions": "### Während der Faktenprüfung geklärte Widersprüche",
+        "sub_superseded": "### Durch neuere Informationen überholte Erkenntnisse",
+        "sub_brief": "### Wo das Briefing nicht mit den Rechercheergebnissen übereinstimmte",
+        "disputed_empty": (
+            "*(Bei der Faktenprüfung wurden keine Widersprüche geklärt und keine "
+            "Erkenntnis wurde überholt.)*"
+        ),
+        "gaps_h": "## Was wir nicht belegen konnten",
+        "gaps_empty": "*(Kein Anbieter hat eine Recherchelücke gemeldet.)*",
+        "gaps_none_for_provider": "hat keine Recherchelücken gemeldet.",
+        "gaps_unreadable": (
+            "*(Die Liste der Recherchelücken konnte beim Schreiben dieses Berichts nicht "
+            "aus der Datenbank gelesen werden — siehe das Run-Protokoll. Dies ist ein "
+            "Berichtsfehler und KEINE Aussage darüber, dass es keine Lücken gibt.)*"
+        ),
+    },
+    "french": {
+        "disputed_h": "## Contesté & modifié",
+        "sub_contradictions": "### Contradictions tranchées lors de la vérification des faits",
+        "sub_superseded": "### Conclusions dépassées par des informations plus récentes",
+        "sub_brief": (
+            "### Là où le briefing ne correspondait pas aux résultats de la recherche"
+        ),
+        "disputed_empty": (
+            "*(Aucune contradiction n'a été tranchée et aucune conclusion n'a été "
+            "dépassée lors de la vérification des faits.)*"
+        ),
+        "gaps_h": "## Ce que nous n'avons pas pu établir",
+        "gaps_empty": "*(Aucun fournisseur n'a signalé de lacune de recherche.)*",
+        "gaps_none_for_provider": "n'a signalé aucune lacune de recherche.",
+        "gaps_unreadable": (
+            "*(La liste des lacunes de recherche n'a pas pu être lue depuis la base de "
+            "données lors de la rédaction de ce rapport — voir le journal du run. Il "
+            "s'agit d'une erreur de rapport, et NON de l'affirmation qu'il n'existe "
+            "aucune lacune.)*"
+        ),
+    },
+}
+
+
+def _truncated_items(items: list[str], strings: dict) -> list[str]:
+    """Apply `_SECTION_MAX_ITEMS` and, when it bites, NAME the loss in words.
+
+    Never a silent drop (phase rule 6): the reader is told how many items were
+    left out and what the cap was.
+    """
+    if _SECTION_MAX_ITEMS <= 0 or len(items) <= _SECTION_MAX_ITEMS:
+        return list(items)
+    kept = list(items[:_SECTION_MAX_ITEMS])
+    template = (strings or {}).get("truncated") or _TRUNCATED_TEMPLATE
+    kept.append(
+        template.format(k=len(items) - _SECTION_MAX_ITEMS, cap=_SECTION_MAX_ITEMS)
+    )
+    return kept
+
+
+def build_disputed_and_changed(
+    *,
+    group_reconciliations: Optional[list] = None,
+    superseded_notes: Optional[list] = None,
+    brief_conflicts: Optional[list] = None,
+    language: str = "",
+) -> str:
+    """Render the "Disputed & changed" section (D-08).
+
+    PURE: no LLM, no DB, no clock, no I/O. Byte-identical across calls for
+    identical input — no set iteration, no dict-insertion luck, no id() leak. The
+    caller appends the result AFTER synthesis, so the writing model never sees it
+    and cannot omit, merge, truncate or rewrite an item.
+
+    Three subgroups, always in this order, each rendered only when non-empty:
+    the contradictions the group skeptics settled, the findings a `superseded`
+    verdict overtook, and the workshop's brief-vs-world flags. When all three are
+    empty the section STILL renders — heading plus a named placeholder sentence.
+
+    Never raises: a non-dict entry, a non-string note or a hostile __str__ costs
+    that one item, never the section.
+    """
+    strings = _SECTION_STRINGS[_norm_lang(language)]
+    try:
+        body: list[str] = []
+
+        # 1. Contradictions the group skeptics settled. Entries reach
+        #    `group_reconciliations` only when `disputed` or relation == "scoped"
+        #    (the narrow filter in pipeline.py), so this does NOT re-filter on
+        #    that — only on "does this entry have anything to say".
+        contradictions: list[str] = []
+        for entry in group_reconciliations or []:
+            if not isinstance(entry, dict):
+                continue  # ASVS V5: skip the bad item, keep the rest
+            note = _sanitize(entry.get("note"))
+            canonical = _sanitize(entry.get("canonical"))
+            if not note and not canonical:
+                continue
+            entity = _sanitize(entry.get("entity")) or "?"
+            attribute = _sanitize(entry.get("attribute")) or "?"
+            # The SAME two words pipeline.py already uses for these two
+            # conditions. No third vocabulary.
+            tag = "DISPUTED" if entry.get("disputed") else "scope-dependent"
+            parts = [f"*   **{entity} — {attribute}** — {tag}:"]
+            if note:
+                parts.append(note)
+            if canonical:
+                parts.append(f"Settled reading: {canonical}")
+            contradictions.append(" ".join(parts))
+        if contradictions:
+            body.append(
+                strings["sub_contradictions"]
+                + "\n\n"
+                + "\n".join(_truncated_items(contradictions, strings))
+            )
+
+        # 2. Superseded caveats — consumed verbatim from _collect_superseded_notes
+        #    and never re-derived from verdicts. The internal tag is stripped for
+        #    display. This list arrives UNCAPPED: _SUPERSEDED_NOTE_CAP bounds the
+        #    synthesis PROMPT, and this is not a prompt.
+        superseded: list[str] = []
+        for raw in list(dict.fromkeys(superseded_notes or [])):
+            if not isinstance(raw, str):
+                continue
+            rest = raw[len(_SUPERSEDED_PREFIX):] if raw.startswith(_SUPERSEDED_PREFIX) else raw
+            text_value = _sanitize(rest)
+            if text_value:
+                superseded.append(f"*   {text_value}")
+        superseded = list(dict.fromkeys(superseded))
+        if superseded:
+            body.append(
+                strings["sub_superseded"]
+                + "\n\n"
+                + "\n".join(_truncated_items(superseded, strings))
+            )
+
+        # 3. The workshop's brief-vs-world flags (D4). Tolerant input on purpose:
+        #    plan 15.2-13 wires the producer, and this section must not care
+        #    whether it hands over strings or dicts.
+        flags: list[str] = []
+        for item in brief_conflicts or []:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                raw_flag: Any = item
+            elif isinstance(item, dict):
+                raw_flag = ""
+                for key in ("note", "text", "finding"):
+                    candidate = item.get(key)
+                    if candidate:
+                        raw_flag = candidate
+                        break
+            else:
+                raw_flag = str(item)
+            text_value = _sanitize(raw_flag)
+            if text_value:
+                flags.append(f"*   {text_value}")
+        if flags:
+            body.append(
+                strings["sub_brief"] + "\n\n" + "\n".join(_truncated_items(flags, strings))
+            )
+
+        if not body:
+            body = [strings["disputed_empty"]]
+        return "\n\n".join([strings["disputed_h"]] + body)
+    except Exception as exc:  # noqa: BLE001 — a report section must never break a run
+        log.warning("report sections: build_disputed_and_changed failed: %r", exc)
+        return f"{strings['disputed_h']}\n\n{strings['disputed_empty']}"
+
+
+def build_could_not_establish(
+    *,
+    not_found_by_provider: Optional[dict] = None,
+    language: str = "",
+) -> str:
+    """Render the "What we could not establish" section (D-08).
+
+    PURE: no LLM, no DB, no clock, no I/O. Byte-identical across calls for
+    identical input; providers are emitted in `sorted()` order so a DB read's
+    row order can never change the bytes. The caller appends the result AFTER
+    synthesis, so the writing model never sees it.
+
+    THREE DISTINCT STATES, and the difference between the first two is the whole
+    point (T-15.2-33):
+
+    * `None`  -> the gap list COULD NOT BE READ. Rendered as a named failure
+      sentence. Rendering "no gaps" over a database error would put a false
+      factual statement into a client-bound document.
+    * `{}`    -> read fine, nothing to report.
+    * populated -> one block per provider; a provider with an empty list is
+      NAMED as having reported no gaps rather than omitted.
+
+    Never raises.
+    """
+    strings = _SECTION_STRINGS[_norm_lang(language)]
+    heading = strings["gaps_h"]
+    if not_found_by_provider is None:
+        return f"{heading}\n\n{strings['gaps_unreadable']}"
+    try:
+        if not isinstance(not_found_by_provider, dict) or not not_found_by_provider:
+            return f"{heading}\n\n{strings['gaps_empty']}"
+
+        blocks: list[str] = []
+        # sorted() by the string form: determinism, never dict-insertion order
+        # coming out of a DB read, and never a TypeError on mixed key types.
+        for provider in sorted(not_found_by_provider.keys(), key=str):
+            # Provider names come from the parser, not a hardcoded enum, so they
+            # are untrusted text too.
+            name = _sanitize(provider)[:60] or "?"
+            raw_items = not_found_by_provider.get(provider)
+            if isinstance(raw_items, (list, tuple)):
+                candidates = list(raw_items)
+            elif raw_items is None or raw_items == "":
+                candidates = []
+            else:
+                candidates = [raw_items]
+            bullets: list[str] = []
+            for item in candidates:
+                text_value = _sanitize(item)
+                if text_value:
+                    bullets.append(f"*   {text_value}")
+            bullets = list(dict.fromkeys(bullets))
+            if bullets:
+                blocks.append(
+                    f"**{name}**\n\n" + "\n".join(_truncated_items(bullets, strings))
+                )
+            else:
+                blocks.append(f"**{name}** — {strings['gaps_none_for_provider']}")
+        return "\n\n".join([heading] + blocks)
+    except Exception as exc:  # noqa: BLE001 — a report section must never break a run
+        log.warning("report sections: build_could_not_establish failed: %r", exc)
+        return f"{heading}\n\n{strings['gaps_empty']}"
+
+
 def _spec_directives(report_spec: Optional[dict]) -> str:
     """Turn a user report_spec (length / tables / instructions) into a prompt block.
 
