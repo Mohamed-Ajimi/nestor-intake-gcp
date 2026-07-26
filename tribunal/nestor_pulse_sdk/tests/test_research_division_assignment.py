@@ -59,6 +59,20 @@ def _runner_recording(calls: dict, name: str):
     return _run
 
 
+def _briefs(calls: dict, stream: str) -> list[str]:
+    """The angle BRIEFS a stream was dispatched with, without the D8 block.
+
+    15.2-14 appends the machine-readable fact-list instruction block to every query
+    routed to a third-party stream (gemini / claude / openai), separated from the
+    brief by a blank line, so the original brief is still the PREFIX of what is
+    sent. The assertions below pin ROUTING — which stream received which angle —
+    not the outbound prompt text, which `test_factlist_fallback.py` owns. The angle
+    queries in this file are single-line by construction, so the text before the
+    first blank line recovers the brief exactly.
+    """
+    return [q.split("\n\n", 1)[0] for q in calls.get(stream, [])]
+
+
 @pytest.mark.asyncio
 async def test_run_angles_routes_by_preference(monkeypatch):
     calls: dict = {}
@@ -81,9 +95,9 @@ async def test_run_angles_routes_by_preference(monkeypatch):
         angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
     )
 
-    assert calls["gemini"] == ["q-high-focused"]
-    assert sorted(calls["claude"]) == ["q-high-broad", "q-low"]
-    assert calls["openai"] == ["q-med"]
+    assert _briefs(calls, "gemini") == ["q-high-focused"]
+    assert sorted(_briefs(calls, "claude")) == ["q-high-broad", "q-low"]
+    assert _briefs(calls, "openai") == ["q-med"]
     assert len(results) == 4
     # Provider name and angle metadata preserved on results
     providers = sorted(p for p, _ in results)
@@ -461,7 +475,7 @@ async def test_run_angles_routes_to_all_four_streams(monkeypatch):
     )
 
     for stream in ("gemini", "openai", "claude", "own"):
-        assert calls[stream] == [f"q-{stream}"]
+        assert _briefs(calls, stream) == [f"q-{stream}"]
     assert len(results) == 4
     assert sorted(p for p, _ in results) == ["claude", "gemini", "openai", "own"]
 
@@ -506,7 +520,7 @@ async def test_run_angles_never_drops_a_corroboration_groups_last_copy(monkeypat
     )
 
     assert len(results) == 1, "the skip rule must never starve a group"
-    assert calls["claude"] == ["q-own"]
+    assert _briefs(calls, "claude") == ["q-own"]
 
 
 @pytest.mark.asyncio
