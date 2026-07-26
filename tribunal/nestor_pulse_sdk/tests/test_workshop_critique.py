@@ -1117,11 +1117,20 @@ def _reply(*lines: str) -> ScriptedWorkshopAudited:
 
 
 async def test_critique_keeps_weak_and_kills():
-    """31. KEEP survives clean, WEAK carries its flaw verbatim, KILL is removed."""
+    """31. KEEP survives clean, WEAK carries its flaw verbatim, KILL is removed.
+
+    The killed candidate shares its parent with a survivor ON PURPOSE. The plan
+    describes this test with three DIFFERENT parents, but D4's per-parent guard
+    (which the plan itself specifies, and which test 35 pins) would then
+    resurrect the killed candidate and the KILL would be unobservable. Sharing a
+    parent is the only arrangement in which a real KILL can be seen at all —
+    which is itself the point: a KILL may never cost a client question its last
+    sub-question. Deviation recorded in the SUMMARY.
+    """
     candidates = _cands(
         ("which fuel-card fees changed in Belgium in 2026", "Q1"),
         ("what is the market like", "Q2"),
-        ("is diesel morally acceptable", "Q3"),
+        ("is diesel morally acceptable", "Q1"),
     )
     audited = _reply(
         "0 | KEEP | -",
@@ -1258,7 +1267,7 @@ async def test_kill_never_empties_the_population(caplog):
 
     assert len(survivors_b) == 3
     assert {c["critique"] for c in survivors_b} == {"KEEP"}
-    assert any("empty candidate population" in r for r in reasons_b), reasons_b
+    assert any("empty candidate set" in r for r in reasons_b), reasons_b
     assert any(rec.levelname == "ERROR" for rec in caplog.records)
 
 
