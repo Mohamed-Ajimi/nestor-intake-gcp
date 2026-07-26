@@ -27,10 +27,21 @@ Return dict shape:
                                          # every path, including the zero-claim one.
     }
 
-Intake is a DELEGATOR (quick task 260721-twy): the brief is operator-validated, so
-adaptive_intake always produces a research plan and never asks clarifying questions.
-The old vague-brief clarification-cap / force-proceed / early-return machinery is
-gone. The ``needs_clarification`` / ``clarifying_questions`` keys survive only as
+Stage 1 is the QUESTION WORKSHOP (plan 15.2-13, D-03): orientation -> candidates
+-> cluster -> critique -> Swiss tournament -> evolve. It takes the client-validated
+questions and sharpens them into ranked sub-questions, which become the run's
+research angles. It may add DEPTH inside a question; it never changes SCOPE (D4) —
+the report's per-focus-area sections are still keyed by the client's own labels.
+
+The single-LLM-call intake that used to be Stage 1 is now UNREFERENCED FROM THIS
+MODULE AND DELIBERATELY RETAINED (D-03) — see the comment above the import block
+for the exact symbol, the rollback recipe and who owns its deletion. There is no
+feature flag and no dual-run: the workshop is the only Stage 1.
+``intake.detect_explicit_questions`` is NOT part of that retirement — it is pure,
+deterministic Python and stays in use as the fallback source of client-validated
+question labels.
+
+The ``needs_clarification`` / ``clarifying_questions`` keys survive only as
 vestigial shape (the ``/answer`` endpoint + worker parking still exist), never
 populated by this pipeline.
 
@@ -49,8 +60,33 @@ import os
 import uuid
 from typing import Any, Optional, TYPE_CHECKING
 
-from nestor_pulse_sdk.pipeline.tribunal.intake import adaptive_intake
-from nestor_pulse_sdk.pipeline.tribunal.research_division import run_angles, divide
+# D-03, THE WHOLE OF IT, IN ONE PLACE.
+#
+# `intake.adaptive_intake` is NO LONGER IMPORTED HERE — the question workshop
+# (`workshop_rank.run_question_workshop`) is Stage 1 now. The function is NOT
+# deleted: `intake.py` is byte-unchanged and `adaptive_intake` is still defined,
+# importable and syntactically live.
+#
+# ROLLBACK RECIPE, if the August live run says the workshop is worse: restore
+# this import, put the `adaptive_intake(...)` call back in place of the
+# `run_question_workshop(...)` block in Stage 1, and pass no `winners=` to
+# `divide()`. That is the entire change — one wiring edit, no restored code, no
+# migration. Deletion of the function itself is plan 15.2-18's separate V-03
+# commit, after sign-off.
+#
+# `detect_explicit_questions` is a DIFFERENT thing and survives in use: it is
+# pure, deterministic Python, not the LLM call D-03 retires.
+from nestor_pulse_sdk.pipeline.tribunal.intake import detect_explicit_questions
+from nestor_pulse_sdk.pipeline.tribunal.workshop_rank import run_question_workshop
+from nestor_pulse_sdk.pipeline.tribunal.research_division import (
+    run_angles,
+    divide,
+    build_mission_brief_from_winners,
+)
+from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
+    own_stream_unavailable_reason,
+)
+from nestor_pulse_sdk.runs.stage_feed import StageFeed
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     claim_distiller,
     synthesize_report,
@@ -681,23 +717,125 @@ class TribunalPipeline:
             )
 
         # ------------------------------------------------------------------
-        # Stage 1: Adaptive intake — DELEGATE (always produce a research plan)
+        # Stage 1: The QUESTION WORKSHOP (D-03) — client questions in, ranked
+        #          sub-questions out. Never raises; degrades in words.
         # ------------------------------------------------------------------
-        # The brief is operator-validated (the intake backend is the only caller),
-        # so adaptive_intake is a delegator now: it always returns a real plan and
-        # never asks clarifying questions. The old clarification-cap / force-proceed
-        # / early-return machinery is gone (quick task 260721-twy).
+        # The `intake` stage key now means "brief received, client-validated
+        # questions identified", and it is still where `_intake_detail` renders
+        # the final research plan. The workshop's own fan-out rows go to the
+        # `workshop` stage key, declared by 15.2-03 — this plan declares none.
         await set_stage(run_id, tenant_id, "intake")
-        mission_brief = await adaptive_intake(
-            brief=brief,
-            audited=audited,
-            run_id=run_id,
-            tenant_id=tenant_id,
+
+        # THE WORKSHOP FEED IS CLOSED HERE, and only here. 15.2-10 and 15.2-11
+        # deliberately left it open (their `_stage_b_feed_finish` flushes but does
+        # not close), because closing it inside stage B would make the next
+        # writer's rows a no-op and drag `run.current_stage` backwards onto a
+        # stage the operator has already watched finish. This pipeline is the
+        # last writer of that stage, so `async with` closes it on both the normal
+        # and the exception path.
+        async with StageFeed(
+            run_id=run_id, tenant_id=tenant_id, stage_key="workshop"
+        ) as workshop_feed:
+            workshop_result = await run_question_workshop(
+                brief=brief,
+                # The workshop's own `normalise_questions` resolves the client
+                # questions from the brief (via the SAME `detect_explicit_questions`
+                # this module imports), so no second question list is passed in.
+                questions=None,
+                # The tournament judge is asked "which of these two matters more
+                # for THIS client's decision" — with an empty decision context it
+                # has no decision to judge against, so the brief's opening is
+                # handed to it, bounded the same way the gates bound theirs.
+                decision_context=(brief or "").strip()[:_GATE_DECISION_CONTEXT_CHARS],
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                feed=workshop_feed,
+                # ONE CircuitBreaker, not the whole BreakerSet: `with_retry`
+                # consults `breaker.allow()` directly. Same run-scoped registry
+                # the skeptic stage draws from, so a wedged Anthropic endpoint is
+                # observed once per run rather than once per stage.
+                breaker=breakers.get("anthropic:workshop"),
+            )
+
+        # Read the result TOLERANTLY (phase rule 4): every key below is optional
+        # as far as this reader is concerned, even though 15.2-11 guarantees them.
+        workshop_result = workshop_result if isinstance(workshop_result, dict) else {}
+        winners = list(workshop_result.get("winners") or [])
+        workshop_fallback = bool(workshop_result.get("workshop_fallback"))
+        run_language = str(workshop_result.get("language") or "").strip()
+        deep_research_prompt = str(workshop_result.get("deep_research_prompt") or "").strip()
+        client_questions = [
+            str(q or "").strip()
+            for q in (workshop_result.get("client_questions") or [])
+            if str(q or "").strip()
+        ]
+        brief_conflicts = list(workshop_result.get("brief_conflicts") or [])
+
+        if not client_questions:
+            # The workshop normally cannot return an empty list, so reaching this
+            # is worth a sentence. `detect_explicit_questions` is the SAME
+            # detector the workshop uses internally — reused, never re-written.
+            client_questions = [
+                q.strip() for q in detect_explicit_questions(brief or "") if q.strip()
+            ]
+            log.warning(
+                "tribunal_pipeline: the workshop returned no client questions — "
+                "falling back to the deterministic question detector (%d found)",
+                len(client_questions),
+            )
+        if not client_questions:
+            first_line = next(
+                (ln.strip() for ln in (brief or "").splitlines() if ln.strip()), ""
+            )
+            client_questions = [(first_line or "the brief")[:120]]
+            log.warning(
+                "tribunal_pipeline: the brief carries no enumerated question — "
+                "researching it as ONE question titled %r", client_questions[0],
+            )
+        if not deep_research_prompt:
+            # This feeds `_gate_decision_context`, and the gates' load-bearing
+            # test is judged AGAINST A DECISION. An empty context silently
+            # weakens every gate decision in the run, so it is never left empty.
+            first_line = next(
+                (ln.strip() for ln in (brief or "").splitlines() if ln.strip()), ""
+            )
+            deep_research_prompt = (first_line or " ".join((brief or "").split()))[:400]
+            log.warning(
+                "tribunal_pipeline: the workshop returned no research prompt — "
+                "using the brief's opening line so the gates keep a decision to "
+                "judge materiality against"
+            )
+
+        mission_brief = build_mission_brief_from_winners(
+            winners=winners,
+            client_questions=client_questions,
+            language=run_language,
+            deep_research_prompt=deep_research_prompt,
         )
 
-        # Surface the adaptive-intake RESULT (focus areas + taxonomy + stakes) so it
-        # stays visible for the whole run and afterwards — the research plan the
-        # engine decided on.
+        # D-12, reason 1 of 3: everything the workshop itself named. This goes
+        # through `_note_degradation` — run()'s ONE accumulator — and includes
+        # 15.2-11's own workshop-fallback sentence, so no second wording of it is
+        # written here.
+        for reason in (workshop_result.get("degradation_reasons") or []):
+            _note_degradation(reason)
+        if workshop_fallback and not degradation_reasons:
+            _note_degradation(
+                "The question workshop produced no usable questions of its own, so "
+                "this run researched the client-validated questions verbatim and "
+                "the added-depth half of the redesign did not run."
+            )
+        for note in (workshop_result.get("workshop_notes") or [])[:4]:
+            log.info("tribunal_pipeline: workshop note — %s", note)
+
+        # D-12, reason 3 of 3: a research stream lost before it was ever called.
+        _own_lost = own_stream_unavailable_reason()
+        if _own_lost:
+            _note_degradation(_own_lost)
+
+        # Surface the RESULT (focus areas + stakes) so the research plan the
+        # engine decided on stays visible for the whole run and afterwards.
         await set_stage(
             run_id, tenant_id, "intake", detail=_intake_detail(mission_brief)
         )
@@ -708,12 +846,38 @@ class TribunalPipeline:
         # ------------------------------------------------------------------
         # Stage 2: Hybrid research division
         # ------------------------------------------------------------------
-        _n_fa = len(mission_brief.get("focus_areas") or [])
-        angles = divide(mission_brief)
+        _trims: list[dict[str, Any]] = []
+        angles = divide(mission_brief, winners=winners, trim_out=_trims)
+
+        # D-12, reason 2 of 3: a trim that took a sub-question below two
+        # independent streams. Depth-only trims are LOGGED by divide() and are
+        # deliberately NOT reasons — the client's question is still researched and
+        # the merge still has two views of it, and demoting the run for that would
+        # be the alarm fatigue D-12 rejects.
+        for _trim in _trims:
+            if not _trim.get("degrading"):
+                continue
+            _note_degradation(
+                f"Only one research stream covered the sub-question "
+                f"\"{str(_trim.get('sub_question') or '')[:80]}\" (under the client "
+                f"question \"{str(_trim.get('parent') or '')[:60]}\"), so its "
+                f"findings could not be corroborated against a second, independent "
+                f"stream."
+            )
+
         # Show the ACTUAL division: each angle, the provider/model it was routed to,
         # and its stakes — a summary header line first.
+        _corroborated = len({
+            a.get("corroboration_key") for a in angles if a.get("corroboration")
+        } - {None, ""})
         _division_items = [{
-            "name": f"{_n_fa} focus area(s) → {len(angles)} research angle(s)",
+            "name": (
+                f"{len(client_questions)} client question(s) → "
+                f"{len(winners)} workshop question(s) → "
+                f"{len(angles)} research angle(s)"
+                + (f", {_corroborated} of them checked by several streams"
+                   if _corroborated else "")
+            ),
             "status": "done",
         }]
         _division_items += [
@@ -721,6 +885,11 @@ class TribunalPipeline:
                 "name": (
                     f"{(a.get('focus_area') or '').strip()[:48]} → "
                     f"{_dr_model_display(a.get('provider'))} · {a.get('stakes', 'med')}"
+                    + (
+                        " · corroboration copy "
+                        f"({_angle_copies(angles, a)} streams on the same sub-question)"
+                        if a.get("corroboration") else ""
+                    )
                 ),
                 "status": "done",
                 # The REAL, self-contained query this angle sends to the
@@ -1579,11 +1748,13 @@ class TribunalPipeline:
             #    site says so). The D-08 section is not a prompt, and dropping
             #    caveats from the operator's report would be precisely the silent
             #    loss the cap is explicitly not for.
-            # 3. `brief_conflicts` IS POPULATED BY PLAN 15.2-13 (wave 6), which
-            #    wires the question workshop into run(); the workshop's D4
-            #    brief-vs-world flags (from 15.2-10's emit_orientation) are in
-            #    scope at this point once that lands. Until then the list is
-            #    empty and the subgroup simply does not render.
+            # 3. `brief_conflicts` IS POPULATED HERE (plan 15.2-13, wave 6). They
+            #    are the workshop's D4 brief-vs-world flags, produced by 15.2-10's
+            #    emit_orientation, carried through stage B untouched and handed
+            #    straight to 15.2-06's "Disputed & changed" renderer. Nothing in
+            #    this module reads or reinterprets them — an empty list simply
+            #    means the orientation found no assumption worth flagging, and the
+            #    subgroup does not render.
             # 4. `not_found_by_provider` is DELIBERATELY NOT HERE.
             #    `_write_final_report` reads `research_gap` directly, so the
             #    section works on the resume path and needs no wiring hand-off
@@ -1591,7 +1762,7 @@ class TribunalPipeline:
             "report_sections": {
                 "group_reconciliations": group_reconciliations,
                 "superseded_notes": _deduped_superseded,
-                "brief_conflicts": [],
+                "brief_conflicts": brief_conflicts,
             },
             "verification": {
                 "per_claim_verdicts": per_claim_verdicts,
@@ -2104,6 +2275,7 @@ def _dr_model_display(provider: str | None) -> str:
         "gemini": f"Gemini {GEMINI_DEEP_RESEARCH_AGENT}",
         "claude": "Claude claude-sonnet-4-6 +web",
         "openai": f"OpenAI {OPENAI_DEEP_RESEARCH_MODEL}",
+        "own": "Own researcher (web search + Claude)",
     }.get(p, provider or "?")
 
 
@@ -2120,6 +2292,19 @@ def _angle_label(angle: dict[str, Any], idx: int) -> str:
     if provider:
         return f"{base} → {_dr_model_display(provider)} · {stakes}"
     return base
+
+
+def _angle_copies(angles: list[dict[str, Any]], angle: dict[str, Any]) -> int:
+    """How many streams share this angle's sub-question. PURE.
+
+    Feeds the research-division row so an operator can SEE that a sub-question
+    was deliberately given to several providers — the corroboration the merge
+    later reads — instead of guessing why the same question appears four times.
+    """
+    key = angle.get("corroboration_key") or ""
+    if not key:
+        return 1
+    return sum(1 for a in angles if (a.get("corroboration_key") or "") == key)
 
 
 def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
@@ -2139,7 +2324,11 @@ def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
         label = (fa.get("focus_area") or "").strip()
         if not label:
             continue
-        tax = TAXONOMY.get(fa.get("taxonomy"), fa.get("taxonomy") or "?")
+        # The workshop does not assign taxonomy codes, and rendering a bare "?"
+        # for a focus area that simply has none would read as a missing value.
+        # Inventing a code instead would be a fabricated fact, so the segment is
+        # dropped when there is nothing true to put in it.
+        tax = TAXONOMY.get(fa.get("taxonomy"), fa.get("taxonomy") or "")
         stakes = fa.get("stakes") or "med"
         # The rewritten, self-contained research brief intake authored for THIS
         # focus area — clarification answers folded in. This is the real text
@@ -2147,7 +2336,10 @@ def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
         # key. Surfaced expandable so the rewrite is visible at its source.
         prompt = (fa.get("research_prompt") or "").strip()
         items.append({
-            "name": f"{label[:56]} · {tax} · {stakes} stakes",
+            "name": (
+                f"{label[:56]} · {tax} · {stakes} stakes" if tax
+                else f"{label[:56]} · {stakes} stakes"
+            ),
             "status": "done",
             "prompt": prompt,
         })
