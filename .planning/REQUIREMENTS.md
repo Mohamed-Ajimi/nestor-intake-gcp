@@ -19,7 +19,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Research Engine Redesign (added 2026-07-24 — requirement source: `.planning/RESEARCH-ENGINE-DECISIONS.md` D1–D15/R1–R7/C1 + `.planning/STAKEHOLDER-NOTES.md` §2026-07-24)
 
 - [ ] **ENGINE-09**: Post-run operator surfaces: superadmin-only verification report, live agent-feed foundation (D15 — operator-agreed mockup), facts-only itemized cost (C1 — no estimates, pending-then-backfill-exact), numbered clickable citations (D13) — built and UAT'd against recorded run-4cbb5311 data, no live LLM runs
-- [ ] **ENGINE-10**: Verification gates: materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture and reproducing the recorded keep/drop numbers
+- [x] **ENGINE-10**: Verification gates: materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud, "superseded" verdict — proven by replaying the recorded 1,162-claim fixture and reproducing the recorded keep/drop numbers
 - [ ] **ENGINE-11**: Engine core redesign: question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller (D8), SerpAPI-fueled own researcher stream (D10), LLM-based cross-provider merge (D9), language tagging (D7), reliability R1–R7 (park/resume per F-01/F-02/F-03), report changes (D13/D14); old engine path removed on acceptance (V-03)
 - [ ] **ENGINE-07**: Research runs execute via the queue + always-on worker model (never inside an HTTP request), so runs of any length are immune to Cloud Run request timeouts
 - [x] **ENGINE-08**: Multiple research runs from different clients run concurrently without interference — per-run audit-chain advisory lock added (completing Tribunal's unexecuted concurrency plan 01-19), proven by a test of ≥2 simultaneous runs from different spaces
@@ -95,7 +95,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEAM-01 | Phase 14 | Complete |
 | SEAM-02 | Phase 14 | Complete |
 | ENGINE-09 | Phase 15 | Pending |
-| ENGINE-10 | Phase 15.1 | Pending |
+| ENGINE-10 | Phase 15.1 | Complete |
 | ENGINE-05 | Phase 15.2 | Pending (absorbed into question workshop) |
 | ENGINE-11 | Phase 15.2 | Pending |
 | ENGINE-06 | — | Dropped 2026-07-24 (S-03) |
