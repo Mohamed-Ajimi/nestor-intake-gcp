@@ -220,3 +220,41 @@ def render_research_failed(
         cta_url=cta_url,
         app_base_url=app_base_url,
     )
+
+
+def render_research_parked(
+    *,
+    project_title: str,
+    park_reason: str,
+    cta_url: str,
+    app_base_url: str | None = None,
+    locale: str = "nl",
+) -> str:
+    """Render the "research paused" notification body in ``locale`` (nl fallback, F-03).
+
+    A parked run is NOT a failed run and NOT a degraded run — it is a run that hit a
+    wall it cannot pass on its own (every stream lost, or a hard billing/cap wall) and
+    stopped WITH its paid work intact, waiting for a superadmin to resume it. Losing
+    one or two of four streams is ``completed_degraded`` and mails the completion
+    variant; a D-14 distiller fallback is normal operation and mails nothing special.
+    Only a true park reaches this renderer.
+
+    Short body per 16-D-11: what paused and why (``park_reason``) plus ONE CTA to the
+    admin intake route. ``cta_url`` is
+    ``{app_base_url}/admin/pulse/intakes/{intake_id}`` — an admin app route, NEVER a
+    token (NOTIF-01). Sent to the triggering superadmin only (16-D-09 / 16-D-10).
+    ``locale`` selects ``templates/{locale}/research_parked.html.j2``; an unknown
+    locale falls back to ``nl`` (RUN-02).
+
+    autoescape stays ON, so a hostile ``project_title`` or ``park_reason`` cannot
+    inject markup (T-16-05 / T-15.2-194). ``park_reason`` arrives ALREADY
+    ``error_signature()``-redacted and 400-char-clamped by the engine (15.2-16,
+    T-15.2-126) — this layer ESCAPES it, it does not sanitise it a second time. There
+    is exactly one redaction rule and it lives in the engine.
+    """
+    return _localized_template("research_parked", locale).render(
+        project_title=project_title,
+        park_reason=park_reason,
+        cta_url=cta_url,
+        app_base_url=app_base_url,
+    )

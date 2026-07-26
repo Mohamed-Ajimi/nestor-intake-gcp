@@ -160,6 +160,60 @@ def _capture_finalize(monkeypatch) -> dict:
     return sink
 
 
+def _capture_patch_run(monkeypatch) -> list:
+    """Record every ``_patch_run`` call as ``(research_run_id, values)``.
+
+    Used by the park tests INSTEAD of monkeypatching ``finalize_parked``, so the
+    assertions read the values the REAL finalizer writes (status / error_message /
+    completed_at) rather than trusting that a stub was called. Stage 7 swallows
+    persistence errors by design, so "no exception" proves nothing — this proves the
+    write actually happened with the right values.
+    """
+    calls: list = []
+
+    def _fake_patch_run(session, research_run_id, **values):
+        calls.append((str(research_run_id), values))
+
+    monkeypatch.setattr(run_task, "_patch_run", _fake_patch_run)
+    return calls
+
+
+class _PriorRow:
+    """A minimal stand-in for the mirrored ``research_runs`` row read before mailing."""
+
+    def __init__(self, status=None, error_message=None) -> None:
+        self.status = status
+        self.error_message = error_message
+
+
+def _patch_run_repo(monkeypatch, prior) -> None:
+    """Make the park branch's prior-row read return ``prior`` without a DB."""
+
+    class _FakeRepo:
+        def __init__(self, session, identity) -> None:
+            pass
+
+        def get(self, research_run_id):
+            return prior
+
+    monkeypatch.setattr(run_task, "ResearchRunRepository", _FakeRepo)
+
+
+def _park_script(seq=1, reason="Anthropic monthly cap reached", stage="deep_research"):
+    """A two-tick metrics script whose terminal is a park carrying a descriptor."""
+    park = {}
+    if seq is not None:
+        park["seq"] = seq
+    if reason is not None:
+        park["reason"] = reason
+    park["stage"] = stage
+    park["signature"] = "abc"
+    return [
+        {"status": "running", "current_stage": "delegation"},
+        {"status": "parked", "current_stage": stage, "park": park},
+    ]
+
+
 def test_poll_driver_releases_pool(
     monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
 ):
@@ -444,3 +498,206 @@ def test_completion_mail_sends_on_both_verified_and_broken(
     assert len(fake_resend["calls"]) >= 2, "broken completion must ALSO send a mail"
     # The subject is the SAME completion subject on both paths (unchanged D-07).
     assert fake_resend["calls"][-1]["subject"] == verified_subject
+
+
+# ===========================================================================
+# Plan 15.2-19 (D-17 / F-03) — the PARKED terminal.
+#
+# Vocabulary discipline, the point of this whole block: a park is NOT a failure,
+# NOT a degradation and NOT a distiller fallback.
+#   * losing 1-2 of 4 streams   -> completed_degraded (the completion mail)
+#   * a D-14 distiller fallback -> normal operation (no special mail at all)
+#   * every stream lost, or a hard wall (monthly cap / exhausted credits / 402)
+#                               -> parked (THIS block: finalize_parked + park mail)
+# A parked run keeps completed_at NULL, builds no bundle, writes no report row, and
+# mails the triggering superadmin exactly ONCE per park event (DEC-5's [park#n]).
+# ===========================================================================
+
+
+def test_parked_terminal_finalizes_parked_and_mails(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A parked terminal finalizes parked (completed_at NULL) and mails exactly once."""
+    patches: list = []
+    ctx = _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    written = _capture_patch_run(monkeypatch)
+    _patch_run_repo(monkeypatch, None)  # no prior park marker on the row.
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    fake_tribunal_client["metrics_script"] = _park_script(seq=1)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert written, "the parked terminal must patch the mirror row"
+    _, values = written[-1]
+    assert values["status"] == "parked", (
+        f"a parked run must be mirrored 'parked', never 'failed' — got {values['status']!r}."
+    )
+    assert values["completed_at"] is None, (
+        "completed_at must stay NULL — the run is PAUSED, not finished."
+    )
+    import re
+
+    assert re.match(r"^\[park#1\] ", values["error_message"]), values["error_message"]
+    assert "Anthropic monthly cap reached" in values["error_message"]
+
+    assert len(fake_resend["calls"]) == 1, (
+        f"EXACTLY one park mail must be sent, got {len(fake_resend['calls'])}."
+    )
+    mail = fake_resend["calls"][-1]
+    assert mail["to"] == [ctx["acting_email"]], "the park mail goes to the triggering superadmin only."
+    assert "Anthropic monthly cap reached" in mail["html"]
+
+
+def test_parked_mail_not_resent_for_same_seq(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend, caplog
+):
+    """Re-observing the SAME park event sends ZERO mails but still finalizes (DEC-5)."""
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    written = _capture_patch_run(monkeypatch)
+    # The row already carries this exact park event's marker.
+    _patch_run_repo(
+        monkeypatch,
+        _PriorRow(status="parked", error_message="[park#1] Anthropic monthly cap reached"),
+    )
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    fake_tribunal_client["metrics_script"] = _park_script(seq=1)
+
+    with caplog.at_level("WARNING"):
+        run_task.run_poll_driver(
+            _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+        )
+
+    assert len(fake_resend["calls"]) == 0, (
+        "a re-observed park event must send ZERO mails (the [park#n] marker is the "
+        f"idempotency record); got {len(fake_resend['calls'])}."
+    )
+    assert written and written[-1][1]["status"] == "parked", (
+        "the finalize must still run even when the mail is skipped."
+    )
+    assert "[park#1]" in caplog.text, (
+        "a SKIPPED mail must be logged at WARNING naming the marker — never silent."
+    )
+
+
+def test_parked_seq_two_does_mail(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A genuinely NEW park (seq=2 against a prior [park#1]) mails exactly once."""
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_patch_run(monkeypatch)
+    _patch_run_repo(
+        monkeypatch,
+        _PriorRow(status="parked", error_message="[park#1] an earlier wall"),
+    )
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    fake_tribunal_client["metrics_script"] = _park_script(seq=2, reason="all four streams lost")
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert len(fake_resend["calls"]) == 1, (
+        f"a NEW park event must mail exactly once, got {len(fake_resend['calls'])}."
+    )
+    assert "all four streams lost" in fake_resend["calls"][-1]["html"]
+
+
+def test_parked_terminal_builds_no_bundle(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A parked terminal never calls build_completion — no bundle, no report row."""
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_patch_run(monkeypatch)
+    _patch_run_repo(monkeypatch, None)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    called: list = []
+    monkeypatch.setattr(
+        run_task,
+        "build_completion",
+        lambda *a, **k: called.append(1) or {},
+    )
+
+    fake_tribunal_client["metrics_script"] = _park_script(seq=1)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert called == [], "a parked run has no deliverable — build_completion must NOT run."
+    assert fake_gcs["uploads"] == [], "a parked run must upload no bundle."
+
+
+def test_parked_is_in_research_terminal(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """The poll loop EXITS on parked (DEC-3 — terminal for the STREAM, not the RUN)."""
+    patches: list = []
+    _install_context(monkeypatch)
+    ticks = _capture_mirror(monkeypatch)
+    _capture_patch_run(monkeypatch)
+    _patch_run_repo(monkeypatch, None)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    fake_tribunal_client["metrics_script"] = _park_script(seq=1)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert ticks[-1] == "parked"
+    assert fake_tribunal_client["get_metrics_calls"] == 2, (
+        "the driver must stop polling a parked run — a BackgroundTask that keeps "
+        "polling an indefinitely-parked run leaks a Cloud Run instance (DEC-3); "
+        f"get_metrics was called {fake_tribunal_client['get_metrics_calls']} times."
+    )
+    assert run_task.is_research_parked("parked")
+
+
+def test_parked_malformed_descriptor_still_finalizes(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """A malformed park descriptor still finalizes with a readable reason (ASVS V5).
+
+    ``RunMetrics.park`` is REMOTE JSON whose members originate in provider error
+    text. A non-int ``seq`` and an absent ``reason`` must not raise inside the
+    driver — no ``pytest.raises`` here on purpose: nothing may escape.
+    """
+    patches: list = []
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    written = _capture_patch_run(monkeypatch)
+    _patch_run_repo(monkeypatch, None)
+    _patch_release(monkeypatch, pool_observed=[], patches=patches)
+
+    fake_tribunal_client["metrics_script"] = [
+        {"status": "running"},
+        {"status": "parked", "park": {"seq": "not-an-int"}},
+    ]
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert written, "a malformed descriptor must still finalize the row"
+    _, values = written[-1]
+    assert values["status"] == "parked"
+    assert values["completed_at"] is None
+    assert values["error_message"].startswith("[park#1] "), (
+        f"a non-int seq must fall back to 1, got {values['error_message']!r}."
+    )
+    # The reason falls back to a readable sentence, never an empty tail or "None".
+    tail = values["error_message"][len("[park#1] "):].strip()
+    assert tail and tail != "None", f"the fallback reason must be readable, got {tail!r}."

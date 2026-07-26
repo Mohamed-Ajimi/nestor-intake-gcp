@@ -147,6 +147,8 @@
       "contextPackStarted": "Context Pack-generatie gestart — dit duurt ± 1–2 minuten.",
       "researchStarted": "Deep research gestart — de voortgang verschijnt hieronder.",
       "researchStartFailed": "Research starten mislukt",
+      "researchResumed": "Research hervat",
+      "researchResumeFailed": "De research kon niet worden hervat",
       "scrollToContextPack": "Scroll naar Context Pack hieronder.",
       "scrollToFinalReport": "Scroll naar het klant-rapport blok hieronder.",
       "searchFailed": "Zoeken mislukt",

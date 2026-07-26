@@ -11,10 +11,21 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
   The brief is composed marker-free upstream so a seam run can never opt into the
   interactive-report pause gate (SEAM-04 by composition — see :mod:`app.research.brief`).
 
+* ``POST /intakes/{intake_id}/research/resume`` (:func:`resume_research`, F-01/ENGINE-11) —
+  the click-only Resume of a PARKED run. Superadmin-only and space-scoped
+  (existence-hidden 404), 409 unless the latest run is exactly ``parked``, and
+  deliberately attempt-FREE: a checkpoint resume costs nothing and never consults
+  ``_MAX_ATTEMPTS`` (F-02). It re-queues the SAME engine run through the seam, so the
+  R3 checkpoints are reused instead of re-charged.
+
 * ``GET /intakes/{intake_id}/research/stream`` (:func:`stream_research_run`, RUN-01) — the
   ONE deliberate ``async def`` handler, cloned from ``intake_routes.stream_skill_runs`` with
-  the RESEARCH terminal set ``{completed, failed, cancelled}`` (NOT the skill-run
-  success/failed vocabulary — 16-RESEARCH Pitfall 3). It mirrors the
+  the RESEARCH terminal set ``{completed, completed_degraded, failed, cancelled, parked}``
+  (NOT the skill-run success/failed vocabulary — 16-RESEARCH Pitfall 3). ``parked`` joined
+  that set in 15.2-19 (DEC-3): a parked run waits on a human click that may be hours away,
+  so holding the stream open would burn the handler to its 10-minute ``MAX_STREAM_SECONDS``
+  cap and drop the browser into its reconnect loop. ``parked`` is terminal for the STREAM,
+  never for the RUN. It mirrors the
   ``research_runs`` row to the browser with a dynamic stage trace and closes on a terminal
   status. Every DB touch goes through :func:`run_in_threadpool` (blocking pg8000 must never
   run on the event loop).
@@ -94,6 +105,10 @@ _RESEARCH_TRANSITIONS: dict[str, str] = {"decomposed": "in_research"}
 #: state, which the intake side has no surface for — a re-trigger with the
 #: repaired brief supersedes the parked run (the old engine run stays parked and
 #: consumes nothing). An actively ``queued``/``running`` run still 409s.
+#
+# ``parked`` is deliberately NOT a member (15.2-19): a parked run has its OWN
+# explicit Resume verb (:func:`resume_research`), and letting a re-trigger
+# supersede it would throw away every R3 checkpoint the engine already paid for.
 _RETRYABLE_RUN_STATUSES = {"failed", "cancelled", "needs_input"}
 
 #: The 3-attempt cap (D-04): a 4th trigger for an intake returns needs_investigation and
@@ -110,6 +125,24 @@ def _next_research_status(current: str) -> str:
             status.HTTP_409_CONFLICT,
             f"Cannot start research for an intake in status {current!r}",
         )
+
+
+def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Identity:
+    """Superadmin role gate as a DEPENDENCY (existence-hidden 404, Pitfall 5).
+
+    Declared BEFORE ``get_tenant_repo`` in the resume/download/re-verify signatures so
+    it resolves first: a non-superadmin caller — including a null-space user — hits this
+    404 before ``get_tenant_repo`` can raise its null-space default-deny 403 (which
+    would leak that the endpoint exists; the denial suite pins EXACTLY 404).
+
+    Defined HERE, above the first handler that depends on it, rather than beside the
+    download handlers: :func:`resume_research` (15.2-19) sits directly after
+    :func:`trigger_research`, and a ``Depends`` default is evaluated at def time, so a
+    later definition would be a NameError at import.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    return identity
 
 
 @research_router.post("/{intake_id}/research", status_code=status.HTTP_202_ACCEPTED)
@@ -247,6 +280,150 @@ def trigger_research(
     return {"research_run_id": research_run_id, "status": "queued"}
 
 
+@research_router.post(
+    "/{intake_id}/research/resume", status_code=status.HTTP_202_ACCEPTED
+)
+def resume_research(
+    intake_id: str,
+    background: BackgroundTasks,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Resume a PARKED research run — free, unlimited, superadmin-only (F-01/F-02).
+
+    A parked run is not failed and not degraded: it hit a wall it cannot pass alone
+    (every stream lost, or a hard billing / monthly-cap wall) and stopped WITH its
+    paid work checkpointed. This verb re-queues the SAME engine run so that work is
+    reused, then schedules a FRESH poll driver (the previous one exited when
+    ``parked`` became terminal — DEC-3).
+
+    Status map, each arm pinned by a test:
+
+    * ``202`` — re-queued; body ``{research_run_id, status: "queued"}``.
+    * ``404`` — non-superadmin caller (including a null-space user), cross-tenant or
+      missing intake, no run, or a run carrying no ``tribunal_run_id`` (WR-03: a run
+      with no engine id can never resolve at the seam, so it is existence-hidden
+      rather than a seam 500). Existence is ALWAYS hidden — never 403, never 200.
+    * ``409`` — the latest run's status is not exactly ``parked``.
+    * ``502`` — any other seam or transport failure. Never an unhandled 500.
+
+    F-02: ``run.attempt`` is passed through UNCHANGED and ``_MAX_ATTEMPTS`` is
+    deliberately NOT consulted. The 3-attempt cap (16-D-04) counts full RESTARTS,
+    which re-charge Tribunal from zero; a checkpoint resume re-charges nothing, so
+    capping it would punish the operator for the engine hitting a wall.
+    """
+    # Defense-in-depth role re-check (the same double gate get_bundle_url uses):
+    # the _superadmin_gate dependency is declared BEFORE get_tenant_repo so it
+    # resolves first and a null-space user is 404 here rather than 403 there.
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).latest_for_intake(intake_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    if run.status != "parked":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Research is not paused for this intake"
+        )
+    if not run.tribunal_run_id:
+        # WR-03: no engine id -> the seam could never resolve it. Existence-hidden
+        # 404 rather than letting the seam 404/500 leak out unshaped.
+        _log.warning(
+            "resume refused: research_run_id=%s is parked but carries no "
+            "tribunal_run_id (existence-hidden 404)", run.id,
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    # The brief is recomposed ONLY because run_poll_driver requires the argument.
+    # It starts nothing: the driver's create_run call carries the UNCHANGED
+    # idempotency key uuid5(intake_id, research_run_id), so the engine returns the
+    # EXISTING run that 15.2-16's resume verb just flipped back to ``queued``.
+    # There is no status flip on this path, so the trigger's empty-brief 422 guard
+    # is deliberately not repeated here.
+    inputs = read_brief_inputs(identity, intake_id)
+    if inputs is None:  # pragma: no cover - intake was in-scope above (race)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    brief = brief_mod.assemble_brief(
+        inputs["intake"],
+        inputs["decomposition"],
+        brief_mod.validated_questions(inputs["intake"], inputs["questions"]),
+        context_pack_text=inputs.get("context_pack_text"),
+    )
+
+    settings = get_settings()
+    # The seam call happens OUTSIDE any held DB session and BEFORE the mirror patch:
+    # a seam failure must schedule no driver and leave no half-transitioned row.
+    try:
+        tribunal_client.resume_run(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            run_id=str(run.tribunal_run_id),
+        )
+    except httpx.HTTPStatusError as exc:
+        seam_status = exc.response.status_code if exc.response is not None else 0
+        _log.warning(
+            "resume seam error: research_run_id=%s seam_status=%s", run.id, seam_status
+        )
+        if seam_status == 404:
+            # Missing OR cross-tenant at the engine — indistinguishable by design.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        if seam_status == 409:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Research is not paused for this intake"
+            )
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Research engine unavailable")
+    except httpx.HTTPError as exc:
+        # Transport failure (timeout / connect error) — never an unhandled 500.
+        _log.warning("resume seam transport failure: research_run_id=%s err=%s", run.id, exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Research engine unavailable")
+
+    # COMMITTED-BEFORE-SCHEDULE (root cause of the 16-05 silent driver, live finding
+    # 2026-07-21): the BackgroundTask driver runs BEFORE the request dependency's
+    # transaction commits, so a driver scheduled against the REQUEST session's
+    # uncommitted writes (a) finds no research_runs row — every mirror/finalize
+    # patch matched 0 rows and the panel froze at "queued"; (b) leaves the row lock
+    # held for the driver's whole lifetime; and (c) loses the whole action on
+    # instance death (rollback). The mirror patch + audit therefore run in their OWN
+    # short tenant_session that COMMITS on block exit — strictly before add_task.
+    # For the resume case specifically, that commit is also what lets the fresh
+    # driver read the row back as ``queued`` instead of the stale ``parked``.
+    #
+    # The intake row's own status is NOT touched — it is already ``in_research``.
+    run_id = run.id
+    with tenant_session(identity) as txs:
+        ResearchRunRepository(txs, identity).patch(
+            run_id, status="queued", error_message=None, completed_at=None
+        )
+        audit.log(
+            txs,
+            actor_uid=identity.uid,
+            event_type="research.resumed",
+            target=str(run_id),
+            space_id=intake.space_id,
+            # Structured {from,to} only — never a link or token (T-16-11).
+            metadata={"from": "parked", "to": "queued"},
+        )
+
+    # F-02: run.attempt is passed through UNCHANGED. A checkpoint resume is free and
+    # unlimited; _MAX_ATTEMPTS counts full restarts only and is NOT consulted here.
+    background.add_task(
+        run_poll_driver, identity, intake_id, str(run_id), brief, run.attempt
+    )
+    # WARNING level: pairs with run_poll_driver's START line so "scheduled but no
+    # START" isolates a BackgroundTask that never executed (the 16-05 failure mode).
+    _log.warning(
+        "research resume driver scheduled: research_run_id=%s attempt=%s (unchanged)",
+        run_id, run.attempt,
+    )
+    return {"research_run_id": str(run_id), "status": "queued"}
+
+
 # ---------------------------------------------------------------------------
 # Raw-output download + audit-chain re-verify (superadmin-only, space-scoped)
 # ---------------------------------------------------------------------------
@@ -315,19 +492,6 @@ def _build_and_store_bundle(
         "bundle lazily rebuilt on download: research_run_id=%s key=%s", run.id, key
     )
     return key
-
-
-def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Identity:
-    """Superadmin role gate as a DEPENDENCY (existence-hidden 404, Pitfall 5).
-
-    Declared BEFORE ``get_tenant_repo`` in the download/re-verify signatures so it
-    resolves first: a non-superadmin caller — including a null-space user — hits this
-    404 before ``get_tenant_repo`` can raise its null-space default-deny 403 (which
-    would leak that the endpoint exists; the denial suite pins EXACTLY 404).
-    """
-    if identity.role != "superadmin":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
-    return identity
 
 
 @research_router.get("/{intake_id}/research/{run_id}/bundle-url")

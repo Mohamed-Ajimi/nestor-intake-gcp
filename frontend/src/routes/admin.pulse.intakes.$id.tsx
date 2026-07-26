@@ -52,7 +52,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
 import { ResearchRunProgress } from "@/components/intake/ResearchRunProgress";
-import { triggerResearch } from "@/lib/api/research";
+import { resumeResearch, triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
@@ -809,6 +809,22 @@ function IntakeDetailPage() {
     await load();
   };
 
+  // Resume from the PARKED card in ResearchRunProgress (F-01). Deliberately NOT
+  // `triggerResearch`: a retry starts a new attempt and re-charges the engine, while a
+  // resume re-queues the SAME run from its checkpoints. F-02 — a checkpoint resume is
+  // free and does not consume one of the three trigger attempts, so unlike
+  // `onRetryResearch` there is no cap for this handler to surface.
+  const onResumeResearch = async () => {
+    const res = await resumeResearch(id);
+    if (!res.success) {
+      const codeKey = resolveErrorKey(res.code);
+      toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchResumeFailed"));
+      return;
+    }
+    toast.success(t("intakeDetail.toast.researchResumed"));
+    await load();
+  };
+
   const onDownloadContextPack = () => {
     const el = document.querySelector("[data-context-pack-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1181,7 +1197,7 @@ function IntakeDetailPage() {
            replay card (feed + verification report + cost + citations), so a superadmin can
            still review the run after the report PDF flips the intake to `delivered`/`archived`. */}
        {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
-         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} />
+         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} onResume={onResumeResearch} />
        )}
       </div>
 

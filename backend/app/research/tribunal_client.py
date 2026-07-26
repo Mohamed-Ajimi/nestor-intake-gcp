@@ -182,6 +182,49 @@ def create_run(
     return resp.json()
 
 
+def resume_run(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Re-queue an already-PARKED Tribunal run; return the RunResponse dict (F-01).
+
+    POSTs an EMPTY body to ``{service_url}/api/runs/{run_id}/resume`` — the engine verb
+    (15.2-16) takes no payload. This re-queues the **SAME** engine run so the R3
+    checkpoints and the R7 in-flight provider jobs are reused; it NEVER creates a new
+    run, because a new run would re-charge the whole pipeline from scratch.
+
+    Tenant discipline (TENANT-02 / the Pitfall 1-2 GUC firewall): the tenant comes
+    SOLELY from the verified ``X-Nestor-Tenant-Id`` header that :func:`_headers` sets
+    from the caller's resolved ``space_id``. It is never a request input and never
+    caller-chosen.
+
+    Engine responses:
+
+    * **200** — the ``RunResponse`` JSON (``{id, status: "queued", ...}``), the same run.
+    * **404** — a missing OR cross-tenant ``run_id``, DELIBERATELY indistinguishable.
+      The caller maps this to its own existence-hidden 404.
+    * **409** — the run's status is not exactly ``parked``.
+
+    ``httpx.HTTPStatusError`` is raised on any non-2xx and the CALLER decides the
+    mapping: :func:`app.api.research_routes.resume_research` maps 404 -> 404,
+    409 -> 409 and everything else -> 502, so a seam error is never an unhandled 500.
+    That caller deliberately consults NO attempt counter — a checkpoint resume is free
+    and unlimited (F-02); ``_MAX_ATTEMPTS`` counts full restarts only.
+    """
+    resp = httpx.post(
+        f"{service_url}/api/runs/{run_id}/resume",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        json={},
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_metrics(
     *,
     service_url: str,

@@ -1,0 +1,17 @@
+{#
+  Research-parked notification (FR) — F-03 / RUN-02 / 16-D-10 / 16-D-11.
+  Une recherche en pause n'est PAS une recherche échouée : elle attend un seul clic.
+  Corps court : pourquoi elle s'est mise en pause (park_reason) + UN SEUL CTA admin.
+  NOTIF-01 : cta_url = {app_base_url}/admin/pulse/intakes/{intake_id} — sans token.
+  autoescape ON (T-16-05 / T-15.2-194) ; jamais `| safe`. park_reason arrive déjà
+  expurgé et tronqué par le moteur (15.2-16) — cette couche l'échappe, elle ne le
+  nettoie pas une seconde fois.
+#}{% extends "_base.html.j2" %}
+{% block tag %}Nestor Pulse — Recherche{% endblock %}
+{% block content %}
+<h1>La recherche est en pause</h1>
+<p>La recherche pour <strong>{{ project_title }}</strong> est en pause et vous attend.</p>
+<p>Raison : {{ park_reason }}</p>
+<p>Reprendre est gratuit : le travail déjà payé est conservé et ne sera pas refait.</p>
+<p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Reprendre la recherche dans l'admin →</a></p>
+{% endblock %}
