@@ -18,6 +18,22 @@ because it invented its own numbers; here every `[n]` is assigned from
     columns this phase -- chain-safe; a stored authoritative-tier column is a
     later, still-non-hashed option if the operator wants it).
 
+`publication_date` IS A RETRIEVAL-DATE PROXY, NOT A PUBLICATION DATE. It carries
+`source.fetched_at` -- the moment WE fetched the page, which says nothing about
+when the page was published. Downstream renderers MUST label it "retrieved",
+never "published": presenting a proxy as a fact is exactly what the operator's
+"NO ESTIMATES -- facts and correct calculations only" bar (C1) forbids.
+
+Phase 15.2 (D-05) additions, all ADDITIVE -- `number_citations`' signature,
+docstring contract and return value are unchanged and still pinned by its
+original determinism test:
+  - `_assign_numbers(rows)` -- the pure two-pass assignment, extracted so it can
+    be proved with hand-built rows in the keyless, DB-less engine gate.
+  - `number_citations_with_claims()` -- the same numbering PLUS a complete
+    claim-id -> `[n]` map, which `citations/anchors.py` reduces to the prefix map
+    its post-pass resolves against.
+  - `list_run_claims()` -- the ordered claim rows the fact ledger is built from.
+
 Reads ONLY the DB (claim / source / claim_source), tenant-scoped via RLS -- no
 model text parsing, no GCS. The caller must have set the tenant context
 (get_db_session / set_tenant_context) so cross-tenant sources are invisible.
@@ -83,6 +99,124 @@ def derive_quality_tier(provider: str | None, url: str | None) -> int:
     return 3
 
 
+# ---------------------------------------------------------------------------
+# The ordered claim -> source query. ONE deterministic statement, hoisted so the
+# numbering and the with-claims variant can never drift apart.
+#
+# The ORDER BY is the DETERMINISM CONTRACT pinned by
+# test_citation_numbering.py::test_numbering_is_deterministic_and_all_resolve.
+# Do not change one character of it.
+# ---------------------------------------------------------------------------
+_CLAIM_SOURCE_SQL = (
+    "SELECT c.id AS claim_id, c.position AS position, "
+    "       s.id AS source_id, s.title AS title, s.url AS url, "
+    "       s.provider AS provider, s.fetched_at AS fetched_at "
+    "FROM claim c "
+    "JOIN claim_source cs ON cs.claim_id = c.id "
+    "JOIN source s ON s.id = cs.source_id "
+    "WHERE c.run_id = :rid "
+    "ORDER BY c.position ASC NULLS LAST, c.id ASC, s.id ASC"
+)
+
+#: The ordered claim rows the fact ledger is built from. SAME ordering key as
+#: _CLAIM_SOURCE_SQL, so the ledger the model sees and the numbers Python assigns
+#: are ordered identically.
+_RUN_CLAIMS_SQL = (
+    "SELECT id, text, facet, position "
+    "FROM claim "
+    "WHERE run_id = :rid "
+    "ORDER BY position ASC NULLS LAST, id ASC"
+)
+
+
+def _row_get(row: Any, key: str) -> Any:
+    """Read `key` off a SQLAlchemy Row or a plain dict, without raising.
+
+    `_assign_numbers` is pure and must be provable with hand-built dicts in the
+    keyless engine gate, but production feeds it SQLAlchemy rows.
+    """
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None:
+        try:
+            return mapping[key]
+        except (KeyError, IndexError, TypeError):
+            return None
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _assign_numbers(rows: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Assign `[n]` at first source appearance. PURE -- no DB, no I/O.
+
+    `rows` must already be ordered by `_CLAIM_SOURCE_SQL`'s ORDER BY; this
+    function does not sort, it only walks.
+
+    Returns `(numbered, claim_to_n)`:
+
+    * `numbered` -- BYTE-IDENTICAL to what `number_citations` has always
+      returned. Its entry shape is documented on `number_citations`.
+    * `claim_to_n` -- full claim-id string -> the `[n]` of that claim's FIRST
+      source in row order. EVERY claim present in `rows` appears here, not just
+      the claims that introduced a new source: one claim can introduce several
+      sources, and most claims cite a source some earlier claim already numbered.
+      A map built only from `first_claim_id` would leave the majority of the
+      model's anchors unresolvable -- which is precisely the D-06 count we are
+      trying to drive to zero.
+    """
+    rows = list(rows or ())
+
+    # First pass: count how many DISTINCT sources each claim cites (single_source).
+    sources_per_claim: dict[str, set[str]] = {}
+    for r in rows:
+        cid = str(_row_get(r, "claim_id"))
+        sid = str(_row_get(r, "source_id"))
+        sources_per_claim.setdefault(cid, set()).add(sid)
+
+    # Second pass: assign a 1-based number to each source at first appearance.
+    numbered: list[dict[str, Any]] = []
+    claim_to_n: dict[str, int] = {}
+    seen_source_to_n: dict[str, int] = {}
+    next_n = 1
+    for r in rows:
+        sid = str(_row_get(r, "source_id"))
+        cid = str(_row_get(r, "claim_id"))
+        if sid in seen_source_to_n:
+            # Already numbered at an earlier first-appearance. The CLAIM still
+            # gets mapped -- this is the majority case.
+            claim_to_n.setdefault(cid, seen_source_to_n[sid])
+            continue
+        claim_to_n.setdefault(cid, next_n)
+        fetched_at = _row_get(r, "fetched_at")
+        if fetched_at is None:
+            publication_date = None
+        elif hasattr(fetched_at, "isoformat"):
+            publication_date = fetched_at.isoformat()
+        else:
+            publication_date = str(fetched_at)
+        url = _row_get(r, "url")
+        provider = _row_get(r, "provider")
+        numbered.append(
+            {
+                "n": next_n,
+                "source_id": sid,
+                "title": _row_get(r, "title"),
+                "url": url,
+                "provider": provider,
+                "publication_date": publication_date,
+                "quality_tier": derive_quality_tier(provider, url),
+                "single_source": len(sources_per_claim.get(cid, ())) == 1,
+                "first_claim_id": cid,
+                "first_claim_position": _row_get(r, "position"),
+            }
+        )
+        seen_source_to_n[sid] = next_n
+        next_n += 1
+
+    return numbered, claim_to_n
+
+
 async def number_citations(
     session: AsyncSession,
     run_id: uuid.UUID,
@@ -112,57 +246,51 @@ async def number_citations(
     # Pull the ordered claim -> source rows in ONE deterministic query. We order
     # by claim.position (first-appearance), then claim.id + source.id as stable
     # tie-breakers so the numbering is byte-identical across calls.
-    rows = (
-        await session.execute(
-            text(
-                "SELECT c.id AS claim_id, c.position AS position, "
-                "       s.id AS source_id, s.title AS title, s.url AS url, "
-                "       s.provider AS provider, s.fetched_at AS fetched_at "
-                "FROM claim c "
-                "JOIN claim_source cs ON cs.claim_id = c.id "
-                "JOIN source s ON s.id = cs.source_id "
-                "WHERE c.run_id = :rid "
-                "ORDER BY c.position ASC NULLS LAST, c.id ASC, s.id ASC"
-            ),
-            {"rid": str(run_id)},
-        )
-    ).all()
+    rows = (await session.execute(text(_CLAIM_SOURCE_SQL), {"rid": str(run_id)})).all()
+    return _assign_numbers(rows)[0]
 
-    # First pass: count how many DISTINCT sources each claim cites (single_source).
-    sources_per_claim: dict[str, set[str]] = {}
-    for r in rows:
-        cid = str(r._mapping["claim_id"])
-        sid = str(r._mapping["source_id"])
-        sources_per_claim.setdefault(cid, set()).add(sid)
 
-    # Second pass: assign a 1-based number to each source at first appearance.
-    numbered: list[dict[str, Any]] = []
-    seen_source_to_n: dict[str, int] = {}
-    next_n = 1
-    for r in rows:
-        m = r._mapping
-        sid = str(m["source_id"])
-        if sid in seen_source_to_n:
-            continue  # already numbered at an earlier first-appearance
-        cid = str(m["claim_id"])
-        fetched_at = m["fetched_at"]
-        numbered.append(
-            {
-                "n": next_n,
-                "source_id": sid,
-                "title": m["title"],
-                "url": m["url"],
-                "provider": m["provider"],
-                "publication_date": (
-                    fetched_at.isoformat() if fetched_at is not None else None
-                ),
-                "quality_tier": derive_quality_tier(m["provider"], m["url"]),
-                "single_source": len(sources_per_claim.get(cid, ())) == 1,
-                "first_claim_id": cid,
-                "first_claim_position": m["position"],
-            }
-        )
-        seen_source_to_n[sid] = next_n
-        next_n += 1
+async def number_citations_with_claims(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """`number_citations`' list PLUS the complete claim-id -> `[n]` map.
 
-    return numbered
+    One query, both halves. The list is BYTE-IDENTICAL to what
+    `number_citations(session, run_id)` returns for the same run -- they share
+    `_CLAIM_SOURCE_SQL` and `_assign_numbers`, so the `## Sources` list and the
+    body's `[n]` markers can never disagree.
+
+    The map is what `citations/anchors.py::anchor_number_map` reduces to the
+    prefix map its post-pass resolves against (D-05).
+    """
+    rows = (await session.execute(text(_CLAIM_SOURCE_SQL), {"rid": str(run_id)})).all()
+    return _assign_numbers(rows)
+
+
+async def list_run_claims(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Return the run's claims in ledger order.
+
+    Entries: `{"claim_id": str, "text": str, "facet": str|None,
+    "position": int|None}`.
+
+    Ordered by the SAME key as the numbering query
+    (`position ASC NULLS LAST, id ASC`), so the fact ledger the model reads and
+    the numbers Python assigns are ordered identically -- there is exactly one
+    ordering in this module and both consumers use it.
+
+    RLS-scoped: the caller must already have set the tenant context.
+    """
+    rows = (await session.execute(text(_RUN_CLAIMS_SQL), {"rid": str(run_id)})).all()
+    return [
+        {
+            "claim_id": str(_row_get(r, "id")),
+            "text": _row_get(r, "text"),
+            "facet": _row_get(r, "facet"),
+            "position": _row_get(r, "position"),
+        }
+        for r in rows
+    ]
