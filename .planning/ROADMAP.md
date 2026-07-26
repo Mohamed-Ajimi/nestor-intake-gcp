@@ -157,7 +157,38 @@ trail intact.
   3. Reliability R1–R7 hold: retry/backoff, breaker, checkpointing, park + superadmin-click-only resume (F-01), checkpoint-resumes free/unlimited with the 3-attempt rule counting full restarts only (F-02), park/failure mail to the triggering superadmin (F-03).
   4. V-01/V-02 acceptance passes: live run on a test intake compared against the recorded 4cbb5311 baseline; hard checklist green (workshop questions visible in feed, per-provider fact lists present, gate funnel recorded, citations resolve, `verify_chain` green, cost fully itemized per C1, feed complete with per-row cost) PLUS operator sign-off next to the recorded baseline.
   5. On acceptance the old engine path (adaptive_intake one-call → distiller-as-shredder → exact-key grouping) is removed immediately (V-03 — no fallback flag), and the first live run validates the deployed F-01 skeptic fix by construction.
-**Plans**: TBD
+**Plans**: 19 plans across 12 waves (planned 2026-07-26). Waves 4-12 are single-plan and mostly serialize file ownership rather than dependency depth — `pipeline/tribunal/pipeline.py` is touched by seven plans and `synthesis/steps.py` by four, and GSD requires zero `files_modified` overlap inside a wave.
+
+**Wave 1** *(no dependencies — 3-way parallel)*
+  - 15.2-01 — alembic `0013` (D-13 columns + `research_gap` + `ck_run_status`) + ORM sync + non-superuser RLS denial harness
+  - 15.2-02 — `reliability.py` (R1/R2/R4/R6 primitives, `terminal_state()`) **+ creates `cloudbuild.test-engine.yaml`**, the phase's keyless fast gate
+  - 15.2-03 — `StageFeed` owner + new `ENGINE_STAGES` keys + `audit_id` plumbing (D15/R5/F4/F9)
+
+**Wave 2** *(blocked on Wave 1 — 4-way parallel)*
+  - 15.2-04 — D8 fact-list format + tolerant parser (`facts.py`)
+  - 15.2-05 — D-05 anchor placement + D-06 unresolved accounting + D13 graded sources
+  - 15.2-09 — D-09 shared status predicate + D-12 four-state vocabulary
+  - 15.2-10 — question workshop A: orientation, candidate generation, near-duplicate clustering
+
+**Wave 3** *(3-way parallel)*
+  - 15.2-06 — D-08's two deterministic report sections
+  - 15.2-11 — question workshop B: critique (**ENGINE-05, absorbed per S-02**), Swiss tournament, evolve, D7 tags
+  - 15.2-12 — SerpAPI own-researcher stream (D10) + D-16 cost arithmetic
+
+**Waves 4-8** *(serial)*
+  - 15.2-07 (W4) — WR-01 fix + the coverage cost-trap intersection + D-11 breaker-gated re-entry
+  - 15.2-08 (W5) — WR-10 / D-10 `checked_incidentally` + D-06/D-12 surfacing
+  - 15.2-13 (W6) — D6 distribution + `_MAX_ANGLES` rework + 4th stream + D-03 unwiring of `adaptive_intake`
+  - 15.2-14 (W7) — fact lists from the three third-party streams + D-14 fallback (D-15 protected)
+  - 15.2-15 (W8) — cross-provider merge before the gates (D9/D11) + D-13 persistence
+
+**Waves 9-12** *(serial)*
+  - 15.2-16 (W9) — R3/R4/R7 checkpointing + park, Tribunal engine side + its cross-tenant denial test
+  - 15.2-19 (W10) — park/resume intake + frontend side: Resume route, F-03 mail, Resume UI
+  - 15.2-17 (W11) — **D-02's single gating proof**: stubbed end-to-end run + D-04's rewired replay + the six-gate sweep
+  - 15.2-18 (W12) — deploy + runbook, then **parks at UAT until 2026-08-01** for V-01/V-02, then the separate V-03 cleanup commit
+
+**Cross-cutting constraints** *(hold in every plan)*: all LLM egress through `audited.*` · frozen audit payload — fields ADD, never rename (`verify_chain` green is a legal gate, EU AI Act Art. 12, deadline 2026-08-02) · no agent frameworks, hand-written loops (`group_skeptic.py` is the template) · never `json.loads` raw model text · no plan may depend on the budget governor, which is inert (`NESTOR_TRIBUNAL_UNCAPPED=1`) · every new table/endpoint gets FORCE RLS + a cross-tenant denial test in the plan that creates it · no local Python/Docker — Cloud Build only · plans 01-17 + 19 require **zero live Anthropic calls**.
 **Carried in from Phase 15.1 gap closure (2026-07-25, operator-approved deferrals):** review finding
 WR-01 (the coverage gate is unreachable dead code — `adjudications` is seeded `True` for every claim,
 so the re-entry mechanism never fires) and WR-10 (verdicts attributed to gate-DROPped group members
