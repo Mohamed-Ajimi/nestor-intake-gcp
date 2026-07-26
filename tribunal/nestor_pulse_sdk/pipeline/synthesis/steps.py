@@ -693,6 +693,21 @@ def build_disputed_and_changed(
         # 3. The workshop's brief-vs-world flags (D4). Tolerant input on purpose:
         #    plan 15.2-13 wires the producer, and this section must not care
         #    whether it hands over strings or dicts.
+        #
+        #    THE `assumption` / `world_says` BRANCH IS THE ONE THE ENGINE ACTUALLY
+        #    USES, and it is the reason this loop is not just the three keys above.
+        #    `workshop._parse_orientation` emits
+        #    `{question, assumption, world_says, source_url}` — it has never
+        #    emitted `note`, `text` or `finding`. So every real brief-vs-world flag
+        #    fell through the three-key lookup, rendered as the empty string, was
+        #    dropped by the `if text_value` guard, and the whole
+        #    "Where the brief did not match what the research found" subgroup
+        #    silently never appeared in ANY report. Nothing caught it because the
+        #    producer and the consumer are tested in different files, against
+        #    different hand-made fixtures, and neither one drove the hand-off.
+        #    The stubbed end-to-end run (`tests/test_engine_e2e_stubbed.py`) is
+        #    what surfaced it. The three legacy keys are kept and still take
+        #    priority, so this is purely additive.
         flags: list[str] = []
         for item in brief_conflicts or []:
             if item is None:
@@ -706,6 +721,21 @@ def build_disputed_and_changed(
                     if candidate:
                         raw_flag = candidate
                         break
+                if not raw_flag:
+                    # The producer's own shape, composed into one sentence. Both
+                    # halves are required: an assumption with nothing to contrast
+                    # it against, or a world reading with no assumption named, is
+                    # not a conflict and must not be printed as one.
+                    assumption = _sanitize(item.get("assumption"))
+                    world_says = _sanitize(item.get("world_says"))
+                    if assumption and world_says:
+                        raw_flag = (
+                            f"The brief assumes: {assumption} "
+                            f"The research found: {world_says}"
+                        )
+                        source_url = _sanitize(item.get("source_url"))
+                        if source_url.startswith(("http://", "https://")):
+                            raw_flag += f" ({source_url})"
             else:
                 raw_flag = str(item)
             text_value = _sanitize(raw_flag)
@@ -1922,6 +1952,32 @@ async def collect_provider_facts(
                     kept += 1
                 rec["reports_with_fact_list"] += 1
                 rec["facts_from_list"] += kept
+                # THE COULDN'T-FIND LIST IS HARVESTED ON THIS BRANCH TOO.
+                #
+                # It was not, and the consequence was silent: the forced-tool
+                # stream (the own-researcher, 15.2-12) `continue`d straight past
+                # the `parse_fact_list` call below, so its `not_found` lines never
+                # reached `not_found_by_provider`, never became `research_gap`
+                # rows, and never appeared in D-08's "What we could not establish"
+                # section. A stream that said out loud what it could not establish
+                # was reported as having said nothing — which reads to the
+                # operator as "this stream found everything it looked for".
+                #
+                # The SAME production parser is used rather than reading
+                # `result["not_found"]` off the envelope: `parse_fact_list` owns
+                # the bounds (`_MAX_NOT_FOUND`, `_MAX_NOT_FOUND_CHARS`) and the
+                # region extraction, and a second reader of the same data is
+                # exactly the fork this phase forbids. `render_report` writes the
+                # block into `report`, so it round-trips. `parsed.facts` is
+                # deliberately DISCARDED here — the pre-parsed facts above are
+                # authoritative and re-adding them would double-count every fact.
+                if report_text:
+                    _nf = parse_fact_list(
+                        report_text, provider=name, facet=facet,
+                        label_index=build_label_index(report_text),
+                    ).not_found
+                    not_found_raw.extend(_nf)
+                    not_found_pairs_raw.extend((name, item) for item in _nf)
                 reports_out.append((name, {**result, "report": stripped}))
                 continue
 
