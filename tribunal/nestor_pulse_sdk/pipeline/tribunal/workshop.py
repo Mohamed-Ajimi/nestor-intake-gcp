@@ -1410,3 +1410,287 @@ async def cluster_candidates(
         if isinstance(stats, dict):
             stats["calls"] = 0
         return [_as_singleton(c) for c in items], reasons
+
+
+# ---------------------------------------------------------------------------
+# The stage entry point (D5 / D-01: fully automatic, no operator pause anywhere).
+# ---------------------------------------------------------------------------
+
+
+def _dedup_reasons(reasons: Sequence[str]) -> list[str]:
+    """Ordered, de-duplicated, blank-free. Never raises."""
+    out: list[str] = []
+    for reason in reasons or []:
+        if isinstance(reason, str) and reason.strip() and reason not in out:
+            out.append(reason)
+    return out
+
+
+def _collect_conflicts(orientations: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
+    """Flatten every question's brief-vs-world flags into one de-duplicated list.
+
+    This is the D4 payload plan 15.2-06's "Disputed & changed" report section
+    consumes — as pipeline DATA, so the writing model never has to re-derive it.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for orientation in orientations or []:
+        for conflict in (orientation or {}).get("brief_conflicts") or []:
+            if not isinstance(conflict, dict):
+                continue
+            key = (
+                str(conflict.get("question") or ""),
+                str(conflict.get("assumption") or ""),
+                str(conflict.get("world_says") or ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(conflict))
+    return out
+
+
+def _verbatim_candidates(questions: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every client-validated question as its own verbatim candidate. Never empty
+    for a non-empty question list — this is the shape D-17 degrades to."""
+    out: list[dict[str, Any]] = []
+    for i, q in enumerate(questions or []):
+        label = str(q.get("label") or "question")
+        out.append(
+            {
+                "index": i,
+                "text": str(q.get("text") or "")[:_CANDIDATE_MAX_CHARS],
+                "parent": label,
+                "parents": [label],
+                "source": "verbatim",
+                "cluster_key": f"__singleton__:{i}",
+                "merged_from": [],
+            }
+        )
+    return out
+
+
+def _stage_a_result(
+    *,
+    questions: list[dict[str, Any]],
+    orientations: list[dict[str, Any]],
+    conflicts: list[dict[str, str]],
+    candidates: list[dict[str, Any]],
+    reasons: Sequence[str],
+    generated: int,
+    fallback: bool,
+) -> dict[str, Any]:
+    return {
+        "questions": questions,
+        "orientation": orientations,
+        "brief_conflicts": conflicts,
+        "candidates": candidates,
+        "degradation_reasons": _dedup_reasons(reasons),
+        "stage_a_fallback": bool(fallback),
+        "counts": {
+            "questions": len(questions),
+            "oriented": len(orientations),
+            "candidates_generated": int(generated),
+            "candidates_after_cluster": len(candidates),
+            "brief_conflicts": len(conflicts),
+        },
+    }
+
+
+async def _stage_summary(
+    feed: "Optional[StageFeed]", *, actions: int, items_read: int, cost_usd: Decimal
+) -> None:
+    """Roll the stage up and FLUSH — but never make the feed inert.
+
+    Plan 15.2-11 keeps writing critique / tournament rows to this SAME `workshop`
+    stage after Stage A returns. Making the feed inert here would turn every one of
+    those rows into a no-op and drag `run.current_stage` backwards onto a stage the
+    operator has already watched finish (`stage_feed.py:316-330`). So: flush, and
+    leave the stage open for plan 15.2-11.
+    """
+    if feed is None:
+        return
+    try:
+        await feed.set_summary(
+            actions=actions, items_read=items_read, cost_usd=str(cost_usd)
+        )
+        await feed.flush()
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks the work
+        log.warning("workshop: stage summary write failed: %r", exc)
+
+
+async def run_workshop_stage_a(
+    *,
+    brief: str,
+    questions: Optional[list[dict[str, Any]]] = None,
+    brief_context: Optional[str] = None,
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    feed: "Optional[StageFeed]" = None,
+    breaker: Any | None = None,
+    model: str = _WORKSHOP_MODEL,
+) -> dict[str, Any]:
+    """Run the whole candidate funnel and return a plain, JSON-safe contract.
+
+    FULLY AUTOMATIC (D5, and D-01's no-pause-gates rule binds this module): nothing
+    in this call path waits for an operator, asks a clarifying question or blocks.
+
+    Sequence: normalise the questions -> orient (first `_ORIENT_MAX_QUESTIONS`) ->
+    generate candidates (ALL questions) -> collapse near-duplicates.
+
+    Returns — this is the contract plans 15.2-11 and 15.2-13 code against:
+
+      questions            list[dict]  the normalised client-validated questions,
+                                       verbatim, in brief order: {label, text, source}.
+                                       Plan 15.2-11's D4 superset assertion compares
+                                       against {q["label"] for q in questions}.
+      orientation          list[dict]  per-question orientation, in input order:
+                                       {label, findings, brief_conflicts, citations,
+                                        ok, cost_usd, audit_id, calls} (+ `reason`
+                                        when ok is False).
+      brief_conflicts      list[dict]  the flat, de-duplicated D4 brief-vs-world
+                                       flags: {question, assumption, world_says,
+                                       source_url}. Plan 15.2-06's "Disputed &
+                                       changed" section consumes exactly this.
+      candidates           list[dict]  the clustered representatives:
+                                       {index, text, parent, parents, source,
+                                        cluster_key, merged_from}. `parents` — NOT
+                                       `parent` — is what a D4 superset assertion
+                                       must union over, because a collapse can carry
+                                       two client questions onto one representative.
+      degradation_reasons  list[str]   ordered, de-duplicated plain-words sentences
+                                       for D-12 and the verification report.
+      stage_a_fallback     bool        True when EVERY surviving candidate is
+                                       `source == "verbatim"`, i.e. the workshop
+                                       produced nothing beyond the client's own
+                                       questions. Plan 15.2-11 turns this into
+                                       `workshop_fallback: true`, a D-12 degrading
+                                       condition.
+      counts               dict[str,int]  questions / oriented / candidates_generated
+                                       / candidates_after_cluster / brief_conflicts.
+
+    NEVER RAISES. On an unexpected failure it logs at ERROR and returns the fallback
+    shape — every client-validated question as its own verbatim candidate,
+    `stage_a_fallback: True`, and a reason naming what broke. Losing the workshop
+    must DEGRADE a run, never fail it (D-17: a degraded deliverable beats none).
+    """
+    normalised: list[dict[str, Any]] = []
+    try:
+        normalised = normalise_questions(questions, brief)
+        # The caller may pass a narrower context pack; the default is the brief.
+        ctx = str((brief_context if brief_context is not None else brief) or "")
+
+        reasons: list[str] = []
+        calls = 0
+        cost = Decimal("0")
+
+        orientations = await run_orientation(
+            questions=normalised,
+            brief_context=ctx,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+            model=model,
+        )
+        for orientation in orientations:
+            calls += int(orientation.get("calls") or 0)
+            cost = _add_cost(cost, orientation.get("cost_usd"))
+
+        failed = sum(1 for o in orientations if not o.get("ok"))
+        if failed:
+            reasons.append(_reason_orientation_failed(failed, len(orientations)))
+        unoriented = len(normalised) - len(orientations)
+        if unoriented > 0:
+            reasons.append(_reason_orientation_uncapped(unoriented, len(orientations)))
+
+        gen_stats: dict[str, Any] = {}
+        candidates, gen_reasons = await generate_candidates(
+            questions=normalised,
+            orientations=orientations,
+            brief_context=ctx,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+            model=model,
+            stats=gen_stats,
+        )
+        reasons.extend(gen_reasons)
+        calls += int(gen_stats.get("calls") or 0)
+        cost = _add_cost(cost, gen_stats.get("cost_usd"))
+        generated = len(candidates)
+
+        cluster_stats: dict[str, Any] = {}
+        representatives, cluster_reasons = await cluster_candidates(
+            candidates=candidates,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            stats=cluster_stats,
+        )
+        reasons.extend(cluster_reasons)
+        calls += int(cluster_stats.get("calls") or 0)
+
+        fallback = (
+            all(c.get("source") == "verbatim" for c in representatives)
+            if representatives
+            else True
+        )
+        if fallback:
+            log.warning(
+                "workshop: stage A produced no sub-questions beyond the %d "
+                "client-validated questions — the run is degraded, not failed",
+                len(normalised),
+            )
+            reasons.append(_reason_stage_a_fallback())
+
+        result = _stage_a_result(
+            questions=normalised,
+            orientations=orientations,
+            conflicts=_collect_conflicts(orientations),
+            candidates=representatives,
+            reasons=reasons,
+            generated=generated,
+            fallback=fallback,
+        )
+
+        await _stage_summary(
+            feed,
+            actions=calls,
+            items_read=len(representatives),
+            cost_usd=cost,
+        )
+        log.info(
+            "workshop: stage A done — %d question(s), %d oriented, %d candidate(s) "
+            "-> %d after clustering, %d brief conflict(s), %d degradation reason(s)",
+            result["counts"]["questions"],
+            result["counts"]["oriented"],
+            result["counts"]["candidates_generated"],
+            result["counts"]["candidates_after_cluster"],
+            result["counts"]["brief_conflicts"],
+            len(result["degradation_reasons"]),
+        )
+        return result
+
+    except Exception as exc:  # noqa: BLE001 — the workshop degrades, never fails
+        log.error("workshop: stage A failed outright: %r", exc, exc_info=True)
+        if not normalised:
+            try:
+                normalised = normalise_questions(questions, brief)
+            except Exception:  # noqa: BLE001
+                normalised = []
+        fallback_candidates = _verbatim_candidates(normalised)
+        return _stage_a_result(
+            questions=normalised,
+            orientations=[],
+            conflicts=[],
+            candidates=fallback_candidates,
+            reasons=[_reason_stage_a_crashed(f"{type(exc).__name__}: {exc}")],
+            generated=len(fallback_candidates),
+            fallback=True,
+        )

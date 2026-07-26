@@ -762,3 +762,298 @@ async def test_clustering_chunks_above_the_block_guard(monkeypatch):
     assert sorted(keys) == ["0#0", "1#0", "2#0"], "ids are namespaced per chunk"
     assert len(set(keys)) == len(keys)
     assert _covered_indices(reps) == set(range(10))
+
+
+# ===========================================================================
+# SECTION 3 — run_workshop_stage_a: the D5 automatic entry point
+# ===========================================================================
+
+#: Discriminators the scripted fake routes on. The orientation SYSTEM prompt and
+#: the candidate prompt share the question text, so the orientation key must come
+#: FIRST in the script dict — `ScriptedWorkshopAudited` returns the first match.
+_ORIENT_MARKER = "You are orienting a research team"
+
+_DEFAULT_CONFLICT = {
+    "assumption": "the brief assumes the incumbent still leads",
+    "world_says": "the Q1 2026 filings put the challenger ahead",
+    "source_url": "https://example.org/filings",
+}
+
+
+def _stage_script(
+    candidates_by_question: dict[str, list[str]],
+    *,
+    findings: list[str] | None = None,
+    conflicts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    script: dict[str, Any] = {
+        _ORIENT_MARKER: _orientation_response(
+            findings if findings is not None else ["an orientation fact"],
+            conflicts if conflicts is not None else [dict(_DEFAULT_CONFLICT)],
+        )
+    }
+    for question_text, lines in candidates_by_question.items():
+        script[question_text] = FakeTextResponse(_fenced(*lines))
+    return script
+
+
+async def _stage_a(
+    audited: ScriptedWorkshopAudited,
+    brief: str,
+    *,
+    questions: list[dict[str, Any]] | None = None,
+    brief_context: str | None = None,
+    feed: Any = None,
+) -> dict[str, Any]:
+    return await workshop.run_workshop_stage_a(
+        brief=brief,
+        questions=questions,
+        brief_context=brief_context,
+        audited=audited,
+        run_id=RUN_ID,
+        tenant_id=TENANT_ID,
+        feed=feed,
+    )
+
+
+def _numbered_brief(n: int) -> str:
+    return "\n".join(
+        f"{i}. What is the state of segment number {i} today?" for i in range(1, n + 1)
+    )
+
+
+def _numbered_label(i: int) -> str:
+    return f"What is the state of segment number {i} today?"
+
+
+def _parent_union(candidates: list[dict[str, Any]]) -> set[str]:
+    """The D4 union: `parents`, NOT `parent` — a collapse can carry two questions."""
+    union: set[str] = set()
+    for candidate in candidates:
+        union.update(candidate["parents"])
+    return union
+
+
+async def test_stage_a_happy_path_shape():
+    questions = [_question(f"Q{i}", f"client question number {i}") for i in (1, 2, 3)]
+    script = _stage_script(
+        {
+            q["text"]: [
+                _candidate_line(f"first sub-question for {q['label']}", q["label"]),
+                _candidate_line(f"second sub-question for {q['label']}", q["label"]),
+            ]
+            for q in questions
+        }
+    )
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=script,
+        # candidates 0+1 collapse; the rest stay distinct -> 6 becomes 5.
+        gemini_script=[FakeTextResponse(_cluster_reply({0: 0, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4}))],
+    )
+
+    result = await _stage_a(audited, "a brief", questions=questions)
+
+    assert set(result) == {
+        "questions",
+        "orientation",
+        "brief_conflicts",
+        "candidates",
+        "degradation_reasons",
+        "stage_a_fallback",
+        "counts",
+    }
+    assert isinstance(result["questions"], list) and len(result["questions"]) == 3
+    assert isinstance(result["orientation"], list) and len(result["orientation"]) == 3
+    assert all(o["ok"] is True for o in result["orientation"])
+    assert isinstance(result["brief_conflicts"], list)
+    assert isinstance(result["degradation_reasons"], list)
+    assert result["stage_a_fallback"] is False
+
+    counts = result["counts"]
+    assert all(isinstance(v, int) for v in counts.values())
+    assert counts["questions"] == 3
+    assert counts["oriented"] == 3
+    assert counts["candidates_generated"] == 6
+    assert counts["candidates_after_cluster"] == 5
+    assert counts["candidates_after_cluster"] <= counts["candidates_generated"]
+    assert counts["candidates_after_cluster"] == len(result["candidates"])
+    assert counts["brief_conflicts"] == len(result["brief_conflicts"]) == 3
+
+    for candidate in result["candidates"]:
+        assert set(candidate) >= {
+            "index", "text", "parent", "parents", "source", "cluster_key", "merged_from",
+        }
+    assert _parent_union(result["candidates"]) >= {q["label"] for q in result["questions"]}
+
+
+async def test_stage_a_every_client_question_has_a_candidate():
+    """The D4 invariant at stage A: no client question can be left without one."""
+    brief = _numbered_brief(5)
+    # Only two of the five questions get a scripted candidate response. The other
+    # three fall through to the never-drop verbatim injection.
+    script = _stage_script(
+        {
+            _numbered_label(1): [_candidate_line("a sharper take on segment 1", "x")],
+            _numbered_label(2): [_candidate_line("a sharper take on segment 2", "y")],
+        }
+    )
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=script,
+        # Empty reply -> every id is the -1 sentinel -> nothing collapses.
+        gemini_script=[FakeTextResponse("")],
+    )
+
+    # A narrow context pack, deliberately naming NO question: the default context is
+    # the whole brief, and the fake routes on substrings, so every question's prompt
+    # would otherwise carry every other question's text and match the wrong script key.
+    result = await _stage_a(
+        audited, brief, brief_context="Background on the client. It sells fuel cards."
+    )
+
+    labels = {q["label"] for q in result["questions"]}
+    assert len(labels) == 5
+    assert {c["parent"] for c in result["candidates"]} >= labels
+    assert _parent_union(result["candidates"]) >= labels
+
+    verbatim = {c["parent"] for c in result["candidates"] if c["source"] == "verbatim"}
+    assert verbatim == {_numbered_label(i) for i in (3, 4, 5)}
+    assert result["stage_a_fallback"] is False
+
+
+async def test_stage_a_falls_back_to_client_questions_when_everything_fails():
+    """D-17: losing the workshop degrades a run, it never fails one."""
+    audited = ScriptedWorkshopAudited(raise_on_call=RuntimeError("the provider is down"))
+
+    result = await _stage_a(audited, _numbered_brief(4))
+
+    assert result["stage_a_fallback"] is True
+    assert len(result["candidates"]) == len(result["questions"]) == 4
+    assert all(c["source"] == "verbatim" for c in result["candidates"])
+    assert _parent_union(result["candidates"]) == {q["label"] for q in result["questions"]}
+    assert result["degradation_reasons"]
+
+
+async def test_stage_a_degradation_reasons_are_sentences_a_human_reads():
+    """D-12 / `test_fail_loud.py:103-115`'s bar: a sentence, never a code."""
+    audited = ScriptedWorkshopAudited(raise_on_call=RuntimeError("the provider is down"))
+
+    result = await _stage_a(audited, _numbered_brief(3))
+    reasons = result["degradation_reasons"]
+
+    assert reasons
+    for reason in reasons:
+        assert isinstance(reason, str)
+        assert len(reason) > 40, reason
+        assert " " in reason
+        assert reason.strip() == reason
+        assert not reason.isupper()
+        assert "_" not in reason.split(" ")[0], "a bare snake_case code is not a sentence"
+    # Where a count is named it is a literal digit, not a placeholder.
+    assert any(any(ch.isdigit() for ch in reason) for reason in reasons)
+    assert len(set(reasons)) == len(reasons), "reasons are de-duplicated"
+
+
+async def test_stage_a_collects_brief_conflicts_across_questions():
+    questions = [_question(f"Q{i}", f"client question number {i}") for i in (1, 2)]
+    script = _stage_script(
+        {q["text"]: [_candidate_line(f"deeper on {q['label']}", q["label"])] for q in questions}
+    )
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=script, gemini_script=[FakeTextResponse("")]
+    )
+
+    result = await _stage_a(audited, "a brief", questions=questions)
+
+    conflicts = result["brief_conflicts"]
+    assert len(conflicts) == 2
+    assert {c["question"] for c in conflicts} == {"Q1", "Q2"}
+    for conflict in conflicts:
+        assert set(conflict) == {"question", "assumption", "world_says", "source_url"}
+        assert conflict["assumption"] == _DEFAULT_CONFLICT["assumption"]
+        assert conflict["source_url"] == _DEFAULT_CONFLICT["source_url"]
+    assert result["counts"]["brief_conflicts"] == 2
+
+
+async def test_stage_a_makes_no_live_call_and_never_pauses():
+    """D5 / D-01: the workshop introduces no operator pause, and no live egress."""
+    questions = [_question("Q1", "client question number 1")]
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=_stage_script(
+            {questions[0]["text"]: [_candidate_line("a deeper sub-question", "Q1")]}
+        ),
+        gemini_script=[FakeTextResponse("")],
+    )
+
+    result = await _stage_a(audited, "a brief", questions=questions)
+
+    # The fake is the ONLY egress, and it accounts for every call that was made.
+    assert audited.call_count == len(audited.anthropic_calls) + len(audited.gemini_calls)
+    assert audited.call_count > 0
+    assert audited.unscripted == [], audited.unscripted
+    assert result["candidates"]
+
+    # No operator pause, no blocking prompt, anywhere in the module.
+    assert "needs_input" not in _WORKSHOP_SRC
+    assert "clarifying_questions" not in _WORKSHOP_SRC
+
+
+async def test_stage_a_does_not_close_the_feed():
+    """T-15.2-108: plan 15.2-11 keeps writing to the SAME `workshop` stage."""
+    recorder = _FeedRecorder()
+    questions = [_question("Q1", "client question number 1")]
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=_stage_script(
+            {questions[0]["text"]: [_candidate_line("a deeper sub-question", "Q1")]}
+        ),
+        gemini_script=[FakeTextResponse("")],
+    )
+
+    feed = _feed(recorder)
+    await _stage_a(audited, "a brief", questions=questions, feed=feed)
+
+    rows_before = len(recorder.last_items)
+    # The seam plan 15.2-11 depends on: a later row still reaches the writer.
+    handle = await feed.add("critique", status="running")
+    await feed.flush()
+
+    assert handle >= 0, "the feed went inert — plan 15.2-11's rows would be no-ops"
+    names = [i["name"] for i in recorder.last_items]
+    assert "critique" in names
+    assert len(recorder.last_items) == rows_before + 1
+    assert recorder.calls[-1]["stage_key"] == "workshop"
+    assert recorder.calls[-1]["detail"]["summary"]["items_read"] == 1
+
+
+async def test_stage_a_is_deterministic_over_a_fixed_script():
+    """What makes plan 15.2-11's tournament determinism test meaningful upstream."""
+    questions = [_question(f"Q{i}", f"client question number {i}") for i in (1, 2, 3)]
+    candidates_by_question = {
+        q["text"]: [
+            _candidate_line(f"first sub-question for {q['label']}", q["label"]),
+            _candidate_line(f"second sub-question for {q['label']}", q["label"]),
+        ]
+        for q in questions
+    }
+    reply = _cluster_reply({0: 0, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4})
+
+    async def _run() -> dict[str, Any]:
+        audited = ScriptedWorkshopAudited(
+            anthropic_script=_stage_script(candidates_by_question),
+            gemini_script=[FakeTextResponse(reply)],
+        )
+        return await _stage_a(audited, "a brief", questions=questions)
+
+    first = await _run()
+    second = await _run()
+
+    assert first["questions"] == second["questions"]
+    assert first["candidates"] == second["candidates"]
+    assert first["counts"] == second["counts"]
+    assert first["brief_conflicts"] == second["brief_conflicts"]
+    assert _parent_union(first["candidates"]) >= {q["label"] for q in first["questions"]}
+
+
+# ===========================================================================
+# SECTION 4 — the ENGINE-05 critique pass (KEEP / WEAK / KILL).
+# Plan 15.2-11 appends its tests below this banner; nothing above needs changing.
+# ===========================================================================
