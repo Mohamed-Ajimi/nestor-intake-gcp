@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 15.1 context gathered (12 decisions G-01..G-12; CONTEXT.md + DISCUSSION-LOG.md
-last_updated: "2026-07-25T22:43:25.218Z"
+stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
+last_updated: "2026-07-26T11:00:14.002Z"
 last_activity: 2026-07-25 -- Phase 15.1 execution started
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 44
-  completed_plans: 38
-  percent: 60
+  completed_plans: 44
+  percent: 70
 ---
 
 # Project State
@@ -179,13 +179,13 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-25T11:06:48.307Z
-Stopped at: Phase 15.1 context gathered (12 decisions G-01..G-12; CONTEXT.md + DISCUSSION-LOG.md
+Last session: 2026-07-26T11:00:13.988Z
+Stopped at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
   committed 54dcc1e). Standing operator direction 2026-07-24 unchanged: run ONE combined Phase-15*
   UAT once 15/15.1/15.2 are all ready (against a live run post-2026-08-01) — do NOT UAT piecemeal.
   15.1 needs NO live LLM runs: its CI proof is a deterministic replay of the recorded 1,162-claim
   fixture; the real-classifier calibration check is hand-run after the cap resets 2026-08-01.
-Resume file: .planning/phases/15.1-research-engine-redesign-verification-gates-inserted-2026-07/15.1-CONTEXT.md
+Resume file: .planning/phases/15.2-research-engine-redesign-engine-core-inserted-2026-07-24/15.2-CONTEXT.md
 
 ## Operator Next Steps
 
