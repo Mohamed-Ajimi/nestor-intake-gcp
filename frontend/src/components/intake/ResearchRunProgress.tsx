@@ -39,8 +39,16 @@ import { VerificationReport } from "@/components/intake/VerificationReport";
 
 // D-12: `completed_degraded` is terminal here AND must be handled by the success branch
 // below — adding it to this set alone would route a degraded run into the cancelled card.
-// `parked` is deliberately absent pending plan 15.2-16 (the Resume affordance).
-const RESEARCH_TERMINAL = new Set(["completed", "completed_degraded", "failed", "cancelled"]);
+// `parked` IS terminal here (15.2-19 / DEC-3) now that the Resume affordance exists, and
+// like `completed_degraded` it MUST be handled by its own branch below — adding it to this
+// set alone would route a paused run into the cancelled card.
+const RESEARCH_TERMINAL = new Set([
+  "completed",
+  "completed_degraded",
+  "failed",
+  "cancelled",
+  "parked",
+]);
 
 /**
  * One row of the D15 activity feed. An `item` row is an agent card (task title, expandable
@@ -550,11 +558,16 @@ function AgentFeed({
  *
  * `onRetry` re-invokes the trigger; the 3-attempt cap is enforced server-side, so the panel
  * always offers the affordance and lets the backend reject an over-cap retry.
+ *
+ * `onResume` is the route-supplied handler that POSTs the resume for a PARKED run and then
+ * re-loads. Distinct from `onRetry` on purpose: a retry starts a NEW attempt and re-charges
+ * the engine, while a resume continues the SAME run from its checkpoints for free (F-02).
  */
 export function ResearchRunProgress({
   intakeId,
   runId: runIdProp,
   onRetry,
+  onResume,
 }: {
   intakeId: string;
   // Optional: the route may lift the run id explicitly. When omitted (the default), the
@@ -562,9 +575,14 @@ export function ResearchRunProgress({
   // drill-down threads intakeId + runId + auditId into AuditBodyPanel.
   runId?: string;
   onRetry?: () => void;
+  onResume?: () => void | Promise<void>;
 }) {
   const { t } = useTranslation("intake");
   const { run } = useActiveResearchRun(intakeId);
+  // T-15.2-193: guards a double-click while the resume request is in flight. The engine
+  // 409s the second call anyway (the state guard is server-side and authoritative); this
+  // only stops the operator firing two requests at once.
+  const [resuming, setResuming] = useState(false);
   // The run id used to scope the audit drill-down: prefer an explicit route prop, else the
   // SSE run's id. When neither exists, the drill-down affordance is hidden by AgentFeed.
   const runId = runIdProp ?? run?.id ?? null;
@@ -576,6 +594,10 @@ export function ResearchRunProgress({
   // no answer surface (by design — briefs are pre-validated), so the panel renders
   // it as the failure card with the re-trigger affordance: a retry supersedes the
   // parked run with a repaired brief (allowed server-side since the 2026-07-21 fix).
+  //
+  // `parked` (the D-17 wall, NOT `needs_input`) is different: it gets its OWN card
+  // below. Routing it to the failure card would offer a re-trigger, which starts a
+  // fresh attempt and throws away every checkpoint the engine already paid for.
   const isTerminal = RESEARCH_TERMINAL.has(status) || status === "needs_input";
   const stageRows = toStageRows(run);
   const elapsed = useElapsed(run?.started_at ?? null, !isTerminal);
@@ -652,6 +674,75 @@ export function ResearchRunProgress({
 
           {/* D15: after the run the feed stays frozen + clickable — a replay of what
               happened, with the audit-body drill-down still reachable (superadmin-only). */}
+          {stageRows.length > 0 && (
+            <div className="mt-5 border-t border-ink/10 pt-4">
+              <AgentFeed rows={stageRows} intakeId={intakeId} runId={runId} />
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── parked: the F-01 Resume card ────────────────────────────────────────────
+    // A parked run deliberately renders a RESUME card rather than the failure card.
+    // Reaching the failure card would offer a full re-trigger, which discards the
+    // run's paid checkpoints — the opposite of what a park is for. It also renders
+    // no RawOutputControls and no verification toggle: a parked run has no report
+    // and no bundle (`report_readable("parked")` is false and the intake-side
+    // download gate would 409).
+    if (status === "parked") {
+      return (
+        <div
+          className="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5"
+          style={{ borderLeftColor: "#D97706" }}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="mb-2 flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+            <span
+              className="font-mono text-[11px] uppercase tracking-wider"
+              style={{ color: "#B45309" }}
+            >
+              {t("research.parkedTitle")}
+            </span>
+          </div>
+          <div className="mb-3 font-sans text-[15px] leading-relaxed text-ink">
+            {t("research.parkedBody")}
+          </div>
+          {run?.error_message && (
+            <div className="mb-4">
+              <div className="mb-1 font-mono text-[11px] uppercase tracking-wider text-ink/50">
+                {t("research.parkedReasonLabel")}
+              </div>
+              {/* The mirrored error_message carries the `[park#n]` marker. Rendered
+                  AS-IS: it is the operator's evidence of whether the park mail was
+                  already sent. Do not strip it and do not parse it. React renders
+                  this as a text child, never as markup. */}
+              <div className="whitespace-pre-wrap break-words font-mono text-[13px] text-amber-700">
+                {run.error_message}
+              </div>
+            </div>
+          )}
+          {onResume && (
+            <button
+              type="button"
+              disabled={resuming}
+              onClick={async () => {
+                setResuming(true);
+                try {
+                  await onResume?.();
+                } finally {
+                  setResuming(false);
+                }
+              }}
+              className="inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-60"
+            >
+              {resuming && <Loader2 className="h-4 w-4 animate-spin" />}
+              {t("research.resume")}
+            </button>
+          )}
+          {/* The frozen feed: exactly where the run stopped, still clickable. */}
           {stageRows.length > 0 && (
             <div className="mt-5 border-t border-ink/10 pt-4">
               <AgentFeed rows={stageRows} intakeId={intakeId} runId={runId} />

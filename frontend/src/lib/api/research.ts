@@ -8,8 +8,8 @@ import { apiFetch, currentIdToken, type ApiResult } from "@/lib/api/client";
 // `Authorization` header), which is why a raw `fetch` + `ReadableStream` is used.
 //
 // It clones `openSkillRunStream` (skillRunStream.ts) VERBATIM except for two things:
-//   1. RESEARCH_TERMINAL = {"completed","completed_degraded","failed","cancelled"} — the
-//      VERBATIM Tribunal terminal set (D-05 boundary), NOT the skill-run
+//   1. RESEARCH_TERMINAL = {"completed","completed_degraded","failed","cancelled","parked"}
+//      — the VERBATIM Tribunal terminal set (D-05 boundary), NOT the skill-run
 //      {succeeded,failed} vocabulary.
 //   2. the URL is `/intakes/${intakeId}/research/stream`.
 //
@@ -212,10 +212,20 @@ export type StreamHandle = { close: () => void };
  * run's stream, so leaving it out here makes the client read that close as a drop and
  * enter its `retry()` reconnect loop until unmount — a self-inflicted request amplifier.
  *
- * `parked` is deliberately ABSENT pending plan 15.2-16, which builds the Resume button.
- * A parked run must keep streaming as in-progress rather than land in a dead-end card.
+ * `parked` IS terminal for the STREAM (15.2-19 / DEC-3) — it was absent until the Resume
+ * button existed, because a terminal `parked` without an affordance is a dead-end card.
+ * It closes the stream because a parked run waits on a HUMAN click that may be hours away:
+ * holding the stream open would burn the server handler to its 10-minute
+ * `MAX_STREAM_SECONDS` cap and then drop this client into its bounded reconnect loop.
+ * The RUN is not finished — `resumeResearch` restarts it and a fresh stream opens.
  */
-const RESEARCH_TERMINAL = new Set(["completed", "completed_degraded", "failed", "cancelled"]);
+const RESEARCH_TERMINAL = new Set([
+  "completed",
+  "completed_degraded",
+  "failed",
+  "cancelled",
+  "parked",
+]);
 
 /**
  * Trigger a deep-research run for an intake. Mirrors `getSkillRunFull`: a one-shot
@@ -227,6 +237,24 @@ export function triggerResearch(
   intakeId: string,
 ): Promise<ApiResult<{ research_run_id: string }>> {
   return apiFetch<{ research_run_id: string }>(`/intakes/${intakeId}/research`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Resume a PARKED research run (F-01 — the click-only resume). Mirrors `triggerResearch`:
+ * a one-shot `apiFetch` over the token-attaching transport (never fork the transport),
+ * method POST. Returns `{ research_run_id }` on 202.
+ *
+ * Superadmin-only + space-scoped server-side: a client / cross-space caller is
+ * existence-hidden as 404 (never 403), and a run that is not exactly `parked` is 409.
+ *
+ * Free and unlimited (F-02): a checkpoint resume re-queues the SAME engine run, so it
+ * re-charges nothing and does NOT consume one of the three trigger attempts. Returns
+ * `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function resumeResearch(intakeId: string): Promise<ApiResult<{ research_run_id: string }>> {
+  return apiFetch<{ research_run_id: string }>(`/intakes/${intakeId}/research/resume`, {
     method: "POST",
   });
 }

@@ -147,6 +147,8 @@
       "contextPackStarted": "Context Pack generation started — this takes about 1–2 minutes.",
       "researchStarted": "Deep research started — progress appears below.",
       "researchStartFailed": "Failed to start research",
+      "researchResumed": "Research resumed",
+      "researchResumeFailed": "Could not resume the research",
       "scrollToContextPack": "Scroll to Context Pack below.",
       "scrollToFinalReport": "Scroll to the client report block below.",
       "searchFailed": "Search failed",
