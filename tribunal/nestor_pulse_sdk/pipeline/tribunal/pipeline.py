@@ -85,6 +85,10 @@ from nestor_pulse_sdk.pipeline.tribunal.research_division import (
 )
 from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
     own_stream_unavailable_reason,
+    # F6 (plan 15.2-16): the "no angle produced a usable result" signal. It is
+    # CAUGHT here and turned into park FACTS; the two raise sites in
+    # research_division.py / degraded_parallel.py are deliberately unchanged.
+    InsufficientProvidersError,
 )
 from nestor_pulse_sdk.runs.stage_feed import StageFeed
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
@@ -123,7 +127,26 @@ from nestor_pulse_sdk.pipeline.tribunal.coverage_gate import check_coverage, MAX
 # exactly one breaker implementation and one retry policy in this engine. The
 # BreakerSet is what gates the coverage re-entry fan-out (D-07-C) — `with_retry` is
 # deliberately NOT imported here, because this plan adds no retry policy.
-from nestor_pulse_sdk.pipeline.tribunal.reliability import BreakerSet
+from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+    BreakerSet,
+    # R4/D-17 (plan 15.2-16). `classify`/`HARD_WALL` decide whether a failure is
+    # an account-level wall (park) or an ordinary error (fail); `error_signature`
+    # is what makes a park reason SAFE TO DISPLAY — it is already digit-stripped,
+    # credential-redacted and truncated, and 15.2-19 renders it into an email.
+    HARD_WALL,
+    classify,
+    error_signature,
+)
+# R3 (plan 15.2-16): the checkpoint store and its guards. `checkpoints.py` holds
+# no database code at all — it is bound to the `_read_output` / `_write_output`
+# primitives below, which is what keeps it unit-testable without Postgres.
+from nestor_pulse_sdk.pipeline.tribunal.checkpoints import (
+    CheckpointStore,
+    angles_digest,
+    next_park_seq,
+    park_signature,
+    safe_job_id,
+)
 from nestor_pulse_sdk.pipeline.tribunal.budget import (
     over_budget,
     budget_marker,
@@ -132,7 +155,7 @@ from nestor_pulse_sdk.pipeline.tribunal.budget import (
     SURVIVAL_RULE,
 )
 from nestor_pulse_sdk.pipeline.synthesis.quality_gate import build_quality_gate
-from nestor_pulse_sdk.runs.stages import set_stage, raise_if_cancelled
+from nestor_pulse_sdk.runs.stages import set_stage, raise_if_cancelled, RunCancelled
 from nestor_pulse_sdk.pipeline.tribunal.taxonomy import TAXONOMY
 from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
 from nestor_pulse_sdk.pipeline.synthesis.steps import extract_focus_areas
@@ -595,6 +618,99 @@ def _verify_closing_item(funnel: dict[str, Any]) -> dict[str, str]:
     }
 
 
+#: Which ALREADY-DECLARED stage key a restored checkpoint reports itself under.
+#: 15.2-03 owns `runs/stages.py`; this plan declares NO new stage and writes feed
+#: rows only into keys that schema already contains. `provider_jobs` and `park`
+#: are absent on purpose: an in-flight job id is not a finished stage, and a park
+#: marker is not progress.
+_CKPT_STAGE_KEYS: dict[str, str] = {
+    "workshop": "intake",
+    "angles": "intake",
+    "research": "deep_research",
+    "merge": "distill",
+    "gates": "gate",
+    "verify": "verify",
+}
+
+#: Hard bound on a park reason. It is persisted on `run.verification_summary`,
+#: projected onto `RunMetrics.park`, and rendered by 15.2-19 into an HTML mail
+#: and the operator panel — so it is a SENTENCE, not a stack trace (T-15.2-126).
+_PARK_REASON_CHARS = 400
+
+
+def _read_terminal_inputs(verification: dict[str, Any] | None) -> dict[str, Any]:
+    """D-17 facts off a synthesis bundle, read defensively. Never raises.
+
+    A pre-15.2-16 `synthesis_cache` row replayed after a deploy carries no
+    `terminal_inputs` key at all, and it must still produce the pre-15.2-16
+    answer rather than an exception or a park: the defaults below are exactly
+    what `runs/worker.py` pinned before this plan.
+    """
+    raw = (verification or {}).get("terminal_inputs")
+    raw = raw if isinstance(raw, dict) else {}
+
+    def _int(key: str, default: int) -> int:
+        value = raw.get(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "streams_lost": max(0, _int("streams_lost", 0)),
+        "streams_total": max(1, _int("streams_total", 1)),
+        "verify_ran": bool(raw.get("verify_ran", True)),
+        "synthesis_ran": bool(raw.get("synthesis_ran", True)),
+        "hard_wall": bool(raw.get("hard_wall", False)),
+        "degradation_reasons": _normalise_degradation_reasons(
+            raw.get("degradation_reasons")
+            if isinstance(raw.get("degradation_reasons"), list)
+            else (verification or {}).get("degradation_reasons")
+        ),
+    }
+
+
+def _park_result(
+    *,
+    stage: str,
+    reason: str,
+    prior_park: Any,
+    terminal_inputs: dict[str, Any],
+    verification_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the pipeline's PARK FACTS. This function never decides a status.
+
+    DEC-6, and the whole reason this returns facts rather than a string: the
+    pipeline never returns `"parked"`. It returns `terminal_inputs` constructed
+    so that `reliability.terminal_state()` provably yields `"parked"` — F6 sets
+    `streams_lost == streams_total`, a hard wall sets `hard_wall=True`, a gate
+    stage that could not run sets `verify_ran=False`, a walled synthesis sets
+    `synthesis_ran=False`. `runs/worker.py` calls `terminal_state(**terminal_inputs)`
+    and writes whatever comes back. There is exactly ONE degradation/park rule in
+    this codebase and it is not here.
+
+    The `reason` must already have been built from `error_signature(exc)` plus a
+    plain-language lead sentence — NEVER `repr(exc)`. It is clamped here as the
+    last line of defence.
+    """
+    clamped = str(reason or "").strip()[:_PARK_REASON_CHARS]
+    signature = park_signature(stage, clamped)
+    park = {
+        "seq": next_park_seq(prior_park, signature),
+        "stage": str(stage or ""),
+        "reason": clamped,
+        "signature": signature,
+    }
+    result: dict[str, Any] = {
+        "parked": True,
+        "park": park,
+        "terminal_inputs": dict(terminal_inputs),
+    }
+    if verification_summary:
+        result["verification_summary"] = verification_summary
+    return result
+
+
 class TribunalPipeline:
     """Adaptive-effort Tribunal SDK engine (ADR-006).
 
@@ -728,6 +844,190 @@ class TribunalPipeline:
             )
 
         # ------------------------------------------------------------------
+        # R3 CHECKPOINTS (plan 15.2-16)
+        # ------------------------------------------------------------------
+        # Constructed AFTER the report_spec / synthesis_cache branch above,
+        # which stays FIRST and unchanged: that branch is a full short-circuit
+        # to synthesis and must keep priority over anything here.
+        #
+        # `CheckpointStore` takes BOUND CLOSURES rather than a session — that is
+        # precisely what keeps the class database-free and unit-testable with a
+        # plain dict and no Postgres. Every payload it writes is an ordinary
+        # `Output(format='ckpt_*')` row through the SAME `_write_output`
+        # primitive the two branches above already use, so checkpoints inherit
+        # the `output` table's existing FORCE-RLS policy: no new table, no
+        # migration, no new isolation surface (T-15.2-129).
+        ckpt = CheckpointStore(
+            read=lambda fmt: _read_output(run_id, tenant_id, fmt),
+            write=lambda fmt, payload: _write_output(run_id, tenant_id, fmt, payload),
+        )
+        await ckpt.load()
+
+        if ckpt.resumed():
+            log.warning(
+                "tribunal_pipeline: RESUMING from checkpoints — %s. Every stage "
+                "listed here was already paid for on a previous attempt and will "
+                "not be dispatched again.",
+                ", ".join(ckpt.restored_keys),
+                extra={"run_id": str(run_id)},
+            )
+            # The detail dict is built into a local FIRST, on purpose. The stage
+            # key here is a VARIABLE, so an inline `detail={...}` would make the
+            # dict's own first key the first quoted token in the call — and the
+            # WR-03 source gates (test_stage_schema.py and
+            # test_research_division_assignment.py) read exactly that position to
+            # recover the stage key. Keeping the call free of string literals
+            # keeps those gates reading real stage keys only.
+            _restored_detail = {"items": [{
+                "name": (
+                    "restored from a checkpoint — this stage ran on an earlier "
+                    "attempt of this run and was NOT charged again"
+                ),
+                "status": "done",
+            }]}
+            for _restored_key in ckpt.restored_keys:
+                _stage_key = _CKPT_STAGE_KEYS.get(_restored_key)
+                if not _stage_key:
+                    continue
+                await set_stage(run_id, tenant_id, _stage_key, detail=_restored_detail)
+
+        # WHERE the run got to, for the park message. A one-element list because
+        # the `set_stage` shim inside `_run_staged` writes to it and `run()` reads
+        # it back after the guard below fires.
+        stage_tracker = ["intake"]
+
+        # ------------------------------------------------------------------
+        # THE ONE PARK GUARD (R4/D-17). One try/except around the whole staged
+        # body — never a scatter of them.
+        # ------------------------------------------------------------------
+        try:
+            return await self._run_staged(
+                brief=brief,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                audited=audited,
+                interactive_report=interactive_report,
+                breakers=breakers,
+                degradation_reasons=degradation_reasons,
+                _note_degradation=_note_degradation,
+                ckpt=ckpt,
+                stage_tracker=stage_tracker,
+            )
+        except RunCancelled:
+            # A USER CANCEL IS NEVER CONVERTED INTO A PARK. It is listed FIRST
+            # and re-raised unconditionally so that the worker's `except
+            # RunCancelled` arm — and its `WHERE ... status='running'` guard —
+            # keep the cancelled verdict. Parking a cancelled run would show the
+            # operator a Resume button for work they deliberately stopped.
+            raise
+        except Exception as exc:  # noqa: BLE001 — re-raised below unless it parks
+            # F6, DEFENCE IN DEPTH — expressed as an isinstance test rather than
+            # a second dedicated except clause for it, so this file keeps
+            # exactly ONE such clause (the PRIMARY one, at the `run_angles`
+            # call site inside `_run_staged`, where the angle count and the
+            # per-provider reasons are in hand). Both of F6's raise sites are
+            # already inside that try, so this arm is unreachable today; it
+            # exists so a future raise site cannot quietly turn "every research
+            # stream was lost" into `failed`.
+            _is_f6 = isinstance(exc, InsufficientProvidersError)
+            if not _is_f6 and classify(exc) != HARD_WALL:
+                # Not a park cause: an ordinary failure, and the worker's
+                # `failed` path is the honest answer for it. Re-raise.
+                raise
+
+            if _is_f6:
+                _lost = max(1, len(getattr(exc, "failed", None) or []) or 1)
+                _inputs = {
+                    "streams_lost": _lost,
+                    "streams_total": _lost,
+                    "verify_ran": False,
+                    "synthesis_ran": False,
+                    "hard_wall": False,
+                    "degradation_reasons": list(degradation_reasons),
+                }
+                reason = (
+                    "No research provider produced a usable result for this run, "
+                    "so there is nothing to verify or report on. Nothing already "
+                    "paid for has been lost — the run is parked and can be "
+                    f"resumed. Provider signal: {error_signature(exc)}"
+                )
+            else:
+                _inputs = {
+                    "streams_lost": 0,
+                    "streams_total": 1,
+                    "verify_ran": False,
+                    "synthesis_ran": False,
+                    "hard_wall": True,
+                    "degradation_reasons": list(degradation_reasons),
+                }
+                reason = (
+                    "This run stopped because the provider refused the request at "
+                    "the account level — a monthly usage cap, exhausted credits or "
+                    "a billing block. No retry can fix that, so the run is parked "
+                    "with its paid work intact and can be resumed once the account "
+                    f"is clear. Provider signal: {error_signature(exc)}"
+                )
+
+            parked = _park_result(
+                stage=stage_tracker[0],
+                reason=reason,
+                prior_park=ckpt.get("park"),
+                terminal_inputs=_inputs,
+            )
+            await ckpt.put("park", parked["park"])
+            log.error(
+                "tribunal_pipeline: PARKED at stage %s — %s",
+                stage_tracker[0], parked["park"]["reason"],
+                extra={"run_id": str(run_id)},
+            )
+            return parked
+
+    async def _run_staged(
+        self,
+        *,
+        brief: str,
+        run_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        audited: "AuditedLLMClient",
+        interactive_report: bool,
+        breakers: BreakerSet,
+        degradation_reasons: list[str],
+        _note_degradation: Any,
+        ckpt: CheckpointStore,
+        stage_tracker: list[str],
+    ) -> dict[str, Any]:
+        """The staged body of `run()`: workshop -> research -> ... -> report.
+
+        SPLIT OUT OF `run()` BY PLAN 15.2-16, and for exactly one reason: the
+        R4/D-17 park needs ONE try/except around the whole staged body, and a
+        sibling method is how you get that without re-indenting 1,300 lines of
+        working pipeline. Every local this body uses is passed in by name, so
+        the body itself is unchanged — `degradation_reasons` is still run()'s
+        ONE accumulator (the same list object, not a copy) and
+        `_note_degradation` is still its only writer.
+
+        Returns either a normal result dict or, on F6, park FACTS from
+        `_park_result` — never the string "parked" (DEC-6).
+        """
+        # `set_stage` IS DELIBERATELY SHADOWED for this whole method.
+        #
+        # The park message has to name WHERE the run stopped, and this body
+        # calls `set_stage` at every stage boundary already. Wrapping the name
+        # once here records the stage for free, instead of editing thirty call
+        # sites (each of which would be a chance to miss one). The wrapper adds
+        # nothing else: same arguments, same awaited call, same return.
+        #
+        # LIMIT, stated rather than hidden: `_coverage_reentry_pass` is a
+        # module-level function and calls the REAL `set_stage`, so a park raised
+        # from inside it is named by the last boundary this body crossed
+        # ("coverage"), which is the right answer anyway.
+        _outer_set_stage = set_stage
+
+        async def set_stage(_run_id, _tenant_id, stage_key, **kwargs):  # noqa: A001
+            stage_tracker[0] = stage_key
+            return await _outer_set_stage(_run_id, _tenant_id, stage_key, **kwargs)
+
+        # ------------------------------------------------------------------
         # Stage 1: The QUESTION WORKSHOP (D-03) — client questions in, ranked
         #          sub-questions out. Never raises; degrades in words.
         # ------------------------------------------------------------------
@@ -737,37 +1037,65 @@ class TribunalPipeline:
         # `workshop` stage key, declared by 15.2-03 — this plan declares none.
         await set_stage(run_id, tenant_id, "intake")
 
-        # THE WORKSHOP FEED IS CLOSED HERE, and only here. 15.2-10 and 15.2-11
-        # deliberately left it open (their `_stage_b_feed_finish` flushes but does
-        # not close), because closing it inside stage B would make the next
-        # writer's rows a no-op and drag `run.current_stage` backwards onto a
-        # stage the operator has already watched finish. This pipeline is the
-        # last writer of that stage, so `async with` closes it on both the normal
-        # and the exception path.
-        async with StageFeed(
-            run_id=run_id, tenant_id=tenant_id, stage_key="workshop"
-        ) as workshop_feed:
-            workshop_result = await run_question_workshop(
-                brief=brief,
-                # The workshop's own `normalise_questions` resolves the client
-                # questions from the brief (via the SAME `detect_explicit_questions`
-                # this module imports), so no second question list is passed in.
-                questions=None,
-                # The tournament judge is asked "which of these two matters more
-                # for THIS client's decision" — with an empty decision context it
-                # has no decision to judge against, so the brief's opening is
-                # handed to it, bounded the same way the gates bound theirs.
-                decision_context=(brief or "").strip()[:_GATE_DECISION_CONTEXT_CHARS],
-                audited=audited,
-                run_id=run_id,
-                tenant_id=tenant_id,
-                feed=workshop_feed,
-                # ONE CircuitBreaker, not the whole BreakerSet: `with_retry`
-                # consults `breaker.allow()` directly. Same run-scoped registry
-                # the skeptic stage draws from, so a wedged Anthropic endpoint is
-                # observed once per run rather than once per stage.
-                breaker=breakers.get("anthropic:workshop"),
+        # R3 (plan 15.2-16): the question workshop is a MULTI-CALL PAID STAGE —
+        # orientation, candidates, clustering, critique, a Swiss tournament and
+        # an evolve pass. When an earlier attempt of THIS run already completed
+        # it, the result is restored and the whole stage is skipped. That is the
+        # largest non-research saving a resume makes.
+        #
+        # The checkpoint holds `workshop_result`, NOT the derived
+        # `mission_brief`: everything between the two is pure, deterministic
+        # Python (the question fallbacks and `build_mission_brief_from_winners`),
+        # so re-deriving it costs nothing and keeps ONE source of truth rather
+        # than two that can drift apart across a redeploy.
+        _restored_workshop = ckpt.get("workshop")
+        workshop_result = (
+            _restored_workshop.get("workshop_result")
+            if isinstance(_restored_workshop, dict)
+            else None
+        )
+        if workshop_result is not None:
+            log.warning(
+                "tribunal_pipeline: RESTORED the question workshop from a "
+                "checkpoint (%d winning sub-question(s)) — the workshop did NOT "
+                "run again and cost nothing on this attempt",
+                len(list((workshop_result or {}).get("winners") or [])),
+                extra={"run_id": str(run_id)},
             )
+        else:
+            # THE WORKSHOP FEED IS CLOSED HERE, and only here. 15.2-10 and 15.2-11
+            # deliberately left it open (their `_stage_b_feed_finish` flushes but does
+            # not close), because closing it inside stage B would make the next
+            # writer's rows a no-op and drag `run.current_stage` backwards onto a
+            # stage the operator has already watched finish. This pipeline is the
+            # last writer of that stage, so `async with` closes it on both the normal
+            # and the exception path.
+            async with StageFeed(
+                run_id=run_id, tenant_id=tenant_id, stage_key="workshop"
+            ) as workshop_feed:
+                workshop_result = await run_question_workshop(
+                    brief=brief,
+                    # The workshop's own `normalise_questions` resolves the client
+                    # questions from the brief (via the SAME `detect_explicit_questions`
+                    # this module imports), so no second question list is passed in.
+                    questions=None,
+                    # The tournament judge is asked "which of these two matters more
+                    # for THIS client's decision" — with an empty decision context it
+                    # has no decision to judge against, so the brief's opening is
+                    # handed to it, bounded the same way the gates bound theirs.
+                    decision_context=(brief or "").strip()[:_GATE_DECISION_CONTEXT_CHARS],
+                    audited=audited,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    feed=workshop_feed,
+                    # ONE CircuitBreaker, not the whole BreakerSet: `with_retry`
+                    # consults `breaker.allow()` directly. Same run-scoped registry
+                    # the skeptic stage draws from, so a wedged Anthropic endpoint is
+                    # observed once per run rather than once per stage.
+                    breaker=breakers.get("anthropic:workshop"),
+                )
+            # CHECKPOINT AFTER THE EXPENSIVE THING, never before it.
+            await ckpt.put("workshop", {"workshop_result": workshop_result})
 
         # Read the result TOLERANTLY (phase rule 4): every key below is optional
         # as far as this reader is concerned, even though 15.2-11 guarantees them.
@@ -860,6 +1188,27 @@ class TribunalPipeline:
         _trims: list[dict[str, Any]] = []
         angles = divide(mission_brief, winners=winners, trim_out=_trims)
 
+        # R3: the angle list is CHECKPOINTED but never restored, on purpose.
+        # `divide()` is pure, deterministic and free, so re-running it costs
+        # nothing and keeps `_trims` — which is where two of D-12's degradation
+        # reasons come from. What the row is FOR is the digest: it records which
+        # questions this run's research answers, so a resume can tell whether a
+        # recorded research result still belongs to the question it was bought
+        # for (T-15.2-123).
+        _live_digest = angles_digest(angles)
+        _stored_angle_digest = ckpt.digest_of("angles")
+        if _stored_angle_digest is not None and _stored_angle_digest != _live_digest:
+            log.warning(
+                "tribunal_pipeline: the research angles CHANGED since the last "
+                "attempt of this run (checkpoint digest %s, live digest %s) — every "
+                "recorded research result will be discarded and the questions "
+                "researched fresh, rather than answering the new questions with the "
+                "old answers",
+                _stored_angle_digest, _live_digest,
+                extra={"run_id": str(run_id)},
+            )
+        await ckpt.put("angles", {"angles": angles}, digest=_live_digest)
+
         # D-12, reason 2 of 3: a trim that took a sub-question below two
         # independent streams. Depth-only trims are LOGGED by divide() and are
         # deliberately NOT reasons — the client's question is still researched and
@@ -939,13 +1288,140 @@ class TribunalPipeline:
                 ]},
             )
 
-        provider_results = await run_angles(
-            angles=angles,
-            audited=audited,
-            run_id=run_id,
-            tenant_id=tenant_id,
-            on_angle_done=_on_angle_done,
-        )
+        # ------------------------------------------------------------------
+        # R3/R7 — THE MONEY STAGE. Everything below exists so that a resumed run
+        # never buys the same deep-research report twice.
+        # ------------------------------------------------------------------
+        def _restore_for_these_angles(key: str) -> dict:
+            """A recorded payload, but ONLY if it belongs to THESE questions.
+
+            The digest is recomputed from the LIVE angle list on every read, and
+            a mismatch DISCARDS the whole payload with both digests named. Index-
+            keyed restore is therefore only ever applied to the identical angle
+            list — otherwise one stream's answer would be attached to another
+            stream's question and the report would be wrong while looking healthy
+            (T-15.2-123).
+            """
+            stored = ckpt.get(key)
+            if not isinstance(stored, dict):
+                return {}
+            stored_digest = ckpt.digest_of(key)
+            if stored_digest != _live_digest:
+                log.warning(
+                    "tribunal_pipeline: DISCARDING the %s checkpoint — it was "
+                    "recorded for angle digest %s and this run's angles digest to "
+                    "%s, so those results answer different questions",
+                    key, stored_digest, _live_digest,
+                )
+                return {}
+            return stored
+
+        _recorded_research = _restore_for_these_angles("research")
+        _recorded_jobs = _restore_for_these_angles("provider_jobs")
+
+        # Index keys survive a JSON round-trip as STRINGS; job ids are re-checked
+        # on the way OUT of the checkpoint as well as on the way in, so a poisoned
+        # `output` row can never reach a provider URL (T-15.2-125).
+        _resume_results: dict[int, Any] = {}
+        for _k, _v in _recorded_research.items():
+            try:
+                _resume_results[int(_k)] = _v
+            except (TypeError, ValueError):
+                continue
+        _resume_jobs: dict[int, dict[str, Any]] = {}
+        for _k, _v in _recorded_jobs.items():
+            if not isinstance(_v, dict):
+                continue
+            _job = safe_job_id(_v.get("job_id"))
+            if _job is None:
+                continue
+            try:
+                _resume_jobs[int(_k)] = {
+                    "provider": str(_v.get("provider") or ""), "job_id": _job,
+                }
+            except (TypeError, ValueError):
+                continue
+
+        if _resume_results or _resume_jobs:
+            log.warning(
+                "tribunal_pipeline: RESUMING deep research — %d angle(s) already "
+                "have a recorded result and will not be dispatched, and %d in-flight "
+                "job(s) will be reconnected to rather than re-dispatched",
+                len(_resume_results), len(_resume_jobs),
+                extra={"run_id": str(run_id)},
+            )
+
+        # The accumulators seed from what is already recorded, so a second crash
+        # keeps the first attempt's angles too.
+        _research_done: dict[str, Any] = dict(_recorded_research)
+        _jobs_in_flight: dict[str, Any] = dict(_recorded_jobs)
+
+        async def _record_angle(idx: int, provider: str, result: dict) -> None:
+            """Checkpoint after EVERY completed angle, not at the end of the stage.
+
+            A crash halfway through deep research must still leave the finished
+            angles recorded — that is the difference between losing one angle and
+            losing twenty.
+            """
+            _research_done[str(idx)] = [provider, result]
+            await ckpt.put("research", _research_done, digest=_live_digest)
+
+        async def _record_job(idx: int, provider: str, job_id: str) -> None:
+            checked = safe_job_id(job_id)
+            if checked is None:
+                return
+            _jobs_in_flight[str(idx)] = {"provider": provider, "job_id": checked}
+            await ckpt.put("provider_jobs", _jobs_in_flight, digest=_live_digest)
+
+        try:
+            provider_results = await run_angles(
+                angles=angles,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                on_angle_done=_on_angle_done,
+                resume_results=_resume_results,
+                resume_jobs=_resume_jobs,
+                on_angle_result=_record_angle,
+                on_job_started=_record_job,
+            )
+        except InsufficientProvidersError as exc:
+            # F6. Losing EVERY research stream is a PARK, not a failure: there is
+            # nothing to verify and nothing to report on, but everything already
+            # paid for is on disk and a resume is free. The raise sites in
+            # `research_division.py` / `degraded_parallel.py` are untouched — only
+            # this catch is new (DEC-6: facts here, the decision in the worker).
+            _streams = len(getattr(exc, "failed", None) or []) or len(angles) or 1
+            _reasons = list((getattr(exc, "reasons", None) or {}).values())
+            reason = (
+                "No research provider produced a usable result for this run, so "
+                "there is nothing to verify or report on yet. Everything already "
+                "paid for has been kept and the run can be resumed. Provider "
+                f"signal: {error_signature(exc)}"
+            )
+            parked = _park_result(
+                stage="deep_research",
+                reason=reason,
+                prior_park=ckpt.get("park"),
+                terminal_inputs={
+                    # streams_lost == streams_total is what makes terminal_state()
+                    # return "parked" (D-17). The pipeline never says "parked".
+                    "streams_lost": _streams,
+                    "streams_total": _streams,
+                    "verify_ran": False,
+                    "synthesis_ran": False,
+                    "hard_wall": False,
+                    "degradation_reasons": list(degradation_reasons) + [
+                        str(r) for r in _reasons if str(r or "").strip()
+                    ],
+                },
+            )
+            await ckpt.put("park", parked["park"])
+            log.error(
+                "tribunal_pipeline: PARKED at deep_research — %s",
+                parked["park"]["reason"], extra={"run_id": str(run_id)},
+            )
+            return parked
 
         # ------------------------------------------------------------------
         # Stage 3: Claim collection — the streams' own fact lists come first
@@ -1240,6 +1716,43 @@ class TribunalPipeline:
         # The gate is a cheap flash fan-out, but it is still a fan-out, and every
         # other fan-out in this pipeline cancel-checks first.
         await raise_if_cancelled(run_id, tenant_id)
+
+        # R3: record the merged claim list and the cluster shape BEFORE the gates
+        # run. Everything above this line — `collect_provider_facts` (which may
+        # fall back to the paid distiller per stream) and `group_claims` (a paid
+        # clusterer call) — is what this row would let a future resume skip.
+        #
+        # GROUPS ARE STORED BY CLAIM INDEX, not by nesting the claim dicts again.
+        # `_group_selected` works because `apply_gates` MUTATES the very dicts the
+        # groups hold BY IDENTITY, and identity is exactly what a JSON round-trip
+        # destroys. Index references are the only shape a restore can rebuild that
+        # coupling from.
+        #
+        # WRITE-ONLY IN THIS PLAN — no restore branch is wired for `merge`,
+        # `gates` or `verify`. See the SUMMARY and `deferred-items.md`: the
+        # restore needs the index-rebuild above to be exercised end-to-end, and
+        # the stubbed full-pipeline harness that could prove it is not in the tree
+        # yet. A checkpoint that is written but not yet read costs nothing and
+        # loses nothing; a restore branch nothing exercises could corrupt a paid
+        # run, which is the trade this plan refuses to make silently.
+        _claim_index = {id(_c): _i for _i, _c in enumerate(claims)}
+        await ckpt.put("merge", {
+            "claims": claims,
+            "groups": [
+                {
+                    "key": _g.get("key"),
+                    "entity": _g.get("entity"),
+                    "attribute": _g.get("attribute"),
+                    "stakes": _g.get("stakes"),
+                    "claim_indexes": [
+                        _claim_index[id(_m)] for _m in (_g.get("claims") or [])
+                        if id(_m) in _claim_index
+                    ],
+                }
+                for _g in groups
+            ],
+        })
+
         await set_stage(
             run_id, tenant_id, "gate",
             detail={"items": [{
@@ -1267,6 +1780,26 @@ class TribunalPipeline:
                 "status": "done",
             }]},
         )
+
+        # R3: the gate decisions now live ON the claim dicts (apply_gates mutates
+        # them), so recording the claims records the decisions with them.
+        await ckpt.put("gates", {"claims": claims, "funnel": gate_funnel})
+
+        # D-17 input: COULD the verification stage run at all? When every gate
+        # call errored there is no selection to verify against, and a run that
+        # ships unverifiable claims as `completed` is the 2026-07-22 incident all
+        # over again. This does NOT park inline — it is a FACT carried into
+        # `terminal_inputs`, and `terminal_state()` makes the call (DEC-6).
+        _distilled = int(gate_funnel.get("distilled") or 0)
+        _gate_errors = int(gate_funnel.get("gate_errors") or 0)
+        verify_ran = not (_distilled > 0 and _gate_errors >= _distilled)
+        if not verify_ran:
+            log.error(
+                "tribunal_pipeline: THE VERIFICATION GATES COULD NOT RUN — %d of "
+                "%d claims errored at the gate, so nothing was selected on the "
+                "evidence and no honest verification is possible for this run",
+                _gate_errors, _distilled, extra={"run_id": str(run_id)},
+            )
 
         # Skeptic verification is the most expensive stage — check for a user cancel
         # before fanning out, and again between batches below.
@@ -1968,6 +2501,24 @@ class TribunalPipeline:
             if label:
                 claims_per_facet.setdefault(label, 0)
 
+        # D-17 FACTS for `terminal_state()` (plan 15.2-16). The pipeline reports;
+        # the worker decides. `streams_total` is the angle count and
+        # `streams_lost` is how many of them produced nothing — so losing one or
+        # two of four streams lands on `completed_degraded` (their angles are a
+        # minority), while losing them all lands on `parked`, which is exactly
+        # D-17's boundary. `synthesis_ran` is True on this path by construction:
+        # we are one call away from writing the report.
+        _streams_total = max(1, len(angles))
+        _streams_lost = max(0, len(angles) - len(provider_results))
+        terminal_inputs = {
+            "streams_lost": _streams_lost,
+            "streams_total": _streams_total,
+            "verify_ran": bool(verify_ran),
+            "synthesis_ran": True,
+            "hard_wall": False,
+            "degradation_reasons": list(degradation_reasons),
+        }
+
         synthesis_bundle = {
             "mission_brief": mission_brief,
             "cleaned_reports": cleaned_reports,
@@ -2066,8 +2617,23 @@ class TribunalPipeline:
                 # pipeline's `verification_summary` key, which is what the worker
                 # persists onto run.verification_summary (plan 15.1-08).
                 "funnel": verification_funnel,
+                # D-17 (15.2-16). Rides on the bundle for the SAME reason
+                # `degradation_reasons` does: the interactive-report resume path
+                # rebuilds the whole result from this cached bundle, so anything
+                # the worker's terminal-state decision needs has to survive the
+                # pause. `_write_final_report` lifts it back out onto the
+                # top-level `terminal_inputs` key the worker reads.
+                "terminal_inputs": terminal_inputs,
             },
         }
+
+        # R3: the verify checkpoint is the bundle's OWN verification block — the
+        # already-flattened, already-serialisable shape this module builds for
+        # `synthesis_cache` a few lines below (id()-keyed verdict maps cannot
+        # cross a pause, and there is exactly one flattener in this file). Write-
+        # only in this plan, as recorded at the merge checkpoint above.
+        await ckpt.put("verify", synthesis_bundle["verification"])
+
         # Cache the scrubbed-research bundle so a "Rewrite report" — or the
         # interactive-gate resume — re-synthesises WITHOUT re-running deep research.
         await _write_output(run_id, tenant_id, "synthesis_cache", synthesis_bundle)
@@ -2512,6 +3078,17 @@ async def _write_final_report(
         # bundle, and returns [] rather than raising for a pre-15.2 synthesis_cache
         # that carries no such key at all.
         "degradation_reasons": _normalise_degradation_reasons(v.get("degradation_reasons")),
+        # D-17 FACTS (plan 15.2-16), ADDITIVE — every existing key above and
+        # below is untouched. `runs/worker.py` feeds this straight to
+        # `terminal_state()`; when it is absent (an ADK run, or a pre-15.2
+        # synthesis_cache replayed after deploy) the worker falls back to its own
+        # literals, so this key is safe to add and safe to miss.
+        #
+        # Read from `v` — the bundle's `verification` dict — for the same reason
+        # `degradation_reasons` is: the RESUME-FROM-CACHE path rebuilds the whole
+        # result from the cached bundle, and reading the bundle is the only way
+        # both paths publish the same facts.
+        "terminal_inputs": _read_terminal_inputs(v),
         # D-06 citation-health counts, following the `rejected_claims` precedent:
         # top-level result keys, siblings of verification_summary and NOT inside
         # the funnel dict. Present on every run, including runs with zero anchors

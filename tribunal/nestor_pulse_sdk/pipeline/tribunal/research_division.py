@@ -75,6 +75,9 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
     ALL_PROVIDERS,
     _enabled_providers,
 )
+# R7 (plan 15.2-16): the ONE job-id guard. A recorded id read back out of an
+# `output` row passes through this before it can reach a provider URL.
+from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -155,6 +158,20 @@ if own_research is not None:
     # indexes this dict directly and a None runner would be an unhandled
     # TypeError inside the timeout block rather than a clean three-stream run.
     _PROVIDER_RUNNERS["own"] = own_research
+
+# --- R7: which streams have a BACKGROUND JOB that can be reconnected to -------
+#
+# Exactly the two providers whose dispatch returns immediately with a job id the
+# engine then polls: Gemini's `interactions/{id}` and OpenAI's
+# `responses.retrieve(id)`.
+#
+# Claude research is a SYNCHRONOUS audited call — there is no server-side job to
+# reconnect to, only a call that either returned or did not. The own-researcher
+# (15.2-12) is a local tool loop in this process, so a resumed run has nothing
+# remote to poll either. For those two streams a resumed run re-dispatches the
+# angle ONLY when `ckpt_research` holds no result for it — which is the R3 rule
+# already, and costs nothing extra.
+_RESUMABLE_PROVIDERS: tuple[str, ...] = ("gemini", "openai")
 
 # --- D8: which streams are ASKED for a machine-readable fact list (15.2-14) ---
 #
@@ -986,6 +1003,10 @@ async def run_angles(
     run_id: uuid.UUID,
     tenant_id: uuid.UUID,
     on_angle_done: "Optional[Callable[[int, bool], Awaitable[None]]]" = None,
+    resume_results: "Optional[dict[int, Any]]" = None,
+    resume_jobs: "Optional[dict[int, dict[str, Any]]]" = None,
+    on_angle_result: "Optional[Callable[[int, str, dict], Awaitable[None]]]" = None,
+    on_job_started: "Optional[Callable[[int, str, str], Awaitable[None]]]" = None,
 ) -> list[tuple[str, dict]]:
     """Drive run_all_with_degradation for each angle; return merged provider_results.
 
@@ -995,6 +1016,8 @@ async def run_angles(
 
     PHASE1-07 preserved: each call raises InsufficientProvidersError if <2 providers
     succeed for that angle. Callers should handle this exception or let it propagate.
+    THIS FUNCTION DOES NOT CATCH IT — plan 15.2-16 adds the catch in `pipeline.py`,
+    where it becomes park FACTS; the raise sites here are unchanged.
 
     Args:
         angles:    List of angle dicts from divide().
@@ -1005,6 +1028,27 @@ async def run_angles(
         on_angle_done: optional async callback (angle_index, succeeded) invoked
                        as each angle finishes — drives live deep-research
                        sub-progress in the UI. Best-effort: never blocks the angle.
+
+    R3/R7 RESUME (plan 15.2-16). Four keyword-only parameters, every one of them
+    defaulting to today's exact behaviour, so a caller that passes none of them
+    cannot tell this function changed:
+
+        resume_results:  {angle_index: (provider, result)} recorded by a previous
+                         attempt. An index present here is NOT DISPATCHED AT ALL —
+                         its tuple is returned verbatim. This is the money: a
+                         resumed run never re-charges an angle it already has.
+        resume_jobs:     {angle_index: {"provider": ..., "job_id": ...}} for angles
+                         whose background job was still IN FLIGHT when the run
+                         stopped. The id is handed to the provider so the poll
+                         reconnects instead of dispatching a second paid job.
+        on_angle_result: awaited with (index, provider, result) on each successful
+                         angle, so a crash mid-stage still leaves the completed
+                         angles recorded.
+        on_job_started:  awaited with (index, provider, job_id) the moment a fresh
+                         background job id exists.
+
+    Both callbacks are BEST-EFFORT — wrapped in try/except + WARNING, exactly like
+    the existing `_notify`. A checkpoint write must never break a paid angle.
 
     Returns:
         List of (provider_name, result_dict) tuples — same shape as a single
@@ -1021,6 +1065,22 @@ async def run_angles(
 
     sem = asyncio.Semaphore(_ANGLE_CONCURRENCY)
 
+    # --- R3 restore map. Read TOLERANTLY: these values came back out of a JSON
+    # `output` row, so a recorded tuple arrives as a two-element list (ASVS V5 —
+    # a checkpoint payload is untrusted-shaped input, never a trusted object).
+    restored: dict[int, tuple[str, dict]] = {}
+    for _idx, _entry in (resume_results or {}).items():
+        try:
+            _provider, _result = list(_entry)[0], list(_entry)[1]
+        except Exception:  # noqa: BLE001 — a malformed entry costs a re-run, never a crash
+            log.warning(
+                "run_angles: discarding a malformed resume_results entry for angle "
+                "%r — that angle will be researched fresh", _idx,
+            )
+            continue
+        if isinstance(_result, dict) and str(_provider or "").strip():
+            restored[int(_idx)] = (str(_provider), _result)
+
     async def _notify(i: int, ok: bool) -> None:
         if on_angle_done is None:
             return
@@ -1029,7 +1089,55 @@ async def run_angles(
         except Exception as exc:  # noqa: BLE001 — progress callback is best-effort
             log.warning("run_angles: on_angle_done callback failed: %r", exc)
 
+    async def _record_result(i: int, provider: str, result: dict) -> None:
+        """Checkpoint one completed angle. Best-effort, same rule as `_notify`."""
+        if on_angle_result is None:
+            return
+        try:
+            await on_angle_result(i, provider, result)
+        except Exception as exc:  # noqa: BLE001 — a checkpoint write never breaks a paid angle
+            log.warning("run_angles: on_angle_result callback failed: %r", exc)
+
+    def _resume_id_for(i: int, provider: str) -> str | None:
+        """The recorded in-flight job id for angle `i`, iff it is THIS provider's.
+
+        A recorded job for a DIFFERENT provider is ignored: the angle was
+        re-routed (a stream went dark, or the coverage retry moved it), and
+        polling another provider's id is meaningless — it can only 404.
+        """
+        entry = (resume_jobs or {}).get(i)
+        if not isinstance(entry, dict):
+            return None
+        recorded_provider = str(entry.get("provider") or "").strip()
+        job_id = safe_job_id(entry.get("job_id"))
+        if job_id is None:
+            return None
+        if recorded_provider != provider:
+            log.warning(
+                "run_angles: angle %d has an in-flight %s job recorded but is now "
+                "routed to %s — the recorded id is IGNORED rather than polled on "
+                "the wrong provider",
+                i + 1, recorded_provider or "?", provider,
+            )
+            return None
+        return job_id
+
     async def _one_angle(i: int, angle: dict[str, Any], force_provider: str | None = None):
+        # R3: an angle whose result is already recorded is NOT DISPATCHED. This
+        # is the whole point of checkpointing — nothing already paid for is
+        # bought again. It happens BEFORE provider resolution, because which
+        # stream would have run it is irrelevant once we hold its answer.
+        if force_provider is None and i in restored:
+            provider, result = restored[i]
+            log.warning(
+                "run_angles: angle %d was RESTORED from the research checkpoint "
+                "(stream %s) and was NOT re-dispatched — this angle cost nothing "
+                "on this attempt",
+                i + 1, provider,
+            )
+            await _notify(i, True)
+            return (provider, result)
+
         preferred = force_provider or angle.get("provider") or _STAKES_PROVIDER.get(
             angle.get("stakes", "med"), _STAKES_PROVIDER["med"]
         )
@@ -1095,10 +1203,35 @@ async def run_angles(
                 i + 1, len(angles), provider, timeout, stakes, fa,
                 bool(angle.get("corroboration")), prompted,
             )
+            # R7: the two resume kwargs are added ONLY for the two background
+            # providers (`_RESUMABLE_PROVIDERS`). The other runners do not accept
+            # them, and passing them unconditionally would be a TypeError on
+            # every claude / own angle.
+            runner_kwargs: dict[str, Any] = {}
+            if provider in _RESUMABLE_PROVIDERS:
+                _resume_id = _resume_id_for(i, provider)
+                if _resume_id is not None:
+                    runner_kwargs["resume_job_id"] = _resume_id
+                    log.warning(
+                        "run_angles: angle %d reconnects to the in-flight %s job "
+                        "already dispatched for it — no second paid job",
+                        i + 1, provider,
+                    )
+                if on_job_started is not None:
+                    async def _job_started(job_id: str, _i: int = i, _p: str = provider) -> None:
+                        try:
+                            await on_job_started(_i, _p, job_id)
+                        except Exception as exc:  # noqa: BLE001 — best-effort, like _notify
+                            log.warning(
+                                "run_angles: on_job_started callback failed: %r", exc
+                            )
+
+                    runner_kwargs["on_job_started"] = _job_started
             try:
                 async with asyncio.timeout(timeout):
                     result = await runner(
                         query=query, audited=audited, run_id=run_id, tenant_id=tenant_id,
+                        **runner_kwargs,
                     )
             except Exception as exc:  # timeout or runner error — this angle yields nothing
                 log.warning(
@@ -1115,16 +1248,25 @@ async def run_angles(
                 return None
         if isinstance(result, dict) and result.get("status") == "success":
             await _notify(i, True)
+            # R3: record this angle the moment it lands, not at the end of the
+            # stage. A crash mid-stage must still leave the completed angles
+            # recorded, or the resume re-buys them.
+            _enriched = {
+                **result, "_angle": fa, "_stakes": stakes, "_d8_prompted": prompted,
+            }
+            await _record_result(i, provider, _enriched)
             # `_d8_prompted` is read by `synthesis.steps.collect_provider_facts`
             # to tell TWO different things apart that must never be worded alike:
             # "this stream was asked for a fact list and did not comply" (a real
             # D-14 fallback) versus "this stream was never asked" (the kill switch,
             # or the forced-tool own-researcher). It changes the wording of the
             # recorded reason an operator reads, not the behaviour.
-            return (
-                provider,
-                {**result, "_angle": fa, "_stakes": stakes, "_d8_prompted": prompted},
-            )
+            #
+            # `_enriched` is returned rather than a second identical literal, so
+            # the checkpointed value and the returned value are the SAME object:
+            # a restored angle is byte-identical to a freshly researched one, and
+            # `covered_fas` below reads the same `_angle` key on both.
+            return (provider, _enriched)
         reason = result.get("error_message") if isinstance(result, dict) else repr(result)
         log.warning(
             "research_division.run_angles: angle %d (%s) did not succeed: %s",

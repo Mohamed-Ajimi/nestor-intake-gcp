@@ -121,3 +121,84 @@ G-05's August calibration measures.
 **Suggested fix (not done here):** changing the blocking key (e.g. entity aliasing
 or embedding-based blocking) is out of scope for this phase and needs a decision
 about false-merge risk.
+
+## From 15.2-16 (2026-07-26)
+
+### D16-1 — the resume denial tests run in NO committed gate config
+
+**Discovered:** execution of 15.2-16, Task 3.
+**Scope:** gate-coverage gap. Same class as D9-3 and D15-1 — but note this one
+was *proven green out-of-band*, so the gap is the STANDING gate, not the proof.
+
+`test_checkpoint_resume.py`'s eight Layer-B tests — including
+`test_resume_cross_tenant_run_is_404`, the automated proof of this plan's only
+**high**-severity threat (T-15.2-122) — need a real Postgres and a
+**non-superuser** DSN. No committed config gives them both:
+
+- `cloudbuild.test-engine.yaml` is DB-less by design. They skip there, cleanly
+  and loudly (`DATABASE_URL not set … a skip here is NOT a pass`). Measured:
+  **8 skipped**.
+- `cloudbuild.test.yaml` cannot run them at all. Its testcontainers fixture does
+  not start (`"host" network_mode is incompatible with port_bindings`), and its
+  Postgres would be a SUPERUSER anyway, which makes any RLS denial assertion
+  vacuous. Both facts are recorded in that config's own header by `b479499`.
+  **The plan's acceptance criterion pointed at this config and is therefore
+  unsatisfiable as written** — that is why the tests were re-based onto the
+  `DATABASE_URL` + `require_non_superuser` idiom of `test_rls_isolation.py`
+  instead of the testcontainers `async_engine` fixture.
+- `cloudbuild.test-rls.yaml` is the only faithful harness (migrations and pytest
+  both as the non-superuser table owner `app_user`), but **15.2-01 owns it** and
+  its anti-false-green block pins an exact `6 passed` count. Adding a file there
+  would break that pin.
+- `cloudbuild.test-critical.yaml` has a real Postgres but connects as the
+  `postgres` SUPERUSER, and its header documents that exclusion policy
+  deliberately. It is owned by 15.2-02.
+
+**Proof that they pass** (so this is a gate gap, not an unproven claim): the file
+was run in Cloud Build against a purpose-built clone of `test-rls.yaml`'s
+harness — `postgres:15`, `app_user` as a NOSUPERUSER owner, `alembic upgrade
+head`, pytest under that DSN. All eight executed and passed by name, with the
+`require_non_superuser` guard NOT tripping. The harness config was deliberately
+**not committed**, because committing it would create a fifth gate config in a
+phase that already has four and whose ownership is spoken for.
+
+**Suggested fix (not done here):** either add
+`nestor_pulse_sdk/tests/test_checkpoint_resume.py` to
+`cloudbuild.test-rls.yaml`'s pytest line and bump its pinned pass-count from 6,
+or give the phase one DB-backed config that owns every non-superuser test.
+Deferred because both are the owner's call: the first changes a pinned count
+that exists precisely to stop silent drift, and the second is a structural
+decision about the phase's gate layout. Natural home: **15.2-17**'s green-gate
+sweep, which already inherits D9-3 and D15-1.
+
+### D16-2 — the `merge` / `gates` / `verify` checkpoints are WRITE-ONLY
+
+**Discovered:** execution of 15.2-16, Task 3.
+**Scope:** partial delivery inside this plan, stated rather than absorbed.
+
+R3 writes all eight `ckpt_*` rows. Only three are also RESTORED — `workshop`,
+`research` and `provider_jobs`, which between them cover the run's paid
+deep-research and the multi-call question workshop, i.e. the overwhelming
+majority of a run's spend. `merge`, `gates` and `verify` are recorded but no
+restore branch reads them yet, so a resume re-runs those three stages.
+
+**Why it was stopped there, and not quietly implemented anyway.** Restoring them
+is not a data problem, it is an IDENTITY problem: `_group_selected` works because
+`apply_gates` mutates the very claim dicts the clusters hold *by identity*, and a
+JSON round-trip destroys identity. A correct restore has to rebuild that coupling
+from claim indexes (the `merge` payload is already written in that shape, ready
+for it). That rebuild sits in the most delicate part of a paid pipeline, and
+nothing in the tree exercises it end-to-end: the stubbed full-pipeline harness
+(`test_engine_e2e_stubbed.py`) is not written yet, and no live run may be spent
+against the Anthropic cap before 2026-08-01. Shipping an unexercised restore
+branch on the hot path could corrupt a real run's claim set, which is a worse
+failure than re-running a cheap stage.
+
+**Consequence for the operator:** a run parked mid-verification resumes with its
+research intact (the expensive part) but re-runs the gates and the skeptic
+sessions. The must-have "re-uses every paid stage result" is therefore **met for
+research and the workshop, and not yet met for gates/verify**.
+
+**Suggested fix (not done here):** wire the three restores once
+`test_engine_e2e_stubbed.py` exists to prove the index-rebuild, or after the
+August live run makes a real park available to replay.

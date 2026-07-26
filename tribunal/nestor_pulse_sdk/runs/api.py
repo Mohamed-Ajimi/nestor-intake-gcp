@@ -449,6 +449,58 @@ async def submit_report_spec(
     return RunResponse.model_validate(run, from_attributes=True).model_dump(mode="json")
 
 
+@router.post("/{run_id}/resume", response_model=RunResponse)
+async def resume_run(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> RunResponse:
+    """Re-queue a PARKED run so it continues from its checkpoints (R3/R4, 15.2-16).
+
+    THE SAME RUN is re-queued -- never a new one. A new run would re-dispatch
+    every deep-research angle and re-charge the whole brief; this one is
+    re-claimed by the worker, and the pipeline's checkpoint branch restores the
+    stages that were already paid for from their `ckpt_*` rows.
+
+    A cross-tenant `run_id` is a 404 -- NEVER a "forbidden" response. The row is
+    resolved only through `Depends(get_db_session)` -- which sets the tenant GUC
+    that the FORCE-RLS policies read -- so another tenant's run is INVISIBLE here
+    and is indistinguishable from one that does not exist. That
+    non-distinguishability is the security property, not a rough edge
+    (T-15.2-122); it mirrors get_run_metrics / get_run_verification, and it is
+    pinned by tests/test_checkpoint_resume.py::test_resume_cross_tenant_run_is_404.
+
+    ("Forbidden" is spelled out rather than given as its status code on purpose.
+    The source gate in test_checkpoint_resume.py asserts that that code appears
+    NOWHERE in this handler's source, and a docstring quoting the number would
+    defeat its own gate.)
+
+    The status allow-list is EXACTLY `parked`. Anything else is a 409, so this
+    verb cannot re-queue a completed, running, queued or cancelled run, and two
+    concurrent clicks cannot both succeed: the first commits `queued` and the
+    second sees it and 409s.
+
+    `completed_at` is left alone -- it is NULL on a parked run, because a parked
+    run has not completed.
+
+    NO ATTEMPT CAP IS CONSULTED HERE, deliberately (F-02). Resuming from
+    checkpoints costs nothing already paid for, so it is free and unlimited at
+    this layer; the intake-side cap and its own endpoint are 15.2-19's.
+    """
+    run = (await session.execute(
+        select(Run).where(Run.id == run_id)
+    )).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+    if run.status != "parked":
+        raise HTTPException(409, "run is not parked")
+
+    run.status = "queued"
+    run.worker_id = None
+    run.error_message = None
+    await session.flush()
+    return RunResponse.model_validate(run, from_attributes=True)
+
+
 @router.post("/{run_id}/rewrite", status_code=status.HTTP_201_CREATED)
 async def rewrite_report(
     run_id: uuid.UUID,
@@ -791,6 +843,20 @@ async def get_comparison_content_compare(
         raise HTTPException(500, f"stored content comparison is unreadable: {exc}") from exc
 
 
+def _park_of(verification_summary) -> dict | None:
+    """The park descriptor on a run's verification_summary, or None.
+
+    Plan 15.2-16 / DEC-4. Additive read of an additive JSONB key: no migration,
+    no audit-payload change, and a run that never parked simply has no `park`
+    key. Never raises -- a malformed column must not break the metrics endpoint
+    the poll driver depends on.
+    """
+    if not isinstance(verification_summary, dict):
+        return None
+    park = verification_summary.get("park")
+    return park if isinstance(park, dict) and park else None
+
+
 @router.get("/{run_id}/metrics", response_model=RunMetrics)
 async def get_run_metrics(
     run_id: uuid.UUID,
@@ -856,6 +922,13 @@ async def get_run_metrics(
             "done" if report_readable(run.status) else run.current_stage
         ),
         stage_detail=run.stage_detail,
+        # D-17 park descriptor (plan 15.2-16), projected from the run's
+        # verification_summary. This endpoint is the ONLY channel the intake poll
+        # driver has for a park REASON, because RunMetrics carries no
+        # error_message. Read defensively and pass None when it is not a dict:
+        # verification_summary is JSONB written by the worker, so it is shaped
+        # input, not a trusted object.
+        park=_park_of(run.verification_summary),
     )
 
 

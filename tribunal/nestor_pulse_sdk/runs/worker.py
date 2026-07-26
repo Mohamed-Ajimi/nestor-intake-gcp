@@ -179,6 +179,90 @@ async def execute_run(claimed: dict) -> None:
                     )
             return
 
+        # PARK (R4/D-17, plan 15.2-16). The engine could not produce an honest
+        # deliverable — every research stream was lost, or a provider refused at
+        # the account level (the monthly cap / exhausted credits / a 402 billing
+        # block). The paid work is on disk as ckpt_* rows, so this is NOT a
+        # failure: the run keeps its cost, carries its reason in words, and
+        # POST /api/runs/{id}/resume re-queues this same run to continue from
+        # those checkpoints.
+        if isinstance(result, dict) and result.get("parked"):
+            import json as _pjson
+            _park = result.get("park") if isinstance(result.get("park"), dict) else {}
+            _ti = (
+                result.get("terminal_inputs")
+                if isinstance(result.get("terminal_inputs"), dict) else {}
+            )
+            # DEC-6: terminal_state() is the SINGLE decision function. The
+            # pipeline reported facts; we compute and write whatever the rule
+            # returns. Same defensive read shape the verification_summary block
+            # below uses.
+            _park_status = terminal_state(
+                streams_lost=int(_ti.get("streams_lost") or 0),
+                streams_total=int(_ti.get("streams_total") or 1),
+                verify_ran=bool(_ti.get("verify_ran", False)),
+                synthesis_ran=bool(_ti.get("synthesis_ran", False)),
+                hard_wall=bool(_ti.get("hard_wall", False)),
+                degradation_reasons=[
+                    str(r) for r in (_ti.get("degradation_reasons") or [])
+                    if isinstance(r, str) and r.strip()
+                ],
+            )
+            if _park_status != "parked":
+                # A genuine contract violation: the pipeline took its park branch
+                # but the facts it reported do not add up to a park. Say so, by
+                # name -- and then WRITE THE COMPUTED VALUE ANYWAY. Overriding it
+                # here would create the second park rule this phase exists to
+                # remove.
+                log.error(
+                    "park_state_inconsistent",
+                    run_id=str(claimed["id"]),
+                    computed=_park_status,
+                    terminal_inputs=_ti,
+                )
+            # `park` is a SIBLING key on the persisted summary, added on the
+            # WRITE side only: build_verification_summary() and
+            # RECORDED_FUNNEL_COUNTS are NOT touched (Pitfall 3 -- the recorded
+            # funnel is compared by full dict equality in two tests). Copy, never
+            # mutate the pipeline's dict. With no funnel at all the row carries
+            # `park` alone, and report.py's accounting helper still returns None
+            # on a missing funnel, so an honest "no gate data" is preserved.
+            _psummary = result.get("verification_summary")
+            _psummary = {**_psummary} if isinstance(_psummary, dict) and _psummary else {}
+            _psummary["park"] = _park
+            _preason = str(_park.get("reason") or "This run was parked.")[:1000]
+            log.warning(
+                "run_parked",
+                run_id=str(claimed["id"]),
+                stage=_park.get("stage"),
+                seq=_park.get("seq"),
+                reason=_preason,
+            )
+            async with sessionmaker() as session:
+                async with session.begin():
+                    await set_tenant_context(session, claimed["tenant_id"])
+                    # completed_at is DELIBERATELY NOT SET. A parked run is not
+                    # complete, and stamping a completion time would make the
+                    # intake card render a duration for a run that has not
+                    # finished (15.2-19 reads exactly that).
+                    await session.execute(
+                        text(
+                            "UPDATE run SET status=:park_status, error_message=:e, "
+                            "verification_summary = CAST(:vsummary AS JSONB), "
+                            "cost_usd_total = COALESCE("
+                            "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "
+                            # Guard: a user cancel (status='cancelled') must win.
+                            "WHERE id=:id AND status='running'"
+                        ),
+                        {
+                            "park_status": _park_status,
+                            "e": _preason,
+                            "vsummary": _pjson.dumps(_psummary, ensure_ascii=False),
+                            "id": claimed["id"],
+                        },
+                    )
+            return
+
         # The runner returns the synthesized report text. Accept either key
         # ('output_text' from SDK/ADK, 'text' from the Tribunal synthesis step).
         output_text = ""
@@ -242,17 +326,36 @@ async def execute_run(claimed: dict) -> None:
         # both are designed paths, not shortfalls, and demoting them would drain
         # completed_degraded of its meaning.
 
-        # synthesis_ran / hard_wall are PINNED on this branch because this IS the
-        # success branch -- a report is in hand. The park path (F6's
-        # InsufficientProvidersError catch and the hard-wall park) is 15.2-16's
-        # work; pinning them here keeps terminal_state() from returning 'parked'
-        # down a path that already has a deliverable.
+        # THE PINS ARE GONE (plan 15.2-16). 15.2-09 pinned synthesis_ran=True /
+        # hard_wall=False here because nothing produced those facts yet and a
+        # missing fact must never turn a run WITH a deliverable into a park.
+        # 15.2-16 supplies them: the pipeline publishes `terminal_inputs` and the
+        # park path is a SEPARATE branch above, so this branch now reads the
+        # facts when they are present and falls back to exactly the old literals
+        # when they are not (an ADK run, or any engine that does not report them).
+        _ti_success = result.get("terminal_inputs") if isinstance(result, dict) else None
+        _ti_success = _ti_success if isinstance(_ti_success, dict) else {}
         _final_status = terminal_state(
-            streams_lost=int(result.get("streams_lost") or 0) if isinstance(result, dict) else 0,
-            streams_total=int(result.get("streams_total") or 1) if isinstance(result, dict) else 1,
-            verify_ran=bool(result.get("verify_ran", True)) if isinstance(result, dict) else True,
-            synthesis_ran=True,
-            hard_wall=False,
+            streams_lost=int(
+                _ti_success.get(
+                    "streams_lost",
+                    (result.get("streams_lost") or 0) if isinstance(result, dict) else 0,
+                ) or 0
+            ),
+            streams_total=int(
+                _ti_success.get(
+                    "streams_total",
+                    (result.get("streams_total") or 1) if isinstance(result, dict) else 1,
+                ) or 1
+            ),
+            verify_ran=bool(
+                _ti_success.get(
+                    "verify_ran",
+                    result.get("verify_ran", True) if isinstance(result, dict) else True,
+                )
+            ),
+            synthesis_ran=bool(_ti_success.get("synthesis_ran", True)),
+            hard_wall=bool(_ti_success.get("hard_wall", False)),
             degradation_reasons=_reasons,
         )
 

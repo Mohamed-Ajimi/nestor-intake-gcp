@@ -281,6 +281,22 @@ class RunMetrics(BaseModel):
     stages: list[dict] = []
     current_stage: str | None = None
     stage_detail: dict[str, StageDetail] | dict | None = None
+    # The R4/D-17 PARK DESCRIPTOR (plan 15.2-16), projected from
+    # `run.verification_summary["park"]`:
+    #     {"seq": int, "stage": str, "reason": str, "signature": str}
+    #
+    #   seq       -- monotonic per park EVENT (the same wall re-hit keeps its
+    #                number), which is how 15.2-19 sends one mail per event.
+    #   stage     -- where the run stopped, e.g. "deep_research".
+    #   reason    -- ONE plain sentence a human reads, already redacted and
+    #                clamped to 400 chars by the engine (T-15.2-126).
+    #   signature -- the 12-char fingerprint `seq` is derived from.
+    #
+    # `None` on every non-parked run. This endpoint is the ONLY channel from the
+    # engine to the intake poll driver (RunMetrics carries no error_message), and
+    # the field is ADDITIVE: an older intake build simply ignores it. `RunStatus`
+    # is 15.2-09's and is deliberately untouched.
+    park: dict | None = None
 
 
 class VerificationVerdictItem(BaseModel):

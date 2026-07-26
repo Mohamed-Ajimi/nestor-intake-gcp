@@ -386,12 +386,22 @@ def test_pipeline_wires_the_collector_into_contested_notes():
     Source inspection is the available gate here: driving `TribunalPipeline.run` end
     to end needs Postgres, an Anthropic key and a live web-search budget, none of
     which exist on the dev box or in the no-Postgres gate build. Reading the source
-    of `run` proves the collector is called and that its output is merged into
+    of the run path proves the collector is called and that its output is merged into
     `contested_notes` — the list `_write_final_report` hands to `synthesize_report`.
+
+    THE RUN PATH IS TWO METHODS SINCE PLAN 15.2-16. `run()` is now a thin
+    preamble-plus-park-guard that delegates the staged body to `_run_staged()`;
+    the split exists so the R4/D-17 park can wrap the whole staged body in ONE
+    try/except. The CR-01 property is unchanged and the collector still runs on
+    every run — it simply lives in the second method now. Both sources are read
+    and concatenated, so this gate keeps asserting the CONNECTION rather than the
+    location, and it cannot be satisfied by a collector that is merely defined.
     """
     from nestor_pulse_sdk.pipeline.tribunal.pipeline import TribunalPipeline
 
-    src = inspect.getsource(TribunalPipeline.run)
+    src = inspect.getsource(TribunalPipeline.run) + inspect.getsource(
+        TribunalPipeline._run_staged
+    )
 
     assert "_collect_superseded_notes(" in src, (
         "CR-01: the superseded collector is not called from TribunalPipeline.run — "
