@@ -71,3 +71,53 @@ DID run and passed.
 pytest list. Not done by 15.2-09 because that config's own header documents a
 deliberate exclusion policy (superuser DSN vs RLS) and changing it needs the
 owner's judgement about whether the harness can run these tests faithfully.
+
+### D15-1 — two D-13 persistence tests are written but have never executed
+
+**Discovered:** execution of 15.2-15.
+**Scope:** gate-coverage gap. Same class as D9-3.
+
+The real-schema round-trip test and the provider-quality-beats-heuristic test skip
+in the full suite because that build's testcontainers fixture is broken (root cause
+recorded in `b479499`). `cloudbuild.test-critical.yaml` *does* have a real Postgres,
+but it does not list `test_citation_roundtrip.py`, and that config is owned by
+15.2-02.
+
+Unproven until either the gate is widened or the first live run happens:
+- that the `ARRAY(Text)` bind for `found_by` round-trips to a Python list, and
+- that `research_gap`'s FORCE-RLS `WITH CHECK` accepts the INSERT.
+
+The 12 pure Layer-1 tests DO execute and prove the emitted SQL and every bound
+value; the executor confirmed those by name via a verbose build rather than
+inferring them from suite totals. So the gap is specifically the DB round-trip,
+not the query construction.
+
+**Suggested fix (not done here):** add `test_citation_roundtrip.py` to
+`cloudbuild.test-critical.yaml`'s pytest list, or fix the full suite's
+testcontainers fixture. Deferred for the same reason as D9-3 — that config's
+header documents a deliberate superuser-DSN-vs-RLS exclusion policy, and widening
+it is the owner's judgement call.
+
+### D15-2 — cross-provider contradictions only collide when the tagger agrees on the entity
+
+**Discovered:** execution of 15.2-15.
+**Scope:** accepted limitation, pre-existing in `grouping.py`; now asserted by test.
+
+15.2-15's headline must-have asked that all four recorded contradictions land in
+one skeptic session. Production blocks by `_norm(entity)` alone, and `_norm`
+collapses formatting, not meaning. So `LUKOIL Nederland` vs `lukoil nl` — and the
+run's real tags for the buyer conflict, `lukoil` vs `lukoil benelux` — never reach
+the same block. `grouping.py` documents this as an ACCEPTED LIMITATION, and the
+plan forbids changing the blocking key by name.
+
+The executor did not force the must-have. It made the fixture honest and added a
+test that asserts the limit explicitly rather than papering over it.
+
+**Operator consequence:** a cross-provider contradiction reaches one session *when
+the tagger names the same entity on both sides*. When the tagger splits the entity,
+the contradiction still ships as two separate claims. How often that bites is what
+G-05's August calibration measures.
+
+**Suggested fix (not done here):** changing the blocking key (e.g. entity aliasing
+or embedding-based blocking) is out of scope for this phase and needs a decision
+about false-merge risk.
