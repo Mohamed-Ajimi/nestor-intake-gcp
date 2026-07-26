@@ -1901,6 +1901,15 @@ class TribunalPipeline:
                     # the skeptic refuted. `dropped` here already covers BOTH
                     # adjudication losers and conflict losers — it is the same
                     # list the rejected_claims ledger just above was built from.
+                    #
+                    # D-13 — `research_gaps` is the merge stage's ATTRIBUTED
+                    # couldn't-find list. It is written HERE, inside the same
+                    # tenant context and the same transaction as the claims,
+                    # because 15.2-06's "What we could not establish" section
+                    # reads the `research_gap` table DIRECTLY rather than taking
+                    # a hand-off through the synthesis bundle: the rows simply
+                    # have to exist before `_write_final_report` runs, and this
+                    # is the last tenant-scoped transaction before it.
                     await persist_tribunal_claims(
                         claims=survivors,
                         dropped_claims=dropped,
@@ -1908,6 +1917,7 @@ class TribunalPipeline:
                         run_id=run_id,
                         tenant_id=tenant_id,
                         session=session,
+                        research_gaps=research_gaps,
                     )
         except Exception as exc:
             # Do NOT block synthesis on persistence failures; log for audit

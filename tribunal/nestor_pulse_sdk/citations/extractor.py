@@ -39,7 +39,9 @@ import re
 import uuid
 from typing import Optional
 
+import sqlalchemy
 from sqlalchemy import text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nestor_pulse_sdk.db.models import Claim, ClaimSource, Source
@@ -52,6 +54,64 @@ _URL_RE = re.compile(r"https?://[^\s)\"'<>\]]+", re.IGNORECASE)
 
 # Cap the snapshot_text length to avoid persisting megabyte-scale provider blobs.
 _SNAPSHOT_MAX_CHARS = 50_000
+
+# ---------------------------------------------------------------------------
+# D-13 bounds (Phase 15.2 plan 15). EVERY value below originates in model output
+# -- a provider's own fact list -- so every one of them is clamped or capped HERE
+# as well as at parse time (15.2-04). This function is the last thing between
+# untrusted model wording and a persisted, queryable column, and a bound that
+# only exists in the parser is a bound one refactor away from being gone.
+# ---------------------------------------------------------------------------
+
+#: The only two words `claim.certainty` may hold (15.2-04 `CERTAINTY_VALUES`).
+_CERTAINTY_VALUES = ("certain", "single")
+
+#: The only three words `claim_source.provider_quality` may hold (15.2-04
+#: `QUALITY_VALUES`). They map to the 1/2/3 tier in citations/numbering.py.
+_QUALITY_VALUES = ("official", "press", "other")
+
+#: Bounds on `claim.found_by` (a Postgres text[]). Provider names are CALLER-
+#: supplied, never model-supplied (T-15.2-57), so this is not an injection
+#: control -- it is the bound that stops a bug writing an unbounded array.
+_MAX_FOUND_BY = 16
+_FOUND_BY_MAX_CHARS = 64
+
+#: Bounds on the `research_gap` write (T-15.2-55, denial-of-storage). Truncation
+#: is LOGGED with the exact dropped count -- bounded and loud, never silent.
+_RESEARCH_GAP_MAX_CHARS = 2_000
+_MAX_RESEARCH_GAPS = 200
+_GAP_PROVIDER_MAX_CHARS = 64
+
+#: `source.title` is the provider's own markdown link label as resolved by
+#: 15.2-04's `display_domain` -- never an invented string.
+_SOURCE_TITLE_MAX_CHARS = 200
+
+
+def _clamp_enum(value: object, allowed: tuple[str, ...], *, field: str) -> Optional[str]:
+    """Return `value` lowercased if it is one of `allowed`, else None + a warning.
+
+    ASVS V5 enum clamping. An unrecognised word is NOT an error worth failing a
+    paid run over and is NOT something to store: it becomes NULL, and the run log
+    says which field rejected what, so a provider that starts emitting a fourth
+    vocabulary word is visible rather than silently absent.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        log.warning(
+            "persist: %s was %s, not a string — stored as NULL",
+            field, type(value).__name__,
+        )
+        return None
+    normalised = value.strip().lower()
+    if normalised in allowed:
+        return normalised
+    if normalised:
+        log.warning(
+            "persist: %s value %r is not one of %s — stored as NULL",
+            field, value[:40], allowed,
+        )
+    return None
 
 
 def _content_hash(text_value: str) -> str:
@@ -177,13 +237,66 @@ async def _insert_claim(
     claim_text: str,
     facet: Optional[str],
     position: Optional[int] = None,
+    certainty: Optional[str] = None,
+    found_by: Optional[list[str]] = None,
 ) -> uuid.UUID:
+    """INSERT one claim row. `certainty` / `found_by` are D-13, ADDITIVE.
+
+    Both default to None so every pre-existing call site stays valid unchanged.
+
+    THREE BINDING RULES, stated here because each one is a trap:
+
+    * `found_by` is a Postgres `text[]`. It is bound through an EXPLICIT
+      `bindparam(..., type_=postgresql.ARRAY(Text))` rather than left for the
+      driver to infer an array type from an untyped Python list -- pg8000 and
+      asyncpg disagree about that inference, and the failure mode is a runtime
+      error inside a paid run rather than a test failure.
+    * An ABSENT provenance is bound as `None`, never as `[]`, so the column reads
+      NULL. `cardinality(found_by)` on an empty array is 0 and on NULL is NULL;
+      "no provenance recorded" and "recorded as found by nobody" are different
+      facts and the corroboration queries must be able to tell them apart.
+    * `certainty` is clamped to {'certain','single'} HERE as well as at parse
+      time. Anything else -- including a non-string -- becomes NULL with a
+      warning. This function is the last thing between untrusted model wording
+      and the database.
+
+    `found_by` is additionally capped at `_MAX_FOUND_BY` entries of
+    `_FOUND_BY_MAX_CHARS` characters. Provider names are caller-supplied and
+    never model-supplied (T-15.2-57), so that cap is a bug bound, not an
+    injection control -- but the column must not be a place a bug can write
+    unbounded data.
+    """
     claim_id = uuid.uuid4()
+
+    certainty_value = _clamp_enum(certainty, _CERTAINTY_VALUES, field="claim.certainty")
+
+    found_by_value: Optional[list[str]] = None
+    if isinstance(found_by, list) and found_by:
+        bounded = [
+            str(p).strip()[:_FOUND_BY_MAX_CHARS]
+            for p in found_by[:_MAX_FOUND_BY]
+            if p
+        ]
+        bounded = [p for p in bounded if p]
+        if len(found_by) > _MAX_FOUND_BY:
+            log.warning(
+                "persist: claim.found_by had %d entries — capped at %d, %d dropped",
+                len(found_by), _MAX_FOUND_BY, len(found_by) - _MAX_FOUND_BY,
+            )
+        # NULL rather than [] -- see the docstring.
+        found_by_value = bounded or None
+
+    statement = text(
+        "INSERT INTO claim "
+        "(id, tenant_id, run_id, text, facet, position, certainty, found_by) "
+        "VALUES (:id, :tid, :rid, :text, :facet, :position, :certainty, :found_by)"
+    ).bindparams(
+        sqlalchemy.bindparam(
+            "found_by", type_=postgresql.ARRAY(sqlalchemy.Text)
+        )
+    )
     await session.execute(
-        text(
-            "INSERT INTO claim (id, tenant_id, run_id, text, facet, position) "
-            "VALUES (:id, :tid, :rid, :text, :facet, :position)"
-        ),
+        statement,
         {
             "id": str(claim_id),
             "tid": str(tenant_id),
@@ -191,9 +304,47 @@ async def _insert_claim(
             "text": claim_text,
             "facet": facet,
             "position": position,
+            "certainty": certainty_value,
+            "found_by": found_by_value,
         },
     )
     return claim_id
+
+
+async def _insert_research_gap(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    provider: str,
+    text_value: str,
+) -> None:
+    """INSERT one `research_gap` row -- a thing a provider said it could NOT find.
+
+    Shaped exactly like `_insert_claim`: one parameterised INSERT, a fresh uuid4,
+    and NO `created_at` (the column carries a server default, so the database
+    clock is the only clock that times these rows).
+
+    TENANT ISOLATION (T-15.2-51). This runs inside `persist_tribunal_claims`'
+    existing `set_tenant_context(session, tenant_id)` and the caller's
+    transaction. `tenant_id` is written explicitly on the row and migration
+    0013's FORCE RLS + `WITH CHECK` policy is the ENFORCEMENT -- there is
+    deliberately no application-level tenant filter here, because a second place
+    that decides which tenant a row belongs to is a second place to get it wrong.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO research_gap (id, tenant_id, run_id, provider, text) "
+            "VALUES (:id, :tid, :rid, :provider, :text)"
+        ),
+        {
+            "id": str(uuid.uuid4()),
+            "tid": str(tenant_id),
+            "rid": str(run_id),
+            "provider": provider,
+            "text": text_value,
+        },
+    )
 
 
 async def _insert_verdict(
@@ -316,11 +467,30 @@ async def _link_claim_source(
     claim_id: uuid.UUID,
     source_id: uuid.UUID,
     snippet: Optional[str] = None,
+    provider_quality: Optional[str] = None,
 ) -> None:
+    """Link one claim to one source. `provider_quality` is D-13, ADDITIVE.
+
+    `provider_quality` is what the PROVIDER said about the source it cited
+    ('official' / 'press' / 'other'), clamped here as well as at parse time;
+    anything else becomes NULL with a warning. `citations/numbering.py` prefers
+    it over `derive_quality_tier`'s domain heuristic, so an unrecognised word
+    costs the provider's opinion and falls back to the heuristic -- it can never
+    invent a tier.
+
+    The `ON CONFLICT (claim_id, source_id) DO NOTHING` clause is UNCHANGED and
+    load-bearing for exactly that reason: a repeat link stays a no-op, so a
+    second claim citing the same source cannot overwrite the first claim's
+    grading of it.
+    """
+    quality_value = _clamp_enum(
+        provider_quality, _QUALITY_VALUES, field="claim_source.provider_quality"
+    )
     await session.execute(
         text(
-            "INSERT INTO claim_source (claim_id, source_id, tenant_id, snippet) "
-            "VALUES (:cid, :sid, :tid, :snippet) "
+            "INSERT INTO claim_source "
+            "(claim_id, source_id, tenant_id, snippet, provider_quality) "
+            "VALUES (:cid, :sid, :tid, :snippet, :quality) "
             "ON CONFLICT (claim_id, source_id) DO NOTHING"
         ),
         {
@@ -328,6 +498,7 @@ async def _link_claim_source(
             "sid": str(source_id),
             "tid": str(tenant_id),
             "snippet": snippet,
+            "quality": quality_value,
         },
     )
 
@@ -419,6 +590,7 @@ async def persist_tribunal_claims(
     tenant_id: uuid.UUID,
     session: AsyncSession,
     dropped_claims: Optional[list[dict]] = None,
+    research_gaps: Optional[list[dict]] = None,
 ) -> dict:
     """Persist fine-grained claim + claim_source + verification_verdict rows.
 
@@ -458,10 +630,32 @@ async def persist_tribunal_claims(
                           report["refuted"] are not permanently empty. Keyword-optional
                           and defaulted to None so every pre-existing call shape stays
                           valid.
+        research_gaps:    D-13 (Phase 15.2). The things a research provider explicitly
+                          reported it could NOT establish, as
+                          `[{"provider": str, "text": str}, ...]`. One `research_gap`
+                          row is written per surviving entry, inside this function's
+                          own `set_tenant_context` and the caller's transaction.
+                          15.2-06's "What we could not establish" report section reads
+                          these rows straight back out of the table, so an absent fact
+                          is stated honestly instead of silently omitted. A run where
+                          every stream established everything it looked for writes NO
+                          rows, and that is the healthy case, not a missing feature.
+                          Keyword-optional and defaulted to None so every pre-existing
+                          call shape stays valid.
+
+                          Every value here is model-authored, so it is bounded before
+                          it is written: blank provider or text is skipped, text is
+                          truncated to `_RESEARCH_GAP_MAX_CHARS`, provider to
+                          `_GAP_PROVIDER_MAX_CHARS`, the `(provider, text)` pair is
+                          de-duplicated order-preservingly, and the total is capped at
+                          `_MAX_RESEARCH_GAPS` with the exact dropped count logged.
 
     Returns:
         {"claim_ids": [uuid, ...], "source_ids": [uuid, ...],
-         "verdict_ids": [uuid, ...], "verdict_count": int}
+         "verdict_ids": [uuid, ...], "verdict_count": int,
+         "research_gap_count": int}
+
+        `research_gap_count` is ADDITIVE — the four pre-existing keys are unchanged.
     """
     await set_tenant_context(session, tenant_id)
 
@@ -478,7 +672,14 @@ async def persist_tribunal_claims(
 
         facet = claim.get("facet") or claim.get("focus_area") or ""
 
-        # Insert ONE fine-grained claim row per survivor
+        # Insert ONE fine-grained claim row per survivor.
+        #
+        # D-13: `certainty` and `found_by` come straight off the claim dict the
+        # merge produced. `certainty` is the PROVIDER's own confidence word (or
+        # the cautious `single` if any stream that stated this fact only found it
+        # once); `found_by` is the corroboration signal — which research streams
+        # stated this fact — that `_dedupe_claims` unioned across streams. Both
+        # are clamped and bounded inside `_insert_claim`.
         claim_id = await _insert_claim(
             session,
             tenant_id=tenant_id,
@@ -486,6 +687,8 @@ async def persist_tribunal_claims(
             claim_text=claim_text,
             facet=facet,
             position=position,
+            certainty=claim.get("certainty"),
+            found_by=claim.get("found_by"),
         )
         claim_ids.append(claim_id)
 
@@ -543,6 +746,32 @@ async def persist_tribunal_claims(
                 seen_urls.add(url)
                 deduped_urls.append(url)
 
+        # D-13 per-URL grading. `provider_quality_by_url` is the map
+        # `_dedupe_claims` builds when two streams' versions of one fact merge —
+        # it keeps each URL graded by the provider that SUPPLIED it. The scalar
+        # `provider_quality` is the un-merged single-provider case. A URL that
+        # neither covers (a skeptic's own web_fetch citation, say) is graded
+        # NULL and falls through to `derive_quality_tier`'s domain heuristic.
+        quality_by_url = claim.get("provider_quality_by_url")
+        if not isinstance(quality_by_url, dict):
+            quality_by_url = {}
+        claim_quality = claim.get("provider_quality")
+
+        # D-13 `source.title`. WHY THIS MATTERS: for the Gemini streams EVERY
+        # url is a `https://vertexaisearch.cloud.google.com/grounding-api-
+        # redirect/...` redirect, so the graded `## Sources` renderer's domain
+        # fallback would label every single Gemini source
+        # `vertexaisearch.cloud.google.com` — actively misleading, not merely
+        # unhelpful. `source_domain` is the display domain 15.2-04 resolved from
+        # the provider's OWN markdown link label, so it is the provider's label
+        # and never an invented title. 15.2-05 added the parameter and left it
+        # unused by production callers; this is the plan that supplies it.
+        # (`title` is NOT part of `content_hash`, so supplying it cannot change
+        # source dedupe, and an existing row keeps the title it already had.)
+        source_title = str(claim.get("source_domain") or "").strip() or None
+        if source_title:
+            source_title = source_title[:_SOURCE_TITLE_MAX_CHARS]
+
         # Upsert source rows + link claim_source rows
         for url in deduped_urls:
             sid = await _upsert_source(
@@ -551,6 +780,7 @@ async def persist_tribunal_claims(
                 url=url,
                 provider="tribunal_skeptic",
                 snapshot_text=url,  # minimal snapshot; Phase 2 can enrich
+                title=source_title,
             )
             source_ids.append(sid)
             await _link_claim_source(
@@ -558,7 +788,60 @@ async def persist_tribunal_claims(
                 tenant_id=tenant_id,
                 claim_id=claim_id,
                 source_id=sid,
+                provider_quality=quality_by_url.get(url) or claim_quality,
             )
+
+    # ------------------------------------------------------------------------
+    # D-13: the couldn't-find lists become `research_gap` rows.
+    # ------------------------------------------------------------------------
+    # These are the things a provider said, in its own words, that it could NOT
+    # establish. Without them "What we could not establish" is an empty heading
+    # and an unfound fact is indistinguishable from a fact nobody looked for.
+    #
+    # Every value is model-authored, so every value is BOUNDED before it is
+    # written (T-15.2-55), and every truncation says exactly how much it dropped.
+    # Every INSERT runs under this function's own `set_tenant_context` above and
+    # inside the caller's transaction — 0013's FORCE RLS `WITH CHECK` policy is
+    # the control, and no second, weaker tenant setup is added here (T-15.2-51).
+    research_gap_count = 0
+    if research_gaps:
+        seen_gaps: set = set()
+        bounded_gaps: list[tuple[str, str]] = []
+        for entry in research_gaps:
+            if not isinstance(entry, dict):
+                continue
+            gap_provider = str(entry.get("provider") or "").strip()
+            gap_text = str(entry.get("text") or "").strip()
+            if not gap_provider or not gap_text:
+                # A gap with no attribution cannot be rendered per provider, and
+                # a gap with no text says nothing. Neither is worth a row.
+                continue
+            gap_provider = gap_provider[:_GAP_PROVIDER_MAX_CHARS]
+            gap_text = gap_text[:_RESEARCH_GAP_MAX_CHARS]
+            pair = (gap_provider, gap_text)
+            if pair in seen_gaps:
+                continue
+            seen_gaps.add(pair)
+            bounded_gaps.append(pair)
+
+        if len(bounded_gaps) > _MAX_RESEARCH_GAPS:
+            log.warning(
+                "persist_tribunal_claims: %d research gaps exceed the %d cap — "
+                "%d dropped and NOT written (run_id=%s)",
+                len(bounded_gaps), _MAX_RESEARCH_GAPS,
+                len(bounded_gaps) - _MAX_RESEARCH_GAPS, str(run_id),
+            )
+            bounded_gaps = bounded_gaps[:_MAX_RESEARCH_GAPS]
+
+        for gap_provider, gap_text in bounded_gaps:
+            await _insert_research_gap(
+                session,
+                tenant_id=tenant_id,
+                run_id=run_id,
+                provider=gap_provider,
+                text_value=gap_text,
+            )
+            research_gap_count += 1
 
     # Dropped claims: refuted by adjudication or the weaker side of a conflict.
     # No `claim` row is written for them (see the dropped_claims Arg note), but
@@ -580,10 +863,12 @@ async def persist_tribunal_claims(
             )
 
     log.info(
-        "persist_tribunal_claims done: %d claims / %d sources / %d verdicts (run_id=%s)",
+        "persist_tribunal_claims done: %d claims / %d sources / %d verdicts / "
+        "%d research gaps (run_id=%s)",
         len(claim_ids),
         len(source_ids),
         len(verdict_ids),
+        research_gap_count,
         str(run_id),
     )
     return {
@@ -591,4 +876,5 @@ async def persist_tribunal_claims(
         "source_ids": source_ids,
         "verdict_ids": verdict_ids,
         "verdict_count": len(verdict_ids),
+        "research_gap_count": research_gap_count,
     }

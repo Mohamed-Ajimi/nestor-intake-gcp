@@ -13,10 +13,18 @@ because it invented its own numbers; here every `[n]` is assigned from
   - every number resolves to a source row (no dangling `[n]`);
   - each entry flags `single_source` (the claim it first appears on cites exactly
     one source);
-  - quality tier (1 official / 2 press / 3 blog-or-other) + a publication-date
-    proxy are DERIVED from a provider/domain heuristic (Open Q A3: NOT stored
-    columns this phase -- chain-safe; a stored authoritative-tier column is a
-    later, still-non-hashed option if the operator wants it).
+  - quality tier is 1 official / 2 press / 3 blog-or-other. THERE ARE NOW TWO
+    SOURCES OF TRUTH FOR IT AND PROVIDER-STATED WINS (D-13, Phase 15.2 plan 15):
+    when the research provider that cited a source said what KIND of source it
+    was, `claim_source.provider_quality` is mapped straight to a tier; only when
+    it said nothing does `derive_quality_tier`'s domain heuristic decide. The
+    provider read the page and the heuristic only reads the hostname, so the
+    heuristic is the FALLBACK, not the authority. `derive_quality_tier` itself is
+    unchanged, still recomputed on read, and still pinned by its own tier tests.
+    A source is graded by the `claim_source` row of the claim that FIRST
+    introduced it in the deterministic ordering below -- one source, one grade,
+    chosen the same way every run.
+  - the publication-date proxy stays DERIVED from `source.fetched_at` (A3).
 
 `publication_date` IS A RETRIEVAL-DATE PROXY, NOT A PUBLICATION DATE. It carries
 `source.fetched_at` -- the moment WE fetched the page, which says nothing about
@@ -100,6 +108,35 @@ def derive_quality_tier(provider: str | None, url: str | None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# D-13 (Phase 15.2 plan 15): the provider-stated grade, which BEATS the heuristic
+# above. `claim_source.provider_quality` holds one of these three words, already
+# clamped twice -- at parse (15.2-04) and again at write (citations/extractor.py)
+# -- so anything unrecognised is already NULL by the time it is read here and
+# falls through to `derive_quality_tier`. A model can therefore never invent a
+# tier; the worst it can do is decline to state one.
+# ---------------------------------------------------------------------------
+_PROVIDER_QUALITY_TIER = {"official": 1, "press": 2, "other": 3}
+
+
+def _quality_tier_for(row: Any, provider: str | None, url: str | None) -> int:
+    """Provider-stated tier when there is one, else the domain heuristic.
+
+    The read is DEFENSIVE by design: `_assign_numbers` is pure and is proved with
+    hand-built row dicts in the keyless engine gate, and 15.2-05's Layer-1
+    fixtures have no `provider_quality` key at all. `_row_get` already returns
+    None for a missing key on both a SQLAlchemy Row and a plain dict, so those
+    fixtures keep passing untouched and fall through to the heuristic -- which is
+    exactly the behaviour they were written to pin.
+    """
+    stated = _row_get(row, "provider_quality")
+    if isinstance(stated, str):
+        tier = _PROVIDER_QUALITY_TIER.get(stated.strip().lower())
+        if tier is not None:
+            return tier
+    return derive_quality_tier(provider, url)
+
+
+# ---------------------------------------------------------------------------
 # The ordered claim -> source query. ONE deterministic statement, hoisted so the
 # numbering and the with-claims variant can never drift apart.
 #
@@ -110,7 +147,10 @@ def derive_quality_tier(provider: str | None, url: str | None) -> int:
 _CLAIM_SOURCE_SQL = (
     "SELECT c.id AS claim_id, c.position AS position, "
     "       s.id AS source_id, s.title AS title, s.url AS url, "
-    "       s.provider AS provider, s.fetched_at AS fetched_at "
+    "       s.provider AS provider, s.fetched_at AS fetched_at, "
+    # D-13 (15.2-15): the provider's OWN statement about the source it cited.
+    # One added column and nothing else -- the ORDER BY below is untouched.
+    "       cs.provider_quality AS provider_quality "
     "FROM claim c "
     "JOIN claim_source cs ON cs.claim_id = c.id "
     "JOIN source s ON s.id = cs.source_id "
@@ -205,7 +245,11 @@ def _assign_numbers(rows: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
                 "url": url,
                 "provider": provider,
                 "publication_date": publication_date,
-                "quality_tier": derive_quality_tier(provider, url),
+                # D-13: provider-stated wins, `derive_quality_tier` is the
+                # fallback. The entry SHAPE is deliberately unchanged -- no new
+                # key -- because 15.2-05's Layer-1 tests compare whole entry
+                # lists for byte-identical determinism. Only the VALUE moves.
+                "quality_tier": _quality_tier_for(r, provider, url),
                 "single_source": len(sources_per_claim.get(cid, ())) == 1,
                 "first_claim_id": cid,
                 "first_claim_position": _row_get(r, "position"),
@@ -235,7 +279,8 @@ async def number_citations(
         "url": str | None,
         "provider": str | None,
         "publication_date": str | None,  # source.fetched_at ISO (date proxy, A3)
-        "quality_tier": int,      # 1/2/3 derived heuristic (A3)
+        "quality_tier": int,      # 1/2/3 — claim_source.provider_quality when the
+                                  # provider stated one (D-13), else the A3 heuristic
         "single_source": bool,    # the claim it first appears on cites exactly one source
         "first_claim_id": str,    # the claim that introduced this source
         "first_claim_position": int | None,
