@@ -86,21 +86,21 @@ steps:
             python -m pytest \
               nestor_pulse_sdk/tests/test_rls_isolation.py \
               -q -rs -m "not live" | tee /tmp/rls-gate.out
-            # ANTI-FALSE-GREEN: all four must PASS. A skip exits pytest 0 but fails the gate
+            # ANTI-FALSE-GREEN: all six must PASS. A skip exits pytest 0 but fails the gate
             # here — a skipped cross-tenant denial test is precisely the false assurance this
             # config exists to eliminate (threat T-15.2-07).
             # NOTE FOR FUTURE EDITS: this count tracks the number of tests in
-            # test_rls_isolation.py, and it is 4 as of Task 2 of plan 15.2-01. Task 3 of the
-            # SAME plan adds two research_gap tests and updates this to 6. If you add a test
-            # to that file, update BOTH the grep and the success echo below.
+            # test_rls_isolation.py. It is 6 as of plan 15.2-01 (the 4 original isolation
+            # tests + the 2 research_gap tests added alongside migration 0013). If you add a
+            # test to that file, update BOTH the grep and the success echo below.
             SUMMARY_LINE=$$(grep -E "[0-9]+ (passed|failed|skipped|error)" /tmp/rls-gate.out | tail -n 1)
             echo "pytest summary: $$SUMMARY_LINE"
-            echo "$$SUMMARY_LINE" | grep -E "(^| )4 passed"
+            echo "$$SUMMARY_LINE" | grep -E "(^| )6 passed"
             if echo "$$SUMMARY_LINE" | grep -E "skipped|failed|error"; then
               echo "RLS GATE RED: skips/failures in the pytest summary" >&2
               exit 1
             fi
-            echo "RLS GATE GREEN: 4/4 executed and passed as non-superuser"
+            echo "RLS GATE GREEN: 6/6 executed and passed as non-superuser"
           '
 
         docker rm -f rls-pg

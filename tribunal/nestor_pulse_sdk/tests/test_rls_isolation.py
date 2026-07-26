@@ -29,6 +29,14 @@ What each test proves:
 | test_force_row_level_security_applies_to_owner | T-05-04 elevation | RESEARCH line 378 |
 | test_no_tenant_context_returns_empty | T-05-02 RLS bypass | RESEARCH Pitfall 1 |
 | test_concurrent_different_tenants_stay_isolated | T-05-02 SET-LOCAL regression | RESEARCH Pitfall 1 |
+| test_research_gap_cross_tenant_denied | T-15.2-01 information disclosure | 15.2-01 / D-13 |
+| test_research_gap_write_without_tenant_context_rejected | T-15.2-03 WITH CHECK + T-15.2-04 uuid-cast crash-loop | 15.2-01 / migrations 0009+0010 |
+
+Phase 15.2 (plan 15.2-01) added the last two rows for the `research_gap` table
+created by migration 0013, plus a `require_non_superuser` guard so this file can
+never pass VACUOUSLY on a superuser DSN again. The harness that runs it
+faithfully -- and that treats a skip as a build failure -- is
+`tribunal/cloudbuild.test-rls.yaml`.
 
 The Pitfall 1 regression test forces pool reuse (size=1, max_overflow=0)
 so two sequential transactions land on the SAME physical connection.
@@ -74,6 +82,35 @@ async def live_engine():
         yield engine
     finally:
         await engine.dispose()
+
+
+@pytest.fixture
+async def require_non_superuser(live_engine):
+    """Skip CLEANLY unless the connected role is a NON-superuser.
+
+    RLS is bypassed unconditionally by a Postgres superuser, so an isolation
+    assertion run as a superuser proves NOTHING (it would pass even with a
+    completely broken policy). `tribunal/cloudbuild.test-critical.yaml` connects
+    as the `postgres` superuser and excludes this file for exactly that reason.
+    This guard makes the file self-excluding on a superuser DSN -- a loud skip,
+    never a false green -- and meaningful only under the non-superuser app_user
+    DSN of `tribunal/cloudbuild.test-rls.yaml`, which is the harness that runs it
+    faithfully (and which treats a skip as a build failure). Threat T-15.2-07.
+
+    Mirrors `test_seam_rls_denial.py::require_non_superuser` in shape and register.
+    """
+    from sqlalchemy import text
+
+    async with live_engine.connect() as conn:
+        is_super = (
+            await conn.execute(text("SELECT current_setting('is_superuser')"))
+        ).scalar_one()
+    if str(is_super).lower() in ("on", "true", "yes", "1"):
+        pytest.skip(
+            "connected as a Postgres SUPERUSER -- RLS is bypassed, so this "
+            "cross-tenant denial test would be a false green. Runs faithfully "
+            "only under a non-superuser DSN (tribunal/cloudbuild.test-rls.yaml)."
+        )
 
 
 @pytest.fixture
@@ -202,6 +239,10 @@ async def test_force_row_level_security_applies_to_owner(live_engine):
         "source",
         "claim",
         "claim_source",
+        # Added by migration 0013 (Phase 15.2 D-13). FORCE is what binds the
+        # policy on app_user, the table OWNER -- without it the API role would
+        # read every tenant's gap rows (threat T-15.2-02).
+        "research_gap",
     )
 
     async with live_engine.connect() as conn:
@@ -387,3 +428,203 @@ async def test_concurrent_different_tenants_stay_isolated():
                 )
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Seed helper -- one project + one run + one research_gap per tenant, all
+# inserted under that tenant's OWN context so the RLS WITH CHECK admits them
+# (this is exactly the `persist_tribunal_claims` write path of plan 15.2-15).
+# ---------------------------------------------------------------------------
+
+
+async def _seed_gap(Session, tenant_id, provider, gap_text):
+    """Insert the FK chain a `research_gap` row needs, for ``tenant_id``.
+
+    Creates one Project, one Run (engine='tribunal' to satisfy ck_run_engine) and
+    one ResearchGap, all through the ORM models -- which additionally proves the
+    ORM declarations of migration 0013 match the shipped DDL.
+
+    Returns the ``run_id``, so a caller can attempt a no-context INSERT against a
+    run that genuinely exists.
+    """
+    from nestor_pulse_sdk.db.models import Project, ResearchGap, Run
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+
+    async with Session() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_id)
+            project = Project(
+                tenant_id=tenant_id, name=f"{tenant_id} gap project", status="active"
+            )
+            session.add(project)
+            await session.flush()  # populate project.id for the run FK
+            run = Run(
+                tenant_id=tenant_id,
+                project_id=project.id,
+                engine="tribunal",  # D-02 CHECK: one of adk/sdk/tribunal
+                brief="rls seed",
+                status="queued",
+                idempotency_key=uuid.uuid4(),
+            )
+            session.add(run)
+            await session.flush()  # populate run.id for the gap FK
+            session.add(
+                ResearchGap(
+                    tenant_id=tenant_id,
+                    run_id=run.id,
+                    provider=provider,
+                    text=gap_text,
+                )
+            )
+            run_id = run.id
+    return run_id
+
+
+# ---------------------------------------------------------------------------
+# Test 5: research_gap cross-tenant SELECT returns zero foreign rows (D-13)
+# ---------------------------------------------------------------------------
+
+
+async def test_research_gap_cross_tenant_denied(
+    live_engine, require_non_superuser, isolated_two_tenants
+):
+    """T-15.2-01 -- a session set to tenant_a MUST NOT see tenant_b's research_gap rows.
+
+    The headline D-13 denial assertion, and D-13's "cross-tenant denial test on
+    day one" requirement for the table created by migration 0013: every new
+    tenant-scoped table gets FORCE RLS plus this test IN THE PLAN THAT CREATES IT.
+    `research_gap` carries the per-provider "couldn't find" list, i.e. a statement
+    about what a client's research did NOT establish -- leaking it across tenants
+    would disclose one client's research shape to another.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from nestor_pulse_sdk.db.models import ResearchGap
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+
+    tenant_a, tenant_b = isolated_two_tenants
+    Session = async_sessionmaker(
+        live_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    await _seed_gap(Session, tenant_a, "gemini", "A's unfound fact")
+    await _seed_gap(Session, tenant_b, "openai", "B's unfound fact")
+
+    # Read as tenant_a -- MUST see only A's gap, never B's.
+    async with Session() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_a)
+            texts = sorted(
+                r[0] for r in (await session.execute(select(ResearchGap.text)))
+            )
+            assert "A's unfound fact" in texts, (
+                f"tenant_a should see its own research_gap row; got: {texts}"
+            )
+            assert "B's unfound fact" not in texts, (
+                f"RLS LEAK: tenant_a saw tenant_b's research_gap row: {texts}"
+            )
+
+    # And the reverse direction.
+    async with Session() as session:
+        async with session.begin():
+            await set_tenant_context(session, tenant_b)
+            texts = sorted(
+                r[0] for r in (await session.execute(select(ResearchGap.text)))
+            )
+            assert "B's unfound fact" in texts
+            assert "A's unfound fact" not in texts, (
+                f"RLS LEAK: tenant_b saw tenant_a's research_gap row: {texts}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: research_gap with NO tenant context -- empty read, REJECTED write
+# ---------------------------------------------------------------------------
+
+
+async def test_research_gap_write_without_tenant_context_rejected(
+    live_engine, require_non_superuser, isolated_two_tenants
+):
+    """T-15.2-03 (WITH CHECK) + T-15.2-04 (the 0009/0010 crash-loop guard), in one test.
+
+    Reproduces the EMPTY-STRING GUC reversion documented in migration 0010: once
+    any transaction on a pooled connection has SET the custom `app.tenant_id` GUC,
+    it reverts to '' -- NOT to unset -- when that transaction ends. Then asserts
+    BOTH halves of the policy:
+
+    (a) the SELECT returns zero rows and RAISES NOTHING. This is what the
+        `NULLIF(current_setting('app.tenant_id', true), '')::uuid` form buys. The
+        bare `current_setting('app.tenant_id')::uuid` form that RESEARCH.md
+        drafted would raise `invalid input syntax for type uuid: ""` right here --
+        the exact worker crash-loop that migrations 0009 and 0010 exist to fix.
+    (b) the INSERT is REJECTED by the policy's WITH CHECK, because NULL is not a
+        match. A silent success here would be a cross-tenant write hole.
+    """
+    from sqlalchemy import select, text
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from nestor_pulse_sdk.db.models import ResearchGap
+
+    tenant_a, _ = isolated_two_tenants
+    Session = async_sessionmaker(
+        live_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    # Plant a row under a REAL tenant context, so there is something to leak and a
+    # genuinely existing run_id to aim the rejected INSERT at.
+    run_id_a = await _seed_gap(Session, tenant_a, "gemini", "A's no-context gap")
+
+    # ---- (a) read with an EMPTY-STRING GUC: zero rows, and NO exception.
+    async with Session() as session:
+        async with session.begin():
+            # Intentionally do NOT call set_tenant_context. Reproduce 0010's
+            # empty-string reversion explicitly.
+            await session.execute(
+                text("SELECT set_config('app.tenant_id', '', true)")
+            )
+            try:
+                rows = (await session.execute(select(ResearchGap))).all()
+            except Exception as exc:  # noqa: BLE001
+                pytest.fail(
+                    "research_gap SELECT with an EMPTY app.tenant_id raised "
+                    f"{type(exc).__name__}: {exc}. The policy must use the "
+                    "NULLIF(current_setting('app.tenant_id', true), '')::uuid "
+                    "form -- the bare current_setting(...)::uuid form raises on "
+                    "'' and crash-loops the worker (migrations 0009/0010)."
+                )
+            assert len(rows) == 0, (
+                f"RLS BYPASS: research_gap read without tenant context returned "
+                f"{len(rows)} rows (must be 0)."
+            )
+
+    # ---- (b) write with an EMPTY-STRING GUC: REJECTED by WITH CHECK.
+    write_error = None
+    async with Session() as session:
+        try:
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.tenant_id', '', true)")
+                )
+                session.add(
+                    ResearchGap(
+                        tenant_id=tenant_a,
+                        run_id=run_id_a,
+                        provider="gemini",
+                        text="smuggled with no tenant context",
+                    )
+                )
+                await session.flush()
+        except Exception as exc:  # noqa: BLE001 -- the RLS policy violation we want
+            write_error = str(exc)
+
+    assert write_error is not None, (
+        "CROSS-TENANT WRITE HOLE: inserting a research_gap row with no tenant "
+        "context SUCCEEDED. The policy's WITH CHECK must reject it (NULL is not "
+        "a match)."
+    )
+    assert (
+        "row-level security" in write_error.lower()
+        or "violates" in write_error.lower()
+        or "policy" in write_error.lower()
+    ), f"Unexpected error shape for the rejected write: {write_error!r}"
