@@ -144,6 +144,30 @@ FAKE_PROVIDER_RESULTS = [
 ]
 
 
+def fake_facts_result(claims=None, reports=None):
+    """A `ProviderFactsResult` standing in for the whole distill stage.
+
+    WHY THIS REPLACED A `claim_distiller` PATCH (15.2-15, D-03/D9). These tests
+    used to monkeypatch `pipeline.claim_distiller`, because the distill stage
+    handed the WHOLE provider corpus to the distiller and used what came back.
+    D-03 unwired that: the stage now calls `collect_provider_facts`, which reads
+    each stream's own D8 fact list first and only falls back to the distiller
+    per non-complying provider. `pipeline.claim_distiller` no longer exists as a
+    module attribute, so patching it raised AttributeError — the patch target
+    moved WITH the behaviour it stands in for.
+
+    `reports` defaults to `FAKE_PROVIDER_RESULTS` because the pipeline rebinds
+    `provider_results = result.reports` (15.2-14 contract (b)) and every
+    downstream source extractor reads it.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.steps import ProviderFactsResult
+
+    return ProviderFactsResult(
+        claims=list(CLAIMS) if claims is None else list(claims),
+        reports=list(FAKE_PROVIDER_RESULTS) if reports is None else list(reports),
+    )
+
+
 # ---------------------------------------------------------------------------
 # No-op async sessionmaker
 # ---------------------------------------------------------------------------
@@ -220,10 +244,11 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
         run_angles_mock,
     )
 
-    # Monkeypatch claim_distiller to return our fixture claims
-    distiller_mock = AsyncMock(return_value=list(CLAIMS))
+    # Monkeypatch the distill stage's collector to return our fixture claims.
+    # (Was a `claim_distiller` patch until 15.2-15 — see `fake_facts_result`.)
+    distiller_mock = AsyncMock(return_value=fake_facts_result())
     monkeypatch.setattr(
-        "nestor_pulse_sdk.pipeline.tribunal.pipeline.claim_distiller",
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.collect_provider_facts",
         distiller_mock,
     )
 
@@ -251,13 +276,23 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
     # by a **kwargs catch-all, so this double keeps documenting the real signature and
     # the next widening surfaces here instead of passing silently.
     persist_calls: list[dict] = []
-    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session, dropped_claims=None):
+    # `research_gaps` is 15.2-15's D-13 write path — additive and defaulted on
+    # the real writer, but a stand-in must still ACCEPT what Stage 7 now passes.
+    # Captured rather than ignored, so this test also pins that the merge stage's
+    # couldn't-find list actually reaches persistence.
+    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session,
+                           dropped_claims=None, research_gaps=None):
         persist_calls.append({
             "claims": list(claims),
             "verdicts_by_claim": verdicts_by_claim,
             "dropped_claims": list(dropped_claims or []),
+            "research_gaps": list(research_gaps or []),
         })
-        return {"claim_ids": [uuid.uuid4() for _ in claims], "source_ids": []}
+        return {
+            "claim_ids": [uuid.uuid4() for _ in claims],
+            "source_ids": [],
+            "research_gap_count": len(research_gaps or []),
+        }
 
     monkeypatch.setattr(
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.persist_tribunal_claims",
@@ -382,9 +417,9 @@ async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
     )
 
     # Stub the rest of the flow after research (same fakes as the clear-path test).
-    distiller_mock = AsyncMock(return_value=list(CLAIMS))
+    distiller_mock = AsyncMock(return_value=fake_facts_result())
     monkeypatch.setattr(
-        "nestor_pulse_sdk.pipeline.tribunal.pipeline.claim_distiller",
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline.collect_provider_facts",
         distiller_mock,
     )
     verdict_support = {"verdict": "support", "confidence": 0.9, "evidence_refs": ["https://a.com"], "citations": [], "has_independent_source": True}
@@ -397,8 +432,13 @@ async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
     # Same widened contract as the double above (15.1-14 / ENGINE-10): Stage 7 also
     # passes the refuted / conflict-lost claims, persisted with claim_id = NULL.
     # Explicit parameter, never a **kwargs catch-all.
-    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session, dropped_claims=None):
-        return {"claim_ids": [uuid.uuid4() for _ in claims], "source_ids": []}
+    async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session,
+                           dropped_claims=None, research_gaps=None):
+        return {
+            "claim_ids": [uuid.uuid4() for _ in claims],
+            "source_ids": [],
+            "research_gap_count": len(research_gaps or []),
+        }
     monkeypatch.setattr(
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.persist_tribunal_claims",
         fake_persist,
@@ -570,13 +610,28 @@ async def test_persist_tribunal_claims_shape(monkeypatch):
     fake_session = AsyncMock()
     fake_session.execute = AsyncMock(return_value=MagicMock(first=lambda: None))
 
-    async def fake_insert_claim(session, *, tenant_id, run_id, claim_text, facet, position=None):
+    # The three D-13 keyword arguments below (`certainty`, `found_by`, `title`,
+    # `provider_quality`) are ADDITIVE and DEFAULTED on the real helpers
+    # (15.2-15), so production call sites that predate them still work — but a
+    # STAND-IN must still accept what the caller now passes, or it fails on a
+    # signature it was never asked to reproduce. They are accepted and ignored:
+    # this test is about the RETURN SHAPE, and the values themselves are pinned
+    # by test_citation_roundtrip.py's D-13 write-contract tests.
+    async def fake_insert_claim(
+        session, *, tenant_id, run_id, claim_text, facet, position=None,
+        certainty=None, found_by=None,
+    ):
         return uuid.uuid4()
 
-    async def fake_upsert_source(session, *, tenant_id, url, provider, snapshot_text):
+    async def fake_upsert_source(
+        session, *, tenant_id, url, provider, snapshot_text, title=None,
+    ):
         return uuid.uuid4()
 
-    async def fake_link_claim_source(session, *, tenant_id, claim_id, source_id, snippet=None):
+    async def fake_link_claim_source(
+        session, *, tenant_id, claim_id, source_id, snippet=None,
+        provider_quality=None,
+    ):
         pass
 
     async def fake_set_tenant_context(session, tenant_id):

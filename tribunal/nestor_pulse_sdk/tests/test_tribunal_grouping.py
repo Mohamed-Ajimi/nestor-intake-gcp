@@ -6,7 +6,8 @@ Covers:
   - group_claims: tags claims, blocks them by entity and CLUSTERS same-fact claims
     within each block (G-03); untagged and unclustered claims become their own
     singleton (never merged blindly, never dropped); a group inherits its members'
-    HIGHEST stakes; NESTOR_TRIBUNAL_CLUSTER=false restores exact-key bucketing.
+    HIGHEST stakes; the NESTOR_TRIBUNAL_CLUSTER=false exact-key path is UNWIRED
+    (D-03, 15.2-15) but `_exact_keys` is still in-tree and still callable.
   - _parse_group_verdict: maps per-index verdicts; fills missing claims with
     'insufficient' (never silently drops a claim); surfaces reconciliation.
   - run_group_skeptic: server/client tool protocol; emit_group_verdict
@@ -338,8 +339,29 @@ class TestClustering:
         assert groups[0]["stakes"] == "high", \
             "a group is only as low-stakes as its most important claim, or that claim gets checked shallowly"
 
-    def test_cluster_disabled_falls_back_to_exact_key_bucketing(self):
-        # The A/B baseline stays reachable without a code change.
+    def test_exact_key_path_is_unwired_but_still_in_tree(self):
+        """D-03: `NESTOR_TRIBUNAL_CLUSTER=false` no longer changes anything.
+
+        UPDATED, NOT DELETED (15.2-15). This test used to be
+        `test_cluster_disabled_falls_back_to_exact_key_bucketing`, and it asserted
+        the OPPOSITE: that flipping `_CLUSTER_ENABLED` off reproduced the pre-15.1
+        `entity│attribute` bucketing exactly, at no extra cost. That was a real
+        guarantee and this file kept it honest.
+
+        D9/D11 removed the guarantee on purpose. The cross-provider merge now runs
+        BEFORE the verification gates and LLM clustering is the ONLY merge in the
+        engine (B-04) — an exact-key baseline is no longer a behaviour this
+        pipeline can be in, so `group_claims` no longer branches on the flag.
+
+        The test is FLIPPED rather than removed, the same treatment
+        `test_fail_loud.py:95` gave its own deliberate negative, because "the A/B
+        path is gone" is a claim that deserves an executable assertion of its own.
+        It pins BOTH halves of D-03: unreferenced, and still in-tree —
+        `_exact_keys` stays importable and still computes the old keys when called
+        directly, so 15.2-18's V-03 cleanup commit has something real to delete
+        and an operator comparison run can still reach the old rule. The original
+        claim fixture is kept verbatim so the two versions are comparable.
+        """
         claims = [
             {"text": "FootballGPT costs $4.99/mo", "facet": "competitors", "stakes": "high"},
             {"text": "Football GPT pricing starts at $9.99/mo", "facet": "competitors", "stakes": "med"},
@@ -353,14 +375,336 @@ class TestClustering:
             groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
         finally:
             grouping._CLUSTER_ENABLED = old_enabled
-        assert len(groups) == 2, \
-            "with clustering off, grouping must reproduce the old entity-attribute bucketing exactly"
-        assert audited.cluster_calls == [], \
-            "the disabled path must cost nothing extra, or the A/B comparison is meaningless"
-        assert all("│" in g["key"] for g in groups), \
-            "the fallback path emits the old exact-match key, not a cluster key"
+
+        # 1. UNWIRED: the flag is dead. Clustering ran anyway.
+        assert audited.cluster_calls, \
+            "the exact-key path is unwired (D-03) — clustering must run even with " \
+            "_CLUSTER_ENABLED=False, or the flag is still reachable"
+        assert all("│" not in g["key"] for g in groups), \
+            "every key must be a CLUSTER key; a `entity│attribute` key means the " \
+            "exact-key branch is still wired into group_claims"
+
+        # 2. NOT DELETED: `_exact_keys` still exists and still does its old job.
+        assert hasattr(grouping, "_exact_keys"), \
+            "D-03 is unreference-then-delete-later: _exact_keys must stay in-tree " \
+            "until 15.2-18's V-03 cleanup commit"
+        old_keys = grouping._exact_keys(
+            claims,
+            [("FootballGPT", "pricing"), ("Football GPT", "pricing"), ("Wyscout", "capability")],
+        )
+        assert len(old_keys) == 3
+        assert all("│" in k for k in old_keys), \
+            "called directly, _exact_keys still emits the old entity│attribute key"
+        assert old_keys[0] == old_keys[1] != old_keys[2], \
+            "and still buckets by exact normalised match"
+
+        # 3. NEVER-DROP holds on the one surviving path.
         flat = [c for g in groups for c in g["claims"]]
-        assert len(flat) == 3, "the fallback path must not lose a claim either"
+        assert len(flat) == 3, "clustering must not lose a claim"
+
+
+# ---------------------------------------------------------------------------
+# D9 / D11 — the cross-provider merge, measured against the run that shipped
+# the contradictions this phase exists to stop.
+# ---------------------------------------------------------------------------
+#
+# THE ANSWER KEY IS RECORDED EVIDENCE, NOT INVENTION. Every pair below is a
+# contradiction that live run **4cbb5311** (2026-07-22) actually shipped to the
+# client. The "before" is in that run's shipped group inventory,
+# `docs/tribunal-run-reports/run-20260722-4cbb5311/GROUPS.md` — rows 21, 24, 66
+# and 104 — where the contradicting claims are filed as SEPARATE single-claim
+# groups, which is exactly why each side got its own skeptic session, found its
+# own supporting source, and passed. The Dutch phrasings are the run's own.
+#
+# COUPLING GUARD (the discipline `test_gate_replay.py:77-84` uses): if this
+# fixture is ever "cleaned up" into synthetic English claims, it stops being
+# evidence and becomes a restatement of the implementation. Keep the entity-tag
+# VARIANTS in particular — `Aral`/`ARAL`, `LUKOIL Nederland`/`lukoil nl`,
+# `LUKOIL BeNeLux`/`lukoil benelux` — because production's `_norm` collapsing
+# them into one block, BEFORE the clusterer is even asked, is half of what makes
+# a contradiction meet.
+#
+# `found_by` is set by the harness on both sides, never by the fake model:
+# provider attribution is caller-supplied throughout the engine (T-15.2-57).
+#
+# WHAT THE ENTITY TAGS BELOW ARE, AND WHAT THEY ARE NOT — read this before
+# "correcting" them to the run's verbatim tag strings.
+#
+# Production blocks by `_norm(entity)` ALONE, and `_norm` collapses case,
+# spacing, underscores, hyphens and punctuation — nothing else, by design
+# (`grouping.py:187-195`). So the merge reaches a contradiction whose two sides
+# were tagged with the SAME entity modulo formatting. It does NOT reach one
+# whose two sides were tagged with substantively different entity strings
+# (`lukoil` vs `lukoil benelux`, `LUKOIL Nederland` vs `lukoil nl`) — that is
+# the module's own stated ACCEPTED LIMITATION (`grouping.py:57-64`), it is a
+# RECALL limit rather than a correctness bug (an unmerged claim is still
+# verified, just in its own session), and how often it bites is measured by the
+# hand-run August calibration (G-05), never asserted by a CI gate.
+#
+# The pairs below therefore carry formatting variants of ONE entity — the case
+# where both sides land in the same batch and the tagger names the same company.
+# `_TAG_SPLITS_THE_MERGE_CANNOT_REACH` below pins the other case explicitly, with
+# the recorded run's REAL tag strings, so the gap is stated rather than hidden.
+
+_RECORDED_CONTRADICTIONS = [
+    (
+        "aral-market-share",
+        {"text": "Aral heeft een marktaandeel van 16% in de Duitse brandstofmarkt",
+         "facet": "market", "stakes": "high", "found_by": ["gemini"]},
+        {"text": "Aral's aandeel in de Duitse brandstofmarkt bedraagt 21%",
+         "facet": "market", "stakes": "high", "found_by": ["openai"]},
+        ("Aral", "marktaandeel"),
+        ("ARAL", "market_share"),
+    ),
+    (
+        "lukoil-nl-stations",
+        {"text": "LUKOIL Nederland exploiteert 46 tankstations",
+         "facet": "market", "stakes": "high", "found_by": ["gemini"]},
+        {"text": "Lukoil heeft ongeveer 70 tot 75 stations in Nederland",
+         "facet": "market", "stakes": "med", "found_by": ["claude"]},
+        ("LUKOIL Nederland", "aantal_stations"),
+        ("lukoil-nederland", "station_count"),
+    ),
+    (
+        "zeeland-ownership",
+        {"text": "De raffinaderij in Zeeland is verkocht aan Carlyle",
+         "facet": "market", "stakes": "high", "found_by": ["openai"]},
+        {"text": "TotalEnergies heeft de Zeeuwse raffinaderij overgenomen",
+         "facet": "market", "stakes": "high", "found_by": ["own"]},
+        ("LUKOIL BeNeLux", "eigendom"),
+        ("lukoil benelux", "status_rapport"),
+    ),
+    (
+        "international-buyer",
+        {"text": "Gunvor koopt de internationale operaties van LUKOIL",
+         "facet": "market", "stakes": "high", "found_by": ["gemini"]},
+        {"text": "Carlyle is de koper van Lukoil's buitenlandse activiteiten",
+         "facet": "market", "stakes": "high", "found_by": ["claude"]},
+        ("LUKOIL", "verkoop_internationale_operaties"),
+        ("lukoil", "buyer"),
+    ),
+]
+
+#: The recorded run's ACTUAL entity tags for two of those contradictions, which
+#: normalise APART. Kept as fixture data because the honest statement of what
+#: this phase fixed needs both halves: the merge reaches a same-entity
+#: contradiction, and it does NOT reach one the tagger split at the entity level.
+_TAG_SPLITS_THE_MERGE_CANNOT_REACH = [
+    ("lukoil", "lukoil benelux"),        # GROUPS.md rows 21 / 24
+    ("LUKOIL Nederland", "lukoil nl"),   # abbreviation, not a formatting variant
+]
+
+
+def _tag_text_for(pairs: list[tuple[str, str]]) -> str:
+    """`i | entity | attribute` lines for the fake tagger, in claim order."""
+    return "\n".join(f"{i} | {e} | {a}" for i, (e, a) in enumerate(pairs))
+
+
+class TestCrossProviderMerge:
+    """D9/D11: two streams contradicting each other reach ONE skeptic session.
+
+    Zero LLM calls, no network, no DB, no mocking library — the fake grouper
+    COMPUTES its cluster answers from the block production actually sent, so no
+    test here has to know how production chunked or ordered anything.
+    """
+
+    @staticmethod
+    def _ids():
+        return {"run_id": uuid.uuid4(), "tenant_id": uuid.uuid4()}
+
+    def test_each_recorded_contradiction_lands_in_one_group(self):
+        """Each of the four shipped contradictions collides in ONE group.
+
+        Run 4cbb5311 filed each of these as two separate single-claim groups.
+        One group is the difference between "one session reconciles 16% vs 21%"
+        and "both numbers ship".
+        """
+        for name, left, right, left_tag, right_tag in _RECORDED_CONTRADICTIONS:
+            claims = [dict(left), dict(right)]
+            audited = _PromptAwareGrouperAudited(
+                _tag_text_for([left_tag, right_tag]), _ALL_ONE
+            )
+            groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+
+            assert len(groups) == 1, (
+                f"{name}: the two sides landed in {len(groups)} groups — a "
+                f"contradiction split across groups is invisible again"
+            )
+            texts = {c["text"] for c in groups[0]["claims"]}
+            assert texts == {left["text"], right["text"]}, name
+            assert len(groups[0]["claims"]) == 2, name
+
+    def test_entity_tag_variants_are_normalised_into_one_block(self):
+        """`_norm` is what lets the two sides MEET before clustering is asked.
+
+        Half of run 4cbb5311's failure was upstream of the clusterer: near-miss
+        entity labels never met, so the two sides were never even candidates for
+        the same group. `_norm` collapses case, spacing and punctuation, which is
+        what makes `Aral`/`ARAL` and `LUKOIL Nederland`/`lukoil-nederland` one
+        block — and the ATTRIBUTE being different (`marktaandeel` vs
+        `market_share`) is deliberately irrelevant, because 15.1 made the entity
+        alone the blocking key for exactly this reason.
+        """
+        for name, _l, _r, left_tag, right_tag in _RECORDED_CONTRADICTIONS:
+            assert _norm(left_tag[0]) == _norm(right_tag[0]), (
+                f"{name}: {left_tag[0]!r} and {right_tag[0]!r} must normalise to "
+                f"the same blocking key or the clusterer never sees them together"
+            )
+            assert left_tag[1] != right_tag[1], (
+                f"{name}: the two sides must carry DIFFERENT attribute tags, or "
+                f"this fixture would also pass under the old entity│attribute "
+                f"bucketing and would prove nothing about the merge"
+            )
+
+    def test_entity_tags_that_normalise_apart_are_the_known_recall_limit(self):
+        """THE HONEST OTHER HALF: the merge does not reach every contradiction.
+
+        `grouping.py:57-64` states one accepted limitation plainly — two claims
+        stating the same fact will NOT merge if their entity tags normalise
+        differently. `_norm` collapses formatting, not meaning, so `lukoil` vs
+        `lukoil benelux` and `LUKOIL Nederland` vs `lukoil nl` stay in separate
+        BLOCKS and the clusterer is never even asked about them.
+
+        Those are the recorded run's real tags for two of the four shipped
+        contradictions. This test exists so that limit is an asserted, visible
+        fact rather than something a reader of the four green tests above would
+        wrongly conclude was solved. It is a RECALL limit, not a correctness bug:
+        an unmerged claim is still verified, it just gets its own session. How
+        often it bites is measured by the hand-run August calibration (G-05) —
+        deliberately not by this gate, because a CI number here would be a
+        number about the fixture, not about the engine.
+        """
+        for left, right in _TAG_SPLITS_THE_MERGE_CANNOT_REACH:
+            assert _norm(left) != _norm(right), (
+                f"{left!r} and {right!r} now normalise together — if _norm was "
+                f"deliberately widened, MOVE this pair into "
+                f"_RECORDED_CONTRADICTIONS and say so; do not delete the test"
+            )
+
+        # And prove the consequence, not just the premise: two claims about the
+        # same fact, tagged this way, come back as two groups.
+        claims = [
+            {"text": "Gunvor koopt de internationale operaties van LUKOIL",
+             "facet": "market", "stakes": "high", "found_by": ["gemini"]},
+            {"text": "Carlyle is de koper van Lukoil's buitenlandse activiteiten",
+             "facet": "market", "stakes": "high", "found_by": ["claude"]},
+        ]
+        audited = _PromptAwareGrouperAudited(
+            _tag_text_for([("lukoil", "verkoop"), ("lukoil benelux", "status_rapport")]),
+            _ALL_ONE,
+        )
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        assert len(groups) == 2, \
+            "entity-level tag splits are the documented recall limit; if this " \
+            "merges now, the blocking key changed and G-05's scope changed with it"
+        assert audited.cluster_calls == [], \
+            "a block of one costs NO clustering call — the two sides never met"
+        flat = [c for g in groups for c in g["claims"]]
+        assert len(flat) == 2, "never-drop holds on the unmerged path too"
+
+    def test_a_contradicting_pair_produces_exactly_one_skeptic_session(self):
+        """All eight claims in: FOUR queued sessions out, not eight.
+
+        This walks the PRODUCTION queue expression — the same
+        `[g for g in _corroboration_order(groups) if _group_selected(g)]` line
+        `pipeline.py` runs — rather than re-implementing the selection here.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal.pipeline import (
+            _corroboration_order, _group_selected,
+        )
+
+        claims: list[dict] = []
+        tags: list[tuple[str, str]] = []
+        for _name, left, right, left_tag, right_tag in _RECORDED_CONTRADICTIONS:
+            claims.extend([dict(left), dict(right)])
+            tags.extend([left_tag, right_tag])
+
+        # Every claim survives the gates as VERIFY. The gates run BEFORE this
+        # point in production (D11) and MUTATE these same dicts, which is why the
+        # groups — which hold them by identity — see the decisions.
+        for claim in claims:
+            claim["gate"] = {
+                "decision": "KEEP", "reason": "KEEP",
+                "strict": "VERIFY", "gate_error": False,
+            }
+
+        audited = _PromptAwareGrouperAudited(_tag_text_for(tags), _ALL_ONE)
+        groups = _run(group_claims(claims=claims, audited=audited, **self._ids()))
+        queue = [g for g in _corroboration_order(groups) if _group_selected(g)]
+
+        assert len(queue) == 4, (
+            f"eight claims forming four contradictions must queue FOUR sessions, "
+            f"got {len(queue)} — one session per contradiction is the D9 bar"
+        )
+        for group in queue:
+            assert len(group["claims"]) == 2, \
+                "each queued group must hold BOTH sides of its contradiction"
+            providers = {p for c in group["claims"] for p in c["found_by"]}
+            assert len(providers) == 2, \
+                "the two sides must come from two DIFFERENT research streams"
+
+    def test_two_provider_agreement_orders_after_single_source(self):
+        """D9: agreement lowers checking priority, single-source raises it.
+
+        Pinned against the PRODUCTION helpers, not a reimplementation — and it
+        matters because the budget governor truncates the queue from the TAIL, so
+        what survives an early cap must be the checks worth most.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal.pipeline import (
+            _corroboration_order, _group_corroboration,
+        )
+
+        corroborated = {
+            "key": "k1", "entity": "Aral", "attribute": "share", "stakes": "med",
+            "claims": [
+                {"text": "a", "found_by": ["gemini"]},
+                {"text": "b", "found_by": ["openai"]},
+            ],
+        }
+        single = {
+            "key": "k2", "entity": "Wyscout", "attribute": "cap", "stakes": "med",
+            "claims": [{"text": "c", "found_by": ["claude"]}],
+        }
+
+        assert _group_corroboration(corroborated) == 2
+        assert _group_corroboration(single) == 1
+
+        # Declared corroborated-FIRST so a no-op sort would fail this test.
+        ordered = _corroboration_order([corroborated, single])
+        assert ordered[0] is single, \
+            "the fact only ONE researcher found goes to the head of the queue"
+        assert ordered[1] is corroborated
+
+    def test_a_group_survives_if_any_member_is_gate_selected(self):
+        """G-04 step 3, guarded against the reorder.
+
+        Moving the gates AFTER the clusterer must not change what survives: one
+        VERIFY member is still enough, because checking a load-bearing claim
+        would otherwise be skipped for having been clustered with stable ones.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal.pipeline import _group_selected
+
+        verify_member = {"text": "checked", "found_by": ["gemini"],
+                         "gate": {"strict": "VERIFY"}}
+        dropped_member = {"text": "dropped", "found_by": ["openai"],
+                          "gate": {"strict": "DROP", "reason": "not_falsifiable"}}
+
+        assert _group_selected({"claims": [verify_member, dropped_member]}) is True
+        assert _group_selected({"claims": [dropped_member]}) is False
+        assert _group_selected({"claims": []}) is False
+
+    def test_the_merge_is_reached_through_the_real_group_claims(self):
+        """Vacuity guard (Pitfall 8): this class must be testing PRODUCTION.
+
+        Without this, a rename or a signature change in `grouping.group_claims`
+        could leave every assertion above passing against something else.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal import pipeline as pipeline_module
+
+        assert pipeline_module.group_claims is group_claims, \
+            "pipeline.py must import the very clusterer these tests drive"
+        assert len(_RECORDED_CONTRADICTIONS) == 4, \
+            "all four recorded contradictions must stay in the answer key"
 
 
 class TestNormAndParse:
