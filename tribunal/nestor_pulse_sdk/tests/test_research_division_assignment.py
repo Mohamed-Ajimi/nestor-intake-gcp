@@ -570,3 +570,88 @@ def test_own_stream_unavailable_reason_names_the_condition_and_leaks_nothing(mon
 
 def test_own_stream_has_its_own_shorter_timeout():
     assert rd._PROVIDER_TIMEOUTS["own"] < rd._DEFAULT_TIMEOUT_S
+
+
+# ---------------------------------------------------------------------------
+# --- D-03 unwiring guard (15.2-13) ---
+#
+# Pure source assertions plus one import check. Comments are STRIPPED before
+# every source assertion: a raw grep over this file counts prose, so a gate
+# written that way invalidates itself the moment someone documents the rule it
+# is guarding.
+# ---------------------------------------------------------------------------
+
+def _pipeline_source_without_comments() -> str:
+    from pathlib import Path
+
+    from nestor_pulse_sdk.pipeline.tribunal import pipeline as tp
+
+    lines = Path(tp.__file__).read_text(encoding="utf-8").splitlines()
+    return "\n".join(ln for ln in lines if not ln.lstrip().startswith("#"))
+
+
+def test_d03_adaptive_intake_is_unreferenced_in_the_live_path():
+    source = _pipeline_source_without_comments()
+    assert "import adaptive_intake" not in source
+    assert "adaptive_intake(" not in source
+
+
+def test_d03_adaptive_intake_still_exists_and_is_importable():
+    """D-03: UNWIRED, NOT DELETED.
+
+    Deletion is plan 15.2-18's separate V-03 commit, after sign-off. Recovery
+    from a bad August run is reverting ONE wiring change in pipeline.py — which
+    is only possible while this function is still here.
+    """
+    from pathlib import Path
+
+    from nestor_pulse_sdk.pipeline.tribunal import intake
+
+    assert callable(intake.adaptive_intake)
+    assert "async def adaptive_intake" in Path(intake.__file__).read_text(encoding="utf-8")
+
+
+def test_d03_forbids_a_feature_flag_or_a_dual_run():
+    source = _pipeline_source_without_comments()
+    for forbidden in ("NESTOR_USE_WORKSHOP", "USE_ADAPTIVE_INTAKE", "legacy_intake"):
+        assert forbidden not in source
+
+
+def test_d03_detect_explicit_questions_survives_in_use():
+    assert "detect_explicit_questions" in _pipeline_source_without_comments()
+
+
+def test_the_run_has_exactly_one_degradation_reason_list():
+    """15.2-08 owns the accumulator; this plan appends to it, never forks it.
+
+    The pattern is the LIST-LITERAL DECLARATION, not every `degradation_reasons:
+    list` annotation: `_build_funnel` takes the reasons as a typed PARAMETER, and
+    counting that as a second accumulator would fail the guard on correct code.
+    A second binding of the name inside run() would silently discard everything
+    appended before it — the workshop fallback, a lost stream — and no plan's own
+    unit tests would catch it, which is exactly why this guard exists.
+    """
+    source = _pipeline_source_without_comments()
+    assert "degradation_reasons" in source
+    assert source.count("degradation_reasons: list[str] = []") == 1
+    assert "_note_degradation(" in source, "reasons are written through the one writer"
+
+
+def test_every_stage_key_the_pipeline_writes_is_declared():
+    """Duplicates test_stage_schema.py's WR-03 scan inside the engine gate."""
+    import re
+
+    from nestor_pulse_sdk.runs.stages import stages_for
+
+    declared = {s["key"] for s in stages_for("tribunal")} | {"done", "report_spec"}
+    used = set(re.findall(r'set_stage\([^)]*?"([a-z_]+)"', _pipeline_source_without_comments()))
+    assert used, "the scan must actually find stage keys"
+    assert used <= declared, f"undeclared stage key(s): {sorted(used - declared)}"
+
+
+def test_the_workshop_stage_feed_is_closed_by_the_pipeline():
+    """15.2-10/11 deliberately leave it open; this module is its last writer."""
+    source = _pipeline_source_without_comments()
+    assert 'StageFeed(' in source
+    assert 'stage_key="workshop"' in source
+    assert "async with StageFeed(" in source
