@@ -23,6 +23,7 @@ at gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/runs/
 
 from __future__ import annotations
 
+import copy
 import json
 import uuid
 from decimal import Decimal
@@ -74,6 +75,38 @@ RECORDED_AUDIT_BUCKET = (
 #       G-10 marker. The recorded run WAS degraded (776 Anthropic cap-400s in
 #       55 seconds).
 #
+# 15.2 ADDITIVE keys -- WR-10/D-10 incidental checking, D-06 anchors, D-12 reasons.
+# Every one of the seven is a FACT ABOUT THE RECORDED RUN, not a placeholder, and
+# not an estimate (operator rule, verbatim: "NO ESTIMATES -- facts and correct
+# calculations only"). Sources, per key:
+#   checked_incidentally 0, and its four reason keys 0
+#       The recorded run had NO GATE STAGE AT ALL -- the same fact that makes
+#       `gate_errors 0`. No claim was gate-DROPped or SKIP_STABLE at run time, so
+#       no claim COULD be checked incidentally: incidental checking is defined as
+#       "the gates did not select it, yet it came back with a verdict", and a run
+#       with no gates has no such population. The blind selection experiment's
+#       KEEP/DROP classification is RETROSPECTIVE -- it was applied to the recorded
+#       claims afterwards and never to that run's grouping. The fixture books all
+#       198 covered claim slots inside `selected_verify` (which is what makes
+#       `should_have_been_checked = 424 - 198` correct), and recorded/GROUPS.md
+#       records per-group claim COUNTS with truncated claim text -- not ids
+#       joinable to the answer-key TSVs -- so any non-zero figure here would be an
+#       invention, not a derivation.
+#   unresolved_anchors 0
+#       Definitional: the recorded run predates D-05 entirely, so no [[c:...]]
+#       anchor was ever emitted and none could fail to resolve. NOTE this is a
+#       DIFFERENT mechanism from the recorded run's provider `[cite: N]` markers,
+#       which are counted separately (`orphan_cite_markers`) and are NOT in the
+#       funnel.
+#   degradation_reasons []
+#       The recorded run's degradation is recorded as `verification_degraded: True`
+#       plus PROSE in recorded/REPORT.md (776 Anthropic cap-400s in 55 seconds),
+#       never as a machine-readable reason list -- D-12's list did not exist in
+#       2026-07. verification/report.py DERIVES the bucket-3 sentence at read time,
+#       so the operator surface still names this run's degradation in words;
+#       synthesising a sentence into the fixture would fabricate a recorded
+#       artifact.
+#
 # Invariants these values satisfy:
 #   distilled == kept + dropped                            1162 == 456 + 706
 #   kept      == selected_verify + skipped_stable            456 == 424 + 32
@@ -81,10 +114,17 @@ RECORDED_AUDIT_BUCKET = (
 #   distilled == checked + (dropped + skipped_stable) + should_have_been_checked
 #                                                          1162 == 198 + 738 + 226
 #   verification_degraded == (should_have_been_checked > 0)
+#   WR-10 one-claim-one-bucket, the 15.2 form of the line above -- bucket 2 is
+#   reduced by exactly the claims that were checked incidentally:
+#     distilled == checked + checked_incidentally
+#                  + (dropped + skipped_stable - checked_incidentally)
+#                  + should_have_been_checked
+#   which reduces to the recorded 1162 == 198 + 738 + 226 while
+#   checked_incidentally is 0.
 #
 # These constants let downstream funnel tests assert the EXACT recorded numbers.
 # ---------------------------------------------------------------------------
-RECORDED_FUNNEL_COUNTS: dict[str, int | bool] = {
+RECORDED_FUNNEL_COUNTS: dict[str, int | bool | list[str]] = {
     "distilled": 1162,
     "kept": 456,
     "dropped": 706,
@@ -102,6 +142,19 @@ RECORDED_FUNNEL_COUNTS: dict[str, int | bool] = {
     "should_have_been_checked": 226,
     "gate_errors": 0,
     "verification_degraded": True,
+    # --- 15.2 additive keys (per-key sources in the block above) ---
+    # WR-10 / D-10 Option 2: no gate stage on this run => no incidental checking
+    # was possible. Zero is a FACT here, not a placeholder.
+    "checked_incidentally": 0,
+    "checked_incidentally_not_falsifiable": 0,
+    "checked_incidentally_not_load_bearing": 0,
+    "checked_incidentally_both": 0,
+    "checked_incidentally_stable": 0,
+    # D-06: the run predates the [[c:...]] anchor mechanism entirely.
+    "unresolved_anchors": 0,
+    # D-12: degradation was recorded as the boolean above plus prose, never as a
+    # machine-readable list. verification/report.py derives the bucket-3 sentence.
+    "degradation_reasons": [],
 }
 
 
@@ -227,22 +280,30 @@ def _mtime_span_seconds(sorted_mtimes: list[str]) -> int:
     return int((_parse(sorted_mtimes[-1]) - _parse(sorted_mtimes[0])).total_seconds())
 
 
-def build_verification_summary() -> dict[str, int | bool]:
+def build_verification_summary() -> dict[str, int | bool | list[str]]:
     """The run-level verification funnel (recorded counts) for run.verification_summary.
 
-    Carries all 13 contract keys: the six original funnel counts, the G-08
+    Carries every contract key: the six original funnel counts, the G-08
     accounting buckets (not_falsifiable / not_load_bearing / both / checked /
-    should_have_been_checked), the G-11 gate_errors line, and the G-10
-    `verification_degraded` marker.
+    should_have_been_checked), the G-11 gate_errors line, the G-10
+    `verification_degraded` marker, and the 15.2 additive keys (WR-10's five
+    `checked_incidentally*` counts, D-06's `unresolved_anchors`, D-12's
+    `degradation_reasons`).
 
     Returns a COPY so callers cannot mutate the constant. The body is
-    deliberately just `dict(RECORDED_FUNNEL_COUNTS)`: two tests compare this
-    against RECORDED_FUNNEL_COUNTS by FULL DICT EQUALITY
-    (test_hash_chain_replay.py, test_verification_report_endpoint.py), so
-    keeping the builder a pure copy makes both hold by construction whenever the
-    constant gains keys.
+    deliberately a pure copy of the constant: two tests compare this against
+    RECORDED_FUNNEL_COUNTS by FULL DICT EQUALITY (test_hash_chain_replay.py,
+    test_verification_report_endpoint.py), so keeping it a pure copy makes both
+    hold by construction whenever the constant gains keys.
+
+    DEEP copy since 15.2: the funnel now carries a LIST value
+    (`degradation_reasons`), and a shallow `dict()` copy would SHARE that list
+    object with the module constant — a single caller that appended to it would
+    silently corrupt G-13's single source of the recorded numbers for the rest of
+    the process, and every later test in the same session. A deep copy still
+    satisfies both equality assertions, which compare by value.
     """
-    return dict(RECORDED_FUNNEL_COUNTS)
+    return copy.deepcopy(RECORDED_FUNNEL_COUNTS)
 
 
 # ---------------------------------------------------------------------------

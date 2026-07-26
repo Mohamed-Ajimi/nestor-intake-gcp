@@ -258,7 +258,7 @@ def test_empty_claims_path_reports_the_gate_funnel_shape():
         "the zero-claim path and the full path must publish the same funnel keys"
     )
     assert set(empty) == set(RECORDED_FUNNEL_COUNTS), (
-        "the funnel must carry exactly the 13 contract keys — the report shaper "
+        "the funnel must carry exactly the funnel contract keys — the report shaper "
         "returns None for `accounting` when a gate key is missing, so a dropped "
         "key reads downstream as 'this run has no gate data'"
     )

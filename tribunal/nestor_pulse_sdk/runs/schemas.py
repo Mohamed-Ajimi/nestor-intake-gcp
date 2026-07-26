@@ -391,6 +391,17 @@ class VerificationReport(BaseModel):
     # at the API boundary reads to the operator as "there is no caveat".
     unverified_from_accounting: bool = False
     unverified_note: str | None = None
+    # D-06 (15.2): [[c:...]] citation anchors the writing model emitted that matched
+    # no claim in this run and were removed. Declared rather than left to ride on
+    # `extra="allow"`, per the CR-02 precedent above and this file's own "Declare,
+    # don't assume" rule.
+    unresolved_anchors: int = 0
+    # D-06 (15.2): the same count as a sentence -- None on a healthy run, because a
+    # marker that renders every time is one the operator stops reading.
+    unresolved_anchors_text: str | None = None
+    # D-12 (15.2): every reason this run degraded, in words. The derived bucket-3
+    # sentence first, then the pipeline's own reasons.
+    degradation_reasons: list[str] = []
     true_cost: VerificationTrueCost = VerificationTrueCost()
     # SC4 / D13: the numbered [n] citations list (DB-generated, all-resolving).
     citations: list[VerificationCitation] = []

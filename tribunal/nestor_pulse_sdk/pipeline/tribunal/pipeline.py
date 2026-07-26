@@ -245,19 +245,155 @@ def _gate_decision_context(mission_brief: dict[str, Any]) -> str:
     return "\n".join(parts).strip()[:_GATE_DECISION_CONTEXT_CHARS]
 
 
+#: WR-10 / D-10 Option 2 — the four reason keys an incidental check is attributed
+#: to. Order is the allocation order used by the clamp in `_build_funnel`, so a
+#: malformed count is truncated deterministically rather than arbitrarily.
+_INCIDENTAL_REASON_KEYS = (
+    "checked_incidentally_not_falsifiable",
+    "checked_incidentally_not_load_bearing",
+    "checked_incidentally_both",
+    "checked_incidentally_stable",
+)
+
+#: D-12 caps for a single degradation reason and for the list as a whole. Both are
+#: load-bearing rather than cosmetic: the funnel is rendered by a GENERIC chip
+#: renderer on the superadmin surface (VerificationReport.tsx walks
+#: Object.entries(report.funnel)), so an unbounded list becomes one unreadable
+#: chip — and an unbounded STRING is how a prompt body or a provider response
+#: would smuggle itself into a JSONB column that also feeds the D15 feed.
+_DEGRADATION_REASON_CHARS = 200
+_MAX_DEGRADATION_REASONS = 8
+
+
+def _count_incidental(
+    claims: list[dict[str, Any]],
+    verdicts_by_claim: dict[int, list[dict]],
+) -> dict[str, int]:
+    """WR-10 / D-10 Option 2: claims the gates did NOT select that got checked anyway.
+
+    A group is sent for checking when ANY member is gate-selected
+    (`_group_selected`), and `group_skeptic._parse_group_verdict` fills EVERY
+    member index — so a gate-DROPped or SKIP_STABLE member of a selected group
+    comes back carrying a real verdict. Those verdicts are not decorative: they
+    reach `adjudicate_all`, can refute the claim, and `scrub_research` then deletes
+    the refuted passage from the delivered report. Yet the funnel published those
+    same claims to the operator inside bucket 2, "not checkable" — the
+    one-claim-one-bucket invariant breaking in the *under-claiming* direction.
+
+    D-10 keeps the behaviour and fixes the accounting. Option 1 (skip non-VERIFY
+    members) was explicitly REJECTED: it silently stops scrubbing passages that are
+    removed today, making the report LESS verified in exchange for cleaner books.
+
+    Computed from CLAIM STATE at the end of the verify stage, not tallied at the
+    filing sites — for exactly the reason `_observed_unchecked` below is: a tally
+    only knows the causes it was taught to name, while claim state knows what
+    actually happened. `verdicts_by_claim` is seeded `{id(c): [] for c in claims}`,
+    so TRUTHINESS (not key presence) is the correct test for "received a verdict".
+
+    Attribution is one claim to exactly one reason key, and `both` is the catch-all
+    — `BOTH`, a missing reason and an unrecognised string all land there, mirroring
+    what `gates.py` already does with its own catch-all. An unattributable
+    incidental check is never dropped from the accounting.
+
+    Never raises: every read is a `.get` chain, so a claim carrying no `gate` key
+    at all is handled rather than blowing up the funnel build. (Such a claim can
+    only arise on a run with no gate stage, where `dropped + skipped_stable` is 0
+    and `_build_funnel`'s clamp reduces the whole count to zero anyway.)
+
+    Returns exactly five int keys: the four reason keys plus `checked_incidentally`,
+    set HERE to the sum of the four so the total and the breakdown cannot disagree.
+    """
+    counts: dict[str, int] = {key: 0 for key in _INCIDENTAL_REASON_KEYS}
+    for claim in claims:
+        gate = claim.get("gate") or {}
+        strict = gate.get("strict")
+        if strict == "VERIFY":
+            continue                                   # selected: bucket 1 or 3, not here
+        if not verdicts_by_claim.get(id(claim)):
+            continue                                   # not selected AND not checked
+        if strict == "SKIP_STABLE":
+            counts["checked_incidentally_stable"] += 1
+            continue
+        reason = gate.get("reason")
+        if reason == "NOT_FALSIFIABLE":
+            counts["checked_incidentally_not_falsifiable"] += 1
+        elif reason == "NOT_LOAD_BEARING":
+            counts["checked_incidentally_not_load_bearing"] += 1
+        else:
+            counts["checked_incidentally_both"] += 1
+    counts["checked_incidentally"] = sum(counts[key] for key in _INCIDENTAL_REASON_KEYS)
+    return counts
+
+
+def _normalise_degradation_reasons(reasons: list[str] | None) -> list[str]:
+    """D-12's ONE normaliser for the run's degradation-reason list.
+
+    `run()` holds exactly ONE accumulator (declared by plan 15.2-07, together with
+    its `_note_degradation` writer) and publishes it on TWO surfaces: the top-level
+    result key `runs/worker.py` reads, and the funnel key the superadmin
+    verification report reads. Both go through THIS function, so the two surfaces
+    cannot disagree about what degraded — which is the CR-02 failure mode of two
+    numbers describing one thing.
+
+    Keeps non-empty `str` entries only, strips each, truncates each to
+    _DEGRADATION_REASON_CHARS, de-duplicates preserving first-seen order, and caps
+    the list at _MAX_DEGRADATION_REASONS. Truncation and capping are LOUD (Rule 6):
+    a reason list silently shortened is a degraded run under-reporting itself.
+
+    Never raises — a non-list (a legacy funnel, a cached bundle from before 15.2)
+    returns [], because a shaper that throws on old data is a shaper that blanks
+    the operator surface.
+    """
+    if not isinstance(reasons, list):
+        return []
+    kept: list[str] = []
+    seen: set[str] = set()
+    n_truncated = 0
+    for entry in reasons:
+        if not isinstance(entry, str):
+            continue
+        text = entry.strip()
+        if not text:
+            continue
+        if len(text) > _DEGRADATION_REASON_CHARS:
+            text = text[:_DEGRADATION_REASON_CHARS]
+            n_truncated += 1
+        if text in seen:
+            continue
+        seen.add(text)
+        kept.append(text)
+    if n_truncated:
+        log.warning(
+            "tribunal_pipeline: %d degradation reason(s) were longer than %d "
+            "characters and were truncated to that length for the operator surface",
+            n_truncated, _DEGRADATION_REASON_CHARS,
+        )
+    if len(kept) > _MAX_DEGRADATION_REASONS:
+        log.warning(
+            "tribunal_pipeline: this run recorded %d distinct degradation reasons "
+            "but only the first %d are published; the rest are in the logs above",
+            len(kept), _MAX_DEGRADATION_REASONS,
+        )
+        kept = kept[:_MAX_DEGRADATION_REASONS]
+    return kept
+
+
 def _build_funnel(
     gate_funnel: dict[str, Any] | None,
     *,
     unchecked_selected: int,
     verify_sessions: int,
+    incidental: dict[str, int] | None = None,
+    unresolved_anchors: int = 0,
+    degradation_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The one funnel dict — the gates' nine keys plus the four this stage owns.
+    """The one funnel dict — the gates' nine keys plus the eleven this stage owns.
 
     Built in ONE place so the zero-claim early return and the full path cannot
     report different shapes (RESEARCH Pitfall 10): a downstream consumer must
     never have to branch on which path produced the report.
 
-    The four pipeline-owned keys (G-08 / G-10 / G-13):
+    The eleven pipeline-owned keys (G-08 / G-10 / G-13 / WR-10 / D-06 / D-12):
       checked                  -- selected for checking AND actually checked
       should_have_been_checked -- bucket 3: selected and NOT checked, whatever the
                                   cause (crash, timeout, usage cap, budget cap).
@@ -267,9 +403,34 @@ def _build_funnel(
       verify_sessions          -- skeptic sessions actually launched. G-13: a
                                   recorded pass-through measure of throughput, NOT
                                   a gate assertion — never assert on it.
+      checked_incidentally     -- WR-10: NOT selected by the gates, yet checked as
+                                  a member of a selected group. Subtracted from
+                                  bucket 2 by verification/report.py, per reason.
+      checked_incidentally_not_falsifiable
+      checked_incidentally_not_load_bearing
+      checked_incidentally_both
+      checked_incidentally_stable
+                               -- the same count split by the gate reason the claim
+                                  carried, so bucket 2's printed reasons still sum
+                                  to bucket 2's printed total after the subtraction.
+      unresolved_anchors       -- D-06: [[c:...]] anchors the writing model emitted
+                                  that matched no claim and were removed. ZERO on
+                                  every path here; the real value only exists after
+                                  synthesis and is folded in by _write_final_report.
+      degradation_reasons      -- D-12: the run's degradation sentences, normalised
+                                  by the ONE normaliser above. NOT the bucket-3
+                                  sentence: verification/report.py derives that at
+                                  read time, so there is exactly one wording of it.
 
     Keys are ADDITIVE ONLY. Phase-15 surfaces and test_hash_chain_replay.py assert
-    on the existing names; renaming one breaks them silently.
+    on the existing names; renaming one breaks them silently. And every key added
+    here MUST be added to RECORDED_FUNNEL_COUNTS (tests/fixtures/run_4cbb5311/
+    loader.py) in the SAME commit — test_gate_selector.py compares the two key sets
+    for equality, in both directions.
+
+    Every parameter after `verify_sessions` is keyword-only WITH A DEFAULT, because
+    the zero-claim call site's source literal is itself asserted by
+    test_gate_selector.py and must stay byte-identical.
     """
     funnel: dict[str, Any] = {key: 0 for key in _GATE_FUNNEL_KEYS}
     for key, value in (gate_funnel or {}).items():
@@ -282,6 +443,52 @@ def _build_funnel(
     funnel["should_have_been_checked"] = unchecked
     funnel["verify_sessions"] = int(verify_sessions)
     funnel["verification_degraded"] = unchecked > 0
+
+    # WR-10 / D-10 Option 2. Same defensive register as the bucket-3 clamp above:
+    # an incidental count above bucket 2's own population would drive a bucket-2
+    # reason negative in verification/report.py and break the one-claim-one-bucket
+    # invariant in the OTHER direction. Allocate against the remaining capacity in
+    # a fixed key order so the truncation is deterministic, and say so out loud.
+    _incidental = incidental or {}
+    _raw = {
+        key: max(0, int(_incidental.get(key, 0) or 0))
+        for key in _INCIDENTAL_REASON_KEYS
+    }
+    _capacity = max(
+        0,
+        int(funnel.get("dropped", 0) or 0) + int(funnel.get("skipped_stable", 0) or 0),
+    )
+    _remaining = _capacity
+    for key in _INCIDENTAL_REASON_KEYS:
+        take = min(_raw[key], _remaining)
+        funnel[key] = take
+        _remaining -= take
+    _incidental_total = sum(funnel[key] for key in _INCIDENTAL_REASON_KEYS)
+    if _incidental_total != sum(_raw.values()):
+        log.warning(
+            "tribunal_pipeline: %d claim(s) were counted as checked incidentally, "
+            "but only %d claims were gated out at all (%d dropped + %d stable "
+            "skips) — publishing the clamped figure, because a count above bucket "
+            "2's population would make the accounting sum to more than the "
+            "distilled total",
+            sum(_raw.values()), _capacity,
+            int(funnel.get("dropped", 0) or 0), int(funnel.get("skipped_stable", 0) or 0),
+        )
+    # The flat total is the SUM of the four published reason counts, never a second
+    # reading of the input: the total and its breakdown cannot disagree.
+    funnel["checked_incidentally"] = _incidental_total
+
+    # D-06. Always present, 0 on every path THROUGH THIS BUILDER — the real count
+    # does not exist until the writing model has produced prose and the anchors
+    # have been resolved, so _write_final_report folds it in afterwards.
+    funnel["unresolved_anchors"] = max(0, int(unresolved_anchors or 0))
+    # D-12, SURFACE 1 OF 2. `degradation_reasons` is plan 15.2-07's run-scoped
+    # accumulator, handed in at the call site and READ here, never re-declared.
+    # Deliberately does NOT include the bucket-3 sentence: verification/report.py
+    # derives that one from `should_have_been_checked` at read time, so exactly ONE
+    # wording of it exists in the codebase. A later plan appending a bucket-3 reason
+    # here would print the same shortfall to the operator twice, in two dialects.
+    funnel["degradation_reasons"] = _normalise_degradation_reasons(degradation_reasons)
     return funnel
 
 
@@ -308,6 +515,7 @@ def _verify_closing_item(funnel: dict[str, Any]) -> dict[str, str]:
     stable = int(funnel.get("skipped_stable", 0) or 0)
     gate_errors = int(funnel.get("gate_errors", 0) or 0)
     sessions = int(funnel.get("verify_sessions", 0) or 0)
+    incidental = int(funnel.get("checked_incidentally", 0) or 0)
 
     counts = (
         f"{checked} of {selected} selected claims checked · "
@@ -316,6 +524,13 @@ def _verify_closing_item(funnel: dict[str, Any]) -> dict[str, str]:
     )
     if gate_errors:
         counts += f" · {gate_errors} gate errors (sent for checking)"
+    if incidental:
+        # WR-10 / D-10 Option 2, in words. Both branches below render `counts`, so
+        # one append covers the degraded row and the healthy row.
+        counts += (
+            f" · {incidental} also checked incidentally (gate-dropped or stable "
+            f"members of a selected group — their verdicts count)"
+        )
 
     if unchecked > 0:
         return {
@@ -842,6 +1057,23 @@ class TribunalPipeline:
                     # module-level `_recon_is_meaningful`, which the coverage
                     # re-entry path shares rather than forking.
                     recon_meaningful = _recon_is_meaningful(recon)
+                    # WR-10 / D-10 Option 2 — DO NOT FILTER THIS LOOP.
+                    #
+                    # Every member of a selected group is filed, including the ones
+                    # the gates DROPped and the ones marked SKIP_STABLE. Those
+                    # verdicts are REAL: they reach `adjudicate_all`, they can
+                    # refute a claim, and `scrub_research` then deletes the refuted
+                    # passage from the delivered report.
+                    #
+                    # Option 1 — skip non-VERIFY members here — was explicitly
+                    # REJECTED by the operator: it silently stops scrubbing passages
+                    # that are removed today, making the report LESS verified in
+                    # exchange for tidier books. So the behaviour stays and the
+                    # ACCOUNTING was fixed instead: `_count_incidental` counts these
+                    # claims, the funnel publishes them as `checked_incidentally`,
+                    # and verification/report.py subtracts them from bucket 2 per
+                    # reason. Adding a `continue`, a `strict != "VERIFY"` test or any
+                    # other filter here re-opens the defect that fix was for.
                     for i, c in enumerate(grp["claims"]):
                         v = vbi.get(i)
                         if v is not None:
@@ -1116,6 +1348,21 @@ class TribunalPipeline:
             )
         unchecked_selected = _observed_unchecked
 
+        # WR-10 / D-10 Option 2, counted from the SAME ground truth and at the same
+        # moment as bucket 3, because it answers the mirror-image question: which
+        # claims did the gates NOT select, yet a skeptic checked anyway?
+        incidental = _count_incidental(claims, verdicts_by_claim)
+        if incidental["checked_incidentally"]:
+            log.info(
+                "tribunal_pipeline: %d claim(s) were checked incidentally — the "
+                "gates dropped them or marked them stable, but they rode along as "
+                "members of a selected group and came back with a verdict. They "
+                "move OUT of 'not checkable' and into their own accounting line; "
+                "their verdicts are real and can still scrub a passage.",
+                incidental["checked_incidentally"],
+                extra={"run_id": str(run_id)},
+            )
+
         # The ONE funnel for this run: built once, then carried on the synthesis
         # bundle, the verification report and the pipeline's return value, so the
         # feed, the operator report and run.verification_summary cannot disagree.
@@ -1123,6 +1370,11 @@ class TribunalPipeline:
             gate_funnel,
             unchecked_selected=unchecked_selected,
             verify_sessions=total_skeptics,
+            incidental=incidental,
+            # Plan 15.2-07's ONE run-scoped accumulator, already in scope here.
+            # Read, never re-declared — a second binding of this name would rebind
+            # it to a fresh empty list and discard every reason appended upstream.
+            degradation_reasons=degradation_reasons,
         )
         # G-10: the closing summary states degradation in words, not with an icon.
         await set_stage(
@@ -1700,17 +1952,29 @@ async def _write_final_report(
         "funnel": v.get("funnel") or _build_funnel(
             None, unchecked_selected=0, verify_sessions=0
         ),
-        # D-06 citation-health counts. SIBLINGS OF "funnel", never members of it:
-        # verification_summary IS the same dict object as
-        # verification_report["funnel"], and RECORDED_FUNNEL_COUNTS is compared by
-        # FULL DICT EQUALITY in two tests — adding a key inside the funnel would
-        # break them. This plan only guarantees the numbers exist and travel;
-        # 15.2-08 owns folding them onto run.verification_summary and owns the
-        # operator-facing wording. Always present, 0 on a run with no anchors.
+        # D-06 citation-health counts, as siblings of "funnel" on this report.
+        # `orphan_cite_markers` and `model_invented_numbers` STAY siblings and only
+        # siblings: they diagnose the PROVIDER's `[cite: N]` mechanism, not D-06's
+        # `[[c:...]]` anchor mechanism, and the operator reads them as report-writing
+        # diagnostics rather than as verification accounting. `unresolved_anchors` is
+        # the one 15.2-08 folds INTO the funnel just below (with the matching key
+        # added to RECORDED_FUNNEL_COUNTS in the same commit, because the two key
+        # sets are locked together by test_gate_selector.py).
+        # Always present, 0 on a run with no anchors.
         "unresolved_anchors": n_unresolved_anchors,
         "orphan_cite_markers": n_orphan_cites,
         "model_invented_numbers": n_model_numbers,
     }
+
+    # D-06, folded onto run.verification_summary. Read back FROM the sibling key on
+    # this same payload rather than from `n_unresolved_anchors` a second time: that
+    # makes the two copies mechanically identical, so the payload can never publish
+    # two disagreeing numbers for one thing (the CR-02 failure mode). And
+    # `verification_report["funnel"]` is the SAME DICT OBJECT as the returned
+    # `result["verification_summary"]`, so this one assignment is what carries the
+    # count all the way to the persisted `run.verification_summary` column.
+    _n_unresolved_anchors = int(verification_report.get("unresolved_anchors") or 0)
+    verification_report["funnel"]["unresolved_anchors"] = _n_unresolved_anchors
 
     # ------------------------------------------------------------------
     # D-08: the two deterministic report sections.
@@ -1765,10 +2029,19 @@ async def _write_final_report(
         n_unresolved_cites=n_orphan_cites,
     )
 
+    _done_name = (f"{v.get('survivor_count', 0)} verified claims · "
+                  f"{v.get('dropped_count', 0)} dropped · "
+                  f"{v.get('contested_count', 0)} contested")
+    if _n_unresolved_anchors:
+        # D-06's "feed's closing summary" half — the count stated in words, where an
+        # operator scanning the feed will actually meet it. The verification-report
+        # half is verification/report.py's `unresolved_anchors_text`.
+        _done_name += (
+            f" · {_n_unresolved_anchors} citation anchor(s) could not be resolved "
+            f"and were removed (the sentences remain)"
+        )
     await set_stage(run_id, tenant_id, "done", detail={"items": [{
-        "name": (f"{v.get('survivor_count', 0)} verified claims · "
-                 f"{v.get('dropped_count', 0)} dropped · "
-                 f"{v.get('contested_count', 0)} contested"),
+        "name": _done_name,
         "status": "done",
     }]})
     log.info(
@@ -1800,9 +2073,14 @@ async def _write_final_report(
         # RESUME-FROM-CACHE path rebuilds the whole result from the cached bundle,
         # so reading the bundle is the only way both paths publish the same reasons.
         # Same content as `synthesis_bundle["verification"]["degradation_reasons"]`,
-        # from the same one list; a copy is taken so a consumer cannot mutate the
-        # bundle. `or []` is the pre-15.2 synthesis_cache back-compat guard.
-        "degradation_reasons": list(v.get("degradation_reasons") or []),
+        # from the same one list, and put through the SAME normaliser the funnel key
+        # goes through (15.2-08): one accumulator, one normaliser, two published
+        # surfaces, identical content — so the worker's terminal-state decision and
+        # the superadmin report can never name different degradations for one run.
+        # The normaliser also returns a fresh list, so a consumer cannot mutate the
+        # bundle, and returns [] rather than raising for a pre-15.2 synthesis_cache
+        # that carries no such key at all.
+        "degradation_reasons": _normalise_degradation_reasons(v.get("degradation_reasons")),
         # D-06 citation-health counts, following the `rejected_claims` precedent:
         # top-level result keys, siblings of verification_summary and NOT inside
         # the funnel dict. Present on every run, including runs with zero anchors

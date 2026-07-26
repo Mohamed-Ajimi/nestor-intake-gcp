@@ -152,6 +152,13 @@ def _parse_group_verdict(block: Any, n_claims: int, citations: list[str]) -> dic
                 ),
             }
     # Fill any missing claim with insufficient (so it survives, not silently dropped).
+    #
+    # WR-10 / D-10 Option 2 — filling EVERY index, including the members the gates
+    # DROPped or marked SKIP_STABLE, is deliberate. This is the PRODUCER half of the
+    # behaviour that `pipeline.py::_count_incidental` accounts for; see the matching
+    # comment on `_flush_groups`' member loop, which files the verdicts this loop
+    # produces. Narrowing it here would silently reduce what `scrub_research` removes
+    # from the delivered report — Option 1, which the operator rejected.
     for i in range(n_claims):
         by_index.setdefault(i, {
             "verdict": "insufficient", "confidence": 0.0,
