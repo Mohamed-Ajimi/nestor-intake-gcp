@@ -747,3 +747,658 @@ def _lowest_index_with_parent(
         if best is None or _index_of(entry) < _index_of(best):
             best = entry
     return best
+
+
+# ===========================================================================
+# STEP 5 — the fixed 4-round Swiss tournament.
+# ===========================================================================
+#
+# Tunables — the tournament half. EVERY NUMBER HERE IS MEDIUM CONFIDENCE.
+# 15.2-RESEARCH cites Co-Scientist for the PATTERN (Elo starting at 1200,
+# pairwise judging, an evolution step) and states plainly that the published
+# sources specify NO pairing algorithm, NO K-factor and NO round count. So each
+# of these is a reasoned default that the August live run calibrates.
+#
+#   _TOURNAMENT_ROUNDS    rounds of Swiss. FIXED, not adaptive: determinism beats
+#                         marginal ranking quality, and the operator judges
+#                         quality in August, not in CI.
+#   _MATCHES_PER_CALL     match-ups rendered into one flash call (RESEARCH: 10).
+#   _ELO_START            Co-Scientist's published initial rating.
+#   _ELO_K               the K-factor. RESEARCH: 32. Elo is the TIE-BREAK only.
+#   _WINNERS_MIN/MAX/FRACTION   RESEARCH's min(15, max(10, ceil(0.35 x C))).
+#   _ALTERNATE_AB         the A/B-alternation off-switch, so August can MEASURE
+#                         the order bias this mitigation corrects.
+#   _TOURNAMENT_ENABLED   the A/B baseline path: off => rank by index, no calls.
+# ---------------------------------------------------------------------------
+_TOURNAMENT_ROUNDS = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ROUNDS", "4"))
+_MATCHES_PER_CALL = int(
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_MATCHES_PER_CALL", "10")
+)
+_ELO_START = float(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ELO_START", "1200"))
+_ELO_K = float(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ELO_K", "32"))
+_WINNERS_MIN = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNERS_MIN", "10"))
+_WINNERS_MAX = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNERS_MAX", "15"))
+_WINNERS_FRACTION = float(
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNERS_FRACTION", "0.35")
+)
+_ALTERNATE_AB = (
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ALTERNATE_AB", "true").lower() == "true"
+)
+_TOURNAMENT_ENABLED = (
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT", "true").lower() == "true"
+)
+
+
+def _reason_tournament_unjudged(unjudged: int, total: int) -> str:
+    return (
+        f"question workshop: {unjudged} of {total} tournament match-up(s) came "
+        f"back unjudged and were awarded to the lower-numbered candidate by "
+        f"default, so the ranking of those questions is correspondingly less "
+        f"informed — no candidate was lost."
+    )
+
+
+def _reason_tournament_round_blank(round_no: int, matches: int) -> str:
+    return (
+        f"question workshop: tournament round {round_no} produced no judgement at "
+        f"all for its {matches} match-up(s), so that whole round contributed "
+        f"nothing to the ranking and every one of its matches fell back to the "
+        f"default winner."
+    )
+
+
+def _reason_tournament_failed(detail: str) -> str:
+    return (
+        f"question workshop: the tournament judge could not be reached "
+        f"({detail[:160]}), so the candidate sub-questions were ranked by their "
+        f"original order alone — every question is still researched, just not in "
+        f"a judged order."
+    )
+
+
+def winner_count(n_candidates: int) -> int:
+    """How many candidates reach the evolve step: `min(15, max(10, ceil(0.35xC)))`.
+
+    Bounded by C itself, so a population of 5 yields 5 rather than 10. Worked
+    values from 15.2-RESEARCH: C=5 -> 5, C=20 -> 10, C=30 -> 11, C=36 -> 13,
+    C=43 -> 15, C=60 -> 15.
+
+    THIS IS NOT THE D4 FLOOR, and reading it as one is the mistake this docstring
+    exists to prevent. RESEARCH's sentence "never returns fewer than the number
+    of client-validated questions" reads like a floor on this function and is not
+    one: a client question with no surviving winner is handled by
+    `enforce_scope_guard`, which adds winners BEYOND this count. Inflating this
+    number to guarantee coverage would buy the same guarantee by paying to evolve
+    candidates nobody chose.
+    """
+    total = max(0, int(n_candidates or 0))
+    if total <= 0:
+        return 0
+    base = min(
+        _WINNERS_MAX, max(_WINNERS_MIN, math.ceil(_WINNERS_FRACTION * total))
+    )
+    return max(0, min(base, total))
+
+
+def _expected(ra: float, rb: float) -> float:
+    """The standard Elo expected score for A against B."""
+    return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+
+
+def _apply_elo(ra: float, rb: float, a_won: bool) -> tuple[float, float]:
+    """The standard K-factor Elo update. Pure, no clamping, no randomisation.
+
+    ELO IS THE TIE-BREAK, NOT THE PRIMARY KEY. With only four rounds it has not
+    converged and nobody should read it as a quality score; what it does is break
+    equal win counts in a principled, deterministic and order-stable way. The
+    Swiss win count is primary, exactly as 15.2-RESEARCH specifies.
+    """
+    ea = _expected(ra, rb)
+    sa = 1.0 if a_won else 0.0
+    return ra + _ELO_K * (sa - ea), rb + _ELO_K * ((1.0 - sa) - (1.0 - ea))
+
+
+def _pair_key(first: int, second: int) -> tuple[int, int]:
+    """A pair identity, ALWAYS lower index first, so `seen` is order-independent."""
+    return (first, second) if first <= second else (second, first)
+
+
+def _pair_round(
+    entries: Sequence[dict[str, Any]], round_no: int, seen: set[tuple[int, int]]
+) -> tuple[list[tuple[int, int]], Optional[int]]:
+    """Pair one Swiss round. PURE and deterministic — same inputs, same output.
+
+    `entries` is the working per-candidate state (`index`, `wins`, `elo`,
+    `byes`); `seen` is the set of already-played pair identities, always stored
+    lower index first.
+
+      * Round 1 pairs by original `index`, ascending: (0,1), (2,3), ... A
+        deterministic seed with no model involved.
+      * Rounds 2+ sort by `(-wins, -elo, index)` — the standing — and walk that
+        list, pairing each still-unpaired entry with the NEXT still-unpaired
+        entry whose pair is not in `seen`. If every remaining candidate is a
+        rematch, the nearest rematch is allowed and logged at DEBUG. This is the
+        standard Swiss greedy adjacent pairing. The sort key is TOTAL and ends in
+        `index`, so a tie in wins AND Elo still resolves deterministically, and
+        nothing is ever ordered by a `set` or by dict insertion luck.
+      * An odd count gives exactly one BYE, to the lowest-standing entry that has
+        taken the fewest byes so far (ties by index). A bye scores as a win with
+        NO Elo change — the Swiss convention, chosen because withholding the
+        point would penalise a candidate for a scheduling artefact.
+
+    Returns `(pairs, bye_index_or_None)` with pairs keyed by ORIGINAL index, not
+    by presented side. Presentation is decided separately in `_present`: if pair
+    identity depended on presentation, determinism would become a function of the
+    `_ALTERNATE_AB` switch.
+
+    DEVIATION FROM THE PLAN TEXT, deliberate: the bye counter is incremented by
+    `run_tournament`, not here, so this function has NO side effects and calling
+    it twice with identical inputs is provably identical (the determinism test
+    does exactly that).
+    """
+    working = list(entries or [])
+    if round_no <= 1:
+        order = sorted(working, key=lambda e: e["index"])
+    else:
+        order = sorted(working, key=lambda e: (-e["wins"], -e["elo"], e["index"]))
+
+    pool = [e["index"] for e in order]
+    bye: Optional[int] = None
+    if len(pool) % 2 == 1:
+        standing = {e["index"]: position for position, e in enumerate(order)}
+        bye = min(
+            order,
+            key=lambda e: (e["byes"], -standing[e["index"]], e["index"]),
+        )["index"]
+        pool = [i for i in pool if i != bye]
+
+    pairs: list[tuple[int, int]] = []
+    used: set[int] = set()  # membership-tested only; never iterated.
+    for position, first in enumerate(pool):
+        if first in used:
+            continue
+        used.add(first)
+        partner: Optional[int] = None
+        nearest: Optional[int] = None
+        for other in pool[position + 1 :]:
+            if other in used:
+                continue
+            if nearest is None:
+                nearest = other
+            if _pair_key(first, other) not in seen:
+                partner = other
+                break
+        if partner is None and nearest is not None:
+            log.debug(
+                "workshop_rank: every remaining opponent for candidate %d in "
+                "round %d is a rematch — allowing the nearest one",
+                first,
+                round_no,
+            )
+            partner = nearest
+        if partner is None:
+            continue
+        used.add(partner)
+        pairs.append(_pair_key(first, partner))
+    return pairs, bye
+
+
+def _present(
+    pair: tuple[int, int], round_no: int, match_index: int
+) -> tuple[int, int]:
+    """Decide which side of a match each candidate is shown on. Pure.
+
+    ORDER BIAS IN PAIRWISE LLM JUDGING IS A REAL, DOCUMENTED FAILURE MODE, and
+    Co-Scientist explicitly mitigates it. The mitigation here is the cheapest
+    defensible one: swap the sides when `(round_no + match_index) % 2 == 1`, so
+    each candidate appears as A in some matches and as B in others and a judge
+    with a positional preference cannot systematically favour the same
+    candidates.
+
+    Why not double-judge every match with the sides swapped: that doubles the
+    cost of the whole tournament for a bias a Swiss schedule already partly
+    averages out.
+    """
+    low, high = pair
+    if _ALTERNATE_AB and (round_no + match_index) % 2 == 1:
+        return high, low
+    return low, high
+
+
+_TOURNAMENT_PROMPT = """\
+You are choosing between candidate research sub-questions for ONE client's
+decision. For each pair below, say which of the two questions matters more for
+THIS client's decision.
+
+The client's decision this research has to serve:
+{decision_context}
+
+Decide on these criteria, in this order:
+  1. which answer would more change what the client actually does;
+  2. which question is more specific and more answerable by research;
+  3. which is less already-known.
+A flaw named under FLAW_A: or FLAW_B: counts AGAINST that side.
+
+{ignore_instructions}
+
+Output EXACTLY one line per match, in input order, in this format (no extra
+text):
+MATCH_INDEX | A
+or
+MATCH_INDEX | B
+
+Matches:
+{matches_block}
+"""
+
+
+def _match_block(batch: Sequence[tuple[dict[str, Any], dict[str, Any]]], offset: int) -> str:
+    """Render one batch of match-ups, indexed and truncated.
+
+    The same two security controls as `_candidate_block` (`gates.py:296-301`):
+    every candidate's text is truncated to `_CANDIDATE_PROMPT_CHARS`, every flaw
+    to `_FLAW_MAX_CHARS`, and every answer is addressed by MATCH_INDEX. Newlines
+    and pipe characters inside a candidate's text or flaw are collapsed to spaces
+    by `_flatten` first, so a candidate cannot forge an extra match line and
+    answer on another match's behalf.
+
+    THIS IS WHERE THE CRITIQUE'S WEAK FLAWS REACH THE TOURNAMENT — the
+    ENGINE-05 -> tournament link 15.2-RESEARCH's stage table specifies.
+    """
+    lines: list[str] = []
+    for position, (side_a, side_b) in enumerate(batch):
+        lines.append(
+            f"{offset + position} | "
+            f"A: {_flatten(side_a.get('text'), _CANDIDATE_PROMPT_CHARS)} | "
+            f"B: {_flatten(side_b.get('text'), _CANDIDATE_PROMPT_CHARS)}"
+        )
+        flaw_a = _flatten(side_a.get("flaw"), _FLAW_MAX_CHARS)
+        if flaw_a:
+            lines.append(f"    FLAW_A: {flaw_a}")
+        flaw_b = _flatten(side_b.get("flaw"), _FLAW_MAX_CHARS)
+        if flaw_b:
+            lines.append(f"    FLAW_B: {flaw_b}")
+    return "\n".join(lines)
+
+
+def _parse_match_lines(text: str, offset: int, n: int) -> dict[int, str]:
+    """Parse `MATCH_INDEX | A|B` lines into `{local_index: "A"|"B"}`.
+
+    The ASVS V5 discipline in `grouping._parse_cluster_lines`' register: the
+    index is regex-extracted, rebased by `offset` and bounds-checked against `n`,
+    the side is upper-cased and clamped to the two legal values, a garbled line
+    is ignored, raw model text is never decoded as structured data, and nothing
+    raises.
+
+    A missing entry is simply ABSENT rather than defaulted here — the caller owns
+    the never-drop default, because only the caller knows the pair's original
+    indices.
+    """
+    out: dict[int, str] = {}
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 2:
+            continue
+        match = re.search(r"\d+", parts[0])
+        if not match:
+            continue
+        local = int(match.group()) - offset
+        if not (0 <= local < n):
+            continue
+        side = parts[1].strip().upper()
+        if side not in ("A", "B"):
+            continue
+        out[local] = side
+    return out
+
+
+async def _judge_batch(
+    chunk: Sequence[tuple[int, int]],
+    offset: int,
+    *,
+    by_index: dict[int, dict[str, Any]],
+    decision_context: str,
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    breaker: Any | None = None,
+    acc: Optional[dict[str, Any]] = None,
+    on_retry: Any = None,
+) -> dict[int, str]:
+    """Judge one batch of match-ups. Best-effort: on failure it returns nothing.
+
+    Same shape as `_critique_batch` — `gates._gate_batch`'s per-batch structure
+    with `reliability.with_retry` as the one retry policy and the
+    `gates.py:394-400` response-text ladder.
+    """
+    n = len(chunk)
+    out: dict[str, Any] = {}
+    batch = [
+        (by_index.get(a) or {"text": ""}, by_index.get(b) or {"text": ""})
+        for a, b in chunk
+    ]
+    prompt = _TOURNAMENT_PROMPT.format(
+        decision_context=_render_decision(decision_context),
+        ignore_instructions=_IGNORE_INSTRUCTIONS,
+        matches_block=_match_block(batch, offset),
+    )
+    config = gates._make_config()
+    kwargs: dict[str, Any] = {"config": config} if config is not None else {}
+
+    try:
+        resp = await with_retry(
+            lambda: audited.gemini_generate(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                model=_RANK_MODEL,
+                contents=prompt,
+                audit_out=out,
+                **kwargs,
+            ),
+            attempts=max(0, _RANK_RETRIES) + 1,
+            base_s=_RANK_BACKOFF_S,
+            label="workshop.tournament",
+            breaker=breaker,
+            on_retry=on_retry,
+        )
+    except Exception as exc:  # noqa: BLE001 — a round never breaks the run
+        log.warning(
+            "workshop_rank: the tournament judge failed for a batch of %d "
+            "match-up(s) — every one of them falls back to the default winner: %r",
+            n,
+            exc,
+        )
+        if isinstance(acc, dict):
+            acc["error"] = (
+                str(exc) if isinstance(exc, CircuitOpenError)
+                else f"{type(exc).__name__}: {exc}"
+            )
+        return {}
+
+    text = getattr(resp, "text", None)
+    if not text:
+        cands = getattr(resp, "candidates", None) or []
+        if cands:
+            parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
+            if parts:
+                text = getattr(parts[0], "text", None) or ""
+
+    if isinstance(acc, dict):
+        acc["calls"] = int(acc.get("calls") or 0) + 1
+        if acc.get("audit_id") is None:
+            acc["audit_id"] = out.get("audit_id")
+        acc["cost"] = _add_cost(
+            acc.get("cost") if isinstance(acc.get("cost"), Decimal) else Decimal("0"),
+            out.get("cost_usd"),
+        )
+
+    return _parse_match_lines(text or "", offset, n)
+
+
+async def _judge_round(
+    pairs: Sequence[tuple[int, int]],
+    presented: Sequence[tuple[int, int]],
+    *,
+    by_index: dict[int, dict[str, Any]],
+    decision_context: str,
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    breaker: Any | None = None,
+    acc: Optional[dict[str, Any]] = None,
+    on_retry: Any = None,
+) -> dict[int, int]:
+    """Judge one whole round; return `{match_index: winning_candidate_index}`.
+
+    Fan-out cloned from `gates._classify` a second time: fixed batches of
+    `_MATCHES_PER_CALL`, an `asyncio.Semaphore` bounding in-flight calls,
+    `asyncio.gather`, then a merge.
+
+    THE NEVER-DROP DEFAULT, and the one place this deliberately diverges from
+    15.2-RESEARCH's code sketch: an unjudged match is won by the pair's LOWER
+    ORIGINAL INDEX, not by "side A". With A/B alternation the presented side is a
+    function of `(round + match_index)`, so defaulting by side would make the
+    default depend on the `_ALTERNATE_AB` switch and the winner order would
+    change when that knob is flipped — determinism broken by a tuning knob.
+    Defaulting by original index is stable under every knob setting and loses
+    nothing (`grouping.py:66-68`'s never-drop rule).
+    """
+    size = max(1, _MATCHES_PER_CALL)
+    slices = [
+        (start, list(presented[start : start + size]))
+        for start in range(0, len(presented), size)
+    ]
+    sem = asyncio.Semaphore(max(1, _RANK_CONCURRENCY))
+
+    async def _run(start: int, chunk: list[tuple[int, int]]):
+        async with sem:
+            verdicts = await _judge_batch(
+                chunk,
+                start,
+                by_index=by_index,
+                decision_context=decision_context,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                breaker=breaker,
+                acc=acc,
+                on_retry=on_retry,
+            )
+        return start, verdicts
+
+    try:
+        results = list(await asyncio.gather(*(_run(s, c) for s, c in slices)))
+    except Exception as exc:  # noqa: BLE001 — the fan-out never propagates
+        log.error("workshop_rank: the tournament fan-out failed: %r", exc)
+        results = []
+
+    winners: dict[int, int] = {}
+    for start, verdicts in results:
+        for local, side in verdicts.items():
+            match_index = start + local
+            if match_index >= len(presented):
+                continue
+            side_a, side_b = presented[match_index]
+            winners[match_index] = side_a if side == "A" else side_b
+
+    unjudged = 0
+    for match_index, pair in enumerate(pairs):
+        if match_index not in winners:
+            winners[match_index] = min(pair)
+            unjudged += 1
+    if isinstance(acc, dict):
+        acc["unjudged"] = int(acc.get("unjudged") or 0) + unjudged
+    return winners
+
+
+async def run_tournament(
+    *,
+    candidates: list[dict[str, Any]],
+    decision_context: str = "",
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    feed: "Optional[StageFeed]" = None,
+    breaker: Any | None = None,
+    stats: Optional[dict[str, Any]] = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Rank EVERY candidate through a fixed 4-round Swiss tournament.
+
+    Returns `(ranked, degradation_reasons)` — the FULL ranked list, not just the
+    winners. Selecting the top `winner_count(...)` is `run_workshop_stage_b`'s
+    job, because `enforce_scope_guard` needs to look BELOW the cut line for a
+    client question's best-ranked candidate before falling back to verbatim text.
+
+    Each returned dict is a COPY of its critique-stage candidate plus `wins`,
+    `elo` (rounded to 2 decimals so two runs compare byte-identically), `rank`
+    (dense, 1-based, 1 = strongest) and `byes`. Plan 15.2-13 derives its D6
+    stakes and stream allocation from `rank`, so a winner without one cannot
+    exist.
+
+    DETERMINISM: the working state is a LIST in ascending `index` order; `seen`
+    is a set that is only ever membership-tested, never iterated; Elo is applied
+    in pair-list order because Elo updates are order-dependent; and the standing
+    sort key `(-wins, -elo, index)` is total. Nothing consults a clock and
+    nothing is randomised.
+
+    `stats` is an OPTIONAL caller-owned out-dict gaining `calls` (int),
+    `cost_usd` (str) and `unjudged` (int).
+
+    NEVER RAISES.
+    """
+    items = [dict(c) for c in (candidates or [])]
+    if isinstance(stats, dict):
+        stats.setdefault("calls", 0)
+        stats.setdefault("cost_usd", "0")
+        stats.setdefault("unjudged", 0)
+    if not items:
+        return [], []
+
+    for position, entry in enumerate(items):
+        value = entry.get("index")
+        entry["index"] = value if isinstance(value, int) else position
+    items.sort(key=lambda c: c["index"])
+    if len({c["index"] for c in items}) != len(items):
+        log.warning(
+            "workshop_rank: the candidate population carries duplicate indices — "
+            "renumbering %d candidate(s) so pairing stays addressable",
+            len(items),
+        )
+        for position, entry in enumerate(items):
+            entry["index"] = position
+
+    if not _TOURNAMENT_ENABLED or len(items) < 2:
+        for position, entry in enumerate(items):
+            entry["wins"] = 0
+            entry["elo"] = round(float(_ELO_START), 2)
+            entry["byes"] = 0
+            entry["rank"] = position + 1
+        return items, []
+
+    by_index = {c["index"]: c for c in items}
+    entries = [
+        {"index": c["index"], "wins": 0, "elo": float(_ELO_START), "byes": 0}
+        for c in items
+    ]
+    state = {e["index"]: e for e in entries}
+    seen: set[tuple[int, int]] = set()
+    reasons: list[str] = []
+    rounds = max(1, _TOURNAMENT_ROUNDS)
+
+    handles = await _feed_declare(
+        feed, [f"tournament round {r}/{rounds}" for r in range(1, rounds + 1)]
+    )
+
+    total_calls = 0
+    total_cost = Decimal("0")
+    total_unjudged = 0
+    total_matches = 0
+    first_failure: Optional[str] = None
+
+    for round_no in range(1, rounds + 1):
+        handle = _handle_at(handles, round_no - 1)
+        await _feed_update(feed, handle, status="running")
+
+        pairs, bye = _pair_round(entries, round_no, seen)
+        if bye is not None:
+            # The Swiss convention: a bye is a win with NO Elo change.
+            state[bye]["wins"] += 1
+            state[bye]["byes"] += 1
+
+        presented = [
+            _present(pair, round_no, match_index)
+            for match_index, pair in enumerate(pairs)
+        ]
+
+        async def _on_retry(attempt: int, maximum: int, wait_s: float, _label: str) -> None:
+            await _feed_mark_retry(
+                feed, handle, attempt=attempt, maximum=maximum, wait_s=wait_s
+            )
+
+        acc: dict[str, Any] = {"calls": 0, "cost": Decimal("0"), "unjudged": 0}
+        verdicts = await _judge_round(
+            pairs,
+            presented,
+            by_index=by_index,
+            decision_context=decision_context,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            breaker=breaker,
+            acc=acc,
+            on_retry=_on_retry if (feed is not None and handle is not None) else None,
+        )
+
+        # Elo is order-dependent, so the application order IS the pair-list order.
+        for match_index, pair in enumerate(pairs):
+            seen.add(pair)
+            low, high = pair
+            winner = verdicts.get(match_index, low)
+            if winner not in (low, high):
+                winner = low
+            loser = high if winner == low else low
+            state[winner]["wins"] += 1
+            new_winner_elo, new_loser_elo = _apply_elo(
+                state[winner]["elo"], state[loser]["elo"], True
+            )
+            state[winner]["elo"] = new_winner_elo
+            state[loser]["elo"] = new_loser_elo
+
+        unjudged = int(acc.get("unjudged") or 0)
+        judged = max(0, len(pairs) - unjudged)
+        total_matches += len(pairs)
+        total_unjudged += unjudged
+        total_calls += int(acc.get("calls") or 0)
+        total_cost = _add_cost(total_cost, acc.get("cost"))
+        if acc.get("error") and first_failure is None:
+            first_failure = str(acc["error"])
+        if pairs and judged == 0:
+            log.warning(
+                "workshop_rank: tournament round %d produced no judgement for its "
+                "%d match-up(s) — every one fell back to the default winner",
+                round_no,
+                len(pairs),
+            )
+            reasons.append(_reason_tournament_round_blank(round_no, len(pairs)))
+
+        await _feed_update(
+            feed,
+            handle,
+            status="failed" if (pairs and judged == 0) else "done",
+            facts=judged,
+            audit_id=acc.get("audit_id"),
+            cost_usd=str(acc.get("cost") or Decimal("0")),
+        )
+
+    standing = sorted(entries, key=lambda e: (-e["wins"], -e["elo"], e["index"]))
+    ranked: list[dict[str, Any]] = []
+    for position, entry in enumerate(standing):
+        out = dict(by_index[entry["index"]])
+        out["wins"] = entry["wins"]
+        out["elo"] = round(entry["elo"], 2)
+        out["byes"] = entry["byes"]
+        out["rank"] = position + 1
+        ranked.append(out)
+
+    if total_unjudged:
+        reasons.append(_reason_tournament_unjudged(total_unjudged, total_matches))
+    if first_failure is not None:
+        reasons.append(_reason_tournament_failed(first_failure))
+    if isinstance(stats, dict):
+        stats["calls"] = total_calls
+        stats["cost_usd"] = str(total_cost)
+        stats["unjudged"] = total_unjudged
+
+    log.info(
+        "workshop_rank: tournament done — %d candidate(s) over %d round(s), %d "
+        "match-up(s), %d unjudged, %d call(s)",
+        len(items),
+        rounds,
+        total_matches,
+        total_unjudged,
+        total_calls,
+    )
+    return ranked, _dedup_reasons(reasons)
