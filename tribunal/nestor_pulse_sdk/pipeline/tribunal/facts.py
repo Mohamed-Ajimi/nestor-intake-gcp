@@ -57,6 +57,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+from urllib.parse import urlparse
+
+if TYPE_CHECKING:  # pragma: no cover — typing only, never imported at runtime
+    from collections.abc import Mapping
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +122,13 @@ VERTEX_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
 #: so a hostile line cannot make this backtrack. Named distinctly from anything in
 #: `citations/` on purpose — that tree is owned by another plan this wave.
 _MD_LINK_RE = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^\s)]{1,2048})\)")
+
+#: A candidate display domain must look like a hostname before it is believed. A
+#: model-supplied label is untrusted text like everything else.
+_DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}\.[a-z]{2,24}$", re.IGNORECASE)
+
+#: Upper bound on the url -> label map built from one report (DoS guard).
+_MAX_LABEL_INDEX = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -228,3 +241,427 @@ def strip_fact_block(text: str | None) -> str:
             continue
         kept.append(line)
     return "".join(kept)
+
+
+# ---------------------------------------------------------------------------
+# The parse side: reading a provider's answer back.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FactListResult:
+    """The outcome of parsing one provider's fact block.
+
+    Every field except ``facts`` and ``not_found`` is a NAMED LOSS. The bar is
+    `verification/report.py:184-190`: a degraded stream must be visibly degraded, in
+    words and numbers a human reads, never a silent green.
+
+    facts:
+        Pipeline-shaped claim dicts, in report order. See `parse_fact_list` for the
+        exact key set.
+    not_found:
+        The provider's own "I looked and could not establish this" lines. Feeds D-08's
+        "What we could not establish" section and the `research_gap` rows.
+    had_block:
+        True when a ``FACTS_START`` sentinel was present at all. Distinguishes "the
+        provider ignored the instruction" from "the provider complied but found
+        nothing" — two very different failures that must not look alike.
+    parse_errors:
+        Lines inside the block that were ignored: no TAB, an echoed header row, or a
+        statement below the minimum length. Also counts a second, ignored fact block.
+    rejected_urls:
+        SOURCE_URL cells dropped for a non-http(s) scheme or excess length. The
+        statement SURVIVES a rejected URL — losing the link must not lose the fact.
+    dropped_over_cap:
+        Facts discarded because the provider exceeded ``_MAX_FACTS``.
+    needs_distiller_fallback:
+        D-14. True when this provider yielded zero usable facts, so 15.2-14 must run
+        the full-extraction distiller over its prose instead.
+    fallback_reason:
+        None when facts exist; otherwise a plain-English sentence naming the provider
+        and the cause. Consumed verbatim by 15.2-14 for the feed and the verification
+        report — a reader must understand it without reading this module.
+    """
+
+    facts: list[dict] = field(default_factory=list)
+    not_found: list[str] = field(default_factory=list)
+    had_block: bool = False
+    parse_errors: int = 0
+    rejected_urls: int = 0
+    dropped_over_cap: int = 0
+    needs_distiller_fallback: bool = True
+    fallback_reason: str | None = None
+
+
+def build_label_index(text: str | None) -> dict[str, str]:
+    """Map every markdown link URL in ``text`` to its display label.
+
+    This is what turns a deep-research report's trailing numbered source list —
+    ``44. [hnsenergygroup.com](https://vertexaisearch.cloud.google.com/...)`` — into a
+    redirect-URL -> display-domain map, so a bare redirect URL on a fact line can
+    still be attributed to a real domain (Pitfall 10).
+
+    RESOLUTION RULE — first USABLE label wins, not simply first label. A Gemini report
+    cites the same redirect URL twice: once inline in the body, where the label is the
+    self-referential string ``vertexaisearch.cloud.google.com``, and once in the
+    trailing source list, where the label is the real domain. The inline occurrence
+    comes FIRST in every recorded call, so a plain first-occurrence-wins map resolves
+    to the redirect host for 100% of URLs and Pitfall 10 stays wide open. A label that
+    is itself the redirect host is therefore treated as a placeholder and may be
+    upgraded by a later, real domain label; any other label is kept as-is and is never
+    overwritten. Measured on the committed recorded run: this is the difference
+    between 0 and 3-4 tier-1/2 domains per report.
+
+    Bounded at ``_MAX_LABEL_INDEX`` entries. Never raises.
+    """
+    out: dict[str, str] = {}
+    if not text:
+        return out
+    for match in _MD_LINK_RE.finditer(text):
+        label = (match.group(1) or "").strip()
+        url = (match.group(2) or "").strip()
+        if not url or not label:
+            continue
+        existing = out.get(url)
+        if existing is None:
+            if len(out) >= _MAX_LABEL_INDEX:
+                break
+            out[url] = label
+        elif _is_placeholder_label(existing) and not _is_placeholder_label(label):
+            # Upgrade a self-referential redirect-host label to the real domain.
+            out[url] = label
+    return out
+
+
+def _is_placeholder_label(label: str) -> bool:
+    """True when a link label carries no information beyond the redirect host itself."""
+    candidate = (label or "").strip().lower()
+    if candidate.startswith("www."):
+        candidate = candidate[4:]
+    return candidate == VERTEX_REDIRECT_HOST
+
+
+def display_domain(
+    url: str | None,
+    *,
+    label: str | None = None,
+    label_index: "Mapping[str, str] | None" = None,
+) -> str:
+    """Resolve a URL to the domain a human would recognise as its source (Pitfall 10).
+
+    Gemini grounded search does not return source URLs. It returns opaque redirects on
+    ``VERTEX_REDIRECT_HOST`` (``vertexaisearch.cloud.google.com``), and the real domain
+    survives only as the markdown link LABEL. Feeding the raw redirect to the tier
+    heuristic grades every source in the largest research stream as tier 3
+    "blog/other" — 52, 56 and 62 sources respectively in the recorded run, uniformly
+    mis-graded. Resolution order:
+
+      1. Take the host from ``url``, lowercased with a leading ``www.`` stripped (the
+         same normalisation as `numbering._domain`). A malformed URL yields ``""``.
+      2. Host is not the redirect host -> return it. Nothing to resolve.
+      3. Host IS the redirect host -> try ``label``, then ``label_index[url]``. A
+         candidate is accepted only if it looks like a hostname AND is not itself
+         ``VERTEX_REDIRECT_HOST`` — recorded call 006 contains inline links whose
+         label is exactly that self-referential string.
+      4. Nothing usable -> return the redirect host. The tier then honestly stays 3
+         and the provider-stated ``provider_quality`` carries the signal instead,
+         which is precisely what D-13 added it for.
+
+    Never raises.
+    """
+    if not url:
+        return ""
+    try:
+        host = urlparse(url).netloc.lower()
+    except Exception:  # noqa: BLE001 — a malformed url just has no derivable domain
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    if host != VERTEX_REDIRECT_HOST:
+        return host
+
+    candidates = [label]
+    if label_index:
+        try:
+            candidates.append(label_index.get(url))
+        except Exception:  # noqa: BLE001 — a hostile mapping must not break parsing
+            pass
+    for raw in candidates:
+        if not raw:
+            continue
+        candidate = str(raw).strip().lower()
+        if candidate.startswith("www."):
+            candidate = candidate[4:]
+        if candidate and candidate != VERTEX_REDIRECT_HOST and _DOMAIN_RE.match(candidate):
+            return candidate
+    return host
+
+
+def _quality_tier_hint(provider: str, domain: str) -> int:
+    """Best-effort 1/2/3 quality tier for a display domain.
+
+    REUSES `citations/numbering.py::derive_quality_tier` — the tier tables are NOT
+    copied here. The import is function-local so this module stays a pure transform
+    with a stdlib-only module scope (`numbering` pulls in SQLAlchemy).
+
+    A tier is a hint, not verification, so any failure degrades to 3 rather than
+    propagating: being wrong about a source's prestige must never fail a run.
+    """
+    if not domain:
+        return 3
+    try:
+        from nestor_pulse_sdk.citations.numbering import derive_quality_tier  # noqa: PLC0415
+        return derive_quality_tier(provider, f"https://{domain}/")
+    except Exception:  # noqa: BLE001 — a tier is best-effort, never load-bearing
+        log.debug("facts: tier hint unavailable for domain %r", domain[:80])
+        return 3
+
+
+def _clamp(raw: object, vocabulary: tuple[str, ...], default: str, kind: str) -> str:
+    """Clamp a model-supplied enum to its vocabulary (shape copied from
+    `group_skeptic._normalise_verdict`).
+
+    The column these land in is free text with no CHECK constraint, so an unclamped
+    typo would reach the database and be miscounted by every downstream bucket. Both
+    defaults fail toward MORE checking (G-11).
+    """
+    if not isinstance(raw, str):
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    if value in vocabulary:
+        return value
+    log.warning("facts: unknown %s %r — normalised to %r", kind, raw[:40], default)
+    return default
+
+
+def _extract_region(
+    lines: list[str], start_token: str, end_token: str
+) -> tuple[list[str], bool, int]:
+    """Slice the lines between the FIRST start/end sentinel pair.
+
+    Returns (region_lines, had_block, extra_blocks). A dangling start sentinel with no
+    end reads to end of text (mirrors the flush at `intake.py:296`). A second block is
+    ignored and reported so the caller can count it as a parse error rather than
+    silently concatenating a duplicate.
+    """
+    region: list[str] = []
+    had_block = False
+    extra_blocks = 0
+    in_block = False
+    closed = False
+    for line in lines:
+        token = line.strip()
+        if not in_block:
+            if token == start_token:
+                if closed:
+                    extra_blocks += 1
+                    continue
+                in_block = True
+                had_block = True
+            continue
+        if token == end_token:
+            in_block = False
+            closed = True
+            continue
+        region.append(line)
+    return region, had_block, extra_blocks
+
+
+def parse_fact_list(
+    text: str | None,
+    *,
+    provider: str,
+    facet: str,
+    label_index: "Mapping[str, str] | None" = None,
+) -> FactListResult:
+    """Parse a provider's D8 fact block into pipeline-shaped claim dicts.
+
+    ``provider`` and ``facet`` are CALLER-SUPPLIED and are NEVER read out of model
+    text — the rule `_parse_distiller_response` states at `steps.py:679-681`. A model
+    must not be able to set its own attribution, so no line format, however
+    well-formed, can influence ``found_by`` or ``facet``.
+
+    Each fact is a dict with exactly nine keys. The first five are the shape
+    `persist_tribunal_claims` already consumes (``source_urls`` is read at
+    `extractor.py:498`), so no persistence-loop change is needed:
+
+        text, facet, evidence, found_by, source_urls,
+        certainty, provider_quality, source_domain, quality_tier_hint
+
+    ``certainty`` and ``provider_quality`` are the D-13 columns added by migration
+    0013; ``source_domain`` and ``quality_tier_hint`` are the Pitfall-10 pair.
+
+    Tolerates 2, 3, 4 or 5 columns; missing cells take their defaults. Blank lines and
+    lines without a TAB are ignored and counted. Nothing raises, for any input.
+    """
+    facts: list[dict] = []
+    not_found: list[str] = []
+    parse_errors = 0
+    rejected_urls = 0
+    dropped_over_cap = 0
+
+    body = text or ""
+    lines = body.splitlines()
+
+    if label_index is None:
+        # Derive from the report itself so a bare redirect URL on a fact line can
+        # still resolve against the report's own trailing source list.
+        label_index = build_label_index(body)
+
+    region, had_block, extra_blocks = _extract_region(lines, FACTS_START, FACTS_END)
+    parse_errors += extra_blocks
+
+    for raw_line in region:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "\t" not in line:
+            parse_errors += 1
+            log.debug("facts: skipping malformed line (no tab): %r", line[:80])
+            continue
+        parts = line.split("\t", 4)
+        if parts[0].strip().upper() == "STATEMENT":
+            # The model echoed the column headings back at us.
+            parse_errors += 1
+            continue
+
+        statement = _clean_statement(parts[0])
+        if len(statement) < _MIN_STATEMENT_CHARS:
+            parse_errors += 1
+            continue
+
+        if len(facts) >= _MAX_FACTS:
+            dropped_over_cap += 1
+            continue
+
+        url_cell = parts[1].strip() if len(parts) > 1 else ""
+        url, link_label, rejected = _parse_url_cell(url_cell)
+        if rejected:
+            rejected_urls += 1
+
+        domain = display_domain(url, label=link_label, label_index=label_index) if url else ""
+
+        # EVIDENCE stays BYTE-VERBATIM: only surrounding whitespace is removed. No
+        # cite-marker stripping, no truncation, no normalisation — `scrub_research`
+        # locates the passage to delete by matching this exact span, and the
+        # cite-marker regex also eats the whitespace preceding a marker, so stripping
+        # here would silently break every later scrub of a discredited fact.
+        evidence = parts[4].strip() if len(parts) > 4 else ""
+
+        facts.append({
+            "text": statement,
+            "facet": facet,
+            "evidence": evidence or statement,
+            "found_by": [provider] if provider else [],
+            "source_urls": [url] if url else [],
+            "certainty": _clamp(
+                parts[3] if len(parts) > 3 else "",
+                CERTAINTY_VALUES,
+                DEFAULT_CERTAINTY,
+                "certainty",
+            ),
+            "provider_quality": _clamp(
+                parts[2] if len(parts) > 2 else "",
+                QUALITY_VALUES,
+                DEFAULT_QUALITY,
+                "quality",
+            ),
+            "source_domain": domain,
+            "quality_tier_hint": _quality_tier_hint(provider, domain),
+        })
+
+    if dropped_over_cap:
+        log.warning(
+            "facts: %s exceeded the %d-fact cap — %d fact(s) dropped",
+            provider or "provider", _MAX_FACTS, dropped_over_cap,
+        )
+
+    nf_region, _nf_had, _nf_extra = _extract_region(lines, NOT_FOUND_START, NOT_FOUND_END)
+    for raw_line in nf_region:
+        entry = raw_line.strip()
+        if not entry:
+            continue
+        if len(not_found) >= _MAX_NOT_FOUND:
+            break
+        not_found.append(entry[:_MAX_NOT_FOUND_CHARS])
+
+    needs_distiller_fallback = not facts
+    fallback_reason = None
+    if needs_distiller_fallback:
+        who = provider or "this provider"
+        if not had_block:
+            fallback_reason = (
+                f"{who} returned no {FACTS_START}/{FACTS_END} block — its report will "
+                f"be run through the full-extraction distiller instead (D-14)."
+            )
+        else:
+            fallback_reason = (
+                f"{who} returned a {FACTS_START}/{FACTS_END} block but not one line in "
+                f"it parsed as a fact ({parse_errors} line(s) ignored) — its report "
+                f"will be run through the full-extraction distiller instead (D-14)."
+            )
+        log.warning("facts: %s", fallback_reason)
+
+    return FactListResult(
+        facts=facts,
+        not_found=not_found,
+        had_block=had_block,
+        parse_errors=parse_errors,
+        rejected_urls=rejected_urls,
+        dropped_over_cap=dropped_over_cap,
+        needs_distiller_fallback=needs_distiller_fallback,
+        fallback_reason=fallback_reason,
+    )
+
+
+def _clean_statement(cell: str) -> str:
+    """Strip unresolved citation markers, trim, and hard-truncate a STATEMENT cell.
+
+    REUSES `audit/audited_llm_client.py::strip_unresolved_cite_markers` — there is no
+    second stripper in this codebase, and this one is imported function-locally
+    exactly as `pipeline.py:1304` does it.
+
+    Truncation, not rejection: an over-long statement is still a fact, and the cap is
+    what bounds the injection surface reaching the skeptic and grouping prompts
+    downstream (a documented security control, not formatting).
+    """
+    try:
+        from nestor_pulse_sdk.audit.audited_llm_client import (  # noqa: PLC0415
+            strip_unresolved_cite_markers,
+        )
+        cleaned, _n_removed = strip_unresolved_cite_markers(cell or "")
+    except Exception:  # noqa: BLE001 — degrade to the raw cell rather than lose the fact
+        cleaned = cell or ""
+    return cleaned.strip()[:_MAX_STATEMENT_CHARS]
+
+
+def _parse_url_cell(cell: str) -> tuple[str, str | None, bool]:
+    """Parse a SOURCE_URL cell into (url, label, rejected).
+
+    Accepts a bare URL or a ``[label](url)`` markdown link. Only ``http`` and
+    ``https`` survive: this URL is later rendered as a CLICKABLE LINK in the
+    superadmin citation panel, so a ``javascript:`` or ``data:`` URL chosen by an
+    untrusted model would be an elevation-of-privilege path into the operator's own
+    tool. A rejected URL drops the link and KEEPS the fact.
+    """
+    if not cell:
+        return "", None, False
+    label: str | None = None
+    url = cell
+    match = _MD_LINK_RE.fullmatch(cell)
+    if match:
+        label = (match.group(1) or "").strip() or None
+        url = (match.group(2) or "").strip()
+    if len(url) > _MAX_URL_CHARS:
+        log.warning("facts: rejecting over-long SOURCE_URL (%d chars)", len(url))
+        return "", label, True
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except Exception:  # noqa: BLE001 — unparseable is rejected, not fatal
+        scheme = ""
+    if scheme not in ("http", "https"):
+        log.warning("facts: rejecting non-http(s) SOURCE_URL %r", url[:80])
+        return "", label, True
+    return url, label, False
