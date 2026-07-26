@@ -7,9 +7,17 @@ Tests exercise:
     - majority-independent: majority-refute-without-independent-source -> survives
     - 0-skeptic low-stakes claim -> survives (waves through)
   adjudicate.adjudicate_all(claims, verdicts_by_claim, survival_rule) -> {survivors, dropped}
-  coverage_gate.check_coverage(claims, adjudications) -> {pass: bool, uncovered: [...]}
-    - fails when a high-stakes claim is missing from adjudications
-    - passes when all high-stakes claims are covered
+  coverage_gate.check_coverage(claims, adjudications, selected_only=True)
+      -> {pass: bool, uncovered: [...]}
+    - the coverage surface is claims that are BOTH stakes='high' AND gate-selected
+      (claim["gate"]["strict"] == "VERIFY") — G-02 made the gates the selector,
+      not stakes (15.2 D-07-B)
+    - fails when a gate-selected high-stakes claim is missing from adjudications
+    - passes when all gate-selected high-stakes claims are covered
+    - a high-stakes claim the gates DROPped is NOT in the surface (the WR-01 cost
+      trap: on the recorded 4cbb5311 population that exclusion is worth ~2,100
+      Anthropic sessions)
+    - selected_only=False restores the pre-15.2 surface for the legacy/A-B caller
   research_division.divide(mission_brief) -> list[dict]
     - returns angle dicts with query + stakes
     - high-stakes angles appear 2+ times (doubled for redundancy)
@@ -37,8 +45,23 @@ from nestor_pulse_sdk.pipeline.tribunal.research_division import divide
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_claim(text: str = "test claim", facet: str = "A", stakes: str = "high") -> dict:
-    return {"text": text, "facet": facet, "stakes": stakes}
+def _make_claim(
+    text: str = "test claim",
+    facet: str = "A",
+    stakes: str = "high",
+    gate: dict | None = None,
+) -> dict:
+    """A claim dict. `gate` is set ONLY when supplied.
+
+    The adjudicate tests above never pass it, so their claim dicts are byte-for-byte
+    what they were before 15.2 — adjudication does not read the gate result. The
+    coverage tests below DO pass it, because after 15.2 D-07-B the gate decision is
+    half of the coverage surface.
+    """
+    claim = {"text": text, "facet": facet, "stakes": stakes}
+    if gate is not None:
+        claim["gate"] = gate
+    return claim
 
 
 def _support_verdict(independent: bool = True) -> dict:
@@ -187,7 +210,7 @@ class TestCheckCoverage:
 
     def test_fails_when_high_stakes_claim_unadjudicated(self):
         """check_coverage returns pass=False when a high-stakes claim is missing from adjudications."""
-        high_claim = _make_claim(text="high claim", stakes="high")
+        high_claim = _make_claim(text="high claim", stakes="high", gate={"strict": "VERIFY"})
         low_claim = _make_claim(text="low claim", stakes="low")
         claims = [high_claim, low_claim]
         # adjudications is a mapping {claim_id -> verdict}, but high_claim is not in it
@@ -198,7 +221,7 @@ class TestCheckCoverage:
 
     def test_passes_when_all_high_stakes_covered(self):
         """check_coverage returns pass=True when all high-stakes claims have adjudications."""
-        high_claim = _make_claim(text="high claim", stakes="high")
+        high_claim = _make_claim(text="high claim", stakes="high", gate={"strict": "VERIFY"})
         low_claim = _make_claim(text="low claim", stakes="low")
         claims = [high_claim, low_claim]
         # adjudications covers the high-stakes claim
@@ -209,8 +232,8 @@ class TestCheckCoverage:
 
     def test_uncovered_list_contains_uncovered_high_stakes(self):
         """The uncovered list for pipeline re-entry contains only high-stakes unadjudicated claims."""
-        h1 = _make_claim(text="h1", stakes="high")
-        h2 = _make_claim(text="h2", stakes="high")
+        h1 = _make_claim(text="h1", stakes="high", gate={"strict": "VERIFY"})
+        h2 = _make_claim(text="h2", stakes="high", gate={"strict": "VERIFY"})
         low = _make_claim(text="low", stakes="low")
         # h2 is adjudicated; h1 is not; low is irrelevant to coverage
         adjudications = {id(h2): True}
@@ -220,6 +243,33 @@ class TestCheckCoverage:
         assert "h1" in uncovered_texts
         assert "h2" not in uncovered_texts
         assert "low" not in uncovered_texts
+
+    def test_gate_dropped_high_stakes_claim_is_not_in_the_surface(self):
+        """THE WR-01 COST-TRAP REGRESSION, living in the 15.1 gates gate.
+
+        A high-stakes claim the gates DROPped carries no verdict BY DESIGN. Before
+        15.2 D-07-B it read as "uncovered", and the WR-01 fix would have fired a
+        billed re-entry session for each one — ~2,100 extra Anthropic tool-use
+        sessions on the recorded 4cbb5311 population (706 DROP + 32 SKIP_STABLE),
+        against a verify stage the gates exist to shrink to ~150. Neither
+        MAX_REENTRY (which bounds passes, not the first fan-out) nor the inert
+        budget governor would have stopped it.
+        """
+        dropped = _make_claim(text="dropped", stakes="high", gate={"strict": "DROP"})
+        result = check_coverage([dropped], {})
+        assert result["pass"] is True
+        assert result["uncovered"] == []
+
+    def test_selected_only_false_restores_the_pre_15_2_surface(self):
+        """selected_only=False is the legacy/A-B surface — stakes alone.
+
+        Retained so the difference is provable, and NEVER used on the production
+        path: the call sites in pipeline.py pass selected_only=True explicitly.
+        """
+        dropped = _make_claim(text="dropped", stakes="high", gate={"strict": "DROP"})
+        result = check_coverage([dropped], {}, selected_only=False)
+        assert result["pass"] is False
+        assert [c["text"] for c in result["uncovered"]] == ["dropped"]
 
     def test_max_reentry_constant_present(self):
         """MAX_REENTRY is exported from coverage_gate for bounded re-entry."""
