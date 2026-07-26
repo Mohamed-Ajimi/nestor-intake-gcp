@@ -1402,3 +1402,1009 @@ async def run_tournament(
         total_calls,
     )
     return ranked, _dedup_reasons(reasons)
+
+
+# ===========================================================================
+# STEP 6 — evolve the winners and tag their D7 SEARCH languages.
+# ===========================================================================
+#
+#   _EVOLVE_MAX_TOKENS  max_tokens on the single evolve call.
+#   _EVOLVE_ENABLED     off => winners keep their tournament text and get their
+#                       languages from the Python fallback only, zero calls.
+#   _WINNER_MAX_CHARS   characters kept per evolved winner.
+#   _LANGS_MAX          languages per winner. A DENIAL-OF-WALLET bound as much as
+#                       an editorial one: each extra language widens every
+#                       provider's search surface downstream.
+#   _DEFAULT_LANGS      the last-resort tag, parsed through the same filter a
+#                       model's answer goes through.
+# ---------------------------------------------------------------------------
+_EVOLVE_MAX_TOKENS = int(
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_EVOLVE_MAX_TOKENS", "4096")
+)
+_EVOLVE_ENABLED = (
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_EVOLVE", "true").lower() == "true"
+)
+_WINNER_MAX_CHARS = int(
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNER_CHARS", "400")
+)
+_LANGS_MAX = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_LANGS_MAX", "3"))
+_DEFAULT_LANGS = os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_DEFAULT_LANGS", "en")
+
+# The fenced sentinels. `intake.py:62-66` is the precedent, and the reason is the
+# same one recorded twice in `steps.py` and in `tools.py:14-16`: asking this
+# provider for structured output alongside citations is an HTTP 400, so every
+# multi-line contract in this pipeline is a plain-text fence instead.
+_WINNERS_START = "WINNERS_START"
+_WINNERS_END = "WINNERS_END"
+
+# Run-language NAME -> ISO 639-1 code, keyed on casefold(). These are the names
+# `adaptive_intake` plausibly emits on `mission_brief["language"]`.
+#
+# THIS IS NOT A DUPLICATE OF PLAN 15.2-13's `_LANG_NAMES`. That map runs
+# code -> display name, to build the provider-facing "search in German, English"
+# sentence. This one runs run-language NAME -> code, to derive a default tag when
+# the model omits LANGS. Different direction, different consumer, no overlap.
+_RUN_LANG_CODES: dict[str, str] = {
+    "nederlands": "nl",
+    "dutch": "nl",
+    "nl": "nl",
+    "english": "en",
+    "engels": "en",
+    "german": "de",
+    "deutsch": "de",
+    "duits": "de",
+    "french": "fr",
+    "français": "fr",
+    "francais": "fr",
+    "frans": "fr",
+    "spanish": "es",
+    "espanol": "es",
+    "español": "es",
+    "italian": "it",
+    "italiano": "it",
+    "portuguese": "pt",
+    "polish": "pl",
+    "russian": "ru",
+    "turkish": "tr",
+}
+
+
+def _reason_evolve_unusable(unusable: int, total: int) -> str:
+    return (
+        f"question workshop: the evolve step returned nothing usable for "
+        f"{unusable} of {total} winning question(s), so they kept their "
+        f"tournament wording — they are still researched, just not sharpened."
+    )
+
+
+def _reason_evolve_failed(detail: str) -> str:
+    return (
+        f"question workshop: the evolve step failed outright ({detail[:160]}), so "
+        f"every winning question kept its tournament wording and its search "
+        f"languages fall back to the run language alone."
+    )
+
+
+def _reason_workshop_fallback() -> str:
+    return (
+        "question workshop: the workshop produced nothing beyond the "
+        "client-validated questions, so this run researches exactly what the "
+        "client asked and nothing deeper."
+    )
+
+
+def _reason_stage_b_crashed(detail: str) -> str:
+    return (
+        f"question workshop: the ranking stage failed outright ({detail[:120]}) "
+        f"and fell back to the client-validated questions only — a degraded "
+        f"deliverable is still a deliverable, so the run continues."
+    )
+
+
+def _note_scope_promoted(label: str) -> str:
+    return (
+        f"question workshop: client question '{label[:80]}' had no winner in the "
+        f"top-ranked set, so its best-ranked sub-question was promoted into the "
+        f"winners and ranked first. The question IS researched."
+    )
+
+
+def _note_scope_injected(label: str) -> str:
+    return (
+        f"question workshop: client question '{label[:80]}' had no surviving "
+        f"sub-question at all, so its own text was injected verbatim and ranked "
+        f"first. The question IS researched, just without extra depth."
+    )
+
+
+def _filter_lang_codes(raw: Any) -> list[str]:
+    """The 2-letter filter half: lower-case, `^[a-z]{2}$`, order-stable, capped."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items: list[Any] = re.split(r"[,;/\s]+", raw)
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = re.split(r"[,;/\s]+", str(raw))
+
+    cap = max(1, _LANGS_MAX)
+    out: list[str] = []
+    for item in items:
+        try:
+            code = str(item).strip().lower()
+        except Exception:  # noqa: BLE001 — a filter never raises
+            continue
+        if not re.fullmatch(r"[a-z]{2}", code):
+            continue
+        if code in out:
+            continue
+        out.append(code)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _normalise_langs(raw: Any, *, run_language: str = "") -> list[str]:
+    """D7 SEARCH-language tags for one winner. Pure, never raises, NEVER EMPTY.
+
+    Resolution order: the model's own answer -> the run language (a bare 2-letter
+    code is used directly, otherwise `_RUN_LANG_CODES` maps its name) ->
+    `_DEFAULT_LANGS`. The never-empty guarantee matters because
+    `15.2-VALIDATION.md`'s D7 contract is "every winner carries at least one
+    language tag", and plan 15.2-13 only builds its angle-query language sentence
+    when `langs` is non-empty — an empty list would silently drop D7 for that
+    question rather than fail visibly.
+
+    THE THING THAT MUST NOT BE CONFUSED: these are SEARCH languages, which widen
+    where a provider looks. The report's OUTPUT language is untouched — ONE
+    language per run, taken from `mission_brief["language"]` and applied by
+    `synthesis/steps.py::_language_directive`. This module changes neither.
+    """
+    codes = _filter_lang_codes(raw)
+    if not codes:
+        spoken = str(run_language or "").strip()
+        if spoken:
+            codes = _filter_lang_codes(spoken)
+            if not codes:
+                mapped = _RUN_LANG_CODES.get(spoken.casefold())
+                if mapped:
+                    codes = [mapped]
+    if not codes:
+        codes = _filter_lang_codes(_DEFAULT_LANGS)
+    if not codes:
+        codes = ["en"]
+    return codes
+
+
+_EVOLVE_PROMPT = """\
+You are sharpening the winning research sub-questions for one client's decision
+so a research provider can act on each of them, and saying which languages are
+worth searching in.
+
+The client's decision this research has to serve:
+{decision_context}
+
+SHARPENING RULE (CRITICAL):
+- Keep the SAME subject and the SAME scope. Make the question specific and
+  answerable: name the entity, the geography and the time frame where the
+  question already implies them.
+- Do NOT merge two questions into one, and do NOT broaden one.
+
+LANGUAGE RULE (search only):
+- Name the ISO 639-1 languages worth SEARCHING in for that question, based on
+  where its subject actually lives — a German regulation is de,en; a Russian
+  company is ru,en.
+- At most {langs_max} languages, and ALWAYS include the run language's own code,
+  which is: {run_language}
+- This does NOT change the language the report is written in. That stays one
+  language for the whole run.
+
+{ignore_instructions}
+
+Output EXACTLY one line per input index, between the two sentinels, in this
+format and no other:
+INDEX | <sharpened question> | LANGS: de,en
+
+{start}
+<your lines go here>
+{end}
+
+No JSON, no bullets, no numbering, and nothing outside the fence.
+
+Questions:
+{winners_block}
+"""
+# DELIBERATE DIVERGENCE from 15.2-RESEARCH's step-6 line format
+# (`WINNER: <text> | LANGS: de,en | PARENT: <label>`): PARENT is not requested,
+# and would not be believed if it were supplied. The line is addressed by INDEX,
+# and `parent` and `rank` are stamped in Python from the input winner at that
+# index — the identical rule `_parse_distiller_response` applies to `provider`
+# ("NEVER parsed out of model output, so a model cannot set its own
+# attribution"). Index addressing is simultaneously the prompt-injection control
+# (`gates.py:362-371`). A line that does carry a PARENT: segment is read only far
+# enough to log a DEBUG disagreement, then discarded.
+
+
+def _parse_winner_lines(
+    text: str, n: int
+) -> tuple[list[Optional[str]], list[Optional[list[str]]]]:
+    """Parse the fenced `INDEX | text | LANGS: …` block. Never raises.
+
+    Both output lists are PRE-FILLED with None, meaning "the model said nothing
+    usable for this index — keep the original". Docstring register taken jointly
+    from `intake._parse_clear_brief` and `grouping._parse_cluster_lines`:
+
+      * lines are accumulated between the two sentinels (`intake.py:229-248`);
+      * a dangling START with no END still yields its lines (`intake.py:296-300`);
+      * a response with NO start sentinel is re-scanned in full, the same
+        tolerance `_intake_once` gives a missing BRIEF_CLEAR (`intake.py:419-424`),
+        logged at WARNING;
+      * the index is regex-extracted and bounds-checked against n, the body is
+        whitespace-collapsed and truncated, a body shorter than
+        `_WINNER_MIN_CHARS` is not usable, raw model text is never decoded as
+        structured data, and nothing raises.
+    """
+    texts: list[Optional[str]] = [None] * n
+    langs: list[Optional[list[str]]] = [None] * n
+    try:
+        lines = (text or "").splitlines()
+        collected: list[str] = []
+        in_block = False
+        saw_start = False
+        for raw in lines:
+            stripped = raw.strip()
+            if in_block:
+                if stripped == _WINNERS_END:
+                    in_block = False
+                    continue
+                collected.append(stripped)
+                continue
+            if stripped == _WINNERS_START:
+                in_block = True
+                saw_start = True
+
+        if not saw_start:
+            log.warning(
+                "workshop_rank: no %s sentinel in the evolve response — re-scanning "
+                "every line rather than losing every sharpened question",
+                _WINNERS_START,
+            )
+            collected = [line.strip() for line in lines]
+
+        for line in collected:
+            if not line or "|" not in line:
+                continue
+            parts = [p.strip() for p in line.split("|")]
+            match = re.search(r"\d+", parts[0])
+            if not match:
+                continue
+            idx = int(match.group())
+            if not (0 <= idx < n):
+                continue
+            body = re.sub(r"\s+", " ", parts[1] if len(parts) > 1 else "").strip()
+            body = body[: max(0, _WINNER_MAX_CHARS)]
+            for segment in parts[2:]:
+                lowered = segment.lower()
+                if lowered.startswith("langs:"):
+                    found = _filter_lang_codes(segment.split(":", 1)[1])
+                    if found:
+                        langs[idx] = found
+                elif lowered.startswith("parent:"):
+                    log.debug(
+                        "workshop_rank: model-supplied PARENT %r discarded — parent "
+                        "is stamped by the pipeline",
+                        segment[:80],
+                    )
+            if len(body) >= _WINNER_MIN_CHARS:
+                texts[idx] = body
+    except Exception as exc:  # noqa: BLE001 — the parser never raises
+        log.warning("workshop_rank: evolve parse failed: %r", exc)
+    return texts, langs
+
+
+def _winners_block(winners: Sequence[dict[str, Any]]) -> str:
+    """The indexed, truncated winners block, with each WEAK's flaw beneath it."""
+    lines: list[str] = []
+    for position, winner in enumerate(winners):
+        lines.append(
+            f"{position} | {_flatten(winner.get('text'), _CANDIDATE_PROMPT_CHARS)}"
+        )
+        flaw = _flatten(winner.get("flaw"), _FLAW_MAX_CHARS)
+        if flaw:
+            lines.append(f"    FLAW: {flaw}")
+    return "\n".join(lines)
+
+
+async def evolve_winners(
+    *,
+    winners: list[dict[str, Any]],
+    decision_context: str = "",
+    run_language: str = "",
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    feed: "Optional[StageFeed]" = None,
+    breaker: Any | None = None,
+    stats: Optional[dict[str, Any]] = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Sharpen the tournament's winners and give each one D7 search languages.
+
+    ONE plain text completion: no tools, no `tool_choice`, no server tools, no
+    citations. Every returned winner is a COPY of its input carrying a possibly
+    sharpened `text` and a never-empty `langs`, with `parent`, `parents`, `rank`,
+    `index`, `source`, `wins`, `elo`, `critique` and `flaw` untouched — because
+    those are the pipeline's attribution, not the model's.
+
+    NEVER RAISES.
+    """
+    items = [dict(w) for w in (winners or [])]
+    if isinstance(stats, dict):
+        stats.setdefault("calls", 0)
+        stats.setdefault("cost_usd", "0")
+    if not items:
+        return [], []
+
+    if not _EVOLVE_ENABLED:
+        log.info(
+            "workshop_rank: the evolve step is switched off "
+            "(NESTOR_TRIBUNAL_WORKSHOP_EVOLVE) — %d winner(s) keep their "
+            "tournament wording and no call is made",
+            len(items),
+        )
+        for winner in items:
+            winner["langs"] = _normalise_langs([], run_language=run_language)
+        return items, []
+
+    handles = await _feed_declare(
+        feed, [f"evolve · {len(items)} winning questions"]
+    )
+    handle = _handle_at(handles, 0)
+    await _feed_update(feed, handle, status="running")
+
+    prompt = _EVOLVE_PROMPT.format(
+        decision_context=_render_decision(decision_context),
+        ignore_instructions=_IGNORE_INSTRUCTIONS,
+        langs_max=max(1, _LANGS_MAX),
+        run_language=str(run_language or "the language of the questions below"),
+        start=_WINNERS_START,
+        end=_WINNERS_END,
+        winners_block=_winners_block(items),
+    )
+
+    async def _on_retry(attempt: int, maximum: int, wait_s: float, _label: str) -> None:
+        await _feed_mark_retry(
+            feed, handle, attempt=attempt, maximum=maximum, wait_s=wait_s
+        )
+
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"type": "text", "text": prompt}]}
+    ]
+    # F8 — the `pause_turn` continuation. A provider may end a turn with
+    # stop_reason == "pause_turn" because a long server-side step needs another
+    # round trip; `group_skeptic.py:260-265` read that as failure and threw away
+    # a paid, half-finished session. Every new loop in this phase gets the
+    # branch, even one that today makes a single call.
+    pauses = PauseContinuation(label="workshop.evolve")
+    reasons: list[str] = []
+    calls = 0
+    cost = Decimal("0")
+    audit_id: Optional[str] = None
+    text = ""
+    failure: Optional[str] = None
+
+    for _turn in range(max(1, pauses.max_pauses + 1)):
+        out: dict[str, Any] = {}
+        try:
+            resp = await with_retry(
+                lambda: audited.anthropic_messages(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    model=_EVOLVE_MODEL,
+                    messages=messages,
+                    max_tokens=_EVOLVE_MAX_TOKENS,
+                    audit_out=out,
+                ),
+                attempts=max(0, _RANK_RETRIES) + 1,
+                base_s=_RANK_BACKOFF_S,
+                label="workshop.evolve",
+                breaker=breaker,
+                on_retry=_on_retry if (feed is not None and handle is not None) else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — a lost evolve degrades, never fails
+            failure = (
+                str(exc) if isinstance(exc, CircuitOpenError)
+                else f"{type(exc).__name__}: {exc}"
+            )
+            log.warning(
+                "workshop_rank: the evolve call failed — %d winner(s) keep their "
+                "tournament wording: %r",
+                len(items),
+                exc,
+            )
+            break
+
+        calls += 1
+        cost = _add_cost(cost, out.get("cost_usd"))
+        if audit_id is None:
+            audit_id = out.get("audit_id")
+
+        if pauses.consume(resp):
+            paused = _content_to_serialisable(getattr(resp, "content", None) or [])
+            if paused:
+                # Append the paused assistant turn back UNCHANGED and go round
+                # again without consuming a content turn.
+                messages.append({"role": "assistant", "content": paused})
+            continue
+
+        text = _response_text(resp)
+        break
+
+    sharpened, tagged = _parse_winner_lines(text, len(items))
+    unusable = 0
+    for position, winner in enumerate(items):
+        new_text = sharpened[position] if position < len(sharpened) else None
+        if new_text:
+            winner["text"] = new_text
+        else:
+            unusable += 1
+        winner["langs"] = _normalise_langs(
+            tagged[position] if position < len(tagged) else None,
+            run_language=run_language,
+        )
+
+    if failure is not None:
+        reasons.append(_reason_evolve_failed(failure))
+    elif unusable:
+        reasons.append(_reason_evolve_unusable(unusable, len(items)))
+
+    await _feed_update(
+        feed,
+        handle,
+        status="failed" if failure is not None else "done",
+        facts=len(items) - unusable,
+        audit_id=audit_id,
+        cost_usd=str(cost),
+    )
+    if isinstance(stats, dict):
+        stats["calls"] = calls
+        stats["cost_usd"] = str(cost)
+
+    return items, _dedup_reasons(reasons)
+
+
+# ===========================================================================
+# D4 — the scope guard. PYTHON, NOT A PROMPT.
+# ===========================================================================
+
+
+def _covered_labels(winners: Sequence[dict[str, Any]]) -> list[str]:
+    """The ordered union of every winner's `parents`. A LIST, never a set."""
+    out: list[str] = []
+    for winner in winners or []:
+        for label in _parents_of(winner):
+            if label not in out:
+                out.append(label)
+    return out
+
+
+def _rerank(winners: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stamp a dense 1-based rank over the list in its current order."""
+    for position, winner in enumerate(winners):
+        winner["rank"] = position + 1
+    return winners
+
+
+def enforce_scope_guard(
+    *,
+    winners: list[dict[str, Any]],
+    client_questions: Sequence[str],
+    all_ranked: Optional[Sequence[dict[str, Any]]] = None,
+    question_texts: Optional[dict[str, str]] = None,
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """D4's invariant: the winners' parent set covers every client question.
+
+    D4 says the workshop MAY ADD DEPTH BUT NEVER CHANGES SCOPE. That is enforced
+    here, in Python, by asserting the winners' `parents` UNION is a superset of
+    the client-validated question labels, and repairing it when it is not —
+    never by asking the model to respect scope. A model asked nicely is not a
+    control, and text injected into a candidate could ask it otherwise.
+
+    Repair order per missing label:
+      1. PROMOTE the label's best-ranked candidate from `all_ranked`, even if it
+         finished below the winner cut — a real sub-question beats raw question
+         text;
+      2. otherwise INJECT the client question's own text verbatim.
+
+    Injections and promotions go to the TOP of the list, in client-question
+    order, and the whole list is then re-ranked densely from 1. That placement is
+    deliberate: plan 15.2-13 derives its D6 stakes and stream allocation from
+    `rank`, so appending an injected client question at the bottom would give the
+    client's own validated question the WEAKEST stakes and the fewest streams —
+    scope-preserving on paper and quality-destroying in practice. A
+    client-validated question the workshop failed to deepen is the most literal
+    expression of client intent and cannot rank below a model-invented
+    sub-question.
+
+    Returns `(winners, notes, injected_labels)`. The sentences come back as
+    NOTES, not degradation reasons: D-12 lists "the workshop fell back to
+    client-validated questions only" as a degrading condition, not "a question
+    was injected". A partial injection means the output is COMPLETE — the
+    question IS researched — so demoting the run for it would be exactly the
+    alarm fatigue D-12 warns against. The FULL fallback is what degrades.
+
+    Idempotent: running it on its own output changes nothing and returns no new
+    notes. Never raises.
+
+    `question_texts` is an OPTIONAL label -> text map so a verbatim injection can
+    carry the client's own wording; without it the label is used as the text.
+    """
+    out: list[dict[str, Any]] = [dict(w) for w in (winners or [])]
+    notes: list[str] = []
+    injected: list[str] = []
+    texts = dict(question_texts or {})
+
+    labels: list[str] = []
+    for raw in client_questions or []:
+        label = str(raw or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    if not labels:
+        return _rerank(out), notes, injected
+
+    try:
+        covered = _covered_labels(out)
+        missing = [label for label in labels if label not in covered]
+        promoted: list[dict[str, Any]] = []
+
+        taken = {_index_of(w) for w in out if isinstance(w.get("index"), int)}
+        for label in missing:
+            best: Optional[dict[str, Any]] = None
+            for candidate in all_ranked or []:
+                if label not in _parents_of(candidate):
+                    continue
+                if _index_of(candidate) in taken:
+                    continue
+                if best is None or _rank_of(candidate) < _rank_of(best):
+                    best = candidate
+            if best is not None:
+                entry = dict(best)
+                entry["scope_injected"] = True
+                entry.setdefault("langs", [])
+                taken.add(_index_of(entry))
+                promoted.append(entry)
+                injected.append(label)
+                log.warning(
+                    "workshop_rank: D4 scope guard — client question %r had no "
+                    "winner, so its best-ranked sub-question was PROMOTED into "
+                    "the winners and ranked first",
+                    label[:80],
+                )
+                notes.append(_note_scope_promoted(label))
+                continue
+
+            entry = {
+                "text": str(texts.get(label) or label)[: max(0, _WINNER_MAX_CHARS)],
+                "parent": label,
+                "parents": [label],
+                "source": "verbatim",
+                "scope_injected": True,
+                "index": -1,
+                "langs": [],
+                "wins": 0,
+                "elo": round(float(_ELO_START), 2),
+                "byes": 0,
+                "critique": _KEEP,
+                "flaw": "",
+            }
+            promoted.append(entry)
+            injected.append(label)
+            log.warning(
+                "workshop_rank: D4 scope guard — client question %r had no "
+                "surviving sub-question at all, so its own text was INJECTED "
+                "verbatim and ranked first",
+                label[:80],
+            )
+            notes.append(_note_scope_injected(label))
+
+        out = promoted + out
+
+        # The post-condition, asserted in code and not only in a test.
+        still_missing = [
+            label for label in labels if label not in _covered_labels(out)
+        ]
+        if still_missing:
+            log.error(
+                "workshop_rank: D4 post-condition failed — %d client question(s) "
+                "still uncovered after the scope guard (%s); injecting them "
+                "unconditionally",
+                len(still_missing),
+                ", ".join(label[:40] for label in still_missing),
+            )
+            forced = [
+                {
+                    "text": str(texts.get(label) or label)[: max(0, _WINNER_MAX_CHARS)],
+                    "parent": label,
+                    "parents": [label],
+                    "source": "verbatim",
+                    "scope_injected": True,
+                    "index": -1,
+                    "langs": [],
+                    "wins": 0,
+                    "elo": round(float(_ELO_START), 2),
+                    "byes": 0,
+                    "critique": _KEEP,
+                    "flaw": "",
+                }
+                for label in still_missing
+            ]
+            injected.extend(still_missing)
+            notes.extend(_note_scope_injected(label) for label in still_missing)
+            out = forced + out
+    except Exception as exc:  # noqa: BLE001 — the guard never raises
+        log.error("workshop_rank: the scope guard failed: %r", exc, exc_info=True)
+
+    return _rerank(out), notes, injected
+
+
+def _rank_of(entry: dict[str, Any]) -> int:
+    """A winner's tournament rank, defensively. Missing sorts last."""
+    try:
+        value = (entry or {}).get("rank")
+        return int(value) if value is not None else 10**6
+    except (TypeError, ValueError):
+        return 10**6
+
+
+# ===========================================================================
+# The public entry points plan 15.2-13 calls.
+# ===========================================================================
+
+
+def _fallback_winners(
+    client_questions: Sequence[str],
+    question_texts: dict[str, str],
+    run_language: str,
+) -> list[dict[str, Any]]:
+    """One verbatim winner per client-validated question — the D-17 shape."""
+    out: list[dict[str, Any]] = []
+    for position, label in enumerate(client_questions or []):
+        out.append(
+            {
+                "text": str(question_texts.get(label) or label)[
+                    : max(0, _WINNER_MAX_CHARS)
+                ],
+                "langs": _normalise_langs([], run_language=run_language),
+                "parent": label,
+                "parents": [label],
+                "rank": position + 1,
+                "index": position,
+                "source": "verbatim",
+                "scope_injected": True,
+                "wins": 0,
+                "elo": round(float(_ELO_START), 2),
+                "byes": 0,
+                "critique": _KEEP,
+                "flaw": "",
+            }
+        )
+    return out
+
+
+def _stage_b_result(
+    *,
+    winners: list[dict[str, Any]],
+    workshop_fallback: bool,
+    language: str,
+    deep_research_prompt: str,
+    client_questions: list[str],
+    brief_conflicts: list[dict[str, Any]],
+    degradation_reasons: Sequence[str],
+    workshop_notes: Sequence[str],
+    counts: dict[str, int],
+) -> dict[str, Any]:
+    return {
+        "winners": winners,
+        "workshop_fallback": bool(workshop_fallback),
+        "language": str(language or ""),
+        "deep_research_prompt": str(deep_research_prompt or ""),
+        "client_questions": list(client_questions),
+        "brief_conflicts": list(brief_conflicts or []),
+        "degradation_reasons": _dedup_reasons(degradation_reasons),
+        "workshop_notes": _dedup_reasons(workshop_notes),
+        "counts": {key: int(value) for key, value in counts.items()},
+    }
+
+
+async def _stage_b_feed_finish(
+    feed: "Optional[StageFeed]",
+    winners: Sequence[dict[str, Any]],
+    *,
+    actions: int,
+    items_read: int,
+    cost_usd: Decimal,
+) -> None:
+    """Show the chosen questions in the feed, roll the stage up, and FLUSH.
+
+    DO NOT CLOSE THE FEED. Plan 15.2-13 owns the `workshop` stage's lifetime from
+    `pipeline.py`; closing it here would make every later write a no-op and drag
+    `run.current_stage` backwards onto a stage the operator has already watched
+    finish (`stage_feed.py:316-330`).
+    """
+    if feed is None:
+        return
+    handles = await _feed_declare(
+        feed,
+        [str(w.get("text") or "")[:_FEED_NAME_CHARS] for w in winners],
+        [truncate_task_prompt(w.get("text")) for w in winners],
+    )
+    for position in range(len(winners)):
+        await _feed_update(feed, _handle_at(handles, position), status="done")
+    try:
+        await feed.set_summary(
+            actions=actions, items_read=items_read, cost_usd=str(cost_usd)
+        )
+        await feed.flush()
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks the work
+        log.warning("workshop_rank: stage B summary write failed: %r", exc)
+
+
+async def run_workshop_stage_b(
+    *,
+    stage_a: dict[str, Any],
+    decision_context: str = "",
+    run_language: str = "",
+    deep_research_prompt: str = "",
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    feed: "Optional[StageFeed]" = None,
+    breaker: Any | None = None,
+) -> dict[str, Any]:
+    """Critique -> tournament -> evolve -> D4 scope guard. THE 15.2-13 CONTRACT.
+
+    FULLY AUTOMATIC (D5, and D-01's no-pause-gates rule binds this module):
+    nothing in this call path waits for an operator, asks a clarifying question
+    or blocks.
+
+    Returns a plain, JSON-safe dict, key by key:
+
+      winners             list[dict]  ascending `rank`, dense from 1. Each winner
+                                      carries `text` (str), `langs` (list[str] of
+                                      2-letter ISO 639-1 codes, never empty),
+                                      `parent` (str) and `rank` (int) — the four
+                                      plan 15.2-13 reads — plus `parents`,
+                                      `index`, `source`, `scope_injected`,
+                                      `wins`, `elo`, `byes`, `critique` and
+                                      `flaw`, carried for the feed, the SUMMARY
+                                      and the August post-mortem.
+      workshop_fallback   bool        True when stage A fell back OR every winner
+                                      is `source == "verbatim"`. This is D-12's
+                                      "the workshop fell back to client-validated
+                                      questions only" degrading condition, and
+                                      nothing weaker maps to it.
+      language            str         `run_language`, echoed UNCHANGED. The
+                                      report's output language is not this
+                                      module's business.
+      deep_research_prompt str        echoed unchanged.
+      client_questions    list[str]   the D4-untouchable labels.
+      brief_conflicts     list[dict]  passed through from stage A untouched;
+                                      plan 15.2-06's "Disputed & changed" section
+                                      consumes them and nothing here reads them.
+      degradation_reasons list[str]   stage A's reasons plus this stage's TRUE
+                                      degradations only.
+      workshop_notes      list[str]   the scope-guard sentences and any other
+                                      non-degrading observation.
+      counts              dict[str,int]  candidates_in / killed / ranked /
+                                      winners / scope_injected / matches_unjudged.
+
+    NEVER RAISES. On an unexpected failure it logs at ERROR and returns the
+    fallback shape — one verbatim winner per client-validated question, ranked in
+    client order, `workshop_fallback: True`, and a reason naming what broke
+    (D-17: a degraded deliverable beats no deliverable).
+    """
+    source = stage_a or {}
+    questions = list(source.get("questions") or [])
+    labels = [str(q.get("label") or "") for q in questions if str(q.get("label") or "")]
+    texts = {
+        str(q.get("label") or ""): str(q.get("text") or "")
+        for q in questions
+        if str(q.get("label") or "")
+    }
+    conflicts = list(source.get("brief_conflicts") or [])
+    upstream = list(source.get("degradation_reasons") or [])
+
+    try:
+        candidates_in = list(source.get("candidates") or [])
+        critique_stats: dict[str, Any] = {}
+        screened, critique_reasons = await critique_candidates(
+            candidates=candidates_in,
+            decision_context=decision_context,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+            stats=critique_stats,
+        )
+
+        tourney_stats: dict[str, Any] = {}
+        ranked, tourney_reasons = await run_tournament(
+            candidates=screened,
+            decision_context=decision_context,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+            stats=tourney_stats,
+        )
+
+        cut = winner_count(len(ranked))
+        top = ranked[:cut]
+
+        evolve_stats: dict[str, Any] = {}
+        evolved, evolve_reasons = await evolve_winners(
+            winners=top,
+            decision_context=decision_context,
+            run_language=run_language,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+            stats=evolve_stats,
+        )
+
+        final, notes, injected = enforce_scope_guard(
+            winners=evolved,
+            client_questions=labels,
+            all_ranked=ranked,
+            question_texts=texts,
+        )
+        # A promoted or injected winner never went through the evolve step, so it
+        # has no model-supplied tag of its own.
+        for winner in final:
+            winner["langs"] = _normalise_langs(
+                winner.get("langs"), run_language=run_language
+            )
+
+        fallback = bool(source.get("stage_a_fallback")) or (
+            bool(final) and all(w.get("source") == "verbatim" for w in final)
+        )
+        reasons = list(upstream) + list(critique_reasons) + list(tourney_reasons)
+        reasons += list(evolve_reasons)
+        if fallback:
+            log.warning(
+                "workshop_rank: the workshop produced nothing beyond the %d "
+                "client-validated question(s) — the run is degraded, not failed",
+                len(labels),
+            )
+            reasons.append(_reason_workshop_fallback())
+
+        calls = (
+            int(critique_stats.get("calls") or 0)
+            + int(tourney_stats.get("calls") or 0)
+            + int(evolve_stats.get("calls") or 0)
+        )
+        cost = Decimal("0")
+        for stats in (critique_stats, tourney_stats, evolve_stats):
+            cost = _add_cost(cost, stats.get("cost_usd"))
+
+        result = _stage_b_result(
+            winners=final,
+            workshop_fallback=fallback,
+            language=run_language,
+            deep_research_prompt=deep_research_prompt,
+            client_questions=labels,
+            brief_conflicts=conflicts,
+            degradation_reasons=reasons,
+            workshop_notes=notes,
+            counts={
+                "candidates_in": len(candidates_in),
+                "killed": max(0, len(candidates_in) - len(screened)),
+                "ranked": len(ranked),
+                "winners": len(final),
+                "scope_injected": len(injected),
+                "matches_unjudged": int(tourney_stats.get("unjudged") or 0),
+            },
+        )
+
+        await _stage_b_feed_finish(
+            feed, final, actions=calls, items_read=len(ranked), cost_usd=cost
+        )
+        log.info(
+            "workshop_rank: stage B done — %d candidate(s) in, %d ranked, %d "
+            "winner(s), %d scope injection(s), fallback=%s",
+            result["counts"]["candidates_in"],
+            result["counts"]["ranked"],
+            result["counts"]["winners"],
+            result["counts"]["scope_injected"],
+            result["workshop_fallback"],
+        )
+        return result
+
+    except Exception as exc:  # noqa: BLE001 — the workshop degrades, never fails
+        log.error("workshop_rank: stage B failed outright: %r", exc, exc_info=True)
+        winners = _fallback_winners(labels, texts, run_language)
+        return _stage_b_result(
+            winners=winners,
+            workshop_fallback=True,
+            language=run_language,
+            deep_research_prompt=deep_research_prompt,
+            client_questions=labels,
+            brief_conflicts=conflicts,
+            degradation_reasons=list(upstream)
+            + [_reason_stage_b_crashed(f"{type(exc).__name__}: {exc}")],
+            workshop_notes=[],
+            counts={
+                "candidates_in": len(list(source.get("candidates") or [])),
+                "killed": 0,
+                "ranked": 0,
+                "winners": len(winners),
+                "scope_injected": len(winners),
+                "matches_unjudged": 0,
+            },
+        )
+
+
+async def run_question_workshop(
+    *,
+    brief: str,
+    questions: Optional[list[dict[str, Any]]] = None,
+    brief_context: Optional[str] = None,
+    decision_context: str = "",
+    run_language: str = "",
+    deep_research_prompt: str = "",
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    feed: "Optional[StageFeed]" = None,
+    breaker: Any | None = None,
+) -> dict[str, Any]:
+    """THE SINGLE CALL PLAN 15.2-13 MAKES from `pipeline.py`.
+
+    Runs `workshop.run_workshop_stage_a` and then `run_workshop_stage_b`, and
+    returns stage B's contract with stage A's degradation reasons already merged
+    in. From the pipeline's point of view the whole question workshop is ONE
+    call; splitting it across two modules is a plan-ownership boundary, not an
+    API boundary.
+
+    NEVER RAISES — a stage-A failure yields the same fallback shape stage B does.
+    """
+    try:
+        stage_a = await workshop.run_workshop_stage_a(
+            brief=brief,
+            questions=questions,
+            brief_context=brief_context,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            feed=feed,
+            breaker=breaker,
+        )
+    except Exception as exc:  # noqa: BLE001 — stage A already degrades internally
+        log.error("workshop_rank: stage A raised unexpectedly: %r", exc)
+        try:
+            normalised = workshop.normalise_questions(questions, brief)
+        except Exception:  # noqa: BLE001
+            normalised = []
+        stage_a = {
+            "questions": normalised,
+            "candidates": [],
+            "brief_conflicts": [],
+            "degradation_reasons": [_reason_stage_b_crashed(f"{type(exc).__name__}: {exc}")],
+            "stage_a_fallback": True,
+        }
+
+    return await run_workshop_stage_b(
+        stage_a=stage_a,
+        decision_context=decision_context,
+        run_language=run_language,
+        deep_research_prompt=deep_research_prompt,
+        audited=audited,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        feed=feed,
+        breaker=breaker,
+    )
