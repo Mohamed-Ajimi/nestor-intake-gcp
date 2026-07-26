@@ -72,6 +72,11 @@ from nestor_pulse_sdk.pipeline.tribunal.gates import apply_gates, _FUNNEL_KEYS a
 from nestor_pulse_sdk.pipeline.tribunal.group_skeptic import run_group_skeptic
 from nestor_pulse_sdk.pipeline.tribunal.adjudicate import adjudicate_all
 from nestor_pulse_sdk.pipeline.tribunal.coverage_gate import check_coverage, MAX_REENTRY
+# Plan 15.2-02's shared reliability primitives. IMPORTED, never extended: there is
+# exactly one breaker implementation and one retry policy in this engine. The
+# BreakerSet is what gates the coverage re-entry fan-out (D-07-C) — `with_retry` is
+# deliberately NOT imported here, because this plan adds no retry policy.
+from nestor_pulse_sdk.pipeline.tribunal.reliability import BreakerSet
 from nestor_pulse_sdk.pipeline.tribunal.budget import (
     over_budget,
     budget_marker,
@@ -372,6 +377,75 @@ class TribunalPipeline:
         if interactive_report:
             brief = (brief or "").replace(_INTERACTIVE_MARKER, "").strip()
 
+        # ------------------------------------------------------------------
+        # RUN-SCOPED REGISTRIES. Both are declared HERE, at the top of the run and
+        # BEFORE the resume-from-cache early return below, so every stage can reach
+        # them and both return paths publish the same shape.
+        # ------------------------------------------------------------------
+        #
+        # The run's circuit-breaker registry (plan 15.2-02). ONE instance per run,
+        # NEVER at module level — plan 02's BreakerSet docstring says so: a
+        # module-level set would carry one run's provider failures into the next
+        # run and, in a multi-tenant system, across tenants. It is created here
+        # rather than down in the verify stage because plans 15.2-12/13/16 attach
+        # the research-provider breakers to this same object. This plan does NOT
+        # thread it into run_angles or any other stage — that is 13/16's work.
+        breakers = BreakerSet()
+        #
+        # D-12's degradation-reason list for this run.
+        #
+        # THIS IS THE ONE AND ONLY DECLARATION OF `degradation_reasons` IN run().
+        # Never re-declare or re-assign the name further down — in particular NOT in
+        # the verify stage next to `unchecked_ids`. A second binding rebinds the name
+        # to a fresh empty list and silently discards everything appended before it
+        # (the workshop fallback, a lost research stream, a fact-list fallback), and
+        # no plan's own unit tests would catch it because each tests its accumulator
+        # in isolation. That is exactly the silent-green class of bug this phase
+        # exists to eliminate.
+        degradation_reasons: list[str] = []
+
+        def _note_degradation(reason: str) -> None:
+            """Append ONE plain-words degradation reason for this run, idempotently.
+
+            The single writer for D-12's reason list. `run()` publishes the list on
+            exactly two surfaces (see the synthesis bundle and `_write_final_report`
+            below): the TOP-LEVEL key on the dict `run()` returns, which
+            `runs/worker.py` reads and feeds to `terminal_state()`, and the same
+            list on the synthesis bundle under `verification`, which is what
+            survives the interactive-report pause and the synthesis_cache round-trip.
+            Both carry the SAME content from THIS list; neither is a second
+            accumulator.
+
+            Callers, so no later plan invents a second list:
+              - this plan (15.2-07): the blocked coverage re-entry sentence;
+              - plan 15.2-08: consumes the list and adds the shared
+                `_normalise_degradation_reasons` (200-char / 8-entry caps) plus the
+                funnel-side surfacing;
+              - plan 15.2-11: the question-workshop fallback;
+              - plan 15.2-12: a lost own-researcher stream;
+              - plan 15.2-14: the fact-list fallback;
+              - plan 15.2-16: the park / skip paths.
+
+            De-duplicated by exact string, because the same provider failure can be
+            observed at more than one site and an operator reading the same sentence
+            twice learns nothing new. Not normalised or capped HERE — plan 08 owns
+            the shared normaliser, and writing a second one would be the fork this
+            phase's Rule 11 forbids.
+
+            NEVER a reason (D-12): a RECOVERED retry and a pending Gemini grounding
+            fee. Both are designed paths, not shortfalls, and demoting them would
+            drain `completed_degraded` of its meaning. Bucket 3 is not written here
+            either — `verification/report.py` derives that sentence at read time
+            (plan 08), so there is exactly one wording of it in the codebase.
+            """
+            if not isinstance(reason, str):
+                return
+            text = reason.strip()
+            if not text or text in degradation_reasons:
+                return
+            degradation_reasons.append(text)
+            log.warning("tribunal_pipeline: DEGRADED — %s", text, extra={"run_id": str(run_id)})
+
         # RESUME-FROM-CACHE: if a report_spec has been submitted for this run (the
         # interactive gate was answered, or this is a "Rewrite report" run that
         # inherited a cached bundle), the expensive research is already done. Skip
@@ -521,6 +595,12 @@ class TribunalPipeline:
                     "funnel": _empty_funnel,
                 },
                 "verification_summary": _empty_funnel,
+                # D-12: the same top-level carrier key the full path publishes, for
+                # the reason the comment above already gives — the worker's
+                # persistence path never branches on which path produced its input.
+                # A zero-claim run has nothing to say, so the list is empty, never
+                # absent.
+                "degradation_reasons": list(degradation_reasons),
             }
 
         # ------------------------------------------------------------------
@@ -597,6 +677,32 @@ class TribunalPipeline:
         _sm = get_sessionmaker()
         sem = asyncio.Semaphore(_SKEPTIC_CONCURRENCY)
 
+        # The skeptic provider's circuit, named by (provider, stage) as plan 02's
+        # CircuitBreaker docstring specifies. It is what D-11's coverage-re-entry
+        # gate reads (D-07-C) — and until this stage started RECORDING outcomes on
+        # it, that gate was decorative: with no failure ever booked the breaker
+        # could never trip, so "a tripped provider means no re-entry" was a
+        # statement about a state nothing could reach. On 2026-07-22 the Anthropic
+        # monthly cap hard-400'd 776 sessions in 55 seconds and nothing in the
+        # process noticed.
+        skeptic_breaker = breakers.get("anthropic:skeptic")
+
+        # Breaker bookkeeping is BEST-EFFORT (Shared Pattern 6): a bookkeeping
+        # error must never kill a batch of results that already came back. The
+        # VERIFICATION LOSS is a different thing entirely — it is counted by
+        # `_book_unchecked` below, which is Pattern 5 and is NOT best-effort.
+        def _note_skeptic_ok() -> None:
+            try:
+                skeptic_breaker.record_success()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("tribunal_pipeline: skeptic breaker success bookkeeping failed: %s", exc)
+
+        def _note_skeptic_failure(exc: BaseException) -> None:
+            try:
+                skeptic_breaker.record_failure(exc)
+            except Exception as bexc:  # noqa: BLE001
+                log.warning("tribunal_pipeline: skeptic breaker failure bookkeeping failed: %s", bexc)
+
         # G-08 BUCKET 3 — claims the gates SELECTED for checking that did not get
         # checked: a crashed or timed-out session, the budget cap, a failed
         # coverage re-entry. Before this existed all three losses were a bare
@@ -638,11 +744,14 @@ class TribunalPipeline:
             async with sem:
                 try:
                     async with asyncio.timeout(_SKEPTIC_TIMEOUT_S):
-                        return await run_skeptic(
+                        result = await run_skeptic(
                             claim=claim, sources=sources, audited=audited,
                             run_id=run_id, tenant_id=tenant_id, model=_SKEPTIC_MODEL,
                         )
+                    _note_skeptic_ok()
+                    return result
                 except Exception as exc:
+                    _note_skeptic_failure(exc)
                     log.warning(
                         "tribunal_pipeline: skeptic failed/timeout for claim %r: %s",
                         claim.get("text", "")[:60], exc,
@@ -691,12 +800,15 @@ class TribunalPipeline:
                 async with sem:
                     try:
                         async with asyncio.timeout(_SKEPTIC_TIMEOUT_S):
-                            return await run_group_skeptic(
+                            result = await run_group_skeptic(
                                 group=group, sources=sources, audited=audited,
                                 run_id=run_id, tenant_id=tenant_id, model=_SKEPTIC_MODEL,
                                 max_turns=turns, max_search_uses=su, max_fetch_uses=fu,
                             )
+                        _note_skeptic_ok()
+                        return result
                     except Exception as exc:
+                        _note_skeptic_failure(exc)
                         log.warning(
                             "tribunal_pipeline: group skeptic failed for %r|%r: %s",
                             group.get("entity"), group.get("attribute"), exc,
@@ -726,21 +838,14 @@ class TribunalPipeline:
                     # `reconciliation` column, so a recon that never reaches a
                     # verdict leaves those sections empty however good the writer.
                     recon = res.get("reconciliation") or {}
-                    # ...but ONLY when the recon carries meaning. `disputed`
-                    # defaults to False and `relation` to "single"/"agree"
-                    # (group_skeptic._parse_group_verdict), so an unconditional
-                    # attach would file every verdict of every group into those
-                    # two report sections.
-                    _recon_is_meaningful = bool(
-                        recon.get("disputed")
-                        or recon.get("relation") == "scoped"
-                        or str(recon.get("note") or "").strip()
-                        or str(recon.get("canonical") or "").strip()
-                    )
+                    # ...but ONLY when the recon carries meaning — see the
+                    # module-level `_recon_is_meaningful`, which the coverage
+                    # re-entry path shares rather than forking.
+                    recon_meaningful = _recon_is_meaningful(recon)
                     for i, c in enumerate(grp["claims"]):
                         v = vbi.get(i)
                         if v is not None:
-                            if _recon_is_meaningful:
+                            if recon_meaningful:
                                 # dict(...) COPIES rather than aliases: a later
                                 # mutation of the group result must not reach a
                                 # verdict already built.
@@ -893,52 +998,86 @@ class TribunalPipeline:
             }]},
         )
 
-        # Build adjudications mapping for coverage gate: id(claim) -> True if adjudicated
-        # A claim is "adjudicated" when it had skeptic verdicts run (n_skeptics > 0)
-        # or was low-stakes (explicitly waved through with empty list).
-        adjudications: dict[int, Any] = {
-            id(c): True
-            for c in claims
-            if id(c) in verdicts_by_claim
-        }
+        # Build the adjudications mapping for the coverage gate: id(claim) -> True
+        # ONLY when at least one skeptic verdict actually came back for that claim.
+        #
+        # WR-01 (`15.1-UAT.md` § Deferred to Phase 15.2). The previous test was
+        # `if id(c) in verdicts_by_claim`, which is UNCONDITIONALLY TRUE: the seed
+        # above builds `{id(c): [] for c in claims}`, so every claim is a key from
+        # the moment the verify stage starts, verdict or no verdict. Consequences,
+        # all of them silent: `coverage["pass"]` was always True, `uncovered` was
+        # always empty, the re-entry loop below was unreachable dead code, bucket-3
+        # site (c) could never fire, and `reentry_count` was permanently 0.
+        #
+        # The funnel stayed HONEST throughout — WR-01 removed a RECOVERY path, it
+        # did not lie about what was checked. A claim that lost its verdict was
+        # still booked into bucket 3 by the ground-truth reconciliation below; it
+        # just never got the second chance the coverage gate exists to give it.
+        #
+        # This is a closure rather than a one-off comprehension because the mapping
+        # must be REBUILT from observed verdicts after a re-entry pass, not
+        # pre-seeded with True (see the loop below).
+        def _adjudications_now() -> dict[int, Any]:
+            return {id(c): True for c in claims if verdicts_by_claim.get(id(c))}
+
+        adjudications: dict[int, Any] = _adjudications_now()
 
         # ------------------------------------------------------------------
         # Stage 6: Coverage gate (bounded re-entry)
         # ------------------------------------------------------------------
+        # THE COST TRAP, at the one place in the engine where it costs money
+        # (D-07-B). `selected_only=True` is the default, and it is passed
+        # EXPLICITLY here anyway: without the intersection, the recorded 4cbb5311
+        # population's 738 gate-DROPped / SKIP_STABLE claims all read as uncovered
+        # and the loop below fans out roughly 2,100 Anthropic sessions against a
+        # stage the gates exist to shrink to ~150. The budget governor is inert
+        # (`NESTOR_TRIBUNAL_UNCAPPED=1`) and will not stop it.
         await set_stage(run_id, tenant_id, "coverage")
-        coverage = check_coverage(claims, adjudications)
+        coverage = check_coverage(claims, adjudications, selected_only=True)
         reentry_count = 0
 
+        # `budget_exceeded` is retained as the Phase-20 seam ONLY — `over_budget()`
+        # always returns False today (D-11), so this term is inert and is NOT the
+        # bound on this loop. The bounds that are real: MAX_REENTRY (one pass) and
+        # the breaker gate inside `_coverage_reentry_pass` (D-07-C).
         while not coverage["pass"] and reentry_count < MAX_REENTRY and not budget_exceeded:
             reentry_count += 1
             log.warning(
                 "tribunal_pipeline: coverage gate FAIL — re-entry %d/%d for %d uncovered high-stakes claims",
                 reentry_count, MAX_REENTRY, len(coverage["uncovered"]),
             )
-            # Re-run skeptics for uncovered high-stakes claims only — concurrently,
-            # reusing the same semaphore + per-skeptic timeout as the main stage.
-            reentry_tasks: list = []
-            reentry_owners: list = []
-            for claim in coverage["uncovered"]:
-                sources = _extract_sources_for_claim(claim, provider_results)
-                verdicts_by_claim[id(claim)] = []
-                adjudications[id(claim)] = True
-                for _ in range(3):  # high-stakes = 3 skeptics
-                    reentry_tasks.append(_one_skeptic(claim, sources))
-                    reentry_owners.append(claim)
-            reentry_results = await asyncio.gather(*reentry_tasks)
-            for claim, verdict in zip(reentry_owners, reentry_results):
-                if verdict is not None:
-                    verdicts_by_claim[id(claim)].append(verdict)
-
-            # Bucket-3 site (c): a re-entry that came back with nothing. This is the
-            # last chance a selected claim gets, so a still-empty verdict list here
-            # is a permanent loss and must be counted, not retried into silence.
-            for claim in coverage["uncovered"]:
-                if not verdicts_by_claim.get(id(claim)):
-                    _book_unchecked([claim], "coverage-gate re-entry returned no verdict")
-
-            coverage = check_coverage(claims, adjudications)
+            reentry = await _coverage_reentry_pass(
+                uncovered=coverage["uncovered"],
+                verdicts_by_claim=verdicts_by_claim,
+                superseded_notes=superseded_notes,
+                provider_results=provider_results,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                sem=sem,
+                breaker=skeptic_breaker,
+                book_unchecked=_book_unchecked,
+            )
+            if reentry["blocked_reason"]:
+                # The fan-out was refused because the skeptic circuit is not closed.
+                # Every uncovered claim has already been booked into bucket 3 by the
+                # helper; here the loss is NAMED for the operator, through the run's
+                # ONE accumulator (never a locally-declared list).
+                _note_degradation(reentry["blocked_reason"])
+                log.warning(
+                    "tribunal_pipeline: coverage re-entry BLOCKED — %s",
+                    reentry["blocked_reason"],
+                )
+                break
+            # Rebuild from OBSERVED verdicts, so a re-entry that came back with
+            # nothing is visible to the second evaluation. The deleted pre-seeding
+            # lines (`verdicts_by_claim[id(claim)] = []` and
+            # `adjudications[id(claim)] = True`) made that impossible: the first was
+            # a no-op by construction (an uncovered claim's verdict list is empty —
+            # that is WHY it is uncovered) and the second declared the claim
+            # adjudicated BEFORE its session ran.
+            adjudications = _adjudications_now()
+            coverage = check_coverage(claims, adjudications, selected_only=True)
 
         # Final adjudication after any re-entry
         if reentry_count > 0:
@@ -1214,6 +1353,29 @@ class TribunalPipeline:
                 "conflicts": conflicts,
                 "claims_per_facet": claims_per_facet,
                 "budget_exceeded": budget_exceeded,
+                # D-12's reason list — SURFACE 1 OF 2, and the carrier for the
+                # other. This is `run()`'s ONE accumulator (declared at the top of
+                # run(), written only through `_note_degradation`), not a copy and
+                # not a second list. It rides on the bundle so the reasons survive
+                # the interactive-report pause and the synthesis_cache round-trip,
+                # exactly as `funnel` does — and `_write_final_report` lifts it back
+                # out of here onto the TOP-LEVEL `result["degradation_reasons"]`
+                # (surface 2), which is the key `runs/worker.py` reads and feeds to
+                # `terminal_state()`. Both surfaces carry the SAME content from the
+                # SAME list; neither is a second accumulator.
+                #
+                # NOT normalised or capped here: plan 15.2-08 owns the shared
+                # `_normalise_degradation_reasons` (200-char / 8-entry caps) and the
+                # FUNNEL-side surfacing, and will route both surfaces through it. Do
+                # not write a second normaliser. Until 08 lands, the only reason this
+                # plan produces is a code-authored sentence built from
+                # `CircuitBreaker.snapshot()["reason"]`, which plan 02 already
+                # redacts and truncates.
+                #
+                # Deliberately NOT added to the funnel: `_build_funnel` /
+                # `_FUNNEL_KEYS` are frozen because `RECORDED_FUNNEL_COUNTS` is
+                # compared by FULL DICT EQUALITY in two tests.
+                "degradation_reasons": degradation_reasons,
                 # The 15.1 funnel — the gates' nine keys plus this stage's four.
                 # Carried on the bundle so it survives the interactive-report pause:
                 # the resume path rebuilds the result from this cache, and
@@ -1627,6 +1789,20 @@ async def _write_final_report(
         # degradation marker is missing (G-10). Same dict object as
         # verification_report["funnel"] — one funnel, three readers, no drift.
         "verification_summary": verification_report["funnel"],
+        # D-12's reason list — SURFACE 2 OF 2, the TOP-LEVEL key `runs/worker.py`
+        # reads (it does exactly `result.get("degradation_reasons")` and feeds the
+        # value to `terminal_state()` and to the persisted verification_summary;
+        # plan 15.2-09 landed that read in wave 2 with no writer, and THIS is the
+        # line that makes it real).
+        #
+        # Sourced from `v` — the bundle's `verification` dict this function already
+        # unpacked — rather than from a new parameter, and that is deliberate: the
+        # RESUME-FROM-CACHE path rebuilds the whole result from the cached bundle,
+        # so reading the bundle is the only way both paths publish the same reasons.
+        # Same content as `synthesis_bundle["verification"]["degradation_reasons"]`,
+        # from the same one list; a copy is taken so a consumer cannot mutate the
+        # bundle. `or []` is the pre-15.2 synthesis_cache back-compat guard.
+        "degradation_reasons": list(v.get("degradation_reasons") or []),
         # D-06 citation-health counts, following the `rejected_claims` precedent:
         # top-level result keys, siblings of verification_summary and NOT inside
         # the funnel dict. Present on every run, including runs with zero anchors
@@ -1700,6 +1876,179 @@ def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
     if not items:
         items = [{"name": "no focus areas extracted", "status": "failed"}]
     return {"items": items}
+
+
+def _recon_is_meaningful(recon: Any) -> bool:
+    """True when a group reconciliation carries actual meaning.
+
+    `disputed` defaults to False and `relation` to "single"/"agree"
+    (`group_skeptic._parse_group_verdict`), so an unconditional attach would file
+    every verdict of every group into the report's `reconciled` / `superseded`
+    sections. Extracted from `_flush_groups` so the coverage re-entry path SHARES
+    the rule instead of forking it — this is an extraction, not a redesign, and its
+    behaviour must stay identical.
+
+    PURE: plain data in, bool out. Never raises.
+    """
+    if not isinstance(recon, dict):
+        return False
+    return bool(
+        recon.get("disputed")
+        or recon.get("relation") == "scoped"
+        or str(recon.get("note") or "").strip()
+        or str(recon.get("canonical") or "").strip()
+    )
+
+
+async def _coverage_reentry_pass(
+    *,
+    uncovered: list[dict[str, Any]],
+    verdicts_by_claim: dict[int, list[dict]],
+    superseded_notes: list[str],
+    provider_results: list[tuple[str, dict]],
+    audited: "AuditedLLMClient",
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    sem: "asyncio.Semaphore",
+    breaker: Any,
+    book_unchecked: Any,
+    model: str = _SKEPTIC_MODEL,
+) -> dict[str, Any]:
+    """ONE bounded coverage-gate re-entry pass. Returns sessions / recovered / blocked_reason.
+
+    This is the last chance a gate-selected claim gets at a verdict — the recovery
+    path WR-01 made unreachable. Three decisions are load-bearing here; all three
+    are recorded in the plan and must not be "simplified" away.
+
+    D-07-A (F7 — WHY THIS ROUTES THROUGH THE **GROUP** SKEPTIC). `EMIT_VERDICT_TOOL`'s
+    verdict enum is `["support","refute","insufficient"]` and `tools.py`'s DELIBERATE
+    ASYMMETRY comment forbids extending it. So a re-entered claim that is
+    true-but-overtaken would come back `insufficient` — survives, no caveat — instead
+    of `superseded`, whose G-07 note reaches synthesis through `contested_notes`.
+    Re-entry therefore calls `run_group_skeptic` with a SINGLE-MEMBER group: the
+    cheapest correct move, and the only one that keeps the fourth verdict on exactly
+    the claims that needed a second chance. Do NOT put this back on `_one_skeptic`.
+
+    D-07-C (THE BREAKER GATE IS `state`, NOT `allow()`). `allow()` CONSUMES the single
+    half-open probe, and this is a FAN-OUT of N sessions, not a probe — authorising N
+    calls on one probe token is exactly the failure the breaker exists to prevent.
+    Re-entry proceeds only from a fully CLOSED circuit; `open` and `half_open` both
+    refuse, and the uncovered claims go to bucket 3 with a named reason. G-11's "fail
+    toward MORE checking" does not apply: the alternative is not more checking, it is
+    more hard-400s (776 of them in 55 seconds on 2026-07-22).
+
+    D-07-D (ONE THOROUGH SESSION, NOT THREE SHALLOW ONES). This path used to loop
+    three per-claim skeptic calls for every uncovered claim. It now runs ONE session
+    at `_GROUP_DEPTH["high"] == (6, 8, 5)`, which is the engine's own stated
+    economics ("stakes controls the DEPTH of that single session, NOT the number of
+    sessions"), what the grouped production path already does for every checked
+    claim, and sufficient under `adjudicate`'s majority-independent rule, which
+    already treats one refute-with-independent-citation as authoritative. The old
+    hard-coded three did not even match `_PER_CLAIM_SKEPTICS`, which is 2.
+
+    MODULE-LEVEL, and `book_unchecked` is a CALLABLE PARAMETER, so this is drivable
+    from a test without constructing a pipeline run.
+    """
+    if not uncovered:
+        return {"sessions": 0, "recovered": 0, "blocked_reason": None}
+
+    # -- D-07-C: the breaker gate. READ the state; never consume the probe. -----
+    state = getattr(breaker, "state", "closed")
+    if state != "closed":
+        try:
+            breaker_reason = (breaker.snapshot() or {}).get("reason") or ""
+        except Exception:  # noqa: BLE001 — a snapshot that raises must not eat the reason
+            breaker_reason = ""
+        blocked_reason = (
+            f"VERIFICATION DEGRADED — the last-chance re-check of "
+            f"{len(uncovered)} claim(s) was not attempted because the "
+            f"fact-checking provider's circuit is {state}"
+            + (f" ({breaker_reason})" if breaker_reason else "")
+            + "; their supporting passages ship unexamined."
+        )
+        book_unchecked(
+            uncovered, f"coverage re-entry blocked — skeptic circuit {state}"
+        )
+        log.warning(
+            "tribunal_pipeline: coverage re-entry NOT dispatched — skeptic circuit "
+            "is %s; %d claim(s) booked into bucket 3 (%s)",
+            state, len(uncovered), breaker_reason or "no reason recorded",
+        )
+        return {"sessions": 0, "recovered": 0, "blocked_reason": blocked_reason}
+
+    turns, su, fu = _GROUP_DEPTH["high"]
+
+    async def _one_reentry(claim: dict) -> dict | None:
+        # The five-key group contract from `grouping._assemble_groups`, with its own
+        # display fallbacks (entity -> claims[0].facet or "?", attribute -> "general").
+        group = {
+            "key": f"__reentry__:{id(claim)}",
+            "entity": (claim.get("facet") or "?"),
+            "attribute": "general",
+            "claims": [claim],
+            "stakes": "high",
+        }
+        sources = _extract_sources_for_claim(claim, provider_results)
+        async with sem:
+            try:
+                async with asyncio.timeout(_SKEPTIC_TIMEOUT_S):
+                    result = await run_group_skeptic(
+                        group=group, sources=sources, audited=audited,
+                        run_id=run_id, tenant_id=tenant_id, model=model,
+                        max_turns=turns, max_search_uses=su, max_fetch_uses=fu,
+                    )
+                try:
+                    breaker.record_success()
+                except Exception:  # noqa: BLE001 — bookkeeping is best-effort
+                    pass
+                return result
+            except Exception as exc:
+                try:
+                    breaker.record_failure(exc)
+                except Exception:  # noqa: BLE001 — bookkeeping is best-effort
+                    pass
+                log.warning(
+                    "tribunal_pipeline: coverage re-entry session failed for claim %r: %s",
+                    claim.get("text", "")[:60], exc,
+                )
+                return None
+
+    results = await asyncio.gather(*[_one_reentry(c) for c in uncovered])
+    sessions = len(uncovered)
+    recovered = 0
+
+    for claim, res in zip(uncovered, results):
+        if not isinstance(res, dict):
+            continue
+        vbi = res.get("verdicts_by_index") or {}
+        v = vbi.get(0)
+        if isinstance(v, dict):
+            recon = res.get("reconciliation") or {}
+            if _recon_is_meaningful(recon):
+                # dict(...) COPIES rather than aliases, matching _flush_groups.
+                v["reconciliation"] = dict(recon)
+            verdicts_by_claim.setdefault(id(claim), []).append(v)
+            recovered += 1
+        # D-07-A's whole point: harvest the G-07 caveat BEFORE the caller builds
+        # contested_notes, exactly as _flush_groups does.
+        superseded_notes.extend(_collect_superseded_notes([claim], vbi))
+        # NOT appended to `group_reconciliations`: a synthetic single-member group's
+        # `relation` defaults to "single" and its entity/attribute are display
+        # fallbacks, so filing it there would print noise into the report's disputed
+        # section under a made-up heading.
+
+    # Bucket-3 site (c), unchanged in meaning and in WORDING — this is the recorded
+    # cause string; do not reword it.
+    for claim in uncovered:
+        if not verdicts_by_claim.get(id(claim)):
+            book_unchecked([claim], "coverage-gate re-entry returned no verdict")
+
+    log.info(
+        "tribunal_pipeline: coverage re-entry — %d session(s) dispatched, "
+        "%d claim(s) recovered a verdict, %d still unchecked",
+        sessions, recovered, sessions - recovered,
+    )
+    return {"sessions": sessions, "recovered": recovered, "blocked_reason": None}
 
 
 def _one_line(text: Any) -> str:
