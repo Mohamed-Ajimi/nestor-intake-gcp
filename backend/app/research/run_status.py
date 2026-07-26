@@ -14,11 +14,28 @@ Four things a reader needs to know before touching this file:
    enforced as a denial. That is why :func:`is_research_success` exists rather
    than a bare ``== "completed"`` comparison at each site.
 
-3. **``parked`` is deliberately absent from BOTH sets.** The poll driver must keep
-   polling a resumable run, and the Resume button, the ``render_research_parked``
-   mail and F-02's free-resume rule are **plan 15.2-16's** work. Adding ``parked``
-   to a terminal set before that lands would ship a dead-end state: a run that
-   stops polling with no way for the operator to move it forward.
+3. **``parked`` is TERMINAL here, and only for the STREAM — never for the RUN.**
+   15.2-09 deliberately left ``parked`` out of every terminal set because shipping
+   it before a Resume affordance existed would have been a dead end. 15.2-16 built
+   the engine half (checkpoints, the park sequence, ``POST /api/runs/{id}/resume``)
+   and plan **15.2-19** ships the operator half (the park mail + the Resume verb +
+   the Resume card), so the deferral is now closed and ``parked`` is a member of
+   :data:`RESEARCH_TERMINAL`.
+
+   Why terminal, against 15.2-RESEARCH § R4's "not terminal for the poll driver"
+   (DEC-3, recorded as a deliberate deviation): ``run_poll_driver`` is a FastAPI
+   ``BackgroundTask`` and a parked run waits on a HUMAN click that may be hours
+   away. A driver that keeps polling is a leaked task pinning a Cloud Run instance,
+   and the SSE handler would burn to its 10-minute ``MAX_STREAM_SECONDS`` cap and
+   drop the browser into its reconnect loop. So the stream and the driver stop; the
+   RUN does not end. A superadmin resume re-queues the SAME engine run and schedules
+   a FRESH driver.
+
+   ``parked`` is NOT in :data:`RESEARCH_SUCCESS` and :func:`is_research_success`
+   must never return True for it — a parked run has no bundle, no report and no
+   chain verdict. Keep the three states distinct: losing 1-2 of 4 streams is
+   ``completed_degraded`` (a real deliverable); a D-14 distiller fallback is normal
+   operation and changes no status at all; ``parked`` is only a hard wall.
 
 4. **The tribunal-side source of truth is** ``nestor_pulse_sdk/runs/schemas.py`` --
    its ``RunStatus`` Literal and its ``report_readable`` / ``bundle_readable``
@@ -37,17 +54,32 @@ from __future__ import annotations
 RESEARCH_SUCCESS = frozenset({"completed", "completed_degraded"})
 
 #: Every terminal state the intake side stops polling / closes a stream on.
-#: ``parked`` is deliberately NOT a member — see point 3 above.
-RESEARCH_TERMINAL = RESEARCH_SUCCESS | frozenset({"failed", "cancelled"})
+#: ``parked`` IS a member (15.2-19 / DEC-3) — terminal for the STREAM, not the RUN.
+#: Built from RESEARCH_SUCCESS so that set stays untouched: a parked run is not a
+#: success and never gets the bundle / report / download.
+RESEARCH_TERMINAL = RESEARCH_SUCCESS | frozenset({"failed", "cancelled", "parked"})
 
 
 def is_research_success(status: str | None) -> bool:
     """Did this run finish with a deliverable in hand?
 
     Tolerates ``None`` (``metrics.get("status")`` can be absent) and returns
-    ``False`` for it — an unknown status is never treated as a success.
+    ``False`` for it — an unknown status is never treated as a success. ``parked``
+    is deliberately False here: a paused run has nothing to hand over yet.
     """
     return status in RESEARCH_SUCCESS
+
+
+def is_research_parked(status: str | None) -> bool:
+    """Is this run PAUSED awaiting a superadmin resume? Tolerates ``None`` -> ``False``.
+
+    Distinct from both failure and degradation: a parked run hit a wall it cannot
+    pass on its own (every stream lost, or a hard billing / monthly-cap wall) and
+    stopped with its paid work checkpointed. It is resumed for free by
+    ``POST /intakes/{intake_id}/research/resume`` (F-01/F-02), never retried as a
+    fresh attempt.
+    """
+    return status == "parked"
 
 
 def is_research_terminal(status: str | None) -> bool:
