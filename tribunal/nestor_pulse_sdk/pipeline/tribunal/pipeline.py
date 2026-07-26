@@ -1350,6 +1350,21 @@ async def _write_final_report(
         extra={"run_id": str(run_id)},
     )
 
+    # Pass the citation kwargs ONLY when there is something to pass. Semantically
+    # identical for synthesize_report (it treats None and [] the same), but it
+    # keeps the pre-15.2 call signature exactly intact on the no-citation path —
+    # which is the path every existing monkeypatched `fake_synthesis` double in
+    # test_tribunal_pipeline.py is written against (those doubles declare explicit
+    # keyword-only params and no **kwargs, so an unconditional new kwarg raises
+    # TypeError). Do NOT "tidy" this back into the literal call: it re-breaks
+    # test_tribunal_pipeline.py. The durable fix is `**_kwargs` on those doubles,
+    # which lives in a file this plan does not own — see the SUMMARY's deferred items.
+    _citation_kwargs: dict = {}
+    if anchor_ledger:
+        _citation_kwargs["anchor_ledger"] = anchor_ledger
+    if numbered:
+        _citation_kwargs["numbered_citations"] = numbered
+
     synthesis_text = await synthesize_report(
         mission_brief=mission_brief,
         provider_reports=cleaned_reports,
@@ -1358,8 +1373,7 @@ async def _write_final_report(
         tenant_id=tenant_id,
         contested_notes=contested_notes,
         report_spec=report_spec,
-        anchor_ledger=anchor_ledger,
-        numbered_citations=numbered,
+        **_citation_kwargs,
     )
 
     # D-05 post-pass. Order matters and is load-bearing:
