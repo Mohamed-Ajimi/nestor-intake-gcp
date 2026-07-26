@@ -5,12 +5,19 @@ Provides:
   - build_web_fetch(max_uses, ...)    -> Anthropic server-side web_fetch_20250910 dict
   - EMIT_VERDICT_TOOL                 -> client-side tool schema (forced via tool_choice)
   - force_emit_verdict()              -> tool_choice dict that forces emit_verdict
+  - EMIT_ORIENTATION_TOOL             -> client-side tool schema (question workshop, 15.2-10)
+  - force_emit_orientation()          -> tool_choice dict that forces emit_orientation
 
 CRITICAL INVARIANTS (ADR-006 §GOTCHA):
   - web_search and web_fetch are SERVER-SIDE tools: the API resolves them within the
     turn and returns *_tool_result blocks inline in resp.content. The client MUST NOT
     append a synthetic tool_result for server tools (HTTP 400 trap).
-  - emit_verdict is the ONLY client-side tool. Forced via tool_choice on the final turn.
+  - There are THREE client-side tools -- emit_verdict, emit_group_verdict and
+    emit_orientation -- and each one is forced via tool_choice on its loop's FINAL
+    turn so the loop always terminates with structured output rather than another
+    search turn. Server tools still never receive a synthetic tool_result; that
+    invariant is about the SERVER tools and is unaffected by how many client tools
+    this module declares.
   - NEVER enable JSON structured-output mode (response format) on a citation-enabled
     call — citations + structured outputs = HTTP 400. emit_verdict via forced tool_choice
     is tool-use, NOT structured outputs — safe.
@@ -226,3 +233,102 @@ EMIT_GROUP_VERDICT_TOOL: dict[str, Any] = {
 def force_emit_group_verdict() -> dict[str, Any]:
     """tool_choice that forces emit_group_verdict on the final group-skeptic turn."""
     return {"type": "tool", "name": "emit_group_verdict"}
+
+
+# ---------------------------------------------------------------------------
+# Client-side tool: emit_orientation (Phase 15.2 plan 10 — the question workshop)
+# ---------------------------------------------------------------------------
+
+#: Forced client tool for the question workshop's ORIENTATION session (D2 step 1).
+#: One session per client-validated question: a handful of searches, at most a
+#: couple of fetches, then this tool. It emits two things and nothing else —
+#: `findings` (what a researcher needs to know before writing sub-questions) and
+#: `brief_conflicts` (D4's "the brief assumes X, the world says Y" flags, which
+#: plan 15.2-06's "Disputed & changed" report section consumes as DATA).
+#:
+#: SCOPE (D4): the description tells the model in words that it may not propose
+#: dropping, replacing, merging or reinterpreting the client's question. That is a
+#: courtesy, not the control — the control is mechanical and lives in
+#: `workshop.py` (PARENT is stamped in Python; a question with zero parsed
+#: candidates gets its own text injected verbatim).
+EMIT_ORIENTATION_TOOL: dict[str, Any] = {
+    "name": "emit_orientation",
+    "description": (
+        "Emit the orientation result for ONE client-validated question after a small "
+        "number of web searches and at most a couple of page fetches. "
+        "'findings' are short, specific, factual notes that change HOW this question "
+        "should be researched — who the real players are, what the current regime is, "
+        "what changed recently. They are an orientation, not a research answer. "
+        "'brief_conflicts' are places where the brief's stated assumption is "
+        "contradicted by what you actually found: quote the fetched source, never "
+        "phrase it from memory, and return an empty list rather than inventing a "
+        "conflict. "
+        "You may NOT propose dropping, replacing, merging or reinterpreting the "
+        "client's question — the scope is fixed and already validated by the client; "
+        "your job is to add depth, never to change what is being asked."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Short factual orientation notes about THIS question. Empty list "
+                    "is acceptable when the searches found nothing that changes how "
+                    "the question should be researched."
+                ),
+            },
+            "brief_conflicts": {
+                "type": "array",
+                "description": (
+                    "Places where the brief's stated assumption is contradicted by a "
+                    "fetched source. Empty list when nothing conflicts."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "assumption": {
+                            "type": "string",
+                            "description": "What the brief assumes, in the brief's own terms.",
+                        },
+                        "world_says": {
+                            "type": "string",
+                            "description": (
+                                "What the fetched source actually says, quoted from that "
+                                "source and never phrased from memory."
+                            ),
+                        },
+                        "source_url": {
+                            "type": "string",
+                            "description": (
+                                "The http(s) URL of the fetched page the contradiction "
+                                "came from, when you have one."
+                            ),
+                        },
+                    },
+                    # source_url is deliberately NOT in `required`, for exactly the
+                    # reason superseded_note is not required in EMIT_GROUP_VERDICT_TOOL
+                    # above: a conflict spotted in a search snippet with no fetched page
+                    # would otherwise have to carry an empty string, and requiring the
+                    # field would push the model to fabricate a plausible-looking URL.
+                    "required": ["assumption", "world_says"],
+                },
+            },
+        },
+        "required": ["findings"],
+    },
+}
+
+
+def force_emit_orientation() -> dict[str, Any]:
+    """tool_choice that forces emit_orientation on the final orientation turn.
+
+    Pass as tool_choice=force_emit_orientation() on the last allowed turn of the
+    question workshop's orientation loop, so the session terminates with structured
+    orientation data rather than another billed search turn.
+
+    Returns:
+        {"type": "tool", "name": "emit_orientation"}
+    """
+    return {"type": "tool", "name": "emit_orientation"}
