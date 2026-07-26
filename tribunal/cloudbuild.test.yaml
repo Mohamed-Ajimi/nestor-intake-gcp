@@ -23,6 +23,41 @@
 #     --config=tribunal/cloudbuild.test.yaml \
 #     --project="$GOOGLE_PROJECT"
 
+# ---------------------------------------------------------------------------
+# KNOWN LIMITATION (measured 2026-07-26, phase 15.2) — the 42 skips are REAL.
+#
+# The testcontainers fixture does NOT start in this config. Diagnosed skip
+# reason, straight from pytest -rs:
+#     Docker not available for testcontainers:
+#     "host" network_mode is incompatible with port_bindings
+# testcontainers 4.x asks docker for port bindings on the Postgres container it
+# spawns, and docker rejects that under the --network=host mode this step needs
+# (see the WHY block below). So `postgres_container` skips, and every test
+# depending on it skips with it. The build still exits 0 -> a green "full
+# suite" that silently proves nothing about the DB-backed paths.
+#
+# A related typo was fixed the same day (requirements.txt pinned
+# `testcontainers[postgresql]`; 4.14.2's real extra is `postgres`). That was a
+# genuine defect and is corrected, but it was NOT the cause -- the postgres
+# module now imports cleanly and the skips persist for the reason above.
+#
+# DO NOT "fix" this by chasing testcontainers networking. Two reasons:
+#   1. This repo already has a working real-Postgres pattern that needs no
+#      testcontainers at all: `docker run -d --name pg --network=host
+#      postgres:15` plus a DATABASE_URL handed to pytest. See
+#      cloudbuild.test-critical.yaml and cloudbuild.test-rls.yaml.
+#   2. testcontainers' Postgres runs as SUPERUSER, and RLS never applies to
+#      superusers. Any cross-tenant / RLS denial test written against this
+#      fixture would be VACUOUS even if the fixture started -- exactly the bug
+#      plan 15.2-01 found in test_rls_isolation.py, where four pre-existing
+#      denial tests had never once executed under a role RLS binds to.
+#
+# THEREFORE: DB-backed tenant-isolation tests belong in cloudbuild.test-rls.yaml
+# (non-superuser app_user DSN). Other DB-backed tests belong in
+# cloudbuild.test-critical.yaml. Treat this suite's skips as NOT-PROVEN, never
+# as passes -- 15.2-VALIDATION.md states this as a hard rule.
+# ---------------------------------------------------------------------------
+
 steps:
   # Run pytest inside a --network=host container on the shared Cloud Build daemon.
   # WHY host networking (proven live 2026-07-20, build 4th iteration):
