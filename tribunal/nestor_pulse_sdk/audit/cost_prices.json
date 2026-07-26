@@ -4,9 +4,10 @@
   "_tool_fees_format": "Per-call flat server-tool fees in USD (NOT per token). Plan 15-02 C1 -- published rates, facts only, never estimated.",
   "_tool_fees": {
     "web_search": 0.01,
-    "web_fetch": 0.0
+    "web_fetch": 0.0,
+    "serpapi_search": null
   },
-  "_tool_fees_source": "web_search: Anthropic published $10 per 1000 searches = $0.01/search. web_fetch: Anthropic web_fetch has no per-fetch fee (billed as input tokens only) -> 0.0 flat fee; its token cost is already in prompt_tokens.",
+  "_tool_fees_source": "web_search: Anthropic published $10 per 1000 searches = $0.01/search. web_fetch: Anthropic web_fetch has no per-fetch fee (billed as input tokens only) -> 0.0 flat fee; its token cost is already in prompt_tokens. serpapi_search: SerpApi is sold as a PREPAID PLAN, so the per-search unit price is plan_monthly_price / searches_per_month -- a PUBLISHED figure, which is what makes count x unit a correct calculation and not an estimate (D-16). The authoritative value is read live from https://serpapi.com/account.json at run start and recorded with the run (output row format='serpapi_plan'), so this table carries null rather than a hardcoded tier price -- the tier itself is an open operator decision owned by plan 15.2-18. null here means 'no plan-independent published rate exists', NOT '$0.00': an unknown unit price yields cost_usd NULL + cost_pending, while a genuine Free-tier reading of $0.00 is an exact, honest zero.",
 
   "anthropic/claude-opus-4-5": {
     "prompt": 15.0,
@@ -140,6 +141,14 @@
   "openai/gpt-4-turbo": {
     "prompt": 10.0,
     "completion": 30.0,
+    "cache_read": 0.0,
+    "cache_creation_5m": 0.0
+  },
+
+  "serpapi/google": {
+    "_note": "Phase 15.2 plan 12 (D-16). SerpApi is a SEARCH provider, not an LLM: it has no token pricing at all, so all four per-token rates are a true 0.0. This entry exists purely so compute() resolves the 'serpapi/google' key instead of taking the unknown-model NULL branch -- the ENTIRE cost of a SerpApi audit row is the per-search fee, passed in as serpapi_search_count x serpapi_unit_price_usd. Do not add a unit price here; it is per-run, not per-table, because the plan can change.",
+    "prompt": 0.0,
+    "completion": 0.0,
     "cache_read": 0.0,
     "cache_creation_5m": 0.0
   }

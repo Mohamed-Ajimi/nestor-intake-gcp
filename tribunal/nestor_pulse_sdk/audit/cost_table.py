@@ -15,6 +15,13 @@ Cost formula (Pitfall 6 -- Anthropic prompt cache token accounting):
         + completion_tokens * completion_rate
         + web_search_count * web_search_fee     # server-tool fee (Plan 15-02 C1)
         + web_fetch_count  * web_fetch_fee      # server-tool fee (Plan 15-02 C1)
+        + serpapi_search_count * serpapi_unit_price  # D10 own-researcher (15.2-12, D-16)
+
+  The SerpApi term is the one fee whose unit price is PER RUN rather than per
+  table: SerpApi is sold as a prepaid plan, so the published unit price is
+  plan_monthly_price / searches_per_month and it changes the moment the plan
+  changes. The run reads it live from the account endpoint at start and hands it
+  in here; cost_prices.json therefore carries _tool_fees.serpapi_search = null.
 
   In this module, `cached_tokens` = cache_read_input_tokens (already paid at 0.1x).
   As of Plan 15-02 (C1 cost-truth fix), `cache_creation_tokens` ARE charged here:
@@ -122,6 +129,47 @@ def _tool_fee(fee_name: str) -> Decimal:
     return Decimal(str(val))
 
 
+def tool_fee_or_none(fee_name: str) -> Optional[Decimal]:
+    """Return the per-call USD fee for a server tool, or None when UNKNOWN.
+
+    The sibling of `_tool_fee`, and deliberately NOT a change to it:
+    `test_cost_cache_write.py` depends on `_tool_fee`'s missing-entry-returns-zero
+    behaviour, and web_fetch's genuine 0.0 relies on it too.
+
+    THE None/ZERO DISTINCTION IS LOAD-BEARING (D-16, plan 15.2-12). For a fee
+    that may legitimately be zero, "missing" and "free" must not collapse into
+    the same number:
+      * Decimal("0")  -- a KNOWN price of zero. SerpApi's Free tier really does
+                        cost $0.00 per search, and that is an exact fact that
+                        belongs in the run total as a zero.
+      * None          -- UNKNOWN. The caller must write NULL cost_usd and set
+                        cost_pending rather than present an incomplete cost as
+                        settled (C1: never fail, never guess).
+
+    Returns None when the key is absent OR its value is JSON null.
+    """
+    prices_path = Path(os.environ.get("COST_PRICES_PATH", str(_DEFAULT_PRICES_PATH)))
+    try:
+        with prices_path.open(encoding="utf-8") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    fees = raw.get("_tool_fees", {})
+    if not isinstance(fees, dict):
+        return None
+    val = fees.get(fee_name)
+    if val is None:
+        return None
+    try:
+        return Decimal(str(val))
+    except Exception:  # noqa: BLE001 -- a malformed hot-edit is unknown, not a crash
+        _logger.warning(
+            "cost_prices.json _tool_fees.%s is not a number -- treating as unknown",
+            fee_name,
+        )
+        return None
+
+
 def compute(
     provider: str,
     model: str,
@@ -131,6 +179,8 @@ def compute(
     cache_creation_tokens: int = 0,
     web_search_count: int = 0,
     web_fetch_count: int = 0,
+    serpapi_search_count: int = 0,
+    serpapi_unit_price_usd: Optional[Decimal] = None,
 ) -> Optional[Decimal]:
     """
     Compute cost in USD for one LLM call.
@@ -149,9 +199,19 @@ def compute(
                              flat fee; 0 by default).
       web_fetch_count:       number of server-side web_fetch invocations on this call
                              (priced at _tool_fees.web_fetch; 0 by default).
+      serpapi_search_count:  number of BILLABLE SerpApi searches on this call (plan
+                             15.2-12, D-16). Billable means search_metadata.status ==
+                             "Success"; SerpApi does not charge for cached, errored or
+                             failed searches, so this is NOT the HTTP-call count.
+                             0 by default, so every pre-15.2-12 caller is unaffected.
+      serpapi_unit_price_usd: the PUBLISHED per-search price in force for THIS run,
+                             i.e. plan_monthly_price / searches_per_month read live
+                             from the SerpApi account endpoint. None means unknown ->
+                             the whole call returns None (never a guessed unit).
 
     Returns:
-      Decimal cost in USD, or None if the model is not in cost_prices.json.
+      Decimal cost in USD, or None if the model is not in cost_prices.json, or None
+      if a non-zero serpapi_search_count has no published unit price.
 
     On unknown model: logs a structured WARNING with (provider, model) tuple + returns None.
     Callers write NULL to audit_log.cost_usd (Pitfall 5 -- never fail, never guess).
@@ -208,5 +268,28 @@ def compute(
         tool_fee_cost += Decimal(str(web_search_count)) * _tool_fee("web_search")
     if web_fetch_count:
         tool_fee_cost += Decimal(str(web_fetch_count)) * _tool_fee("web_fetch")
+
+    # D10 own-researcher SerpApi fee (plan 15.2-12, D-16). Exact Decimal, never
+    # a float, and never a guessed tier.
+    #
+    # INVARIANT: `serpapi_search_count` is only ever passed by
+    # AuditedLLMClient.serpapi_search, together with provider="serpapi". NEVER
+    # attach it to an LLM call -- an unknown SerpApi unit price returns None for
+    # the WHOLE call, so doing so would null out that LLM call's own cost too.
+    if serpapi_search_count:
+        unit = (
+            serpapi_unit_price_usd
+            if serpapi_unit_price_usd is not None
+            else tool_fee_or_none("serpapi_search")
+        )
+        if unit is None:
+            _logger.warning(
+                "SerpApi unit price unknown for %d billable search(es) -- writing "
+                "NULL cost_usd and cost_pending rather than guessing a plan tier "
+                "(D-16; the tier is plan 15.2-18's operator decision)",
+                serpapi_search_count,
+            )
+            return None
+        tool_fee_cost += Decimal(str(serpapi_search_count)) * Decimal(str(unit))
 
     return prompt_cost + cache_cost + cache_create_cost + completion_cost + tool_fee_cost
