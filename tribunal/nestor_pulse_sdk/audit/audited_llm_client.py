@@ -47,9 +47,31 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Literal, Optional
+from typing import Any, Awaitable, Callable, Literal, Optional
+
+# R7 (plan 15.2-16). `checkpoints` is a pure module — no database, no provider
+# client, no import back into this package — so a module-level import here adds
+# no cycle and no load cost. `safe_job_id` is the ONE guard a provider job id
+# passes before it is persisted or interpolated into a poll URL (T-15.2-125).
+from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
 
 log = logging.getLogger(__name__)
+
+# R7 / DEC-2 — A RESUME NEVER SILENTLY RE-DISPATCHES A PAID JOB.
+#
+# When a persisted background job id is no longer retrievable (Gemini 404/410,
+# OpenAI `NotFoundError` past the ~10-minute response-retention window —
+# RESEARCH A11), the default is to DEGRADE that one stream with a named reason
+# and let D-12/D-17 do their job: one or two streams lost is
+# `completed_degraded`. Set NESTOR_TRIBUNAL_RESUME_REDISPATCH=true to fall
+# through to a fresh dispatch instead.
+#
+# Rationale, verbatim from the operator's standing rule — "NO ESTIMATES — facts
+# and correct calculations only": quietly paying twice for the same
+# deep-research job is the money-side equivalent of a silent green.
+RESUME_REDISPATCH = (
+    os.environ.get("NESTOR_TRIBUNAL_RESUME_REDISPATCH", "false").lower() == "true"
+)
 
 # ---------------------------------------------------------------------------
 # Deep-research model constants -- env-overridable for easy tuning.
@@ -1159,6 +1181,8 @@ class AuditedLLMClient:
         agent: str = GEMINI_DEEP_RESEARCH_AGENT,
         max_attempts: int = 70,
         poll_interval: int = 30,
+        resume_job_id: str | None = None,
+        on_job_started: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
         """Poll the Gemini deep-research API and return the canonical envelope.
 
@@ -1169,6 +1193,26 @@ class AuditedLLMClient:
         receives the new "steps" schema. See GEMINI_INTERACTIONS_BASE notes above
         for why the SDK cannot be bumped to >= 2.0. The create call returns
         immediately (background=True); we poll GET until status is completed/failed.
+
+        R7 (plan 15.2-16) — RESUME INSTEAD OF PAYING TWICE. The dispatch is
+        `background: true`, so the interaction keeps running on Google's side
+        even when this process dies or the run parks. Two additive keyword-only
+        parameters make that reconnectable, and NEITHER changes today's
+        behaviour when omitted:
+
+          resume_job_id:   an interaction id recorded by a previous attempt. When
+                           present (and accepted by `safe_job_id`) the dispatch
+                           POST is SKIPPED entirely and the poll loop reconnects
+                           to the existing job. A rejected id falls through to a
+                           fresh dispatch, loudly.
+          on_job_started:  awaited once with the interaction id the moment a
+                           FRESH background job exists, so the caller can record
+                           it before the long poll begins. Best-effort — a
+                           callback that raises is logged and swallowed, because
+                           a checkpoint write must never break a paid call.
+
+        The poll loop itself is UNCHANGED. R7 adds a reconnect entry point and a
+        404/410 rule; it does not rebuild the polling.
         """
         import httpx  # noqa: PLC0415 -- local import keeps module load light
 
@@ -1194,35 +1238,112 @@ class AuditedLLMClient:
             "Api-Revision": GEMINI_INTERACTIONS_REVISION,
         }
 
+        # T-15.2-125: the id is interpolated into a URL PATH below, and on a
+        # resume it arrives from an `output` row rather than from the provider.
+        # A rejected id is NOT fatal — it falls through to a fresh dispatch — but
+        # it never reaches the URL builder.
+        resumed_id = safe_job_id(resume_job_id) if resume_job_id else None
+        if resume_job_id and resumed_id is None:
+            log.warning(
+                "Gemini deep-research: the recorded job id was refused by the "
+                "job-id guard, so this angle is dispatched fresh rather than "
+                "polled — nothing was reconnected"
+            )
+
         try:
             # Per-request timeout only; the long wait is the poll loop, not one call.
             async with httpx.AsyncClient(timeout=60.0) as http:
-                log.debug("Gemini deep-research: starting interaction (agent=%s)", agent)
-                resp = await http.post(
-                    f"{base}/interactions",
-                    headers=create_headers,
-                    json={"input": query, "agent": agent, "background": True},
-                )
-                resp.raise_for_status()
-                interaction = resp.json()
-                interaction_id = interaction.get("id") or interaction.get("name") or ""
-                # Some responses return a fully-qualified name ("interactions/abc").
-                interaction_id = str(interaction_id).split("/")[-1]
-                if not interaction_id:
-                    return {
-                        "status": "error",
-                        "error_message": (
-                            "Research error: no interaction id in create response: "
-                            f"{str(interaction)[:300]}"
-                        ),
-                    }
+                if resumed_id is not None:
+                    # SKIP THE DISPATCH POST ENTIRELY. The interaction is still
+                    # running on Google's side and has already been paid for.
+                    interaction_id = resumed_id
+                    log.warning(
+                        "Gemini deep-research: RESUMING the existing interaction "
+                        "%s (agent=%s) — no second job was dispatched and nothing "
+                        "was charged twice",
+                        interaction_id, agent,
+                    )
+                else:
+                    log.debug(
+                        "Gemini deep-research: starting interaction (agent=%s)", agent
+                    )
+                    resp = await http.post(
+                        f"{base}/interactions",
+                        headers=create_headers,
+                        json={"input": query, "agent": agent, "background": True},
+                    )
+                    resp.raise_for_status()
+                    interaction = resp.json()
+                    raw_id = interaction.get("id") or interaction.get("name") or ""
+                    # Some responses return a fully-qualified name ("interactions/abc").
+                    raw_id = str(raw_id).split("/")[-1]
+                    if not raw_id:
+                        return {
+                            "status": "error",
+                            "error_message": (
+                                "Research error: no interaction id in create response: "
+                                f"{str(interaction)[:300]}"
+                            ),
+                        }
+                    interaction_id = safe_job_id(raw_id)
+                    if interaction_id is None:
+                        # NEVER interpolate an unvalidated provider id into the
+                        # poll URL (T-15.2-125). Fail in words instead.
+                        return {
+                            "status": "error",
+                            "error_message": (
+                                "Research error: the interaction id returned by the "
+                                f"provider is malformed and was refused: {raw_id[:80]!r}"
+                            ),
+                        }
+                    if on_job_started is not None:
+                        try:
+                            await on_job_started(interaction_id)
+                        except Exception as cb_exc:  # noqa: BLE001 — checkpoint writes are best-effort
+                            log.warning(
+                                "Gemini deep-research: on_job_started callback failed "
+                                "(%r) — the job is running but was not recorded, so a "
+                                "resume would re-dispatch it",
+                                cb_exc,
+                            )
 
                 for _ in range(max_attempts):
                     await asyncio.sleep(poll_interval)
-                    g = await http.get(
-                        f"{base}/interactions/{interaction_id}", headers=get_headers
-                    )
-                    g.raise_for_status()
+                    try:
+                        g = await http.get(
+                            f"{base}/interactions/{interaction_id}", headers=get_headers
+                        )
+                        g.raise_for_status()
+                    except httpx.HTTPStatusError as http_exc:
+                        code = getattr(
+                            getattr(http_exc, "response", None), "status_code", 0
+                        )
+                        if resumed_id is not None and code in (404, 410):
+                            if RESUME_REDISPATCH:
+                                log.warning(
+                                    "Gemini deep-research: the resumed interaction is "
+                                    "gone (HTTP %s) and NESTOR_TRIBUNAL_RESUME_REDISPATCH "
+                                    "is on — dispatching a FRESH, separately billed job",
+                                    code,
+                                )
+                                return await self.gemini_deep_research_raw(
+                                    query,
+                                    agent=agent,
+                                    max_attempts=max_attempts,
+                                    poll_interval=poll_interval,
+                                    resume_job_id=None,
+                                    on_job_started=on_job_started,
+                                )
+                            return {
+                                "status": "error",
+                                "error_message": (
+                                    "Research error: the resumed Gemini research job "
+                                    f"is no longer retrievable (HTTP {code}). This "
+                                    "research stream was lost and was NOT "
+                                    "re-dispatched, so nothing has been charged twice."
+                                ),
+                            }
+                        raise
                     interaction = g.json()
                     status = interaction.get("status")
                     if status in ("completed", "done"):
@@ -1263,6 +1384,8 @@ class AuditedLLMClient:
         max_attempts: int = 70,
         poll_interval: int = 30,
         max_connect_retries: int = 3,
+        resume_job_id: str | None = None,
+        on_job_started: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
         """Poll the OpenAI deep-research Responses API and return the canonical envelope.
 
@@ -1271,6 +1394,18 @@ class AuditedLLMClient:
         Transient connection/timeout errors on the initial responses.create call are
         retried up to max_connect_retries times with exponential back-off (2**attempt s).
         Clean failure statuses ("failed", "cancelled", "incomplete") are NOT retried.
+
+        R7 (plan 15.2-16) — the same two additive keyword-only parameters as the
+        Gemini method, with the same contract: `resume_job_id` skips
+        `responses.create` entirely and reconnects to the existing background
+        response; `on_job_started` is awaited once with a FRESH response id and
+        is best-effort.
+
+        THE ONE OPENAI-SPECIFIC DIFFERENCE. A background response is retained
+        for roughly ten minutes after it finishes, so a resume that arrives late
+        gets `NotFoundError` / HTTP 404. Under DEC-2 that DEGRADES this one
+        stream with a named reason (`RESUME_REDISPATCH` false, the default); it
+        never crashes the run and never silently pays for the job twice.
         """
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key:
@@ -1291,15 +1426,78 @@ class AuditedLLMClient:
             rep = repr(exc)
             return "Connection" in rep or "Timeout" in rep or "Connection" in name or "Timeout" in name
 
+        # --- R7 (plan 15.2-16): resume support -------------------------------
+        # The local transient-error predicate above is the CREATE-retry rule and
+        # is deliberately untouched. The two helpers below concern a RESUMED id
+        # only, which is a different question with a different answer.
+        resumed_id = safe_job_id(resume_job_id) if resume_job_id else None
+        if resume_job_id and resumed_id is None:
+            log.warning(
+                "OpenAI deep-research: the recorded response id was refused by the "
+                "job-id guard, so this angle is dispatched fresh rather than "
+                "polled — nothing was reconnected"
+            )
+
+        def _is_not_found(exc: Exception) -> bool:
+            """True for the "this response no longer exists" family. Never raises.
+
+            Read defensively across openai package versions: the class NAME, then
+            any int/str status attribute, then a nested response object.
+            """
+            try:
+                if type(exc).__name__ == "NotFoundError":
+                    return True
+                for attr in ("status_code", "status", "code"):
+                    value = getattr(exc, attr, None)
+                    if isinstance(value, bool):
+                        continue
+                    if isinstance(value, int) and value == 404:
+                        return True
+                    if isinstance(value, str) and value.strip() == "404":
+                        return True
+                nested = getattr(exc, "response", None)
+                return getattr(nested, "status_code", None) == 404
+            except Exception:  # noqa: BLE001 — a predicate that raises is worse than a False
+                return False
+
+        async def _resume_gone_result() -> dict:
+            """DEC-2: degrade this stream by default; re-dispatch only on request."""
+            if RESUME_REDISPATCH:
+                log.warning(
+                    "OpenAI deep-research: the resumed response is gone and "
+                    "NESTOR_TRIBUNAL_RESUME_REDISPATCH is on — dispatching a FRESH, "
+                    "separately billed job"
+                )
+                return await self.openai_deep_research_raw(
+                    query,
+                    model=model,
+                    max_attempts=max_attempts,
+                    poll_interval=poll_interval,
+                    max_connect_retries=max_connect_retries,
+                    resume_job_id=None,
+                    on_job_started=on_job_started,
+                )
+            return {
+                "status": "error",
+                "error_message": (
+                    "Research error: the resumed OpenAI research job is no longer "
+                    "retrievable (a background response is kept for about ten "
+                    "minutes after it finishes). This research stream was lost and "
+                    "was NOT re-dispatched, so nothing has been charged twice."
+                ),
+            }
+
         try:
             from openai import AsyncOpenAI  # noqa: PLC0415 -- construction allowed here only
 
             client = AsyncOpenAI(api_key=api_key, timeout=3600)
 
             # ---- Retry loop for the initial create call ----
+            # R7: `range(0)` on a resume — the job already exists and is already
+            # paid for, so `responses.create` is never called.
             response = None
             last_exc: Exception | None = None
-            for attempt in range(max_connect_retries):
+            for attempt in range(0 if resumed_id is not None else max_connect_retries):
                 try:
                     response = await client.responses.create(
                         model=model,
@@ -1322,7 +1520,7 @@ class AuditedLLMClient:
                     else:
                         raise  # non-transient -- propagate immediately
 
-            if response is None:
+            if response is None and resumed_id is None:
                 return {
                     "status": "error",
                     "error_message": (
@@ -1331,10 +1529,62 @@ class AuditedLLMClient:
                     ),
                 }
 
+            if resumed_id is not None:
+                # RECONNECT IMMEDIATELY — no create, and no initial 30 s sleep, so
+                # an expired id is discovered now rather than half a minute from
+                # now.
+                log.warning(
+                    "OpenAI deep-research: RESUMING the existing response %s "
+                    "(model=%s) — no second job was dispatched and nothing was "
+                    "charged twice",
+                    resumed_id, model,
+                )
+                try:
+                    response = await client.responses.retrieve(resumed_id)
+                except Exception as exc:  # noqa: BLE001 — an expired resume degrades, never crashes
+                    if _is_not_found(exc):
+                        return await _resume_gone_result()
+                    raise
+            else:
+                # A FRESH background job exists: record its id before the long
+                # poll, so a crash or a park mid-poll can reconnect to it.
+                fresh_id = safe_job_id(getattr(response, "id", None))
+                if fresh_id is None:
+                    return {
+                        "status": "error",
+                        "error_message": (
+                            "Research error: the response id returned by the provider "
+                            f"is malformed and was refused: "
+                            f"{str(getattr(response, 'id', ''))[:80]!r}"
+                        ),
+                    }
+                if on_job_started is not None:
+                    try:
+                        await on_job_started(fresh_id)
+                    except Exception as cb_exc:  # noqa: BLE001 — checkpoint writes are best-effort
+                        log.warning(
+                            "OpenAI deep-research: on_job_started callback failed "
+                            "(%r) — the job is running but was not recorded, so a "
+                            "resume would re-dispatch it",
+                            cb_exc,
+                        )
+
             # ---- Polling loop ----
+            # R7: on a resume the first iteration EVALUATES the response we just
+            # retrieved instead of sleeping and retrieving again. One flag, one
+            # shot — the loop below is otherwise the pre-15.2 loop unchanged.
+            _have_fresh = resumed_id is not None
             for _ in range(max_attempts):
-                await asyncio.sleep(poll_interval)
-                response = await client.responses.retrieve(response.id)
+                if _have_fresh:
+                    _have_fresh = False
+                else:
+                    await asyncio.sleep(poll_interval)
+                    try:
+                        response = await client.responses.retrieve(response.id)
+                    except Exception as exc:  # noqa: BLE001
+                        if resumed_id is not None and _is_not_found(exc):
+                            return await _resume_gone_result()
+                        raise
 
                 if response.status == "completed":
                     report = response.output_text
