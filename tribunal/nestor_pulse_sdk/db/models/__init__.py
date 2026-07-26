@@ -13,6 +13,7 @@ from nestor_pulse_sdk.db.models.output import Output
 from nestor_pulse_sdk.db.models.source import Source
 from nestor_pulse_sdk.db.models.claim import Claim
 from nestor_pulse_sdk.db.models.claim_source import ClaimSource
+from nestor_pulse_sdk.db.models.research_gap import ResearchGap
 from nestor_pulse_sdk.db.models.audit_log import AuditLog
 from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
 
@@ -25,6 +26,7 @@ __all__ = [
     "Source",
     "Claim",
     "ClaimSource",
+    "ResearchGap",
     "AuditLog",
     "VerificationVerdict",
 ]

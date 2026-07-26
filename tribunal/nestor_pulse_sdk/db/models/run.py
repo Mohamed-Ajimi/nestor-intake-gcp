@@ -111,13 +111,16 @@ class Run(Base):
             "engine IN ('adk','sdk','tribunal')", name="ck_run_engine"
         ),
         # D-09 status constraint (+ 'needs_input' clarification pause, migration
-        # 0005; + 'needs_report_spec' report-spec pause, migration 0007). The DB
-        # CHECK already carries 'needs_report_spec' (migration 0007 drops+recreates
-        # it); this ORM literal is synced to match so `alembic check`/autogenerate
-        # sees no ORM/DB drift (13-RESEARCH.md Pitfall 4 -- cosmetic, no DB change).
+        # 0005; + 'needs_report_spec' report-spec pause, migration 0007;
+        # + the degraded-completion and parked states, migration 0013 (D-12/D-17)).
+        # Migration 0013 drops+recreates the DB CHECK with these NINE literals --
+        # a strict superset of the previous seven, so no existing row can violate
+        # it. This ORM literal is synced to match IN THE SAME COMMIT as the DDL so
+        # `alembic check`/autogenerate sees no ORM/DB drift (13-RESEARCH.md
+        # Pitfall 4, threat T-15.2-06 -- cosmetic here, no DB change).
         CheckConstraint(
-            "status IN ('queued','running','completed','failed','cancelled',"
-            "'needs_input','needs_report_spec')",
+            "status IN ('queued','running','completed','completed_degraded','parked',"
+            "'failed','cancelled','needs_input','needs_report_spec')",
             name="ck_run_status",
         ),
         # (tenant_id, idempotency_key) UNIQUE -- repeat POST returns existing run.
