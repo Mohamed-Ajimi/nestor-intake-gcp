@@ -202,3 +202,83 @@ research and the workshop, and not yet met for gates/verify**.
 **Suggested fix (not done here):** wire the three restores once
 `test_engine_e2e_stubbed.py` exists to prove the index-rebuild, or after the
 August live run makes a real park available to replay.
+
+## From 15.2-19 (2026-07-26)
+
+### D19-1 — `test_mail_render.py::test_invite_carries_link` has been failing, in no gate
+
+**Discovered:** Task 1 verification (observed in BOTH the RED and the GREEN build).
+**Scope:** pre-existing, unrelated to plan 15.2-19.
+
+The test asserts the raw action link
+`https://auth.example/action?mode=resetPassword&oobCode=XYZ123` appears in the
+rendered invite body. Jinja `autoescape` is ON, so the `&` is rendered as `&amp;`
+and the raw substring is never present. The rendered HTML *does* contain
+`...mode=resetPassword&amp;oobCode=XYZ123`, i.e. the link is correct and the mail
+works — the ASSERTION is wrong, not the renderer.
+
+Measured in Cloud Build `52e63276` (before this plan's changes): `7 failed, 24
+passed`, of which 6 failures were this plan's deliberate RED and the 7th was this
+test. After the plan: `1 failed, 36 passed` — the same single pre-existing failure.
+
+**Why this went unnoticed:** `test_mail_render.py` carries no `integration` marker,
+and the repo-ROOT `cloudbuild.test.yaml` — the only committed backend gate — runs
+`pytest tests -m integration`. So the file runs in NO committed gate config. Same
+class as D9-3 / D15-1 / D16-1.
+
+**Not fixed here** because it is outside this plan's blast radius (the invite mail
+is Phase-11 work) and because the honest fix is two decisions, not one: correct the
+assertion to expect the escaped form, AND decide whether the non-integration unit
+tests get a committed gate at all. Natural home: **15.2-17**'s green-gate sweep,
+which already inherits D9-3, D15-1 and D16-1.
+
+### D19-2 — the non-integration backend unit suite runs in NO committed gate
+
+**Discovered:** Task 1 / Task 2 verification.
+**Scope:** gate-coverage gap, pre-existing, repo-wide.
+
+`cloudbuild.test.yaml` (repo root, the only backend build config in the tree) runs
+`python -m pytest tests -m integration`. Everything without that marker — including
+`test_mail_render.py` and `test_research_run_task.py`, which between them hold all
+12 of this plan's new non-DB proofs — is deselected and never runs on any committed
+gate. Measured: the integration gate reports `155 deselected`.
+
+This plan's 12 unit tests WERE proven green, out of band, in Cloud Build
+`76153e23` against an ad-hoc uncommitted config (`python:3.12-slim`, no DB, the two
+files by name). Deliberately not committed, for the same reason 15.2-16 gave for
+D16-1: this phase already has four gate configs with assigned owners, and adding a
+fifth is a structural decision, not an executor's call.
+
+This plan's four *denial* tests are NOT affected — `test_research_cross_tenant.py`
+is `integration`-marked and all four ran and passed by name in the committed gate.
+
+**Suggested fix (not done here):** add a second step to `cloudbuild.test.yaml`
+running `pytest tests -m "not integration"`, or mark the affected files. Either
+changes what the required merge gate means. Natural home: **15.2-17**.
+
+### D19-3 — D9-1 (Windows CRLF vs LF blobs) is still live despite `.gitattributes`
+
+**Discovered:** Task 3 verification.
+**Scope:** pre-existing, repo-wide, unrelated to plan 15.2-19.
+
+A `.gitattributes` now exists at the repo root, but `npm run lint` still reports
+**25,971 errors**, essentially all `Delete ␍` from `eslint-plugin-prettier`, across
+files this plan never touched (`vitest.config.ts`, `eslint.config.js`, ...). The
+working tree is still CRLF while the blobs are LF, so the whole-repo lint command
+remains unusable as a local gate on this machine. It is presumably green in Linux
+CI.
+
+**How 15.2-19 proved no regression anyway** (the method is worth reusing): for each
+touched frontend file, the `HEAD` blob and the working copy were both normalised to
+LF into sibling temp files and linted separately, then the counts compared.
+Result — `research.ts` 16 vs 16, `ResearchRunProgress.tsx` 11 vs 11,
+`admin.pulse.intakes.$id.tsx` 1173 vs 1173. Zero new findings. Two authored lines
+were reshaped during this check to keep the counts identical (a collapsed
+`resumeResearch` signature and a single-line `<ResearchRunProgress …/>` render
+site, because that JSX region carries pre-existing indentation drift that taxes
+every added line).
+
+**Suggested fix (not done here):** verify the `.gitattributes` actually covers
+`*.ts`/`*.tsx`/`*.js` with `eol=lf` and re-normalise the working tree
+(`git add --renormalize .`), or set `core.autocrlf=input` on the dev box. Repo-wide,
+well outside a single plan's blast radius.
