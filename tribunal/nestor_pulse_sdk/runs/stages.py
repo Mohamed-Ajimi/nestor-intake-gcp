@@ -38,14 +38,30 @@ log = logging.getLogger(__name__)
 ENGINE_STAGES: dict[str, list[dict[str, str]]] = {
     "tribunal": [
         {"key": "intake",            "label": "Adaptive intake"},
+        # WR-03 (15.2 plan 03): declared BEFORE any 15.2 plan writes the key, so
+        # the UI never renders a bare unlabelled key and RunMetrics.stages never
+        # omits the stage the run reports being in. Placed between intake and
+        # research_division because the workshop's WINNING sub-questions are what
+        # research_division.divide() consumes (D2–D7; wired by plan 15.2-13).
+        {"key": "workshop",          "label": "Question workshop"},
         {"key": "research_division", "label": "Research division"},
         {"key": "deep_research",     "label": "Deep research"},
+        # WR-03 (15.2 plan 03): the FOURTH peer research stream (D10) — Nestor's
+        # own researcher runs alongside the three third-party providers, so it is
+        # declared immediately after deep_research rather than nested inside it
+        # (wired by plans 15.2-12/13).
+        {"key": "own_research",      "label": "Own research"},
         {"key": "distill",           "label": "Claim distillation"},
+        # WR-03 (15.2 plan 03): D9/D11 put the cross-provider merge BEFORE the
+        # verification gates, and the D-14 fallback distillation must have
+        # produced its claims first — hence between distill and gate
+        # (wired by plan 15.2-15).
+        {"key": "merge",             "label": "Cross-provider merge"},
         # WR-03: the pipeline has been writing this key since Phase 15.1
         # (pipeline.py:536-562) while the schema never declared it — so
         # run.current_stage reported a stage RunMetrics.stages omitted, and the
-        # UI rendered the raw key with no label. Declared here, between distill
-        # and verify, which is where the gates actually run.
+        # UI rendered the raw key with no label. Declared here, between the
+        # cross-provider merge and verify, which is where the gates actually run.
         {"key": "gate",              "label": "Verification gates"},
         {"key": "verify",            "label": "Skeptic verification"},
         {"key": "adjudicate",        "label": "Adjudication"},

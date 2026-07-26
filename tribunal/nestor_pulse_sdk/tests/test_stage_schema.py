@@ -63,13 +63,31 @@ def _pipeline_source() -> str:
 # 1. WR-03 — the gate stage is declared, and in the right place
 # ---------------------------------------------------------------------------
 def test_gate_stage_is_declared_between_distill_and_verify():
+    """The gate stage is declared exactly once, labelled, and in its running order.
+
+    WHY THE ADJACENCY MOVED (Phase 15.2 plan 03). This test originally pinned
+    `gate == distill + 1`, because in 15.1 the gates ran immediately after claim
+    distillation. 15.2's D9/D11 insert a CROSS-PROVIDER MERGE between the two: the
+    per-provider claim sets (plus the D-14 fallback distillation's output) are merged
+    before anything is gated. So the chain is now
+    `distill → merge → gate → verify`.
+
+    The WR-03 property this test exists to protect is UNCHANGED: every stage the
+    pipeline reports is declared, in the order it runs. Only the recorded order is
+    different, because the pipeline's order is different. The generalised guard in
+    section 4 below is untouched.
+    """
     keys = _keys("tribunal")
 
     assert keys.count("gate") == 1, "the gate stage must be declared exactly once"
 
-    # ORDER is the point: the schema is what the UI renders as an ordered checklist,
-    # and the gates run after claim distillation and before skeptic verification.
-    assert keys.index("gate") == keys.index("distill") + 1
+    # ORDER is the point: the schema is what the UI renders as an ordered checklist.
+    # Claim distillation → cross-provider merge → the gates → skeptic verification.
+    assert (
+        keys.index("distill") < keys.index("merge") < keys.index("gate") < keys.index("verify")
+    ), f"the distill → merge → gate → verify chain is out of order: {keys}"
+    assert keys.index("merge") == keys.index("distill") + 1
+    assert keys.index("gate") == keys.index("merge") + 1
     assert keys.index("gate") == keys.index("verify") - 1
 
     label = next(s["label"] for s in stages_for("tribunal") if s["key"] == "gate")
@@ -77,6 +95,56 @@ def test_gate_stage_is_declared_between_distill_and_verify():
 
     # The adk schema is a different pipeline and must NOT have gained the entry.
     assert "gate" not in _keys("adk")
+
+
+# ---------------------------------------------------------------------------
+# 1b. WR-03 for the three stages Phase 15.2 adds
+# ---------------------------------------------------------------------------
+def test_15_2_stage_keys_are_declared_with_labels():
+    """`workshop`, `own_research` and `merge` are declared BEFORE any plan writes them.
+
+    WR-03 is a *declare-first* rule, not a clean-up-after rule: `RunMetrics.stages`
+    is built from `stages_for(run.engine)` (`runs/api.py:846`), so a stage the
+    pipeline reports but the schema omits ships as a bare key with no label and is
+    missing from the ordered checklist entirely. Plans 15.2-10/11/12/13/15 write
+    these three keys; this assertion is what makes their writes renderable.
+    """
+    keys = _keys("tribunal")
+    labels = {s["key"]: s["label"] for s in stages_for("tribunal")}
+
+    # The exact ordered schema the 15.2 engine reports against.
+    assert keys == [
+        "intake",
+        "workshop",
+        "research_division",
+        "deep_research",
+        "own_research",
+        "distill",
+        "merge",
+        "gate",
+        "verify",
+        "adjudicate",
+        "coverage",
+        "conflict",
+        "synthesize",
+    ], f"the tribunal stage order changed: {keys}"
+
+    assert labels["workshop"] == "Question workshop"
+    assert labels["own_research"] == "Own research"
+    assert labels["merge"] == "Cross-provider merge"
+
+    # Placement, stated as the relationships that make each one meaningful:
+    #   workshop's winning sub-questions feed research_division.divide() (D2-D7)
+    assert keys.index("workshop") == keys.index("intake") + 1
+    assert keys.index("workshop") == keys.index("research_division") - 1
+    #   own_research is the FOURTH peer research stream, alongside the three
+    #   third-party providers (D10) — not a step inside deep_research
+    assert keys.index("own_research") == keys.index("deep_research") + 1
+
+    # The adk schema is a different pipeline and must NOT have gained the entries.
+    assert "workshop" not in _keys("adk")
+    assert "own_research" not in _keys("adk")
+    assert "merge" not in _keys("adk")
 
 
 # ---------------------------------------------------------------------------
