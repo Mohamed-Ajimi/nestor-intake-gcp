@@ -324,6 +324,7 @@ class AuditedLLMClient:
         run_id: uuid.UUID,
         tenant_id: uuid.UUID,
         model: str,
+        audit_out: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -336,6 +337,35 @@ class AuditedLLMClient:
           - usage.cache_creation_input_tokens (Pitfall 6 -- for cost formula)
 
         Returns the raw anthropic response.
+
+        audit_out (F4 -- 15.2 plan 03, ADDITIVE):
+          An OPTIONAL caller-owned dict. When supplied, it is populated AFTER the
+          audit row is written with audit_id / cost_usd / provider / model /
+          duration_ms.
+
+          WHY IT EXISTS. `StageDetailItem.audit_id` (`runs/schemas.py:167`) is the
+          D15 feed's drill-down target -- the frontend already renders it and
+          `GET /{run_id}/audit/{audit_id}` (`runs/api.py:885`) already serves it,
+          tenant-scoped. But only the two-phase deep-research pair exposed an id
+          (`AuditHandle.audit_id`); this method generated `audit_id` internally and
+          threw it away, so a workshop / skeptic / gate feed row had no way to
+          learn which call it represented.
+
+          WHY AN OUT-PARAM AND NOT A CHANGED RETURN TYPE. Every existing call site
+          consumes the raw provider response directly; widening the return to a
+          tuple would break all of them. An out-param on a caller-owned dict is
+          purely additive -- omit it and nothing about this method changes.
+
+          The 15.2 outline floats `audit_out` and `with_audit_id=True` as
+          alternatives. This is the ONE mechanism; do not add a second.
+
+          It is declared as an EXPLICIT keyword-only parameter, deliberately ahead
+          of **kwargs, because kwargs is forwarded VERBATIM to the provider SDK
+          below -- an unknown key there is an HTTP 400.
+
+          It writes NOTHING to the database: no new audit column, no new field in
+          the frozen hash-chain payload. `verify_chain` is unaffected (EU AI Act
+          Art. 12; see the Canonical JSON rule in this module's docstring).
         """
         async with _SEMAPHORE:
             started = time.monotonic()
@@ -413,6 +443,19 @@ class AuditedLLMClient:
                     hash=row_hash,
                 )
 
+            # F4: hand the caller the id of the row that was just written, so a D15
+            # feed row can carry a drill-down that actually resolves. Populated
+            # AFTER the write (the id is final and the row exists) and never read
+            # back -- nothing here reaches the payload or the audit row.
+            self._fill_audit_out(
+                audit_out,
+                audit_id=audit_id,
+                cost_usd=cost_usd,
+                provider="anthropic",
+                model=model,
+                duration_ms=duration_ms,
+            )
+
         return resp
 
     async def gemini_generate(
@@ -422,6 +465,7 @@ class AuditedLLMClient:
         tenant_id: uuid.UUID,
         model: str,
         contents: Any,
+        audit_out: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -430,6 +474,12 @@ class AuditedLLMClient:
         google-genai exposes usage_metadata:
           - prompt_token_count
           - candidates_token_count
+
+        audit_out (F4 -- 15.2 plan 03, ADDITIVE): see `anthropic_messages` for the
+        full rationale. Same contract, `provider == "google"`. Optional, keyword-only,
+        declared ahead of **kwargs so it is never forwarded to the provider SDK
+        (an unknown key there is an HTTP 400), populated after the audit row is
+        written, and writing nothing to the DB or the frozen hash-chain payload.
         """
         async with _SEMAPHORE:
             started = time.monotonic()
@@ -500,7 +550,53 @@ class AuditedLLMClient:
                     hash=row_hash,
                 )
 
+            # F4 -- see anthropic_messages. Additive, post-write, never read back.
+            self._fill_audit_out(
+                audit_out,
+                audit_id=audit_id,
+                cost_usd=cost_usd,
+                provider="google",
+                model=model,
+                duration_ms=duration_ms,
+            )
+
         return resp
+
+    @staticmethod
+    def _fill_audit_out(
+        audit_out: Any,
+        *,
+        audit_id: uuid.UUID,
+        cost_usd: Any,
+        provider: str,
+        model: str,
+        duration_ms: int,
+    ) -> None:
+        """Populate a caller-supplied out-param dict with this call's audit facts.
+
+        F4 (15.2 plan 03). STRICTLY additive and one-way: this writes only into the
+        caller's own dict, is never read back, and touches neither the audit row nor
+        the frozen hash-chain payload.
+
+        A caller that passes something which is not a dict must not be able to break
+        an LLM call that already succeeded and was already audited -- so a non-dict
+        is a debug line, not an exception.
+
+        `cost_usd` is stringified, never float()ed: `StageDetailItem.cost_usd` is
+        `str | None` and the exact Decimal cent text must survive into JSONB.
+        """
+        if not isinstance(audit_out, dict):
+            if audit_out is not None:
+                log.debug(
+                    "audit_out is %s, not a dict -- audit facts not surfaced",
+                    type(audit_out).__name__,
+                )
+            return
+        audit_out["audit_id"] = str(audit_id)
+        audit_out["cost_usd"] = str(cost_usd)
+        audit_out["provider"] = provider
+        audit_out["model"] = model
+        audit_out["duration_ms"] = duration_ms
 
     async def openai_response(
         self,
