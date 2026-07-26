@@ -758,7 +758,12 @@ def test_replay_makes_no_live_llm_calls():
 
 def test_worker_persists_the_replayed_funnel_onto_the_run_row():
     """The replayed funnel reaches `run.verification_summary`, in the SAME statement
-    that sets status='completed'.
+    that sets the terminal status.
+
+    15.2-09 note: the completion UPDATE now binds `status=:final_status` (a
+    `terminal_state()`-computed value) instead of the literal `'completed'`, so the
+    statement is matched on that bind name. The single-statement property this test
+    exists to pin is unchanged.
 
     Closes the gap plan 15.1-08 could not close inside its file boundary: nothing
     asserted that the funnel lands in the COLUMN. It is asserted here with a fake
@@ -826,7 +831,7 @@ def test_worker_persists_the_replayed_funnel_onto_the_run_row():
                 _run(worker_mod.execute_run(claimed))
 
     completions = [
-        (sql, params) for sql, params in executed if "status='completed'" in sql
+        (sql, params) for sql, params in executed if "status=:final_status" in sql
     ]
     assert len(completions) == 1, (
         f"expected exactly one completion UPDATE, got {len(completions)}: "

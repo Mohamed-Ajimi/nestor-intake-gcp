@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nestor_pulse_sdk.db.base import get_sessionmaker
 from nestor_pulse_sdk.db.rls import set_tenant_context
+from nestor_pulse_sdk.pipeline.tribunal.reliability import terminal_state
 
 log = structlog.get_logger(__name__)
 # Unique per PROCESS: Cloud Run instances can share hostname ('localhost') and
@@ -113,7 +114,9 @@ async def execute_run(claimed: dict) -> None:
     Ordering:
       1. dispatch_runner(engine) -- pure Python, no DB
       2. runner.run(...) -- may take minutes for deep research
-      3. Post-completion: set_tenant_context + UPDATE run SET status='completed'
+      3. Post-completion: set_tenant_context + UPDATE run SET the terminal status
+         computed by terminal_state() -- completed, or completed_degraded when a
+         reason was named (D-12)
       4. On exception: set_tenant_context + UPDATE run SET status='failed'
     """
     from nestor_pulse_sdk.runs.adapter import dispatch_runner
@@ -199,7 +202,73 @@ async def execute_run(claimed: dict) -> None:
                 checked=_summary.get("checked"),
             )
 
-        # SUCCESS: update status to completed
+        # --- D-12 REASON LIST + terminal status -----------------------------
+        # The region between the BEGIN/END markers below is read as TEXT and pinned
+        # by tests/test_status_gates.py (the D-12 "these two never degrade" test).
+        # Keep that test's own name OUT of the region: it contains the very token
+        # the test forbids, so mentioning it inside would fail the gate.
+        # BEGIN reason-building region
+        #
+        # The TOP-LEVEL result key `degradation_reasons` is the contract, and its
+        # producer is TribunalPipeline.run() in plan 15.2-07 (wave 4): plan 07
+        # declares the run's ONE accumulator plus a `_note_degradation(reason)`
+        # closure at the top of run() and publishes it here; plans 15.2-11 / 12 /
+        # 14 / 16 are the stages that append reasons through that closure. Plan
+        # 15.2-08 (wave 5) normalises the SAME list onto the funnel as
+        # verification_summary["degradation_reasons"] -- that nested copy is the
+        # READ-side surfacing and is NOT what this line reads.
+        #
+        # This plan is wave 2 and plan 07 is wave 4, so at the moment this lands
+        # NOTHING writes the key yet and `_reasons` starts empty, leaving today's
+        # behaviour unchanged. THAT IS INTENTIONAL AND CORRECT, not a bug -- do
+        # not "fix" a read that has no writer yet. Until 07 lands, the only reason
+        # this branch can add is the bucket-3 sentence below, computed here from
+        # the verification funnel.
+        _raw_reasons = result.get("degradation_reasons") if isinstance(result, dict) else None
+        _reasons: list[str] = [
+            str(r) for r in (_raw_reasons or []) if isinstance(r, str) and r.strip()
+        ]
+        if _has_summary and _summary.get("should_have_been_checked"):
+            # A worded reason a human reads, following the register at
+            # verification/report.py:184-190 -- never a code.
+            _reasons.append(
+                f"VERIFICATION DEGRADED -- "
+                f"{int(_summary.get('should_have_been_checked') or 0)} claims were "
+                "selected for fact-checking but were not checked; they ship "
+                "unexamined."
+            )
+        # END reason-building region. Nothing about a RECOVERED retry and nothing
+        # about a pending Gemini grounding fee may ever enter this list (D-12):
+        # both are designed paths, not shortfalls, and demoting them would drain
+        # completed_degraded of its meaning.
+
+        # synthesis_ran / hard_wall are PINNED on this branch because this IS the
+        # success branch -- a report is in hand. The park path (F6's
+        # InsufficientProvidersError catch and the hard-wall park) is 15.2-16's
+        # work; pinning them here keeps terminal_state() from returning 'parked'
+        # down a path that already has a deliverable.
+        _final_status = terminal_state(
+            streams_lost=int(result.get("streams_lost") or 0) if isinstance(result, dict) else 0,
+            streams_total=int(result.get("streams_total") or 1) if isinstance(result, dict) else 1,
+            verify_ran=bool(result.get("verify_ran", True)) if isinstance(result, dict) else True,
+            synthesis_ran=True,
+            hard_wall=False,
+            degradation_reasons=_reasons,
+        )
+
+        if _reasons:
+            # Persist the reasons as a SIBLING key on the funnel, WRITE SIDE ONLY:
+            # build_verification_summary() and RECORDED_FUNNEL_COUNTS are NOT
+            # touched (Pitfall 3 -- loader.py compares the funnel by full dict
+            # equality). Copy, never mutate the pipeline's dict in place. When
+            # there is no funnel at all the row carries degradation_reasons alone:
+            # report.py's _accounting() returns None on missing funnel keys, so the
+            # report still honestly says "no gate data" while naming the degradation.
+            _summary = {**_summary} if _has_summary else {}
+            _summary["degradation_reasons"] = _reasons
+            _has_summary = True
+
+        # SUCCESS: update status to the computed terminal state
         async with sessionmaker() as session:
             async with session.begin():
                 # SET LOCAL app.tenant_id BEFORE any tenant-scoped query (T-06-02)
@@ -216,16 +285,19 @@ async def execute_run(claimed: dict) -> None:
                 # is no funnel the column is left NULL rather than zeroed: report.py
                 # renders NULL as "this run has no gate data", while a zeroed funnel
                 # would certify a clean bucket 3 that nobody ever measured
-                # (T-15.1-38). No new status is introduced (G-10; 15.2's R6 owns it).
+                # (T-15.1-38). 15.2's R6 promoted the marker into a real terminal
+                # state: the status below is terminal_state()-computed, and its
+                # reason list rides in this SAME statement (T-15.2-23 -- a run must
+                # never be able to say 'completed' while its marker is missing).
                 _set_summary = (
                     "verification_summary = CAST(:vsummary AS JSONB), " if _has_summary else ""
                 )
-                _params = {"id": claimed["id"]}
+                _params = {"id": claimed["id"], "final_status": _final_status}
                 if _has_summary:
                     _params["vsummary"] = _json.dumps(_summary, ensure_ascii=False)
                 completed = await session.execute(
                     text(
-                        "UPDATE run SET status='completed', completed_at=NOW(), "
+                        "UPDATE run SET status=:final_status, completed_at=NOW(), "
                         + _set_summary +
                         "cost_usd_total = COALESCE("
                         "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "

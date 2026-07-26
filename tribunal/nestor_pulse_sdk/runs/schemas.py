@@ -74,9 +74,11 @@ def report_readable(status: str) -> bool:
         reads through `get_db_session` -> `set_tenant_context` -> FORCE RLS, and
         the `scalar_one_or_none()` -> 404 block stays ABOVE this gate: a
         cross-tenant `run_id` is a **404, never a 403** (the deliberate
-        non-distinguishability documented at runs/api.py:869-873).
+        non-distinguishability documented in `get_run_verification`'s docstring
+        in runs/api.py).
 
-    (b) **F1** -- `GET /{run_id}/verification` (router `runs/api.py:854`) is
+    (b) **F1** -- `GET /{run_id}/verification` (`get_run_verification` in
+        `runs/api.py`) is
         deliberately gate-free and is already correct for `parked`, because a
         parked run must be able to show *why* it stopped. Do not add a gate
         there. `tests/test_status_gates.py::test_verification_endpoint_has_no_status_gate`
