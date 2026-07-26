@@ -63,6 +63,7 @@ from app.db.stream_session import (
 from app.research import brief as brief_mod
 from app.research import tribunal_client
 from app.research.bundle import build_bundle_zip
+from app.research.run_status import RESEARCH_TERMINAL, is_research_success
 from app.research.run_task import run_poll_driver
 from app.storage import gcs
 from app.storage.keys import build_object_key
@@ -343,8 +344,11 @@ def get_bundle_url(
     * ``identity.role != "superadmin"`` → 404 (Open Q2 defense-in-depth; a client is
       user-role and RUN-03 says it can NEVER reach the download — Pitfall 5, NOT 403).
     * a cross-tenant / missing intake or run → 404 (existence hidden, D-07).
-    * ``status != "completed"`` or ``chain_status != "verified"`` → 409 (the D-06/D-09
-      complete-but-locked availability gate).
+    * not :func:`~app.research.run_status.is_research_success` or
+      ``chain_status != "verified"`` → 409 (the D-06/D-09 complete-but-locked
+      availability gate). A ``completed_degraded`` run IS downloadable (D-09) — only
+      the *status* half is widened; the chain conjunct is untouched, so a
+      broken-chain degraded run is still locked.
     * ``bundle_key IS NULL`` on a verified run → driver-death recovery: build + upload the
       bundle lazily (:func:`_build_and_store_bundle`), then mint against the new key.
 
@@ -363,8 +367,10 @@ def get_bundle_url(
     if run is None or str(run.intake_id) != str(intake_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
 
-    # Availability gate (D-06/D-09): only a completed + verified run may be downloaded.
-    if run.status != "completed" or run.chain_status != "verified":
+    # Availability gate (D-06/D-09): only a SUCCESS-terminal + verified run may be
+    # downloaded. STATUS half only is widened — the chain conjunct, the superadmin-first
+    # 404 above and the existence-hidden 404s are an AUTHORIZATION contract, unchanged.
+    if not is_research_success(run.status) or run.chain_status != "verified":
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Raw output is not available"
         )
@@ -628,8 +634,9 @@ TICK_SECONDS = 2.0  # one indexed SELECT every 2s
 HEARTBEAT_SECONDS = 15.0  # ``: ping`` keeps proxies/Cloud Run from reaping idle streams
 MAX_STREAM_SECONDS = 10 * 60  # in-handler cap; a run this long is treated as hung
 # The RESEARCH terminal set — Tribunal literals carried VERBATIM (D-05 boundary). NEVER the
-# skill-run success/failed vocabulary (16-RESEARCH Pitfall 3 / AP-6).
-RESEARCH_TERMINAL = {"completed", "failed", "cancelled"}
+# skill-run success/failed vocabulary (16-RESEARCH Pitfall 3 / AP-6). Defined ONCE in
+# app.research.run_status and re-exported here so the SSE handler and the poll driver
+# cannot drift apart again; ``parked`` is deliberately not a member (see that module).
 # Defeat proxy buffering so events arrive live per-tick, not in a burst at close.
 SSE_HEADERS = {
     "Cache-Control": "no-cache",

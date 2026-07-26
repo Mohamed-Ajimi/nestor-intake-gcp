@@ -33,6 +33,8 @@ from nestor_pulse_sdk.runs.schemas import (
     RunMetrics,
     RunResponse,
     VerificationReport,
+    bundle_readable,
+    report_readable,
 )
 from nestor_pulse_sdk.runs.stages import stages_for
 
@@ -584,7 +586,9 @@ async def create_comparison_critique(
 
     latest_completed: dict[str, Run] = {}
     for r in rows:
-        if r.status != "completed":
+        # D-09: report_readable, not a bare status comparison -- a degraded arm
+        # still has a report body and belongs in the critique.
+        if not report_readable(r.status):
             continue
         cur = latest_completed.get(r.engine)
         if cur is None or r.created_at > cur.created_at:
@@ -688,7 +692,9 @@ async def create_comparison_content_compare(
 
     latest_completed: dict[str, Run] = {}
     for r in rows:
-        if r.status != "completed":
+        # D-09: report_readable, not a bare status comparison -- a degraded arm
+        # still has a report body and belongs in the comparison.
+        if not report_readable(r.status):
             continue
         cur = latest_completed.get(r.engine)
         if cur is None or r.created_at > cur.created_at:
@@ -840,12 +846,14 @@ async def get_run_metrics(
         grounded_claim_count=int(grounded_claim_count),
         citation_recall=recall,
         source_count=int(source_count),
-        # Live stage progress (0006). Completed/terminal runs report 'done' so the
+        # Live stage progress (0006). Report-readable runs report 'done' so the
         # UI shows every stage green even if the last set_stage write raced the
-        # status flip.
+        # status flip. F2: this reads report_readable, so completed_degraded
+        # reports 'done' TOO -- otherwise the feed shows a permanently spinning
+        # stage on exactly the runs an operator most needs to read.
         stages=stages_for(run.engine),
         current_stage=(
-            "done" if run.status == "completed" else run.current_stage
+            "done" if report_readable(run.status) else run.current_stage
         ),
         stage_detail=run.stage_detail,
     )
@@ -871,6 +879,13 @@ async def get_run_verification(
     the run scalar_one_or_none -> 404 (T-15-06), mirroring get_run_metrics /
     renderer.get_source. There is NO distinguishable 403 -- a foreign run and a
     non-existent run look identical to the caller by design.
+
+    F1: this endpoint is DELIBERATELY status-gate-free -- it carries no
+    readability predicate and no conflict response -- and that is already correct
+    for a parked run, which must be able to show *why* it stopped. Do not add a
+    status gate here;
+    tests/test_status_gates.py::test_verification_endpoint_has_no_status_gate
+    pins it.
     """
     from nestor_pulse_sdk.verification.report import build_verification_report
 
@@ -939,12 +954,14 @@ async def get_run_report(
 
     Reads the persisted Output (markdown) the worker wrote on completion, parses
     it into sections, and joins the run's claims -> sources for the citation
-    panel. All tenant-scoped via RLS. 409 until the run is completed + persisted.
+    panel. All tenant-scoped via RLS. 409 until report_readable(run.status) --
+    i.e. completed OR completed_degraded (D-09/G-10: a degraded run's ~$45 of
+    output is never withheld); parked has no report yet and still 409s.
     """
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "run not found")
-    if run.status != "completed":
+    if not report_readable(run.status):
         raise HTTPException(409, "report not available yet")
 
     # WR-02: filter to format='markdown' (mirrors create_comparison_content_compare).
@@ -1030,10 +1047,15 @@ async def get_run_research_bundle(
     Those are DELIBERATELY EXCLUDED — the raw-output download never exposes
     discredited content. This handler returns EXACTLY ``{"cleaned_reports": [...]}``.
 
-    Gate discipline mirrors ``get_run_report``: 404 on an unknown run, 409 until the
-    run is ``completed``, 409 when no ``synthesis_cache`` Output exists yet. All
-    reads are RLS-scoped via ``Depends(get_db_session)`` (the seam's
-    ``X-Nestor-Tenant-Id`` sets the tenant GUC, so a cross-tenant run is invisible).
+    Gate discipline mirrors ``get_run_report``: 404 on an unknown run, 409 until
+    ``bundle_readable(run.status)``, 409 when no ``synthesis_cache`` Output exists
+    yet. ``bundle_readable`` is WIDER than ``report_readable``: ``parked`` is
+    readable by design (D-09) — a parked run has research in hand and the
+    superadmin must be able to inspect it before resuming, even though there is no
+    report. A parked run with no cache still hits the second 409, which is what
+    makes ``parked`` inspection-only rather than a crash. All reads are RLS-scoped
+    via ``Depends(get_db_session)`` (the seam's ``X-Nestor-Tenant-Id`` sets the
+    tenant GUC, so a cross-tenant run is invisible).
 
     READ-only: writes NO Output row, touches NO audit chain, and does NOT alter the
     frozen ``canonical_json`` payload (14 D-05).
@@ -1043,7 +1065,7 @@ async def get_run_research_bundle(
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "run not found")
-    if run.status != "completed":
+    if not bundle_readable(run.status):
         raise HTTPException(409, "bundle not available yet")
 
     body = (await session.execute(

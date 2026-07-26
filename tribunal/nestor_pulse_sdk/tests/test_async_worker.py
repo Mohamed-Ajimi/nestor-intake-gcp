@@ -302,9 +302,12 @@ class TestAsyncWorker:
                 with patch("nestor_pulse_sdk.runs.adapter.dispatch_runner", return_value=success_runner):
                     await worker_mod.execute_run(claimed)
 
-        # Should have executed an UPDATE with completed
-        assert any("completed" in s.lower() for s in sql_calls), (
-            f"Success path must UPDATE run SET status='completed'. Got: {sql_calls}"
+        # Should have executed the completion UPDATE. 15.2-09: the status is now a
+        # terminal_state()-computed bind (`status=:final_status`), not the literal
+        # 'completed', so match the bind name -- a bare "completed" substring would
+        # be satisfied by `completed_at=NOW()` alone and pin nothing.
+        assert any("status=:final_status" in s for s in sql_calls), (
+            f"Success path must UPDATE run SET status=:final_status. Got: {sql_calls}"
         )
 
         # Test FAILURE path
@@ -375,6 +378,14 @@ class TestAsyncWorker:
                     await worker_mod.execute_run(claimed)
 
         # No terminal status write at all -- the cancelled state is left untouched.
-        assert not any("status='failed'" in s or "status='completed'" in s for s in sql_calls), (
+        # 15.2-09: the success write is now `status=:final_status` (which may be
+        # completed OR completed_degraded), so that bind must be in the deny list
+        # too -- otherwise this guard would silently stop catching the success path.
+        assert not any(
+            "status='failed'" in s
+            or "status='completed'" in s
+            or "status=:final_status" in s
+            for s in sql_calls
+        ), (
             f"RunCancelled must not write failed/completed. Got: {sql_calls}"
         )

@@ -8,8 +8,9 @@ import { apiFetch, currentIdToken, type ApiResult } from "@/lib/api/client";
 // `Authorization` header), which is why a raw `fetch` + `ReadableStream` is used.
 //
 // It clones `openSkillRunStream` (skillRunStream.ts) VERBATIM except for two things:
-//   1. RESEARCH_TERMINAL = {"completed","failed","cancelled"} — the VERBATIM Tribunal
-//      terminal set (D-05 boundary), NOT the skill-run {succeeded,failed} vocabulary.
+//   1. RESEARCH_TERMINAL = {"completed","completed_degraded","failed","cancelled"} — the
+//      VERBATIM Tribunal terminal set (D-05 boundary), NOT the skill-run
+//      {succeeded,failed} vocabulary.
 //   2. the URL is `/intakes/${intakeId}/research/stream`.
 //
 // NEVER FORK THE TRANSPORT (skillRuns.ts convention): `triggerResearch` reuses `apiFetch`
@@ -206,8 +207,15 @@ export type StreamHandle = { close: () => void };
 /**
  * Terminal research-run statuses, VERBATIM from the Tribunal contract (D-05) — the
  * stream's stop condition. This is NOT the skill-run success vocabulary.
+ *
+ * `completed_degraded` IS terminal for the stream (D-12): the server closes a degraded
+ * run's stream, so leaving it out here makes the client read that close as a drop and
+ * enter its `retry()` reconnect loop until unmount — a self-inflicted request amplifier.
+ *
+ * `parked` is deliberately ABSENT pending plan 15.2-16, which builds the Resume button.
+ * A parked run must keep streaming as in-progress rather than land in a dead-end card.
  */
-const RESEARCH_TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const RESEARCH_TERMINAL = new Set(["completed", "completed_degraded", "failed", "cancelled"]);
 
 /**
  * Trigger a deep-research run for an intake. Mirrors `getSkillRunFull`: a one-shot

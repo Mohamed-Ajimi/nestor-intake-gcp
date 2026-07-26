@@ -73,7 +73,7 @@ def _healthy_funnel() -> dict:
     }
 
 
-def test_degraded_run_still_reports_completed_status():
+def test_four_terminal_states_and_completed_still_means_clean():
     """G-10: no new run status. The marker lives in the report, not the vocabulary.
 
     Rejected in G-10: a `completed_degraded` status. Four endpoints gate on the
@@ -81,22 +81,36 @@ def test_degraded_run_still_reports_completed_status():
     move with it, and a status literal missing from this Literal turns reads of
     such a run into HTTP 500s (CR-03). 15.2's R6 promotes this marker into a real
     terminal state, together with the other three.
+
+    This test IS that update: phase 15.2 / D-12 promoted the marker -- 15.2-01
+    moved `ck_run_status` to nine literals (migration 0013) and 15.2-09 moved
+    `RunStatus` and the four gates with it, so the G-10 preconditions are now
+    discharged rather than ignored.
     """
     statuses = set(get_args(RunStatus))
     assert statuses == {
         "queued",
         "running",
         "completed",
+        "completed_degraded",
         "failed",
         "cancelled",
+        "parked",
         "needs_input",
         "needs_report_spec",
     }
-    assert "completed_degraded" not in statuses
+    assert "completed_degraded" in statuses, (
+        "D-12: a run whose output fell short is written as completed_degraded, "
+        "with every reason named in words"
+    )
+    assert "parked" in statuses, (
+        "D-17/F-01: a run with no honest deliverable is parked and resumable, "
+        "and a read of it must not 500 (CR-03)"
+    )
     assert "degraded" not in statuses
     assert "completed" in statuses, (
-        "a degraded run keeps status completed -- that is what makes the report's "
-        "own marker load-bearing"
+        "completed still means CLEAN -- a run that lost anything is "
+        "completed_degraded (D-12)"
     )
 
 

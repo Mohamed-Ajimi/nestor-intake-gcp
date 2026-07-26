@@ -35,10 +35,74 @@ Engine = Literal["adk", "sdk", "tribunal"]
 # report planner parks the run there until POST /{id}/report-spec). Response
 # schemas validate FROM the DB row, so every DB-legal status must be listed --
 # a missing literal turns reads of a paused run into HTTP 500s (CR-03).
+# 'completed_degraded' (migration 0013, D-12) means the run finished but part of
+# the output fell short and EVERY reason is named in words -- it is never a
+# silent green. 'parked' (D-17/F-01) means no honest deliverable was possible
+# and a superadmin click resumes it -- it is a pause, not a failure. Which
+# leaves 'completed' meaning CLEAN: a run that lost anything is
+# 'completed_degraded', never 'completed'.
 RunStatus = Literal[
-    "queued", "running", "completed", "failed", "cancelled",
-    "needs_input", "needs_report_spec",
+    "queued", "running", "completed", "completed_degraded", "failed",
+    "cancelled", "parked", "needs_input", "needs_report_spec",
 ]
+
+# --- D-09 access model: the ONE place the status gates are defined ----------
+# Every `run.status`-based output gate in runs/api.py reads through the two
+# predicates below. They exist so the four sites that used to each carry their
+# own `status != "completed"` comparison cannot drift apart again.
+REPORT_READABLE_STATUSES: frozenset[str] = frozenset({"completed", "completed_degraded"})
+BUNDLE_READABLE_STATUSES: frozenset[str] = REPORT_READABLE_STATUSES | {"parked"}
+
+
+def report_readable(status: str) -> bool:
+    """May the caller read this run's REPORT BODY, or anything derived from it?
+
+    This is the gate for the report download (GET /{run_id}/report) and for
+    everything computed off the report body: the blind-critique input filter and
+    the content-compare filter. Takes a plain `str` because callers pass
+    `run.status` straight off the ORM row.
+
+    True for exactly {completed, completed_degraded}. A `completed_degraded` run
+    gets EVERYTHING a `completed` run gets (G-10/D-09) -- never lock the
+    superadmin out of a ~$45 run's output because one stage was gutted; the
+    degradation is named in the verification report, not enforced as a denial.
+    `parked` is FALSE: there is no report yet.
+
+    Two invariants a future editor must not break:
+
+    (a) Widening a *status* gate never widens *tenant* scope. Every caller still
+        reads through `get_db_session` -> `set_tenant_context` -> FORCE RLS, and
+        the `scalar_one_or_none()` -> 404 block stays ABOVE this gate: a
+        cross-tenant `run_id` is a **404, never a 403** (the deliberate
+        non-distinguishability documented in `get_run_verification`'s docstring
+        in runs/api.py).
+
+    (b) **F1** -- `GET /{run_id}/verification` (`get_run_verification` in
+        `runs/api.py`) is
+        deliberately gate-free and is already correct for `parked`, because a
+        parked run must be able to show *why* it stopped. Do not add a gate
+        there. `tests/test_status_gates.py::test_verification_endpoint_has_no_status_gate`
+        pins it.
+    """
+    return status in REPORT_READABLE_STATUSES
+
+
+def bundle_readable(status: str) -> bool:
+    """May the caller read this run's RESEARCH BUNDLE (inspection surface)?
+
+    True for exactly {completed, completed_degraded, parked}. `parked` is TRUE by
+    design (D-09): inspection only -- a parked run has research in hand and the
+    superadmin must be able to look at it before deciding to resume, even though
+    `report_readable("parked")` is False because no report exists yet.
+
+    This widening does NOT change WHAT the bundle handler returns: it still
+    returns EXACTLY `cleaned_reports`. The D-01 exclusion of `rejected_claims` /
+    `contested_notes` / `verification` is unaffected.
+
+    The same tenant invariant as `report_readable` applies: a cross-tenant
+    `run_id` stays a 404, never a 403.
+    """
+    return status in BUNDLE_READABLE_STATUSES
 
 
 class CreateRunRequest(BaseModel):

@@ -20,9 +20,12 @@ AI-06 release contract, :func:`app.db.ai_session.run_with_session_release`):
   the transaction-local ``app.current_space_id`` GUC structurally.
 
 Terminal-set discipline (16-RESEARCH Pitfall 3): the loop breaks on the RESEARCH
-terminal set ``{"completed", "failed", "cancelled"}`` — NEVER the skill-run
-success/failed vocabulary. A successful Tribunal run is ``completed``, carried
-verbatim (D-05 boundary), and is never remapped to the skill-run success literal.
+terminal set ``{"completed", "completed_degraded", "failed", "cancelled"}`` —
+NEVER the skill-run success/failed vocabulary. A successful Tribunal run is
+``completed`` or ``completed_degraded``, carried verbatim (D-05 boundary), and is
+never remapped to the skill-run success literal. The set and its predicates live
+in ONE place, :mod:`app.research.run_status`; ``parked`` is deliberately not a
+member (see that module's docstring).
 
 5xx tolerance (16-RESEARCH Pitfall 1): a 5xx from ``get_metrics`` (e.g. the residual
 ``needs_report_spec`` response-Literal gap) is retried a bounded number of times,
@@ -56,6 +59,7 @@ from app.mail import resend
 from app.mail.render import render_research_complete, render_research_failed
 from app.research import tribunal_client
 from app.research.bundle import build_bundle_zip
+from app.research.run_status import RESEARCH_TERMINAL, is_research_success
 from app.storage import gcs
 from app.storage.keys import build_object_key
 
@@ -66,10 +70,6 @@ log = logging.getLogger(__name__)
 
 #: Poll cadence in seconds between ``get_metrics`` ticks (~3s per 16-RESEARCH).
 POLL_SECONDS = 3.0
-
-#: The RESEARCH terminal set — Tribunal literals carried VERBATIM (D-05 boundary).
-#: NEVER the skill-run ``{"succeeded", "failed"}`` vocabulary (Pitfall 3).
-_RESEARCH_TERMINAL = {"completed", "failed", "cancelled"}
 
 #: Bounded retries on a 5xx from ``get_metrics`` before finalizing as failed
 #: (16-RESEARCH Pitfall 1 — the poll driver must never crash the BackgroundTask).
@@ -178,6 +178,8 @@ def finalize_completed(
     _patch_run(
         session,
         research_run_id,
+        # Carries the Tribunal literal VERBATIM (D-05), so completed_degraded lands
+        # on the row unchanged. Deliberately NOT a predicate — do not "fix" it.
         status=metrics.get("status", "completed"),
         current_stage=metrics.get("current_stage"),
         cost_usd_total=metrics.get("cost_usd_total"),
@@ -206,7 +208,10 @@ def finalize_failed(
     status = "failed"
     if metrics is not None:
         status = metrics.get("status", "failed")
-        if status not in {"failed", "cancelled"}:
+        # "parked" is in the clamp because a parked run is NOT a failure — it is a
+        # pause a superadmin resumes (D-17/F-01). Mislabelling it ``failed`` here
+        # would destroy the resume affordance plan 15.2-16 builds on top of it.
+        if status not in {"failed", "cancelled", "parked"}:
             status = "failed"
 
     _patch_run(
@@ -451,7 +456,7 @@ def run_poll_driver(
                 raise  # a 4xx is a real error → on_error finalizes failed.
 
             mirror_tick(identity, research_run_id, rid, metrics)
-            if metrics.get("status") in _RESEARCH_TERMINAL:
+            if metrics.get("status") in RESEARCH_TERMINAL:
                 log.warning(
                     "run_poll_driver terminal: research_run_id=%s tribunal_run_id=%s "
                     "status=%s", research_run_id, rid, metrics.get("status"),
@@ -460,9 +465,12 @@ def run_poll_driver(
                 # the D-01-scrubbed bundle fetch, the zip build, and the GCS upload —
                 # runs HERE, in the connection-free CALL window (T-17-07: no pooled DB
                 # connection is held across seam/GCS I/O). The WRITE phase only patches
-                # the row. Non-completed terminals carry completion=None (no bundle).
+                # the row. Non-success terminals carry completion=None (no bundle).
+                # D-09: a completed_degraded run MUST get the bundle too — gating
+                # this on the bare "completed" literal would leave a degraded run
+                # terminal with no bundle, no report row and no mail.
                 completion = None
-                if metrics.get("status") == "completed":
+                if is_research_success(metrics.get("status")):
                     completion = build_completion(ctx, research_run_id, rid)
                 return rid, metrics, completion
             time.sleep(POLL_SECONDS)
@@ -478,8 +486,12 @@ def run_poll_driver(
         to = [ctx["acting_email"]] if ctx.get("acting_email") else []
         cta_url = _admin_cta(ctx)
 
-        if metrics.get("status") == "completed":
-            # completion is always present for a completed terminal (build_completion).
+        # D-09: completed AND completed_degraded both finalize + mail. There is no
+        # degraded mail variant in this plan (park/degrade copy is 15.2-16's
+        # render_research_parked work), and gating the mail would silently drop the
+        # operator's only notification that a ~$45 run finished.
+        if is_research_success(metrics.get("status")):
+            # completion is always present for a success terminal (build_completion).
             completion = completion or {}
             report = completion.get("report") or {}
             finalize_completed(
