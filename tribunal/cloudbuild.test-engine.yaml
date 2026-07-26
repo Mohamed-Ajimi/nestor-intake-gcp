@@ -1,0 +1,106 @@
+# tribunal/cloudbuild.test-engine.yaml — Phase 15.2 research-engine test gate.
+#
+# The FAST phase gate for 15.2, and the analogue of cloudbuild.test-gates.yaml
+# (which remains the 15.1 verification-gate regression gate). This config
+# provisions NO DATABASE and requires NO PROVIDER API KEYS: every file listed
+# below is pure — reliability primitives are clock-injectable and I/O-free, LLM
+# egress in the engine tests goes through hand-written duck-typed fakes, and
+# nothing opens a connection. So the whole Postgres preamble of
+# cloudbuild.test-critical.yaml (image pull, container start, pg_isready wait,
+# role creation) and its connection-string env are deliberately absent here.
+#
+# The `not live` marker filter on the pytest line is LOAD-BEARING. pyproject.toml
+# only REGISTERS the `live` marker — it is listed under
+# [tool.pytest.ini_options] markers so that --strict-markers accepts it — and
+# registration does NOT deselect it. Without that filter a live-marked test
+# would fire a REAL LLM call from CI, against an Anthropic account that is
+# already at its monthly cap (resets 2026-08-01). Every provider-touching test
+# in this phase carries @pytest.mark.live precisely because this filter exists.
+#
+# The file list is built with `ls ... 2>/dev/null || true` because this config
+# lands in wave 1 while its target test files arrive across waves 1-10: a file
+# that does not exist yet must be a SKIP, not a pytest collection error. The
+# `|| true` is required — under `set -e` a bare `FILES=$(ls missing-file)`
+# aborts the script. Do not tidy that guard away, and do not replace the
+# explicit list with a glob: the explicit list is what keeps unrelated suite
+# files (and every DB-bound file) out of this fast gate.
+#
+# READ THE `collecting:` BLOCK, NOT JUST THE EXIT STATUS. The same `|| true`
+# guard that tolerates a not-yet-written file also silently drops a MISNAMED
+# one — a typo'd path makes this gate go green having run nothing.
+#
+# OWNERSHIP: this file is owned EXCLUSIVELY by plan 15.2-02 and NO LATER 15.2
+# PLAN EDITS IT. Every planned 15.2 test file is already listed, so a later wave
+# adds its file to the repo and this gate picks it up with no config change.
+# Any file listed here must be pure (no Postgres, no provider key, no network)
+# OR must pytest.skip() cleanly when DATABASE_URL is unset (the
+# test_rls_isolation.py::_require_database_url() pattern) — it must never error
+# at import or at collection time.
+#
+# INVOCATION:
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.test-engine.yaml \
+#     --project="$GOOGLE_PROJECT"
+
+steps:
+  - id: pytest-engine
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        docker run --rm \
+          -v /workspace:/workspace -w /workspace \
+          python:3.11-slim bash -c '
+            set -e
+            pip install --no-cache-dir -q -r requirements.txt
+            # 22 paths: the 19 NEW 15.2 files (waves 1-11) plus the 3 EXISTING
+            # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
+            # does not already run.
+            #
+            # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
+            #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
+            #      test_citation_numbering.py need a REAL Postgres, so they
+            #      belong to cloudbuild.test-critical.yaml (and, for the
+            #      non-superuser DSN, cloudbuild.test-rls.yaml from plan 15.2-01).
+            #  (2) test_gate_replay.py, test_verification_buckets.py,
+            #      test_fail_loud.py, test_tribunal_grouping.py,
+            #      test_claim_distiller.py and test_stage_schema.py are ALREADY
+            #      run by cloudbuild.test-gates.yaml, which the 15.2 sampling
+            #      rate runs alongside this gate at every wave merge — listing
+            #      them twice would only slow the gate down.
+            FILES=$$(ls nestor_pulse_sdk/tests/test_reliability_retry.py \
+                        nestor_pulse_sdk/tests/test_reliability_breaker.py \
+                        nestor_pulse_sdk/tests/test_terminal_states.py \
+                        nestor_pulse_sdk/tests/test_feed_enrichment.py \
+                        nestor_pulse_sdk/tests/test_fact_list_parser.py \
+                        nestor_pulse_sdk/tests/test_citation_anchors.py \
+                        nestor_pulse_sdk/tests/test_report_sections.py \
+                        nestor_pulse_sdk/tests/test_status_gates.py \
+                        nestor_pulse_sdk/tests/test_coverage_reentry.py \
+                        nestor_pulse_sdk/tests/test_workshop_critique.py \
+                        nestor_pulse_sdk/tests/test_workshop_scope_guard.py \
+                        nestor_pulse_sdk/tests/test_workshop_tournament.py \
+                        nestor_pulse_sdk/tests/test_workshop_languages.py \
+                        nestor_pulse_sdk/tests/test_own_researcher.py \
+                        nestor_pulse_sdk/tests/test_cost_serpapi.py \
+                        nestor_pulse_sdk/tests/test_factlist_fallback.py \
+                        nestor_pulse_sdk/tests/test_checkpoint_resume.py \
+                        nestor_pulse_sdk/tests/test_provider_resume.py \
+                        nestor_pulse_sdk/tests/test_engine_e2e_stubbed.py \
+                        nestor_pulse_sdk/tests/test_research_division_assignment.py \
+                        nestor_pulse_sdk/tests/test_distiller_coverage.py \
+                        nestor_pulse_sdk/tests/test_hash_chain_replay.py 2>/dev/null || true)
+            if [ -z "$$FILES" ]; then
+              echo "no 15.2 engine test files present yet — nothing to run"
+              exit 0
+            fi
+            echo "collecting:"
+            echo "$$FILES"
+            python -m pytest $$FILES -v -rs --tb=short -m "not live"
+          '
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+timeout: "1800s"
