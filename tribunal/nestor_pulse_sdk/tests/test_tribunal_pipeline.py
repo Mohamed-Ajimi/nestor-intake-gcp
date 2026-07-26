@@ -286,7 +286,12 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
 
     # Monkeypatch synthesize_report (per-focus-area synthesis entry point)
     synthesis_calls: list[dict] = []
-    async def fake_synthesis(*, mission_brief, provider_reports, audited, run_id, tenant_id, contested_notes=None, report_spec=None):
+    # **_kwargs: this double must tolerate additive keyword arguments. Phase 15.2
+    # plans 05/06/07/08/13/15/16 each extend synthesize_report's signature, and a
+    # closed double turns every such addition into a TypeError in a file that is in
+    # NEITHER cloudbuild.test-engine.yaml NOR cloudbuild.test-gates.yaml — i.e. a
+    # broken suite hiding behind two green gates (found in 15.2-05).
+    async def fake_synthesis(*, mission_brief, provider_reports, audited, run_id, tenant_id, contested_notes=None, report_spec=None, **_kwargs):
         synthesis_calls.append({"n_reports": len(provider_reports), "contested_notes": contested_notes, "report_spec": report_spec})
         return "Final synthesis text."
 
@@ -410,7 +415,9 @@ async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.scrub_research",
         fake_scrub,
     )
-    async def fake_synthesis(*, mission_brief, provider_reports, audited, run_id, tenant_id, contested_notes=None, report_spec=None):
+    # **_kwargs: see the note on the sibling double above — additive synthesize_report
+    # kwargs must not TypeError here (15.2-05 finding).
+    async def fake_synthesis(*, mission_brief, provider_reports, audited, run_id, tenant_id, contested_notes=None, report_spec=None, **_kwargs):
         return "Final synthesis text."
     monkeypatch.setattr(
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.synthesize_report",
