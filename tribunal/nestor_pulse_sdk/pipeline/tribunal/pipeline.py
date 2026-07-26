@@ -1246,6 +1246,57 @@ async def _read_output(run_id: uuid.UUID, tenant_id: uuid.UUID, fmt: str):
     return None
 
 
+async def _load_citation_context(
+    run_id: uuid.UUID, tenant_id: uuid.UUID
+) -> tuple[list[dict], list[dict], dict[str, int]]:
+    """Read this run's fact ledger + `[n]` numbering (Phase 15.2, D-05).
+
+    Returns `(anchor_ledger, numbered, prefix_to_n)`:
+      * `anchor_ledger` -- the facts the writing model is asked to anchor to;
+      * `numbered`      -- the `[n]` -> source list the `## Sources` block renders;
+      * `prefix_to_n`   -- what the post-pass resolves the model's anchors against.
+
+    All three come from ONE read of the same rows, so the body's `[n]` markers and
+    the `## Sources` list can never disagree.
+
+    TENANT SCOPING (T-15.2-21): copies the `_read_output` idiom exactly --
+    `set_tenant_context` runs before any query, and both queries filter on
+    `run_id`. RLS then scopes claim/source/claim_source. No new table, no new
+    endpoint, no new cross-tenant surface.
+
+    Best-effort by design (shared pattern 6): a citation-context failure degrades
+    the report's citations and is logged, it never breaks the run. On failure the
+    report is written exactly as it would have been before 15.2.
+
+    RESUME PATH: `_write_final_report` is also reached from the interactive-resume
+    branch. Because the ledger and the numbering are read HERE from the DB rather
+    than carried on the `synthesis_cache` bundle, a resumed run gets the same
+    citations with no bundle schema change.
+    """
+    from nestor_pulse_sdk.citations.anchors import anchor_number_map, build_ledger
+    from nestor_pulse_sdk.citations.numbering import (
+        list_run_claims,
+        number_citations_with_claims,
+    )
+    from nestor_pulse_sdk.db.base import get_sessionmaker
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+    try:
+        sm = get_sessionmaker()
+        async with sm() as session:
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                claim_rows = await list_run_claims(session, run_id)
+                numbered, claim_to_n = await number_citations_with_claims(session, run_id)
+        return build_ledger(claim_rows), numbered, anchor_number_map(claim_to_n)
+    except Exception as exc:  # noqa: BLE001 — citations degrade, runs do not fail
+        log.warning(
+            "tribunal_pipeline: _load_citation_context failed, the report will carry "
+            "no citation anchors and an unnumbered Sources list: %s",
+            exc,
+        )
+        return [], [], {}
+
+
 async def _write_output(run_id: uuid.UUID, tenant_id: uuid.UUID, fmt: str, payload) -> None:
     """Persist an Output(format=fmt) JSON row for a run (best-effort)."""
     import json as _json
@@ -1291,6 +1342,14 @@ async def _write_final_report(
     await set_stage(run_id, tenant_id, "synthesize", detail={"items": [
         {"name": "writing final report", "status": "running"}]})
 
+    anchor_ledger, numbered, prefix_to_n = await _load_citation_context(run_id, tenant_id)
+    log.info(
+        "tribunal_pipeline: citation context loaded — %d ledger fact(s), "
+        "%d numbered source(s)",
+        len(anchor_ledger), len(numbered),
+        extra={"run_id": str(run_id)},
+    )
+
     synthesis_text = await synthesize_report(
         mission_brief=mission_brief,
         provider_reports=cleaned_reports,
@@ -1299,7 +1358,40 @@ async def _write_final_report(
         tenant_id=tenant_id,
         contested_notes=contested_notes,
         report_spec=report_spec,
+        anchor_ledger=anchor_ledger,
+        numbered_citations=numbered,
     )
+
+    # D-05 post-pass. Order matters and is load-bearing:
+    #   1. count_model_numbers FIRST — at this instant no number in the text can
+    #      have come from Python, so every bare [n] found is model-invented.
+    #   2. apply_citation_anchors — resolve [[c:...]] to the numbers Python
+    #      assigned; strip AND COUNT whatever does not resolve (D-06).
+    #   3. strip_unresolved_cite_markers, UNCHANGED and still last: [cite: N] is
+    #      the PROVIDER's mechanism, [[c:...]] is ours. Two mechanisms, two
+    #      counts, never conflated.
+    from nestor_pulse_sdk.citations.anchors import (
+        apply_citation_anchors,
+        count_model_numbers,
+    )
+    n_model_numbers = count_model_numbers(synthesis_text)
+    synthesis_text, n_unresolved_anchors = apply_citation_anchors(
+        synthesis_text, prefix_to_n
+    )
+    if n_model_numbers:
+        log.warning(
+            "tribunal_pipeline: the writing model wrote %d bare bracketed number(s) "
+            "of its own before any numbering was applied. Those are not citations "
+            "and resolve to nothing in the Sources list.",
+            n_model_numbers,
+        )
+    if n_unresolved_anchors:
+        log.warning(
+            "tribunal_pipeline: %d citation anchor(s) matched no claim in this run "
+            "and were removed from the report. The statements they were attached to "
+            "are now uncited.",
+            n_unresolved_anchors,
+        )
 
     from nestor_pulse_sdk.audit.audited_llm_client import strip_unresolved_cite_markers
     synthesis_text, n_orphan_cites = strip_unresolved_cite_markers(synthesis_text)
@@ -1336,6 +1428,16 @@ async def _write_final_report(
         "funnel": v.get("funnel") or _build_funnel(
             None, unchecked_selected=0, verify_sessions=0
         ),
+        # D-06 citation-health counts. SIBLINGS OF "funnel", never members of it:
+        # verification_summary IS the same dict object as
+        # verification_report["funnel"], and RECORDED_FUNNEL_COUNTS is compared by
+        # FULL DICT EQUALITY in two tests — adding a key inside the funnel would
+        # break them. This plan only guarantees the numbers exist and travel;
+        # 15.2-08 owns folding them onto run.verification_summary and owns the
+        # operator-facing wording. Always present, 0 on a run with no anchors.
+        "unresolved_anchors": n_unresolved_anchors,
+        "orphan_cite_markers": n_orphan_cites,
+        "model_invented_numbers": n_model_numbers,
     }
 
     synthesis_text = synthesis_text + _verification_appendix(
@@ -1374,6 +1476,13 @@ async def _write_final_report(
         # degradation marker is missing (G-10). Same dict object as
         # verification_report["funnel"] — one funnel, three readers, no drift.
         "verification_summary": verification_report["funnel"],
+        # D-06 citation-health counts, following the `rejected_claims` precedent:
+        # top-level result keys, siblings of verification_summary and NOT inside
+        # the funnel dict. Present on every run, including runs with zero anchors
+        # (value 0, never absent) — a consumer never has to branch on the path.
+        "unresolved_anchors": n_unresolved_anchors,
+        "orphan_cite_markers": n_orphan_cites,
+        "model_invented_numbers": n_model_numbers,
     }
 
 

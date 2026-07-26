@@ -364,3 +364,242 @@ class TestTokenShape:
         m = ANCHOR_RE.fullmatch(token)
         assert m is not None
         assert re.fullmatch(r"[0-9a-f]{8}", m.group("pfx"))
+
+
+# ---------------------------------------------------------------------------
+# PITFALL 2: the anchor rule must reach the prompts synthesize_report ACTUALLY
+# sends. Prompt-capturing fake, cloned from test_synthesize_report.py::FakeAudited
+# -- no DB, no key, no network, no mocking library.
+# ---------------------------------------------------------------------------
+
+FA_A = "Pricing strategies"
+FA_B = "Coffee offering"
+
+#: The literal both prompt rules share. If this string stops appearing in all
+#: three captured prompts, the anchor instruction is not reaching the model.
+ANCHOR_RULE_MARKER = "CITATION ANCHORS (non-negotiable):"
+
+MISSION_BRIEF = {
+    "deep_research_prompt": "Research the forecourt retail market.",
+    "focus_areas": [
+        {"focus_area": FA_A, "taxonomy": "B", "stakes": "high"},
+        {"focus_area": FA_B, "taxonomy": "B", "stakes": "med"},
+    ],
+}
+
+PROVIDER_REPORTS = [("gemini", {"status": "success", "report": "Research prose."})]
+
+
+class _FakeResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class CapturingAudited:
+    """Records the `contents=` of every gemini_generate call."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.prompts.append(contents)
+        if "Write the remaining framing sections" in contents:
+            return _FakeResponse(
+                "## Executive Summary\n\nBottom line.\n\n"
+                "## Cross-cutting Synthesis\n\nThemes.\n\n"
+                "## Confidence & Gaps\n\nSolid."
+            )
+        m = re.search(r'focus area \d+ of \d+:\s*"([^"]+)"', contents)
+        fa = m.group(1) if m else "Unknown"
+        return _FakeResponse(f"## {fa}\n\nFindings for {fa}.")
+
+    @property
+    def section_prompts(self) -> list[str]:
+        return [p for p in self.prompts if "Write the remaining framing sections" not in p]
+
+    @property
+    def wrap_prompt(self) -> str:
+        return next(p for p in self.prompts if "Write the remaining framing sections" in p)
+
+
+def _ledger_for_two_focus_areas() -> list[dict]:
+    return build_ledger(
+        [
+            {"claim_id": _cid(1), "text": "Fuel margin is 6 cents", "facet": FA_A,
+             "position": 0},
+            {"claim_id": _cid(2), "text": "Coffee attach rate is 18%", "facet": FA_B,
+             "position": 1},
+        ]
+    )
+
+
+async def _synthesize(audited, **kwargs):
+    from nestor_pulse_sdk.pipeline.synthesis.steps import synthesize_report
+
+    return await synthesize_report(
+        mission_brief=MISSION_BRIEF,
+        provider_reports=PROVIDER_REPORTS,
+        audited=audited,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        **kwargs,
+    )
+
+
+@pytest.mark.skipif(
+    not _ANCHORS_ENABLED, reason="NESTOR_TRIBUNAL_ANCHORS kill switch is off"
+)
+async def test_anchor_rule_reaches_both_prompt_sites():
+    """PITFALL 2 -- the headline of this plan.
+
+    CONTEXT.md pointed the anchor instruction at synthesis prompt line 229, which
+    lives in `final_synthesis_audited`. `synthesize_report` calls that ONLY when
+    the mission brief carries zero focus areas (the broadcast/control fallback).
+    Every real run has focus areas and therefore goes down the
+    `_one_section` x N + `wrap_prompt` path, so patching line 229 would have been
+    a silent no-op on every real run -- green tests, zero anchors in production.
+
+    This asserts the rule reaches ALL THREE prompts actually sent: one per focus
+    area, plus the wrap.
+    """
+    audited = CapturingAudited()
+    await _synthesize(audited, anchor_ledger=_ledger_for_two_focus_areas())
+
+    assert len(audited.prompts) == 3, "2 section calls + 1 wrap call"
+    for prompt in audited.prompts:
+        assert ANCHOR_RULE_MARKER in prompt
+
+
+@pytest.mark.skipif(
+    not _ANCHORS_ENABLED, reason="NESTOR_TRIBUNAL_ANCHORS kill switch is off"
+)
+async def test_section_ledger_is_scoped_to_its_own_focus_area():
+    audited = CapturingAudited()
+    await _synthesize(audited, anchor_ledger=_ledger_for_two_focus_areas())
+
+    prompt_a = next(p for p in audited.section_prompts if f'"{FA_A}"' in p)
+    assert "Fuel margin is 6 cents" in prompt_a
+    assert "Coffee attach rate is 18%" not in prompt_a
+
+
+@pytest.mark.skipif(
+    not _ANCHORS_ENABLED, reason="NESTOR_TRIBUNAL_ANCHORS kill switch is off"
+)
+async def test_wrap_prompt_gets_the_rule_but_NOT_the_ledger():
+    """Cost control (T-15.2-25): the wrap reuses the body's anchors."""
+    audited = CapturingAudited()
+    await _synthesize(audited, anchor_ledger=_ledger_for_two_focus_areas())
+
+    wrap = audited.wrap_prompt
+    assert "already carry opaque anchor tokens" in wrap  # ANCHOR_RULE_WRAP
+    assert "--- FACT LEDGER ---" not in wrap
+    # And the section rule's ledger-specific wording never leaks into the wrap.
+    assert "A FACT LEDGER is supplied below" not in wrap
+
+
+async def test_back_compat_no_ledger_means_no_rule_and_no_sentinel():
+    """With anchors off the prompts are byte-identical to the pre-15.2 ones."""
+    audited = CapturingAudited()
+    await _synthesize(audited, anchor_ledger=None)
+
+    assert len(audited.prompts) == 3
+    for prompt in audited.prompts:
+        assert ANCHOR_RULE_MARKER not in prompt
+        assert "--- FACT LEDGER ---" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# The graded ## Sources list (D13 / D-07).
+# ---------------------------------------------------------------------------
+
+
+def _numbered(**overrides) -> dict:
+    entry = {
+        "n": 1,
+        "source_id": "s1",
+        "title": "Aral annual report",
+        "url": "https://www.sec.gov/aral",
+        "provider": "google",
+        "publication_date": "2026-07-26T12:00:00+00:00",
+        "quality_tier": 1,
+        "single_source": False,
+        "first_claim_id": "c1",
+        "first_claim_position": 0,
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestGradedSourcesSection:
+    def test_renders_tier_retrieval_date_and_single_source_flag(self):
+        from nestor_pulse_sdk.pipeline.synthesis.steps import (
+            build_graded_sources_section,
+        )
+
+        out = build_graded_sources_section(
+            [
+                _numbered(),
+                _numbered(n=2, title=None, url="https://www.reuters.com/x",
+                          quality_tier=2, single_source=True),
+                _numbered(n=3, title=None, url="https://blog.example/y",
+                          quality_tier=3, publication_date=None),
+            ],
+            "body text",
+        )
+        assert "1. [Aral annual report](https://www.sec.gov/aral) — official source" in out
+        assert "retrieved 2026-07-26" in out
+        assert "published" not in out, "fetched_at is a RETRIEVAL proxy (C1)"
+        # title=None falls back to the display domain, www. stripped.
+        assert "2. [reuters.com](https://www.reuters.com/x) — established press" in out
+        assert "single-source" in out
+        assert "3. [blog.example](https://blog.example/y) — other source · retrieved date unknown" in out
+        # single_source=False must NOT render the flag or a dangling separator:
+        # the whole line is asserted, not a substring of it.
+        assert (
+            "1. [Aral annual report](https://www.sec.gov/aral) — "
+            "official source · retrieved 2026-07-26"
+        ) in out.splitlines()
+
+    def test_entry_without_a_url_renders_as_plain_text_not_a_broken_link(self):
+        from nestor_pulse_sdk.pipeline.synthesis.steps import (
+            build_graded_sources_section,
+        )
+
+        out = build_graded_sources_section([_numbered(url=None)], "")
+        assert "1. Aral annual report — official source" in out
+        assert "]()" not in out
+
+    def test_falsy_numbered_is_byte_identical_to_the_legacy_builder(self):
+        from nestor_pulse_sdk.pipeline.synthesis.steps import (
+            _extract_sources_section,
+            build_graded_sources_section,
+        )
+
+        text = "see [x](https://a.example) and [y](https://b.example)"
+        assert build_graded_sources_section(None, text) == _extract_sources_section(text)
+        assert build_graded_sources_section([], text) == _extract_sources_section(text)
+
+    def test_append_only_rescue_keeps_a_prose_url_that_has_no_claim(self):
+        from nestor_pulse_sdk.pipeline.synthesis.steps import (
+            build_graded_sources_section,
+        )
+
+        out = build_graded_sources_section(
+            [_numbered()],
+            "cited [Aral](https://www.sec.gov/aral) plus [Stray](https://stray.example/z)",
+        )
+        assert "https://stray.example/z" in out
+        assert "carry no verified claim link" in out
+        # The already-numbered URL is not listed twice.
+        assert out.count("https://www.sec.gov/aral") == 1
+
+    def test_an_anchor_inside_a_link_does_not_lose_the_url(self):
+        """The scan copy is anchor-stripped, so `[L][[c:..]](url)` still lists."""
+        from nestor_pulse_sdk.pipeline.synthesis.steps import (
+            build_graded_sources_section,
+        )
+
+        out = build_graded_sources_section(
+            None, "see [Aral][[c:9f2a41bd]](https://www.sec.gov/aral) end"
+        )
+        assert "https://www.sec.gov/aral" in out
