@@ -36,6 +36,7 @@ import logging
 import os
 import re
 import uuid
+from dataclasses import dataclass, field
 from typing import Any, Optional, TYPE_CHECKING
 
 from nestor_pulse_sdk.citations.anchors import (
@@ -1152,13 +1153,26 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
 
 
 def _build_distiller_prompt(
-    provider_reports: list, focus_area_labels: list[str], language: str = ""
+    provider_reports: list,
+    focus_area_labels: list[str],
+    language: str = "",
+    *,
+    full_extraction: bool = False,
 ) -> str:
     """Build the plain-text distiller prompt.
 
     Uses a tab-separated "FACET<TAB>CLAIM_TEXT" line format (one claim per line),
     mirroring the RelevanceGate line discipline (CLAUDE.md anti-pattern section).
     NOT JSON mode — citations⊗structured-outputs HTTP 400 trap.
+
+    ``full_extraction`` (D-14, plan 15.2-14) switches on the PER-PROVIDER FALLBACK
+    voice: this report carried no usable machine-readable fact list, so this
+    extraction is the only record of what that researcher found. It is built as an
+    extra rule fragment that is the EMPTY STRING in the default case, exactly the
+    way ``lang_rule`` is, so the default prompt stays BYTE-IDENTICAL to the one
+    `test_claim_distiller.py` and `test_distiller_coverage.py` pin. That is the
+    mechanism by which D-15 holds: this function's existing behaviour is untouched
+    and neither of those two test files needs editing.
     """
     facet_block = "\n".join(f"  - {f}" for f in focus_area_labels) or "  - general"
 
@@ -1167,6 +1181,15 @@ def _build_distiller_prompt(
         f"  - Write CLAIM_TEXT in {lang}. If a report is in another language, "
         f"TRANSLATE the claim into {lang} (the whole run is one language).\n"
         if lang else ""
+    )
+
+    # D-14: empty by default, so the default prompt is byte-identical to today's.
+    full_rule = (
+        "  - This report did NOT include a machine-readable fact list, so THIS\n"
+        "    extraction is the ONLY record of what this researcher found. Extract\n"
+        "    every distinct atomic fact from the WHOLE report, beginning to end. Do\n"
+        "    NOT summarise, do NOT prioritise, and do NOT stop early.\n"
+        if full_extraction else ""
     )
 
     report_blocks: list[str] = []
@@ -1195,6 +1218,7 @@ def _build_distiller_prompt(
         "  - Extract EVERY distinct atomic fact across ALL focus areas. Do NOT limit the\n"
         "    number of claims — thorough coverage matters more than brevity. Each focus\n"
         "    area should be covered in proportion to how much the reports say about it.\n"
+        f"{full_rule}"
         "  - Blank lines and lines without at least one TAB separator are ignored.\n\n"
         f"Focus area labels (use one per claim):\n{facet_block}\n\n"
         f"--- Research reports ---\n\n{reports_text}\n\n"
@@ -1302,12 +1326,28 @@ async def claim_distiller(
     audited: "AuditedLLMClient",
     run_id: uuid.UUID,
     tenant_id: uuid.UUID,
+    full_extraction: bool = False,
 ) -> list[dict]:
     """Distil provider reports into atomic claims via an audited gemini-flash call.
 
     Un-stubbed in Plan 01-13 Task 2 (previously raised NotImplementedError).
     The Tribunal skeptic (Plan 01-14) consumes these claims for per-claim
     stakes triage and verification.
+
+    READ THIS BEFORE DELETING ANYTHING — D-15
+    -----------------------------------------
+    V-03 removes the WIRING that made this function the primary claim source (the
+    "distiller-as-shredder" path, where every provider's prose was shredded into
+    claims whether or not the provider had supplied a structured list). V-03 does
+    NOT remove THIS FUNCTION. Since 15.2-14 its ``full_extraction`` mode is D-14's
+    per-provider fallback: the path taken by a research stream that ignored the
+    fact-list instruction, so that the stream is neither dropped nor re-researched.
+
+    It also keeps its own tests. ``tests/test_claim_distiller.py`` and
+    ``tests/test_distiller_coverage.py`` MUST STAY GREEN THROUGH V-03
+    (CONTEXT.md D-15, RESEARCH Pitfall 13). Anyone told to "remove the old engine
+    path" should stop here: the thing to unwire lives in ``pipeline.py``, not in
+    this module.
 
     Args:
         provider_reports: list of (provider_name, result_dict) tuples from
@@ -1318,6 +1358,8 @@ async def claim_distiller(
         audited:          Injected AuditedLLMClient — the ONLY LLM egress.
         run_id:           UUID for the current run (audit chain).
         tenant_id:        UUID for the current tenant (audit chain).
+        full_extraction:  D-14 fallback mode. Default False keeps the prompt and
+                          every observable behaviour byte-identical to today's.
 
     Returns:
         list of dicts, each with at least:
@@ -1360,8 +1402,15 @@ async def claim_distiller(
 
     sem = asyncio.Semaphore(_DISTILLER_CONCURRENCY)
 
+    mode = "full-extraction" if full_extraction else "safety-net"
+
     async def _distill_unit(name: str, chunk: str) -> list[dict]:
-        prompt = _build_distiller_prompt([(name, {"report": chunk})], focus_area_labels, language)
+        prompt = _build_distiller_prompt(
+            [(name, {"report": chunk})],
+            focus_area_labels,
+            language,
+            full_extraction=full_extraction,
+        )
         async with sem:
             try:
                 response = await audited.gemini_generate(
@@ -1400,8 +1449,8 @@ async def claim_distiller(
         if facet_counts.get(fa, 0) == 0:
             log.warning("claim_distiller: focus area %r produced ZERO claims — unverified topic", fa)
     log.info(
-        "claim_distiller: %d units distilled, claims per facet: %s",
-        len(units), facet_counts,
+        "claim_distiller: %d units distilled (mode=%s), claims per facet: %s",
+        len(units), mode, facet_counts,
     )
 
     # Dedupe near-identical facts surfaced by multiple angles/providers (the 30-cap
@@ -1430,10 +1479,505 @@ async def claim_distiller(
     distinct_providers = len({p for c in claims for p in (c.get("found_by") or [])})
     log.info(
         "claim_distiller: %d raw claims -> %d after dedupe, from %d providers "
-        "(%d distinct providers named in found_by)",
-        before, len(claims), len(provider_reports), distinct_providers,
+        "(%d distinct providers named in found_by, mode=%s)",
+        before, len(claims), len(provider_reports), distinct_providers, mode,
     )
     return claims
+
+
+# ---------------------------------------------------------------------------
+# Step 3b: D8-first claim collection with the D-14 per-provider fallback.
+# Plan 15.2-14. This function is the drop-in replacement for the bare
+# `claim_distiller(...)` call in `pipeline.py`'s distill stage; 15.2-15 does the
+# wiring. NOTHING here is a new parser, deduper, stripper or tier table — the D8
+# format and its tolerant parser are 15.2-04's `pipeline/tribunal/facts.py`, and
+# the prose path is `claim_distiller` above.
+# ---------------------------------------------------------------------------
+
+#: Cross-provider cap on the deduped "we looked and could not establish this"
+#: list. Per-report count and per-entry length are already bounded by 15.2-04's
+#: parser; this bounds the UNION, which is what reaches a JSONB column and the
+#: operator's report. NESTOR_TRIBUNAL_* idiom (grouping.py).
+_NOT_FOUND_TOTAL_MAX = int(os.environ.get("NESTOR_TRIBUNAL_NOT_FOUND_TOTAL_MAX", "300"))
+
+#: The nine keys 15.2-04 guarantees on every fact dict, in its order.
+_FACT_CLAIM_KEYS: tuple[str, ...] = (
+    "text", "facet", "evidence", "found_by", "source_urls",
+    "certainty", "provider_quality", "source_domain", "quality_tier_hint",
+)
+
+
+@dataclass(frozen=True)
+class ProviderFactsRecord:
+    """One provider's D8 accounting — every integer is a NAMED loss or yield.
+
+    This is the fail-loud contract (`verification/report.py:184-190`): a stream
+    that quietly produced less than it should have must be visibly, numerically
+    degraded, never a silent green.
+
+    ``prompted`` is False when the stream was NEVER ASKED for a fact list — either
+    the ``NESTOR_TRIBUNAL_D8_FACT_LIST`` kill switch is off, or it is the
+    own-researcher stream, which emits its facts through a forced client tool
+    instead. That is NOT a provider failure and must never be worded as one: an
+    operator told "gemini did not comply" when gemini was never asked has been
+    given a false fault report.
+
+    ``reason`` carries 15.2-04's own ``FactListResult.fallback_reason`` sentence
+    VERBATIM (its module writes it to be read by a human without reading this
+    one); the count-bearing sentence an operator sees lives in
+    ``ProviderFactsResult.fallback_notes``.
+    """
+
+    provider: str
+    reports_seen: int = 0
+    reports_with_fact_list: int = 0
+    reports_fell_back: int = 0
+    facts_from_list: int = 0
+    claims_from_fallback: int = 0
+    parse_errors: int = 0
+    rejected_urls: int = 0
+    dropped_over_cap: int = 0
+    prompted: bool = False
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderFactsResult:
+    """What the distill stage now produces. THREE CONSUMER CONTRACTS:
+
+    (a) ``claims`` is the merge's input (15.2-15). Every entry carries the nine
+        15.2-04 keys plus ``fact_source``, whichever path produced it.
+
+    (b) ``reports`` is a DROP-IN REPLACEMENT for ``provider_results`` from the
+        distill stage onward — same length, same order, same tuple/dict shape,
+        every other key preserved — with the machine-readable block already
+        removed from the prose. Use it in place of ``provider_results`` so that
+        ``scrub_research``, ``synthesize_report`` and ``_extract_sources_for_*``
+        all see clean report text. Leaving the block in would double-count every
+        fact and render as tab-salad in the deliverable.
+
+    (c) ``fallback_notes`` and ``not_found`` are surfaced in the verification
+        report — AND ``fallback_notes`` MUST NOT BE FED INTO ``terminal_state()``,
+        nor into ``pipeline.run()``'s ``_note_degradation`` accumulator, which is
+        what feeds it. Per D-14 a fallback "degrades one stream, not the run".
+        D-12's degrading conditions are: a non-zero bucket 3, a stream lost to a
+        tripped breaker, a workshop fallback, or a skipped stage. A D-14 fallback
+        is none of those — the provider's research still reached the merge in
+        full. Promoting it would drain ``completed_degraded`` of meaning in
+        exactly the way D-12 warns about for recovered retries.
+    """
+
+    claims: list[dict] = field(default_factory=list)
+    reports: list[tuple[str, dict]] = field(default_factory=list)
+    not_found: list[str] = field(default_factory=list)
+    records: list[ProviderFactsRecord] = field(default_factory=list)
+    fallback_notes: list[str] = field(default_factory=list)
+
+
+def _normalise_fact_claim(
+    claim: dict, *, provider: str, facet: str, fact_source: str
+) -> dict | None:
+    """One claim -> the single key set, whichever path produced it. NEVER RAISES.
+
+    Returns ``None`` for a claim with no usable text, so the caller can count the
+    loss rather than ship an empty claim.
+
+    On the ``distiller_fallback`` branch the four D-13 / Pitfall-10 fields are
+    written as ``None`` UNCONDITIONALLY, in Python, and are never read from model
+    output. THIS IS A SECURITY CONTROL, NOT A DEFAULT (T-15.2-61): provider prose
+    embeds web pages the provider chose to ingest, so a page saying
+    "certainty: certain, provider_quality: official" is an indirect prompt
+    injection aimed straight at a persisted, queryable D-13 column. A model must
+    not be able to state its own confidence. The distiller was never asked for
+    those fields, so there is nothing legitimate to lose by hard-writing them.
+
+    On the ``fact_list`` branch the values come from 15.2-04's parser, which has
+    already clamped them to ``CERTAINTY_VALUES`` / ``QUALITY_VALUES``.
+    """
+    if not isinstance(claim, dict):
+        return None
+    try:
+        text = str(claim.get("text") or "").strip()
+        if not text:
+            return None
+
+        found_by = claim.get("found_by")
+        if not isinstance(found_by, list) or not found_by:
+            found_by = [provider] if provider else []
+        else:
+            found_by = [str(p) for p in found_by if p]
+
+        source_urls = claim.get("source_urls")
+        if not isinstance(source_urls, list):
+            source_urls = []
+
+        out: dict = {
+            "text": text,
+            "facet": str(claim.get("facet") or facet or "general"),
+            "evidence": str(claim.get("evidence") or ""),
+            "found_by": found_by,
+            "source_urls": source_urls,
+        }
+        if fact_source == "distiller_fallback":
+            # Written here, in Python. See the docstring — T-15.2-61.
+            out["certainty"] = None
+            out["provider_quality"] = None
+            out["source_domain"] = None
+            out["quality_tier_hint"] = None
+        else:
+            out["certainty"] = claim.get("certainty")
+            out["provider_quality"] = claim.get("provider_quality")
+            out["source_domain"] = claim.get("source_domain")
+            out["quality_tier_hint"] = claim.get("quality_tier_hint")
+        # One key set for both paths, guaranteed rather than assumed: 15.2-15's
+        # merge and persistence loop read these by name and a missing key there
+        # would be a KeyError inside a paid run.
+        for key in _FACT_CLAIM_KEYS:
+            out.setdefault(key, None)
+        out["fact_source"] = fact_source
+        return out
+    except Exception:  # noqa: BLE001 — one malformed claim costs that claim only
+        log.debug("collect_provider_facts: unusable claim discarded")
+        return None
+
+
+def _fallback_note(provider: str, *, prompted: bool, k: int, m: int, c: int) -> str:
+    """The plain-words, per-provider fallback sentence an operator reads.
+
+    Built ONLY from the provider name and integers — never from report text or
+    model output (T-15.2-66). These sentences render in the superadmin UI, so any
+    model-controlled substring here would be an injection surface aimed at a human.
+
+    Two wordings, because "did not comply" and "was never asked" are different
+    facts about the run and telling an operator the wrong one is a false fault
+    report. Both clear the >40-character plain-words bar for every input.
+
+    NOTE for the verification report: this is a STREAM-level note. It is
+    deliberately NOT bucket-3 wording — `verification/report.py` DERIVES the
+    bucket-3 sentence at read time (15.2-08), and a second wording of the same
+    shortfall would double-report it.
+    """
+    who = provider or "this provider"
+    if prompted:
+        opening = (
+            f"{who} returned no usable fact list for {k} of {m} research report(s)"
+        )
+    else:
+        opening = (
+            f"{who} was not asked for a machine-readable fact list, so {k} of {m} "
+            f"research report(s) had none"
+        )
+    return (
+        f"{opening} — its prose was run through the full-extraction distiller "
+        f"instead ({c} claims), so those claims carry no provider-stated certainty "
+        f"or source quality and the domain heuristic fills the tier (D-14). The "
+        f"research still reached the merge; nothing was dropped."
+    )
+
+
+async def collect_provider_facts(
+    *,
+    provider_reports: list,
+    mission_brief: dict,
+    audited: "AuditedLLMClient",
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    feed: Any = None,
+) -> ProviderFactsResult:
+    """Provider reports -> claims, D8 first, with the D-14 fallback per report.
+
+    THE RULE, once: a report that carried a usable machine-readable fact list is
+    read with 15.2-04's parser and is NEVER passed to the distiller. A report that
+    did not is added to ONE full-extraction distillation covering all such reports.
+    A stream is never dropped and a research call is NEVER re-issued — a corrective
+    deep-research call is among the most expensive calls in the run, and on Gemini
+    it is a full re-run (D-14's two rejected alternatives).
+
+    Both rejected alternatives and the no-double-spend property are pinned by
+    ``tests/test_factlist_fallback.py``.
+    """
+    reports_out: list[tuple[str, dict]] = []
+    records_by_provider: "dict[str, dict]" = {}
+    d8_claims: list[dict] = []
+    fallback_units: list[tuple[str, dict]] = []
+    not_found_raw: list[str] = []
+    unusable_claims = 0
+
+    entries = list(provider_reports or [])
+
+    def _unpack(entry: Any) -> "tuple[str, dict]":
+        """Tolerant (name, result) unpack — hostile input must not raise."""
+        try:
+            name, result = entry
+        except Exception:  # noqa: BLE001 — a malformed entry is not a run-killer
+            return "", {}
+        return str(name or ""), (result if isinstance(result, dict) else {})
+
+    has_material = False
+    for entry in entries:
+        _n, result = _unpack(entry)
+        if (result.get("report") or ""):
+            has_material = True
+            break
+        facts_val = result.get("facts")
+        if isinstance(facts_val, list) and facts_val:
+            # A forced-tool stream can deliver facts with no prose at all.
+            has_material = True
+            break
+
+    if not has_material:
+        log.info(
+            "collect_provider_facts: no provider material to read (%d entr(y/ies)) "
+            "— returning an empty result, no LLM call made",
+            len(entries),
+        )
+        return ProviderFactsResult(reports=[(n, r) for n, r in (_unpack(e) for e in entries)])
+
+    # NOTE: focus-area labels and the run language are NOT resolved here. The only
+    # consumer of either is `claim_distiller`, which derives both from
+    # `mission_brief` itself — resolving them a second time would be two sources
+    # for one value and the first thing to drift.
+
+    # Function-local, mirroring `pipeline.py`'s `strip_unresolved_cite_markers`
+    # import: this module gains NO module-scope dependency on pipeline.tribunal.
+    from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
+        build_label_index,
+        parse_fact_list,
+        strip_fact_block,
+    )
+
+    def _rec(name: str) -> dict:
+        return records_by_provider.setdefault(name, {
+            "provider": name,
+            "reports_seen": 0,
+            "reports_with_fact_list": 0,
+            "reports_fell_back": 0,
+            "facts_from_list": 0,
+            "claims_from_fallback": 0,
+            "parse_errors": 0,
+            "rejected_urls": 0,
+            "dropped_over_cap": 0,
+            "prompted": False,
+            "reason": None,
+        })
+
+    for entry in entries:
+        name, result = _unpack(entry)
+        rec = _rec(name)
+        rec["reports_seen"] += 1
+
+        report_text = ""
+        stripped = ""
+        try:
+            # `name` and `facet` are CALLER-SUPPLIED and are never read out of
+            # report text — the rule `_parse_distiller_response` states above.
+            # A model must not be able to set its own attribution (T-15.2-60).
+            facet = str(result.get("_angle") or "") or "general"
+            report_text = result.get("report") or ""
+            if not isinstance(report_text, str):
+                report_text = ""
+            if bool(result.get("_d8_prompted")):
+                rec["prompted"] = True
+
+            # ALWAYS strip, including on the fallback path: a partial or dangling
+            # block must never reach synthesis, scrub_research or the extractors.
+            stripped = strip_fact_block(report_text)
+
+            # --- The forced-tool hand-off (15.2-12 / 15.2-15) ------------------
+            # The own-researcher emits its facts through a forced `emit_fact_list`
+            # client tool, so they arrive ALREADY PARSED on the result dict. Using
+            # them verbatim and never distilling this stream is the whole point:
+            # re-distilling a stream that already emitted structured facts is a
+            # pure double spend for a strictly worse result.
+            # TO BE CONFIRMED ON MERGE by 15.2-12 / 15.2-15 — see the SUMMARY.
+            pre_parsed = result.get("facts")
+            if isinstance(pre_parsed, list) and pre_parsed and all(
+                isinstance(f, dict) for f in pre_parsed
+            ):
+                kept = 0
+                for raw in pre_parsed:
+                    norm = _normalise_fact_claim(
+                        raw, provider=name, facet=facet, fact_source="fact_list"
+                    )
+                    if norm is None:
+                        unusable_claims += 1
+                        continue
+                    d8_claims.append(norm)
+                    kept += 1
+                rec["reports_with_fact_list"] += 1
+                rec["facts_from_list"] += kept
+                reports_out.append((name, {**result, "report": stripped}))
+                continue
+
+            if not report_text:
+                # Nothing to parse and nothing to distil. Not a fallback: there is
+                # no prose that could have carried a list.
+                reports_out.append((name, {**result, "report": stripped}))
+                continue
+
+            label_index = build_label_index(report_text)
+            parsed = parse_fact_list(
+                report_text, provider=name, facet=facet, label_index=label_index
+            )
+            rec["parse_errors"] += parsed.parse_errors
+            rec["rejected_urls"] += parsed.rejected_urls
+            rec["dropped_over_cap"] += parsed.dropped_over_cap
+            not_found_raw.extend(parsed.not_found)
+
+            if not parsed.needs_distiller_fallback:
+                rec["reports_with_fact_list"] += 1
+                kept = 0
+                for raw in parsed.facts:
+                    norm = _normalise_fact_claim(
+                        raw, provider=name, facet=facet, fact_source="fact_list"
+                    )
+                    if norm is None:
+                        unusable_claims += 1
+                        continue
+                    d8_claims.append(norm)
+                    kept += 1
+                rec["facts_from_list"] += kept
+            else:
+                rec["reports_fell_back"] += 1
+                if rec["reason"] is None:
+                    # 15.2-04's own sentence, carried verbatim.
+                    rec["reason"] = parsed.fallback_reason
+                # The block is stripped BEFORE distillation too, so the distiller
+                # never re-reads a half-parsed fact table as prose.
+                fallback_units.append((name, {**result, "report": stripped}))
+        except Exception as exc:  # noqa: BLE001 — one bad report degrades itself only
+            log.warning(
+                "collect_provider_facts: %s report could not be read as a fact "
+                "list (%s) — it is passed through as prose",
+                name or "a provider", type(exc).__name__,
+            )
+            stripped = stripped or report_text or ""
+
+        reports_out.append((name, {**result, "report": stripped}))
+
+    # --- The ONE fallback distillation, over ALL fallback reports at once -----
+    # Skipping it entirely when there is nothing to distil IS the no-double-spend
+    # assertion. One call keeps `claim_distiller`'s existing per-chunk parallelism
+    # and its `_chunk_text` coverage guarantee — neither is re-implemented here.
+    fallback_claims: list[dict] = []
+    if fallback_units:
+        raw_fallback = await claim_distiller(
+            provider_reports=fallback_units,
+            mission_brief=mission_brief,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            full_extraction=True,
+        )
+        for raw in raw_fallback:
+            # Attribution comes from `found_by`, which `claim_distiller` already
+            # sets from the tuple name — never from the model's own output.
+            attributed = ""
+            fb = raw.get("found_by") if isinstance(raw, dict) else None
+            if isinstance(fb, list) and fb:
+                attributed = str(fb[0] or "")
+            norm = _normalise_fact_claim(
+                raw if isinstance(raw, dict) else {},
+                provider=attributed,
+                facet="general",
+                fact_source="distiller_fallback",
+            )
+            if norm is None:
+                unusable_claims += 1
+                continue
+            fallback_claims.append(norm)
+            if attributed:
+                _rec(attributed)["claims_from_fallback"] += 1
+
+    # --- ONE dedupe, across ALL streams, D8 claims FIRST ----------------------
+    # The order is deliberate. `_dedupe_claims` keeps the FIRST occurrence and
+    # MERGES `found_by`, so putting provider-stated facts first means a fact the
+    # provider itself asserted wins over a distilled paraphrase of the same fact,
+    # while the corroboration signal (two streams naming the same fact) survives
+    # in `found_by`. This is the SINGLE normaliser — no second deduper is written
+    # here, and `_dedupe_claims` itself is not modified; 15.2-15's merge depends
+    # on its current shape. Note also that the D6 corroboration COPIES — the same
+    # sub-question deliberately sent to several providers — are exactly what this
+    # merge is for; they are the signal, and nothing above removes them per-stream.
+    claims = _dedupe_claims(d8_claims + fallback_claims)
+
+    # --- not_found: order-preserving dedupe, then a LOUD cap ------------------
+    seen_nf: set = set()
+    not_found: list[str] = []
+    for item in not_found_raw:
+        key = str(item or "").strip()
+        if not key or key in seen_nf:
+            continue
+        seen_nf.add(key)
+        not_found.append(key)
+    if len(not_found) > _NOT_FOUND_TOTAL_MAX:
+        log.warning(
+            "collect_provider_facts: %d distinct 'could not establish' entries "
+            "exceed the %d cap — %d dropped (raise "
+            "NESTOR_TRIBUNAL_NOT_FOUND_TOTAL_MAX to keep them all)",
+            len(not_found), _NOT_FOUND_TOTAL_MAX,
+            len(not_found) - _NOT_FOUND_TOTAL_MAX,
+        )
+        not_found = not_found[:_NOT_FOUND_TOTAL_MAX]
+
+    # --- Per-provider records, plain-words notes, and one feed row each -------
+    records: list[ProviderFactsRecord] = []
+    fallback_notes: list[str] = []
+    for name, rec in records_by_provider.items():
+        records.append(ProviderFactsRecord(**rec))
+        if rec["reports_fell_back"] > 0:
+            note = _fallback_note(
+                name,
+                prompted=bool(rec["prompted"]),
+                k=rec["reports_fell_back"],
+                m=rec["reports_seen"],
+                c=rec["claims_from_fallback"],
+            )
+            fallback_notes.append(note)
+            log.warning("collect_provider_facts: %s", note)
+
+    if feed is not None:
+        for name, rec in records_by_provider.items():
+            # Best-effort: a feed write must never break a paid run.
+            try:
+                if rec["reports_fell_back"] > 0:
+                    row = (
+                        f"{name or 'provider'}: no fact list — full distillation "
+                        f"fallback ({rec['claims_from_fallback']} claims from "
+                        f"{rec['reports_fell_back']} report(s))"
+                    )
+                    n_facts = rec["claims_from_fallback"]
+                else:
+                    row = (
+                        f"{name or 'provider'}: {rec['facts_from_list']} fact(s) "
+                        f"from its own fact list"
+                    )
+                    n_facts = rec["facts_from_list"]
+                await feed.add(name=row, status="done", facts=int(n_facts))
+            except Exception as exc:  # noqa: BLE001 — feed rows are best-effort
+                log.warning(
+                    "collect_provider_facts: feed row for %s failed: %r", name, exc
+                )
+
+    log.info(
+        "collect_provider_facts: %d provider(s), %d report(s) with a fact list, "
+        "%d fell back to full distillation -> %d D8 fact(s) + %d fallback claim(s) "
+        "= %d claim(s) after one dedupe (%d unusable discarded, %d 'could not "
+        "establish' entries)",
+        len(records_by_provider),
+        sum(r["reports_with_fact_list"] for r in records_by_provider.values()),
+        sum(r["reports_fell_back"] for r in records_by_provider.values()),
+        len(d8_claims), len(fallback_claims), len(claims), unusable_claims,
+        len(not_found),
+    )
+
+    return ProviderFactsResult(
+        claims=claims,
+        reports=reports_out,
+        not_found=not_found,
+        records=records,
+        fallback_notes=fallback_notes,
+    )
 
 
 claim_guard = _phase2_stub("claim_guard")
