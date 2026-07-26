@@ -119,29 +119,106 @@ _NOT_CHECKABLE_KEYS = ("not_falsifiable", "not_load_bearing", "both", "skipped_s
 # of zeros, which would read as a clean bucket 3 and lie about an old run.
 _ACCOUNTING_KEYS = ("checked", "should_have_been_checked", "gate_errors") + _NOT_CHECKABLE_KEYS
 
+# WR-10 / D-10 Option 2 (15.2): the four "checked incidentally" counts, POSITIONALLY
+# PAIRED with _NOT_CHECKABLE_KEYS above -- index i here is the incidental count for
+# bucket-2 reason i there. Keep the two tuples in the same order; the zip below
+# depends on it.
+#
+# ⚠ THE TRAP -- READ BEFORE TOUCHING _ACCOUNTING_KEYS ⚠
+# These keys are read with `funnel.get(key, 0)` and are DELIBERATELY NOT part of
+# `_ACCOUNTING_KEYS`. `_accounting` returns None when ANY `_ACCOUNTING_KEYS` member
+# is missing from the funnel, and that is not a bug — it is how the shaper DETECTS a
+# pre-15.1 run and reports "no gate data" instead of a dict of zeros that would read
+# as a clean bucket 3. Adding one of these (or `unresolved_anchors`, or
+# `degradation_reasons`) to that tuple would make EVERY funnel written before 15.2 —
+# including every run already in the database — fail the membership test, so the
+# operator's accounting block would go blank on runs that have perfectly good gate
+# data. `test_accounting_keys_tuple_excludes_the_incidental_keys` in
+# test_verification_buckets.py asserts the tuple's exact membership, so this is
+# enforced rather than merely requested.
+_INCIDENTAL_KEYS = (
+    "checked_incidentally_not_falsifiable",
+    "checked_incidentally_not_load_bearing",
+    "checked_incidentally_both",
+    "checked_incidentally_stable",
+)
+
+# D-12 caps, mirroring pipeline._normalise_degradation_reasons. Restated here on
+# purpose: this shaper must also survive a hand-built or legacy funnel that never
+# went through the producer-side normaliser.
+_DEGRADATION_REASON_CHARS = 200
+_MAX_DEGRADATION_REASONS = 8
+
 
 def _accounting(funnel: dict | None) -> dict | None:
-    """G-08's three buckets, derived from the funnel. None when there is no gate data."""
+    """G-08's buckets, derived from the funnel. None when there is no gate data.
+
+    FOUR accounting lines since 15.2 (D-10 / WR-10):
+
+      1. `checked`                  -- selected by the gates AND actually checked.
+      2. `checked_incidentally`     -- NOT selected, yet checked anyway as a member
+         of a selected group. Its verdicts are real: they reach adjudication and a
+         refutation still scrubs the passage. Reported with the gate reason the
+         claim carried, so the operator can see WHICH not-checkable claims got
+         checked after all.
+      3. `not_checkable`            -- gated out AND never checked, with the
+         specific reason. Reduced by line 2, PER REASON, so its four printed
+         reasons still add up to its own printed total on the page.
+      4. `should_have_been_checked` -- the headline. Zero on a healthy run.
+
+    The arithmetic a reader can check by hand:
+        distilled == checked
+                   + checked_incidentally.total
+                   + not_checkable.total
+                   + should_have_been_checked
+
+    `checked_incidentally.total` is computed HERE as the sum of the same four
+    clamped values the subtraction uses — never as a read of the funnel's flat
+    `checked_incidentally` key — so the one-claim-one-bucket invariant holds by
+    construction even for a hand-built funnel. (The pipeline's flat key is the
+    producer's ground truth; a test asserts the two agree.)
+    """
     if not isinstance(funnel, dict):
         return None
     if any(key not in funnel for key in _ACCOUNTING_KEYS):
         return None
 
-    not_falsifiable = int(funnel["not_falsifiable"] or 0)
-    not_load_bearing = int(funnel["not_load_bearing"] or 0)
-    both = int(funnel["both"] or 0)
-    stable_known_fact = int(funnel["skipped_stable"] or 0)
+    raw = {key: int(funnel[key] or 0) for key in _NOT_CHECKABLE_KEYS}
+    # Read with `.get` — NEVER a membership gate, see the trap note above. Clamped
+    # to its own raw bucket-2 reason so a malformed funnel can never drive a reason
+    # negative; same defensive register as pipeline._build_funnel's
+    # `min(unchecked_selected, selected)`.
+    incidental = {
+        nc_key: min(max(0, int(funnel.get(inc_key, 0) or 0)), raw[nc_key])
+        for nc_key, inc_key in zip(_NOT_CHECKABLE_KEYS, _INCIDENTAL_KEYS)
+    }
+    reduced = {key: raw[key] - incidental[key] for key in _NOT_CHECKABLE_KEYS}
 
     return {
         # Bucket 1.
         "checked": int(funnel["checked"] or 0),
+        # Bucket 1b (WR-10) -- the same five-key shape as bucket 2, and the same
+        # `stable_known_fact` rename on the way out (the funnel says
+        # `skipped_stable` / `checked_incidentally_stable`; this block has always
+        # spelled it for a reader rather than for the gate stage).
+        "checked_incidentally": {
+            "total": sum(incidental.values()),
+            "not_falsifiable": incidental["not_falsifiable"],
+            "not_load_bearing": incidental["not_load_bearing"],
+            "both": incidental["both"],
+            "stable_known_fact": incidental["skipped_stable"],
+        },
         # Bucket 2 -- never a bare total; every gated-out claim carries its reason.
+        # A claim subtracted here is NOT lost: it is in the `checked_incidentally`
+        # block directly above, and the two blocks together still account for every
+        # gated-out claim. `total` is the sum of the four REDUCED values, so an
+        # operator who adds up the printed reasons gets the printed total.
         "not_checkable": {
-            "total": not_falsifiable + not_load_bearing + both + stable_known_fact,
-            "not_falsifiable": not_falsifiable,
-            "not_load_bearing": not_load_bearing,
-            "both": both,
-            "stable_known_fact": stable_known_fact,
+            "total": sum(reduced.values()),
+            "not_falsifiable": reduced["not_falsifiable"],
+            "not_load_bearing": reduced["not_load_bearing"],
+            "both": reduced["both"],
+            "stable_known_fact": reduced["skipped_stable"],
         },
         # Bucket 3 -- the headline. Zero on a healthy run.
         "should_have_been_checked": int(funnel["should_have_been_checked"] or 0),
@@ -201,6 +278,67 @@ def _degradation(funnel: dict | None, accounting: dict | None) -> tuple[bool, st
     return True, text
 
 
+def _degradation_reasons(
+    funnel: dict | None,
+    verification_degraded_text: str | None,
+) -> list[str]:
+    """D-12: every reason this run degraded, as sentences the operator reads.
+
+    A SIBLING of `_degradation`, never a change to it: that function carries G-10
+    semantics `test_fail_loud.py` pins.
+
+    Two sources, one list:
+
+      * the pipeline's own reasons, carried on `funnel["degradation_reasons"]` —
+        a lost research stream, a question-workshop fallback, a fact-list fallback,
+        a blocked coverage re-entry. They are written by ONE run-scoped accumulator
+        in `pipeline.run()` and normalised by ONE normaliser
+        (`pipeline._normalise_degradation_reasons`). The same normalisation is
+        restated below because this shaper must also survive a hand-built or legacy
+        funnel that never passed through the producer.
+      * the BUCKET-3 sentence, DERIVED here and prepended. The pipeline deliberately
+        never writes it, so exactly one wording of it exists in the codebase — which
+        is also what lets the recorded run, whose funnel carries
+        `degradation_reasons: []`, still name its degradation to the operator.
+
+    Never invents a reason from anything else. Per D-12, a RECOVERED retry is
+    recovery, not shortfall, and `cost_pending` is the designed
+    pending-then-backfill-exact path; neither is a degradation reason, and demoting
+    them would drain `completed_degraded` of its meaning.
+
+    This function shapes the operator's WORDS. It does not decide the run's status:
+    that is `terminal_state()` (15.2-02) and the worker (15.2-16), which read
+    `should_have_been_checked` and this list off `run.verification_summary`.
+    """
+    if not isinstance(funnel, dict):
+        return []
+
+    raw = funnel.get("degradation_reasons")
+    if not isinstance(raw, list):
+        raw = []
+
+    kept: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        text = entry.strip()
+        if not text:
+            continue
+        text = text[:_DEGRADATION_REASON_CHARS]
+        if text in seen:
+            continue
+        seen.add(text)
+        kept.append(text)
+
+    if isinstance(verification_degraded_text, str) and verification_degraded_text.strip():
+        bucket_three = verification_degraded_text.strip()
+        if bucket_three not in seen:
+            kept.insert(0, bucket_three)
+
+    return kept[:_MAX_DEGRADATION_REASONS]
+
+
 # ---------------------------------------------------------------------------
 # Pure shaper -- NO DB, NO GCS. Unit-testable from the recorded fixture rows.
 # ---------------------------------------------------------------------------
@@ -236,6 +374,7 @@ def shape_verification_report(
       verdicts{support,refute,insufficient,superseded}, refuted, superseded,
       reconciled, unverified{count,claims_with_verdict,total_claims},
       unverified_from_accounting, unverified_note,
+      unresolved_anchors, unresolved_anchors_text, degradation_reasons,
       true_cost{cost_usd_total,cost_pending}, citations, counts.
 
     CR-02: `unverified` keeps its exact three keys, but when a run carries ZERO
@@ -249,8 +388,11 @@ def shape_verification_report(
     `superseded` (a reconciliation-derived scoped/temporal finding) are two
     different things that happen to share a word -- see the classing branch.
 
-    G-08's three buckets (`accounting`):
+    G-08's buckets (`accounting`), four lines since 15.2's D-10 / WR-10:
       1. `checked`                     -- a fact-checker looked at it.
+      1b. `checked_incidentally`       -- NOT selected by the gates, but checked
+         anyway as a member of a selected group, with the SPECIFIC gate reason.
+         Subtracted from bucket 2 per reason (see `_accounting`).
       2. `not_checkable`               -- gated out, with the SPECIFIC reason
          (not_falsifiable / not_load_bearing / both / stable_known_fact).
       3. `should_have_been_checked`    -- selected for checking and never
@@ -352,6 +494,27 @@ def shape_verification_report(
     accounting = _accounting(funnel)
     verification_degraded, verification_degraded_text = _degradation(funnel, accounting)
 
+    # D-12: every reason, in sentences (the derived bucket-3 one first).
+    degradation_reasons = _degradation_reasons(funnel, verification_degraded_text)
+    # D-06: the citation anchors the writing model emitted that matched no claim in
+    # this run. `funnel or {}` because a pre-15.1 run carries no funnel at all.
+    unresolved_anchors = max(0, int((funnel or {}).get("unresolved_anchors", 0) or 0))
+    # A healthy run says NOTHING -- the same rule `_degradation` follows. A marker
+    # that renders on every run is background noise, and the operator stops reading
+    # it exactly when it starts mattering.
+    unresolved_anchors_text: str | None = None
+    if unresolved_anchors:
+        unresolved_anchors_text = (
+            f"{unresolved_anchors} citation anchor(s) in the written report could "
+            "not be matched to a numbered source from this run, so they were "
+            "removed and no broken [n] marker ships. The sentences they were "
+            "attached to are UNCHANGED and still stand -- they are simply uncited. "
+            "This count is the measure of how closely the writing model followed "
+            "the citation-anchor instruction: the higher it is, the more of the "
+            "report's apparent sourcing the model produced from memory rather than "
+            "from the evidence this run actually gathered."
+        )
+
     # -----------------------------------------------------------------------
     # CR-02 (the 15.1 SC2 gap): the unverified block must never contradict the
     # accounting block it sits next to.
@@ -428,6 +591,12 @@ def shape_verification_report(
         # VerificationReport so they cannot be dropped at the API boundary.
         "unverified_from_accounting": unverified_from_accounting,
         "unverified_note": unverified_note,
+        # D-06 / D-12, TOP-LEVEL SIBLINGS beside the other CR-02-style honesty keys.
+        # Nothing is added inside `unverified`: two tests assert its key set is
+        # exactly {count, claims_with_verdict, total_claims}.
+        "unresolved_anchors": unresolved_anchors,
+        "unresolved_anchors_text": unresolved_anchors_text,
+        "degradation_reasons": degradation_reasons,
         "true_cost": {
             "cost_usd_total": (
                 str(cost_usd_total) if cost_usd_total is not None else None
