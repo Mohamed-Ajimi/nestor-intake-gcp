@@ -39,7 +39,8 @@ import logging
 import os
 import random
 import re
-from typing import Any, Callable
+import time
+from typing import Any, Callable, Sequence
 
 log = logging.getLogger(__name__)
 
@@ -505,3 +506,408 @@ class PauseContinuation:
             self.max_pauses,
         )
         return True
+
+
+# ---------------------------------------------------------------------------
+# R2 — the per-provider circuit breaker.
+#
+# THESE FIVE NUMBERS ARE MEDIUM-CONFIDENCE DEFAULTS. RESEARCH grounds them in
+# community consensus and standard published practice, not in vendor
+# documentation — the trip threshold of 5, the 60 s open window and the 10×
+# overload allowance are all "widely used", not "measured here". The August live
+# run (V-01/V-02) is what calibrates them against real provider behaviour, which
+# is exactly why every one of them is env-tunable: retuning must cost an env-var
+# change, not a code change and a new image.
+#   BREAKER_HARD_THRESHOLD      consecutive IDENTICAL hard failures before trip.
+#   BREAKER_OVERLOAD_THRESHOLD  separate, HIGHER threshold for 529/timeouts, so a
+#                               capacity blip does not kill a research stream.
+#   BREAKER_OPEN_S              first open window; each re-open doubles it.
+#   BREAKER_OPEN_MAX_S          ceiling on that escalation.
+#   BREAKER_SIGNATURE_CHARS     how much of the message defines "identical".
+BREAKER_HARD_THRESHOLD = int(
+    os.environ.get("NESTOR_TRIBUNAL_BREAKER_HARD_THRESHOLD", "5")
+)
+BREAKER_OVERLOAD_THRESHOLD = int(
+    os.environ.get("NESTOR_TRIBUNAL_BREAKER_OVERLOAD_THRESHOLD", "10")
+)
+BREAKER_OPEN_S = float(os.environ.get("NESTOR_TRIBUNAL_BREAKER_OPEN_S", "60"))
+BREAKER_OPEN_MAX_S = float(os.environ.get("NESTOR_TRIBUNAL_BREAKER_OPEN_MAX_S", "600"))
+BREAKER_SIGNATURE_CHARS = int(
+    os.environ.get("NESTOR_TRIBUNAL_BREAKER_SIGNATURE_CHARS", "80")
+)
+
+CLOSED = "closed"
+OPEN = "open"
+HALF_OPEN = "half_open"
+
+
+class CircuitOpenError(RuntimeError):
+    """Raised instead of calling a provider whose circuit is open.
+
+    Carries the plain-words `reason` that D-12 puts in a degraded run's
+    `degradation_reasons` list. A lost stream is always NAMED — never a silent
+    absence (Shared Pattern 5, T-15.2-05).
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        reason: str,
+        opened_at: float = 0.0,
+        retry_at: float = 0.0,
+    ) -> None:
+        self.provider = provider
+        self.reason = reason
+        self.opened_at = float(opened_at)
+        self.retry_at = float(retry_at)
+        window = max(0.0, self.retry_at - self.opened_at)
+        super().__init__(
+            f"{provider}: circuit open — {reason}. No further {provider} calls "
+            f"will be made for {window:.0f}s, then one probe decides whether to "
+            f"close it."
+        )
+
+
+def error_signature(exc: BaseException) -> str:
+    """A normalised fingerprint that makes "the same error again" decidable.
+
+    R2 trips on consecutive IDENTICAL hard failures, so "identical" needs a
+    definition. Without digit stripping every request id in the message makes
+    each error unique and the breaker NEVER TRIPS — which is the failure this
+    whole primitive exists to prevent.
+
+    Pipeline: lowercase -> redact credentials -> strip digit runs -> collapse
+    whitespace -> truncate -> prefix with the HTTP status (which keeps its
+    digits, because 401 and 403 are different errors).
+
+    Redaction happens BEFORE truncation and is not optional (T-15.2-02): a
+    SerpApi failure carries the API key in the query string, and this signature
+    is written to WARNING logs, to `snapshot()` and to the operator feed, so it
+    must be safe to display. Never raises.
+    """
+    try:
+        status = _status_of(exc)
+        text = redact(f"{type(exc).__name__} {exc}".lower())
+        text = re.sub(r"\d+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()[:BREAKER_SIGNATURE_CHARS]
+        return f"{status if status is not None else 'none'}|{text}"
+    except Exception:  # noqa: BLE001 — a signature that raises is worse than a vague one
+        return "none|<unprintable>"
+
+
+class CircuitBreaker:
+    """One provider's circuit. In-process, RUN-SCOPED, per (provider, stage).
+
+    SCOPE DECISION: one worker runs one run (`runs/worker.py`), so there is no
+    shared state to coordinate, no database and no cross-request surface. State
+    carries provider names, counts and status codes only — no tenant data
+    (T-15.2-07). Construct these through a per-run `BreakerSet`; NEVER at module
+    level, or one run's failures would open another run's circuit.
+
+    The `clock` is injected so the open window is testable without sleeping:
+    the tests pass a fake clock and step it forward by hand.
+
+    State machine:
+        closed  -- `allow()` True, calls flow.
+        open    -- `allow()` False until `retry_at`. Nothing is sent, nothing is
+                   billed.
+        half_open -- exactly ONE probe is allowed through. Success closes the
+                   circuit; failure re-opens it for twice as long, capped.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        hard_threshold: int = BREAKER_HARD_THRESHOLD,
+        overload_threshold: int = BREAKER_OVERLOAD_THRESHOLD,
+        open_s: float = BREAKER_OPEN_S,
+        max_open_s: float = BREAKER_OPEN_MAX_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.name = name
+        self.hard_threshold = max(1, int(hard_threshold))
+        self.overload_threshold = max(1, int(overload_threshold))
+        self.open_s = float(open_s)
+        self.max_open_s = float(max_open_s)
+        self._clock = clock
+
+        self.consecutive_hard = 0
+        self.overload = 0
+        self.rate_limited = 0
+        self.signature: str | None = None
+        self.reason = ""
+        self.opened_at = 0.0
+        self.retry_at = 0.0
+
+        self._open = False
+        self._probe_in_flight = False
+        self._open_cycles = 0
+
+    # -- state -------------------------------------------------------------
+
+    @property
+    def state(self) -> str:
+        """"closed" / "open" / "half_open", derived from the injected clock."""
+        if not self._open:
+            return CLOSED
+        if self._probe_in_flight or self._clock() >= self.retry_at:
+            return HALF_OPEN
+        return OPEN
+
+    def allow(self) -> bool:
+        """May a call go out right now? Consumes the half-open probe if so."""
+        if not self._open:
+            return True
+        if self._probe_in_flight:
+            return False  # somebody else already took the one probe
+        if self._clock() >= self.retry_at:
+            self._probe_in_flight = True
+            return True
+        return False
+
+    def raise_if_open(self) -> None:
+        """Raise `CircuitOpenError` when no call may go out."""
+        if not self.allow():
+            raise CircuitOpenError(
+                self.name,
+                self.reason or "circuit open after repeated hard failures",
+                self.opened_at,
+                self.retry_at,
+            )
+
+    # -- outcomes ----------------------------------------------------------
+
+    def record_success(self) -> None:
+        """A call worked: close the circuit and forget the failure history."""
+        self._open = False
+        self._probe_in_flight = False
+        self._open_cycles = 0
+        self.consecutive_hard = 0
+        self.overload = 0
+        self.signature = None
+        self.reason = ""
+        self.opened_at = 0.0
+        self.retry_at = 0.0
+
+    def record_failure(self, exc: BaseException) -> None:
+        """Book a failure against the right counter. Only some kinds trip."""
+        failure_class = classify(exc)
+
+        if failure_class == RATE_LIMIT:
+            # R2, verbatim: rate limiting is NOT a failure — it means the API is
+            # healthy and we are sending too much. Plain 429s are retried, never
+            # counted, and never trip the breaker. This is the single most
+            # important line in this method: treating 429 as a failure would
+            # open the circuit on a perfectly healthy provider.
+            self.rate_limited += 1
+            return
+
+        if failure_class == HARD_WALL:
+            # The monthly cap / exhausted credits. Unambiguous and unrecoverable
+            # within the run, so it trips on the FIRST occurrence — waiting for
+            # five is how 776 requests went out in 55 seconds.
+            self.signature = error_signature(exc)
+            self.consecutive_hard += 1
+            self.trip(
+                f"{self.name} refused the request at the account level "
+                f"(hard wall: {self.signature}) — no retry can fix this"
+            )
+            return
+
+        if self._probe_in_flight:
+            # The one half-open probe failed: re-open immediately, for longer,
+            # whatever the class. The provider is not back yet.
+            self._probe_in_flight = False
+            self.trip(
+                f"{self.name} failed its recovery probe ({failure_class}) — "
+                f"circuit re-opened for longer"
+            )
+            return
+
+        if failure_class == HARD:
+            signature = error_signature(exc)
+            if signature != self.signature:
+                self.signature = signature
+                self.consecutive_hard = 1
+            else:
+                self.consecutive_hard += 1
+            if self.consecutive_hard >= self.hard_threshold:
+                self.trip(
+                    f"{self.name} returned the same hard failure "
+                    f"{self.consecutive_hard} times in a row ({self.signature})"
+                )
+            return
+
+        if failure_class == OVERLOAD:
+            self.overload += 1
+            if self.overload >= self.overload_threshold:
+                self.trip(
+                    f"{self.name} has been overloaded or timing out "
+                    f"{self.overload} times — backing off this provider"
+                )
+            return
+
+        # TRANSIENT: a 5xx blip that `with_retry` already handles. No counter
+        # moves, because a recovered retry is not a failure of the provider.
+        return
+
+    # -- transitions -------------------------------------------------------
+
+    def trip(self, reason: str) -> None:
+        """Open the circuit, with an escalating window on each successive trip."""
+        self.opened_at = self._clock()
+        self._open_cycles += 1
+        window = min(self.open_s * (2 ** (self._open_cycles - 1)), self.max_open_s)
+        self.retry_at = self.opened_at + window
+        self.reason = reason
+        self._open = True
+        self._probe_in_flight = False
+        log.warning(
+            "circuit breaker %s OPEN for %.0fs — %s (signature: %s)",
+            self.name,
+            window,
+            reason,
+            self.signature or "n/a",
+        )
+
+    def force_open(self, reason: str) -> None:
+        """Open the circuit with an arbitrary reason and NO exception.
+
+        This is the startup seam plan 15.2-12 uses for "`SERPAPI_API_KEY` is not
+        configured": the own-researcher's breaker is forced open before the run
+        starts, so the stream is never attempted, the reason is named in D-12's
+        degradation list, and the run finishes as a clean 3-stream
+        `completed_degraded` instead of failing mid-flight on a missing secret.
+        """
+        self.trip(reason)
+
+    def snapshot(self) -> dict[str, Any]:
+        """Plain, JSON-safe data for the operator feed and the verification report."""
+        return {
+            "provider": self.name,
+            "state": self.state,
+            "reason": self.reason,
+            "consecutive_hard": self.consecutive_hard,
+            "overload": self.overload,
+            "rate_limited": self.rate_limited,
+            "opened_at": self.opened_at,
+            "retry_at": self.retry_at,
+        }
+
+
+class BreakerSet:
+    """The RUN-SCOPED registry of per-provider breakers. Create one PER RUN.
+
+    NEVER instantiate this at module level. Breaker state is per run by design:
+    a module-level set would carry one run's provider failures into the next
+    run — and, in a multi-tenant system, across tenants.
+    """
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._breakers: dict[str, CircuitBreaker] = {}
+
+    def get(self, name: str) -> CircuitBreaker:
+        """The breaker for `name`, created on first use."""
+        if name not in self._breakers:
+            self._breakers[name] = CircuitBreaker(name, clock=self._clock)
+        return self._breakers[name]
+
+    def all(self) -> dict[str, CircuitBreaker]:
+        return dict(self._breakers)
+
+    def open_providers(self) -> list[str]:
+        """Providers whose circuit is not closed (open or awaiting a probe)."""
+        return [n for n, b in self._breakers.items() if b.state != CLOSED]
+
+    def reasons(self) -> list[str]:
+        """The plain-words reasons, ready for D-12's `degradation_reasons`."""
+        return [
+            b.reason for b in self._breakers.values() if b.state != CLOSED and b.reason
+        ]
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [b.snapshot() for b in self._breakers.values()]
+
+
+# ---------------------------------------------------------------------------
+# R4/R6 — D-17's terminal-state boundary, as a pure function.
+#
+# `failed` and `cancelled` are written elsewhere (`runs/worker.py`) and are
+# deliberately OUTSIDE this function's range: they mean "the run crashed" and
+# "a human stopped it", neither of which is a judgement about the output. The
+# status VOCABULARY sites — `runs/schemas.py::RunStatus` and
+# `db/models/run.py::ck_run_status` — are owned by plans 15.2-09 and 15.2-01;
+# this module owns only the decision.
+# ---------------------------------------------------------------------------
+
+ENGINE_TERMINAL_STATES: tuple[str, ...] = ("completed", "completed_degraded", "parked")
+
+
+def terminal_state(
+    *,
+    streams_lost: int,
+    streams_total: int,
+    verify_ran: bool,
+    synthesis_ran: bool,
+    hard_wall: bool,
+    degradation_reasons: Sequence[str],
+) -> str:
+    """Decide a run's terminal state. Pure: no I/O, no clock, no LLM.
+
+    Returns one of `ENGINE_TERMINAL_STATES`. D-17's truth table:
+
+      PARK — "no honest deliverable is possible". A hard wall (the Anthropic
+        monthly cap, exhausted credits — the settled R4 case), no streams at
+        all, EVERY research provider walled, verification entirely unable to
+        run, or the synthesis model walled. Park means "this genuinely needs
+        you": resume is a superadmin click, and checkpoint resumes are free.
+
+      COMPLETED_DEGRADED — the output fell short and every reason is named. One
+        or two streams lost, a non-empty bucket 3, a workshop that fell back, a
+        skipped stage.
+
+      COMPLETED — clean.
+
+    TWO CASES THAT DELIBERATELY DO NOT DEGRADE A RUN (D-12 — do not add them):
+      * RECOVERED RETRIES do not degrade. R5 already shows them in the feed as
+        recovery; demoting them would make nearly every run degraded and drain
+        the status of its meaning.
+      * `cost_pending` does not degrade. Pending-then-backfill-exact is the
+        designed path for Gemini grounding fees (C1), not a shortfall.
+
+    The `streams_lost > 0` with no reason recorded branch degrades ANYWAY and
+    logs the inconsistency at WARNING. Losing a stream without naming why is a
+    bookkeeping bug, and the honest resolution is to say so out loud rather than
+    report a clean `completed` (fail loud, never a silent green).
+    """
+    reasons = [
+        r for r in (degradation_reasons or []) if isinstance(r, str) and r.strip()
+    ]
+
+    if hard_wall:
+        return "parked"
+    if streams_total <= 0:
+        return "parked"
+    if streams_lost >= streams_total:
+        return "parked"
+    if not verify_ran:
+        return "parked"
+    if not synthesis_ran:
+        return "parked"
+
+    if reasons:
+        return "completed_degraded"
+
+    if streams_lost > 0:
+        log.warning(
+            "terminal_state: %d of %d research streams were lost but no "
+            "degradation reason was recorded — degrading anyway. This is a "
+            "bookkeeping bug: every lost stream must be named (D-12).",
+            streams_lost,
+            streams_total,
+        )
+        return "completed_degraded"
+
+    return "completed"
