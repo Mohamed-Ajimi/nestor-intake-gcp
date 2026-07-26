@@ -56,6 +56,12 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
     synthesize_report,
     conflict_detector,
     scrub_research,
+    # D-08 (Phase 15.2): the two report sections are rendered by PYTHON from
+    # pipeline data and appended AFTER synthesize_report returns, so the writing
+    # model never sees them and cannot omit, merge, truncate or rewrite an item.
+    # Both are pure — no LLM, no DB, no clock. Append site: _write_final_report.
+    build_disputed_and_changed,
+    build_could_not_establish,
 )
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import run_skeptic
 from nestor_pulse_sdk.pipeline.tribunal.grouping import group_claims
@@ -1168,6 +1174,34 @@ class TribunalPipeline:
             "cleaned_reports": cleaned_reports,
             "contested_notes": contested_notes,
             "rejected_claims": rejected_claims,
+            # D-08 inputs for the two deterministic report sections.
+            #
+            # 1. WHY IT LIVES ON THE BUNDLE. `_write_final_report` is shared by
+            #    the zero-touch path and the interactive-report RESUME path,
+            #    which rebuilds everything from this cached `synthesis_cache`
+            #    row. Anything the report needs must be serializable and travel
+            #    here — exactly the reason `contested_notes` is on the bundle.
+            #    All three values below are plain str/bool/dict data.
+            # 2. WHY `superseded_notes` IS THE UNCAPPED DEDUPED LIST while
+            #    `contested_notes` above gets `[:_SUPERSEDED_NOTE_CAP]`: that cap
+            #    bounds a PROMPT ("NOT to hide anything" — the comment at the cap
+            #    site says so). The D-08 section is not a prompt, and dropping
+            #    caveats from the operator's report would be precisely the silent
+            #    loss the cap is explicitly not for.
+            # 3. `brief_conflicts` IS POPULATED BY PLAN 15.2-13 (wave 6), which
+            #    wires the question workshop into run(); the workshop's D4
+            #    brief-vs-world flags (from 15.2-10's emit_orientation) are in
+            #    scope at this point once that lands. Until then the list is
+            #    empty and the subgroup simply does not render.
+            # 4. `not_found_by_provider` is DELIBERATELY NOT HERE.
+            #    `_write_final_report` reads `research_gap` directly, so the
+            #    section works on the resume path and needs no wiring hand-off
+            #    from 15.2-15 (which owns the WRITE path) beyond the rows.
+            "report_sections": {
+                "group_reconciliations": group_reconciliations,
+                "superseded_notes": _deduped_superseded,
+                "brief_conflicts": [],
+            },
             "verification": {
                 "per_claim_verdicts": per_claim_verdicts,
                 "n_claims": len(claims),
@@ -1244,6 +1278,63 @@ async def _read_output(run_id: uuid.UUID, tenant_id: uuid.UUID, fmt: str):
     except Exception as exc:  # noqa: BLE001 — cache reads are best-effort
         log.warning("tribunal_pipeline: _read_output(%s) failed: %s", fmt, exc)
     return None
+
+
+async def _read_research_gaps(
+    run_id: uuid.UUID, tenant_id: uuid.UUID
+) -> Optional[dict[str, list[str]]]:
+    """Read this run's per-provider "couldn't find" list (D-08, migration 0013).
+
+    THREE-STATE CONTRACT, and the difference between the first two is the whole
+    reason this returns Optional:
+
+      * ``None``      -> the list COULD NOT BE READ. `build_could_not_establish`
+                         renders a named failure sentence for this state.
+      * ``{}``        -> read fine, nothing to report.
+      * non-empty     -> ``{provider: [text, ...]}``.
+
+    Returning ``{}`` on a database error would render "No provider reported a
+    research gap" over a failure — a false factual statement in a document the
+    operator hands to a client, and exactly the silent green phase rule 6 forbids
+    (T-15.2-33). So the except arm returns ``None``, never ``{}``.
+
+    TENANT SCOPING (T-15.2-34): clones `_read_output`'s idiom exactly —
+    `set_tenant_context` runs before the query, and the query filters on `run_id`
+    ONLY. `tenant_id` is deliberately absent from the WHERE clause: `research_gap`
+    carries FORCE RLS and the `research_gap_tenant_isolation` policy from
+    migration 0013, so isolation is enforced by the DATABASE, not by application
+    filtering (the broken-RLS class of bug must not recur). The
+    `(tenant_id, run_id)` index still serves this plan.
+
+    The ORDER BY is LOAD-BEARING for byte-stability: the section renders rows in
+    the order they arrive, and an unordered SELECT could return them differently
+    on two reads of the same data, breaking D-08's byte-identical guarantee.
+    """
+    from sqlalchemy import text as _sql
+    from nestor_pulse_sdk.db.base import get_sessionmaker
+    from nestor_pulse_sdk.db.rls import set_tenant_context
+    try:
+        sm = get_sessionmaker()
+        async with sm() as session:
+            async with session.begin():
+                await set_tenant_context(session, tenant_id)
+                rows = (await session.execute(
+                    _sql("SELECT provider, text FROM research_gap WHERE run_id=:r "
+                         "ORDER BY provider ASC, created_at ASC, id ASC"),
+                    {"r": str(run_id)},
+                )).all()
+        out: dict[str, list[str]] = {}
+        for row in rows or ():
+            provider = str(row[0] or "").strip() or "?"
+            out.setdefault(provider, []).append(str(row[1] or ""))
+        return out
+    except Exception as exc:  # noqa: BLE001 — a failed read is STATED, never hidden
+        log.warning(
+            "tribunal_pipeline: _read_research_gaps failed for run=%s: %r — the "
+            "'What we could not establish' section will say so",
+            run_id, exc,
+        )
+        return None
 
 
 async def _load_citation_context(
@@ -1337,6 +1428,11 @@ async def _write_final_report(
     cleaned_reports = [tuple(r) for r in (bundle.get("cleaned_reports") or [])]
     contested_notes = bundle.get("contested_notes") or []
     rejected_claims = bundle.get("rejected_claims") or []
+    # D-08 section inputs. `or {}` is the RESUME-PATH BACK-COMPAT guard: a
+    # pre-15.2 synthesis_cache row replayed after deploy carries no
+    # `report_sections` key at all, and must still produce both sections on their
+    # empty paths rather than raise.
+    report_sections = bundle.get("report_sections") or {}
     v = bundle.get("verification") or {}
 
     await set_stage(run_id, tenant_id, "synthesize", detail={"items": [
@@ -1454,7 +1550,48 @@ async def _write_final_report(
         "model_invented_numbers": n_model_numbers,
     }
 
-    synthesis_text = synthesis_text + _verification_appendix(
+    # ------------------------------------------------------------------
+    # D-08: the two deterministic report sections.
+    #
+    # THE INVARIANT: both blocks are built and appended HERE, after
+    # synthesize_report has already returned and after the anchor/cite post-passes
+    # above, so the writing model never receives them and cannot omit, merge,
+    # truncate, reorder or paraphrase an item (T-15.2-37). The rejected
+    # alternative — "the model presents them from a supplied list" (D14's literal
+    # wording) — is unprovable without an LLM-judged test, and the "deterministic
+    # list plus a model-written intro" variant only moves the drift one paragraph
+    # up. The post-passes deliberately do NOT walk these blocks: they carry no
+    # anchors and no provider cite markers, `_sanitize` having already removed
+    # both from the pipeline data they are rendered from.
+    #
+    # The "\n\n---\n\n" separator matches the one _verification_appendix opens
+    # with, so the three trailing sections read as three peers.
+    # ------------------------------------------------------------------
+    language = (mission_brief or {}).get("language") or ""
+    gaps = await _read_research_gaps(run_id, tenant_id)  # None => unreadable
+    disputed_section = build_disputed_and_changed(
+        group_reconciliations=report_sections.get("group_reconciliations"),
+        superseded_notes=report_sections.get("superseded_notes"),
+        brief_conflicts=report_sections.get("brief_conflicts"),
+        language=language,
+    )
+    could_not_section = build_could_not_establish(
+        not_found_by_provider=gaps,
+        language=language,
+    )
+    log.info(
+        "tribunal_pipeline: D-08 sections rendered — disputed=%d chars, "
+        "could_not_establish=%d chars, gaps=%s",
+        len(disputed_section), len(could_not_section),
+        "unreadable" if gaps is None else f"{len(gaps)} provider(s)",
+        extra={"run_id": str(run_id)},
+    )
+
+    synthesis_text = (
+        synthesis_text
+        + "\n\n---\n\n" + disputed_section
+        + "\n\n---\n\n" + could_not_section
+    ) + _verification_appendix(
         n_claims=v.get("n_claims", 0),
         n_survivors=v.get("survivor_count", 0),
         n_dropped=v.get("dropped_count", 0),

@@ -30,6 +30,12 @@ Coverage:
 """
 from __future__ import annotations
 
+import json
+import re
+import uuid
+
+import pytest
+
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     _SECTION_ITEM_CHARS,
     _SECTION_MAX_ITEMS,
@@ -374,3 +380,217 @@ def test_the_builders_import_no_llm_client():
     assert not inspect.iscoroutinefunction(build_disputed_and_changed)
     assert not inspect.iscoroutinefunction(build_could_not_establish)
     assert steps is not None
+
+
+# ---------------------------------------------------------------------------
+# 15-20. The wiring — _write_final_report drives the real production path.
+#
+# Still zero LLM, no DB, no mocking library: a hand-written duck-typed fake
+# records every prompt string it is handed, and `_read_research_gaps` is replaced
+# AT THE MODULE BOUNDARY (no test-only parameter is added to production code).
+#
+# `set_stage` and `_load_citation_context` are NOT patched on purpose: both are
+# best-effort, both swallow their own exceptions, and in a gate that provisions no
+# DATABASE_URL both fail immediately and log. Leaving them in keeps the real
+# production path under test.
+#
+# Sentinels are strings that cannot occur naturally, so "the model never saw it"
+# is a substring search with no false negatives.
+# ---------------------------------------------------------------------------
+
+ZZ_GAP_A = "ZZGAP-ALPHA"
+ZZ_GAP_B = "ZZGAP-BETA"
+ZZ_BRIEF = "ZZBRIEF-GAMMA"
+ZZ_RECON = "ZZRECON-DELTA"
+
+
+class _FakeResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class RecordingAudited:
+    """Duck-typed stand-in for AuditedLLMClient that records every prompt.
+
+    Deterministic by construction: the reply is a pure function of the prompt, so
+    two runs of the same bundle produce the same report body.
+    """
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.prompts.append(contents)
+        if "Write the remaining framing sections" in contents:
+            return _FakeResponse(
+                "## Executive Summary\n\nThe bottom line.\n\n"
+                "## Cross-cutting Synthesis\n\nThemes interact.\n\n"
+                "## Confidence & Gaps\n\nSTRONG on A, LIMITED on B."
+            )
+        m = re.search(r'focus area \d+ of \d+:\s*"([^"]+)"', contents)
+        fa = m.group(1) if m else "Unknown"
+        return _FakeResponse(f"## {fa}\n\nFindings for {fa}.")
+
+
+def make_report_sections_payload() -> dict:
+    return {
+        "group_reconciliations": [
+            {
+                "entity": "Aral",
+                "attribute": "market share",
+                "disputed": True,
+                "relation": "scoped",
+                "note": f"{ZZ_RECON} — one provider reported 16%, another 21%.",
+                "canonical": "",
+            }
+        ],
+        "superseded_notes": [
+            "[SUPERSEDED] Gunvor owns the Zeeland refinery: Carlyle acquired the stake."
+        ],
+        "brief_conflicts": [f"{ZZ_BRIEF} — the brief assumes a Dutch Aral network."],
+    }
+
+
+def make_bundle(with_report_sections: bool = True) -> dict:
+    bundle: dict = {
+        "mission_brief": {
+            "deep_research_prompt": "Research the Dutch fuel retail market.",
+            "language": "English",
+            "focus_areas": [
+                {"focus_area": "Station networks", "taxonomy": "B", "stakes": "high"},
+                {"focus_area": "Margin structure", "taxonomy": "B", "stakes": "med"},
+            ],
+        },
+        "cleaned_reports": [
+            ["gemini", {"status": "success", "report": "Research prose about networks."}]
+        ],
+        "contested_notes": ["[DISPUTED] Aral — market share: 16% versus 21%."],
+        "rejected_claims": [],
+        "verification": {
+            "per_claim_verdicts": {},
+            "n_claims": 3,
+            "survivor_count": 2,
+            "dropped_count": 1,
+            "n_unverified": 0,
+            "contested_count": 1,
+            "claims_per_facet": {},
+        },
+    }
+    if with_report_sections:
+        bundle["report_sections"] = make_report_sections_payload()
+    return bundle
+
+
+def make_gap_rows() -> dict:
+    return {
+        "gemini": [f"{ZZ_GAP_A} — no public 2025 throughput figure."],
+        "openai": [f"{ZZ_GAP_B} — no named owner for the Rotterdam depot."],
+    }
+
+
+def _patch_gaps(monkeypatch, value):
+    async def _fake(run_id, tenant_id):
+        return value
+
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.pipeline.tribunal.pipeline._read_research_gaps", _fake
+    )
+
+
+async def _write(bundle, audited):
+    from nestor_pulse_sdk.pipeline.tribunal.pipeline import _write_final_report
+
+    return await _write_final_report(
+        bundle=bundle,
+        report_spec=None,
+        audited=audited,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+    )
+
+
+class TestWriteFinalReportWiring:
+    @pytest.mark.asyncio
+    async def test_sections_are_appended_in_order_before_the_verification_appendix(
+        self, monkeypatch
+    ):
+        _patch_gaps(monkeypatch, make_gap_rows())
+        result = await _write(make_bundle(), RecordingAudited())
+        out = result["output_text"]
+        assert (
+            out.index(EN["disputed_h"])
+            < out.index(EN["gaps_h"])
+            < out.index("## Verification")
+        ), "the three trailing sections have a fixed order"
+
+    @pytest.mark.asyncio
+    async def test_the_writing_model_never_sees_either_section(self, monkeypatch):
+        """THE D-08 GATE.
+
+        The whole decision is that these sections are appended AFTER synthesis, so
+        the writing model cannot omit, merge, truncate or paraphrase an item. That
+        is only true if no prompt ever carried them.
+        """
+        _patch_gaps(monkeypatch, make_gap_rows())
+        audited = RecordingAudited()
+        result = await _write(make_bundle(), audited)
+        out = result["output_text"]
+
+        assert audited.prompts, "the fake recorded nothing — the test proves nothing"
+        forbidden = (EN["disputed_h"], EN["gaps_h"], ZZ_GAP_A, ZZ_GAP_B, ZZ_BRIEF)
+        for i, prompt in enumerate(audited.prompts):
+            for needle in forbidden:
+                assert needle not in prompt, (
+                    f"prompt {i} carried {needle!r} — the writing model can rewrite "
+                    "anything it is shown"
+                )
+        for needle in forbidden:
+            assert needle in out, f"{needle!r} never reached the report"
+        # ZZ_RECON is deliberately NOT in the prompt assertion: reconciliation
+        # notes legitimately reach synthesis via contested_notes (G-07). It must
+        # still reach the deterministic section.
+        assert ZZ_RECON in out
+
+    @pytest.mark.asyncio
+    async def test_gap_read_failure_is_stated_not_hidden(self, monkeypatch):
+        _patch_gaps(monkeypatch, None)
+        result = await _write(make_bundle(), RecordingAudited())
+        out = result["output_text"]
+        assert EN["gaps_unreadable"] in out
+        assert EN["gaps_empty"] not in out, (
+            "a database error must never be reported as 'no provider reported a gap'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_report_sections_key_is_tolerated(self, monkeypatch):
+        """Resume-path back-compat: a pre-15.2 synthesis_cache row replayed after
+        deploy carries no `report_sections` key at all."""
+        _patch_gaps(monkeypatch, {})
+        result = await _write(make_bundle(with_report_sections=False), RecordingAudited())
+        out = result["output_text"]
+        assert EN["disputed_h"] in out
+        assert EN["gaps_h"] in out
+        assert EN["disputed_empty"] in out
+        assert EN["gaps_empty"] in out
+
+    @pytest.mark.asyncio
+    async def test_two_renders_of_the_same_bundle_are_byte_identical_in_the_appended_region(
+        self, monkeypatch
+    ):
+        _patch_gaps(monkeypatch, make_gap_rows())
+        first = (await _write(make_bundle(), RecordingAudited()))["output_text"]
+        second = (await _write(make_bundle(), RecordingAudited()))["output_text"]
+
+        def _slice(text: str) -> str:
+            return text[text.index(EN["disputed_h"]):text.index("## Verification")]
+
+        assert _slice(first) == _slice(second)
+        assert EN["disputed_h"] in _slice(first)
+
+    def test_bundle_report_sections_is_json_serializable(self):
+        """_write_output persists the bundle with json.dumps(..., default=str);
+        anything on it that cannot survive that round-trip breaks the resume path."""
+        payload = {"report_sections": make_report_sections_payload()}
+        blob = json.dumps(payload, ensure_ascii=False, default=str)
+        assert json.loads(blob) == payload
+        assert ZZ_BRIEF in blob
