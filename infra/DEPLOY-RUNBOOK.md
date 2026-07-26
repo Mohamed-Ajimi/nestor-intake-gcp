@@ -1851,6 +1851,13 @@ a Cloud SQL psql session):
 #   Pre-existing rows keep NULL on the new columns (no server_default backfill except run.cost_pending=false).
 ```
 
+> ⚠️ **HEAD HAS MOVED SINCE (2026-07-25).** The `== 0011` expectation above was correct **for this
+> phase**. The Phase-15.1 gap-closure pass applied `0012_verdict_superseded_note.py`, so the TRIBUNAL
+> line's head is now **`0012`** — see § Phase 15.1 Step 15.1.f. Re-running the check above today
+> should read `0012`, not `0011`; that is not a regression. (The version table is
+> `tribunal.tribunal_alembic_version` — the tribunal line keeps its own, deliberately named apart
+> from the intake `nestor` line's `alembic_version`.)
+
 Alembic still below `0011` in the tribunal line after this → the Job in this step did not run (or ran on
 the pre-rebuild image); re-run Step 15.a then this step.
 
@@ -1992,9 +1999,21 @@ error-likelihood gates, LLM canonical grouping, corroboration prioritization, ho
 accounting, a fourth `superseded` verdict and a loud degradation marker. It touches **exactly two
 deployables** (`tribunal-worker` AND `tribunal-api`) and **nothing else**:
 
-- **NO migration** — see Step 15.1.a.
-- **NO Cloud Run env change and NO new secret** — see Step 15.1.b.
-- **NO frontend rebuild** — the operator surface added in Phase 15 already renders this phase's
+> 🔁 **TWO OF THE FOUR BULLETS BELOW ARE SUPERSEDED (2026-07-25 gap-closure pass).** They were
+> accurate for the ORIGINAL Phase-15.1 pass (plans 15.1-01 … 15.1-10, deployed at `$SHA`
+> `20260725-220005`). The gap-closure pass (plans 15.1-11 … 15.1-16) **does** land a tribunal
+> migration and **does** require a frontend rebuild. Read Steps **15.1.f** and **15.1.g** before
+> acting on the "NO migration" or "NO frontend rebuild" bullets. They are annotated in place rather
+> than deleted, because the original pass's record has to stay readable.
+
+- **NO migration** — see Step 15.1.a. **← SUPERSEDED for the gap-closure pass: migration `0012`
+  (`0012_verdict_superseded_note.py`) IS applied. See Step 15.1.f.**
+- **NO Cloud Run env change and NO new secret** — see Step 15.1.b. *(Still true, including for the
+  gap-closure pass — it adds no tunable and no secret.)*
+- **NO frontend rebuild** — **← SUPERSEDED for the gap-closure pass by Step 15.1.g:** plan 15.1-16
+  edits `VerificationReport.tsx`, `lib/api/research.ts` and the three `intake.json` locale files, so
+  the image MUST be rebuilt or the `verdicts.superseded` section and its caveat exist only in the
+  JSON payload. The original reasoning, true for the original pass, follows —
   output. `VerificationReport.tsx` renders the funnel via `Object.entries(report.funnel)`, so the
   new funnel keys appear with **no frontend change**. (One honest caveat is recorded as a known
   gap in `15.1-UAT.md` § Known gaps: the backend now emits `verification_degraded_text`, but no
@@ -2014,6 +2033,14 @@ deployables** (`tribunal-worker` AND `tribunal-api`) and **nothing else**:
 > no env flip that ships it, because this phase adds no env var to flip.
 
 ### Step 15.1.a — CONFIRM there is nothing to migrate (do NOT run the migrate Job)
+
+> 🔁 **SUPERSEDED FOR THE GAP-CLOSURE PASS — read this before following the step below.** This step
+> was correct for the ORIGINAL Phase-15.1 pass (plans 15.1-01 … 15.1-10). The **2026-07-25
+> gap-closure pass (plans 15.1-11 … 15.1-16) DOES land a tribunal-line migration** —
+> `0012_verdict_superseded_note.py`, one nullable `superseded_note TEXT` column on
+> `verification_verdict` — and it **was applied live**. **Step 15.1.f supersedes this step's "do NOT
+> run the migrate Job" instruction for that pass**, and the tribunal alembic head is now **`0012`**,
+> not `0011`. The text below is kept unedited as the record of the original pass.
 
 **Phase 15.1 lands NO migration.** The tribunal alembic head stays at **0011**
 (`0011_cost_verification.py`, shipped in § Phase 15 Step 15.b). Both columns this phase writes
@@ -2172,6 +2199,172 @@ completes but `run.verification_summary` is NULL and no `gate` stage appears in 
 **tribunal-worker** rebuild was skipped (the gates never ran). Either symptom means Step 15.1.c was
 not completed — re-run it; there is no env flip that fixes a stale image.
 
+### Step 15.1.f — Gap closure (plans 15.1-11 … 15.1-16): alembic 0012 + dual Tribunal rebuild
+
+**EXECUTED LIVE 2026-07-25** at `$SHA` `20260725-233634`. This step supersedes Step 15.1.a for the
+gap-closure pass: that pass persists a new `verification_verdict.superseded_note` column, so it
+carries a real tribunal-line migration.
+
+> ⚠️ **ORDER IS LOAD-BEARING: build BOTH images → migrate → THEN deploy.** Two independent reasons,
+> and getting either wrong is silent:
+>
+> 1. **The column must exist before the new writer runs.** Plan 15.1-14's `_insert_verdict` writes
+>    `superseded_note` on every verdict. If the code ships ahead of the migration, every verdict
+>    `INSERT` fails, **Stage 7's `try/except` swallows it**, and the run completes with **zero
+>    verdicts** — the exact hollow surface this pass exists to close, and it would look like success.
+> 2. **The migrate Job applies the alembic revisions baked into an IMAGE.** The image carrying `0012`
+>    must therefore exist *before* the Job can apply it.
+
+```bash
+export GOOGLE_PROJECT=project-cb01b861-cb4a-438d-b9a
+export REGION=europe-west1
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+# 1. Build BOTH Tribunal images at ONE $SHA (same idiom as Step 15.1.c).
+#    The worker WRITES verdict rows; the api SERVES the report shaper. Both are required.
+gcloud builds submit tribunal --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+```
+
+> ⚠️ **LESSON (image-pin, hit live 2026-07-22 on `nestor-migrate`), quoted verbatim from § Phase 15
+> Step 15.b: "the Job does NOT track the service image. Redeploying `tribunal-api`/`tribunal-worker`
+> at `$SHA` leaves the `tribunal-migrate` Job pinned to its OLD image — executing it then is a
+> silent no-op (alembic connects, finds itself 'at head' on the stale revision set, exits 0, logs no
+> `Running upgrade` line). ALWAYS repin the Job to the just-built image FIRST."**
+>
+> **This was REAL on 2026-07-25, not theoretical.** Before the repin, the Job was pinned to
+> `tribunal-api:20260724-214354` — an image two deploys old, whose baked revision set tops out at
+> `0011`. Executing it unpinned would have exited 0 and applied nothing.
+
+```bash
+# 2. REPIN the migrate Job to the JUST-BUILT api image — BEFORE executing it.
+gcloud run jobs update tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}"
+
+# Confirm the repin actually took (cheap, and the whole step depends on it).
+gcloud run jobs describe tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.template.spec.containers[0].image)'   # must echo :${SHA}
+
+# 3. Execute the migration.
+gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+**4. CONFIRM the upgrade actually ran — an exit code is NOT proof.** Read the execution log and
+require the literal line:
+
+```
+Running upgrade 0011 -> 0012
+```
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="tribunal-migrate"
+   AND labels."run.googleapis.com/execution_name"="<EXECUTION_ID>"' \
+  --project="$GOOGLE_PROJECT" --limit=50 --format="value(textPayload)"
+```
+
+**Absence of that line means the Job ran on a stale image — repin and re-execute.** Do not proceed
+to the deploy on a `Container called exit(0)` alone.
+
+**5. Confirm the schema read-only.** Note the tribunal line's version table is
+**`tribunal.tribunal_alembic_version`**, NOT `alembic_version` (set via `version_table` /
+`version_table_schema` in `alembic/env.py`) — querying `tribunal.alembic_version` raises
+`UndefinedTableError` and is a false alarm, not a failed migration. Expect:
+
+```
+col superseded_note text nullable=YES
+rls enabled=true forced=true
+policy verification_verdict_tenant_isolation
+index idx_verification_verdict_tenant_run
+index verification_verdict_pkey
+tribunal_head = 0012
+```
+
+The RLS assertions matter: migration `0012` issues **no security DDL at all** (one `op.add_column`
+and nothing else), so ENABLE + FORCE ROW LEVEL SECURITY and the
+`verification_verdict_tenant_isolation` policy must come through **unchanged**. A PostgreSQL row
+policy is a table-level object, so the new column is covered by construction. This is the **TRIBUNAL**
+line — NOT the intake `nestor` line, whose own `0011`/`0012` belong to Phases 16/17.
+
+```bash
+# 6. Deploy worker first, then api — ONLY after the migration is confirmed.
+#    Always the retargeted scripts (never a hand-rolled `gcloud run deploy`): they pin IMAGE_TAG
+#    and PRESERVE the Phase-14 lockdown (tribunal-run SA, --no-allow-unauthenticated,
+#    invoker=nestor-run ONLY — not re-granted here).
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+
+# 7. Post-deploy verification (no live run — Anthropic monthly cap resets 2026-08-01).
+gcloud run services describe tribunal-worker --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.latestReadyRevisionName,status.traffic)'
+gcloud run services describe tribunal-api --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.latestReadyRevisionName,status.traffic)'
+
+# Digest-pin proof: each revision must resolve to an @sha256: digest, never :latest.
+gcloud run revisions describe <REVISION> --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.containers[0].image)'
+
+# URL captured WITHOUT a path (the OIDC audience is the path-less service_url; Pitfall 4 —
+# do NOT re-set the seam env), then /readyz with an identity token.
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$TRIBUNAL_URL/readyz"
+```
+
+**Still NOT touched by this pass:** no new secret, **no Cloud Run env change** (the gap-closure code
+adds no tunable — Step 15.1.b stands unchanged), and **no `nestor-api` rebuild** (no intake-side
+surface changed). **NO live research run is triggered** — the Anthropic monthly cap resets
+**2026-08-01**.
+
+### Step 15.1.g — Gap closure: FRONTEND rebuild + deploy
+
+**EXECUTED LIVE 2026-07-25** at the same `$SHA` `20260725-233634`. This step supersedes the
+"**NO frontend rebuild**" bullet in the § Phase 15.1 preamble for the gap-closure pass.
+
+**Why it is mandatory this pass.** Plan 15.1-16 edits
+`frontend/src/components/intake/VerificationReport.tsx` (a dedicated section for
+`report.verdicts.superseded`, plus a `superseded_note` caveat fallback when `reconciliation.note` is
+absent), `frontend/src/lib/api/research.ts`, and the three `intake.json` locale files. **Without a
+rebuild the newly-populated verdict class exists only in the JSON payload** — the operator still
+cannot see a superseded verdict, which would leave SC2's forced-inline-caveat clause unmet on the
+operator surface even though every backend fix had landed. Shipping 15.1.f without 15.1.g is a
+half-deploy.
+
+Reuse the § Phase 12 Step 12.3 / § Phase 15 Step 15.c flow verbatim — same `_API_BASE_URL` and
+`VITE_FIREBASE_*` substitutions already captured (no URL re-wiring, no new env, no new secret):
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:${SHA}"
+
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<id>.europe-west1.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" --region "$REGION" \
+  --allow-unauthenticated --port 8080 --project="$GOOGLE_PROJECT"
+```
+
+Constraints carried from Phase 12 Step 12.3 — all still binding:
+
+- **NEVER pass `VITE_SUPABASE_*`.** An in-image bundle guard FAILS the build if a Supabase signature
+  leaks into the bundle.
+- **Deploy with `--port 8080`** (the Nitro node-server binds `$PORT`).
+- **`routeTree.gen.ts` does NOT need regenerating.** Plan 15.1-16 adds **no route** — it edits an
+  existing component that already mounts on the existing `admin.pulse.intakes.$id` anchor via
+  `ResearchRunProgress`. (Contrast § Phase 18, which DID add a route and did need the regeneration.)
+- **Install is `npm ci`, never `npm install`.** `frontend/package-lock.json` **is** committed and
+  `frontend/Dockerfile` runs `npm ci`. The "no lockfile" note in CLAUDE.md is stale — it refers to
+  *bun* — and following it costs an `ERESOLVE` dead end.
+
+Record the new frontend revision id and its digest, and the revision it supersedes (the pass
+before this one was `nestor-frontend-00025-4w8`, image `20260724-231312`).
+
 ---
 
 ## Summary checklist
@@ -2247,3 +2440,5 @@ not completed — re-run it; there is no env flip that fixes a stale image.
 - [ ] Step 15.1.c — BOTH Tribunal images REBUILT via Cloud Build at ONE `$SHA` (`cloudbuild.worker.yaml` — the worker EXECUTES the gates and is the sole writer of `run.verification_summary`; `cloudbuild.api.yaml` — the api SERVES the accounting buckets / degradation text / `superseded` verdict class) + redeployed worker-then-api at that `$SHA` via the retargeted deploy scripts (Phase-14 lockdown preserved, not re-granted); **the specific built tag, never `:latest`**. NO frontend rebuild, NO `nestor-api` rebuild
 - [ ] Step 15.1.d — VERIFY: `gcloud run services describe` shows a NEW revision on BOTH services with traffic 100% on it; tribunal-api URL confirmed UNCHANGED via `describe` WITHOUT a path (Pitfall 4); `/readyz` 200 with an identity token; **NO live research run triggered** (Anthropic cap until 2026-08-01)
 - [ ] Step 15.1.e — DEFERRED (not a deploy-time gate): the Phase-15.1 browser checklist in `15.1-UAT.md` § Deferred Browser UAT is batched into the ONE combined Phase-15\* operator session after 2026-08-01, against a real live run, with no live-DB seeding — do NOT run it piecemeal
+- [ ] Step 15.1.f — GAP CLOSURE (plans 15.1-11 … 15.1-16): BOTH Tribunal images REBUILT at ONE `$SHA` **FIRST**, then `tribunal-migrate` REPINNED to that `tribunal-api:$SHA` (image-pin lesson — the Job was found on a 2-deploy-old image; unpinned = silent no-op) and executed `--wait`; log shows **`Running upgrade 0011 -> 0012`** (an exit code is NOT proof); `superseded_note text` nullable confirmed AND `verification_verdict` still ENABLE+FORCE RLS with the `verification_verdict_tenant_isolation` policy intact (0012 issues no security DDL); TRIBUNAL head == **0012** in `tribunal.tribunal_alembic_version` (NOT the intake `nestor` line); ONLY THEN deploy worker-then-api at `$SHA` via the retargeted scripts (Phase-14 lockdown preserved). **Order build → migrate → deploy is load-bearing**: code ahead of the migration makes every verdict INSERT fail into Stage 7's swallow, producing a zero-verdict run that looks green. NO env change, NO new secret, NO `nestor-api` rebuild, NO live research run
+- [ ] Step 15.1.g — GAP CLOSURE: `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.1-16's `verdicts.superseded` section + `superseded_note` caveat fallback in `VerificationReport.tsx`, `lib/api/research.ts`, en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed). **Mandatory this pass** — without it the newly-populated verdict class exists only in the JSON and the operator still cannot see it
