@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Index, Text
+from sqlalchemy import Float, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +38,10 @@ class ClaimSource(Base):
     )
     snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # D-13 (migration 0013): the provider-STATED source quality -- 'official' |
+    # 'press' | 'other' | NULL. `numbering.derive_quality_tier()`'s domain
+    # heuristic is the FALLBACK, used only when this is NULL.
+    provider_quality: Mapped[str | None] = mapped_column(String, nullable=True)
 
     __table_args__ = (
         Index("idx_claim_source_tenant", "tenant_id"),
