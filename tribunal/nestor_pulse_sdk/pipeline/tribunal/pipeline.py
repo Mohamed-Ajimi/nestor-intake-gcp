@@ -1021,7 +1021,26 @@ class TribunalPipeline:
         # module-level function and calls the REAL `set_stage`, so a park raised
         # from inside it is named by the last boundary this body crossed
         # ("coverage"), which is the right answer anyway.
-        _outer_set_stage = set_stage
+        #
+        # THE IMPORT BELOW IS LOAD-BEARING AND MUST NOT BE "TIDIED" BACK INTO
+        # `_outer_set_stage = set_stage`.
+        #
+        # `set_stage` is REBOUND by the `async def` immediately below, which makes
+        # the name a LOCAL of this whole method — including on the line above the
+        # def. Reading it there therefore raises
+        # `UnboundLocalError: cannot access local variable 'set_stage'` on the
+        # FIRST statement of the staged body, i.e. on every single run, before any
+        # stage executes. The `except Exception` in `run()` re-raises it (it is not
+        # a HARD_WALL), so the run reports `failed` with no park and no partial
+        # work — the engine is completely dead.
+        #
+        # It survived review and eleven waves of per-component tests because no
+        # test drove `TribunalPipeline.run(...)` end to end; the stubbed e2e
+        # (`tests/test_engine_e2e_stubbed.py`) caught it on its first execution.
+        # Importing the module attribute under a DIFFERENT name removes the
+        # shadowing entirely, and re-reads `runs.stages.set_stage` at call time,
+        # so a monkeypatched writer still applies.
+        from nestor_pulse_sdk.runs.stages import set_stage as _outer_set_stage
 
         async def set_stage(_run_id, _tenant_id, stage_key, **kwargs):  # noqa: A001
             stage_tracker[0] = stage_key
