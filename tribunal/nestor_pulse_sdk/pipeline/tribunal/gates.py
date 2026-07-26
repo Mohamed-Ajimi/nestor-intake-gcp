@@ -41,7 +41,8 @@ Design constraints carried from the rest of the pipeline:
 
 RETRY POLICY (R1, and the reason this phase exists): transient failures only —
 429, 5xx, timeouts, connection resets — with bounded exponential backoff. A hard
-usage-cap 400 is NEVER retried. See `_is_transient`.
+usage-cap 400 is NEVER retried. See `_is_transient` — its body moved to
+`reliability.py` in phase 15.2 and is re-exported here.
 
 SELECTION vs DEPTH (G-02): these gates are the SINGLE answer to "which claims get
 checked". The claim's importance tier is not consulted anywhere in this module; it
@@ -258,91 +259,24 @@ def _parse_gate_lines(
     return rows, defaulted
 
 
-def _status_of(exc: BaseException) -> int | None:
-    """Best-effort HTTP status from a provider exception, or None."""
-    for attr in ("status_code", "status", "code"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            m = re.fullmatch(r"\s*(\d{3})\s*", value.strip())
-            if m:
-                return int(m.group(1))
-    return None
-
-
-# Wording that marks a HARD account-level refusal rather than a transient blip.
-# Deliberately specific phrases: "cap" alone would match "capability"/"capacity"
-# in ordinary claim-bearing error text.
-_CAP_MARKERS = (
-    "usage limit",
-    "usage cap",
-    "monthly limit",
-    "monthly cap",
-    "spend limit",
-    "hard cap",
-    "credit balance",
-    "out of credit",
-    "insufficient_quota",
-    "insufficient quota",
-    "quota exceeded",
-    "exceeded your",
-    "billing",
+# THIN RE-EXPORT — the bodies of these four symbols MOVED to `reliability.py` in
+# phase 15.2 (plan 15.2-02). Nothing was copied: there is exactly one retry
+# classifier in this codebase, and it is `reliability.is_transient`, incident
+# docstring included.
+#
+# They stay BOUND AT MODULE LEVEL here on purpose, because external code
+# addresses them through `gates.`: `test_gate_failure_modes.py` exercises the
+# transient/hard classification via `apply_gates`, and `test_gate_replay.py:228`
+# names `gates._is_transient` in a docstring. `_gate_batch` below still calls
+# `_is_transient` and still reads its own `_GATE_RETRIES` / `_GATE_BACKOFF_S` —
+# that seam is deliberately NOT migrated onto `reliability.with_retry`, because
+# both those tests monkeypatch `gates._GATE_BACKOFF_S = 0.0`.
+from nestor_pulse_sdk.pipeline.tribunal.reliability import (  # noqa: F401,E402
+    _CAP_MARKERS,
+    _TRANSIENT_MARKERS,
+    _is_transient,
+    _status_of,
 )
-
-# Signals of a genuinely transient failure when the exception carries no status.
-_TRANSIENT_MARKERS = (
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
-    "timeout",
-    "timed out",
-    "connection reset",
-    "connection aborted",
-    "connection refused",
-    "temporarily unavailable",
-    "service unavailable",
-    "overloaded",
-    "try again",
-)
-
-
-def _is_transient(exc: BaseException) -> bool:
-    """Retry predicate: True only for failures that a second attempt could fix.
-
-    THE 776-ERROR INCIDENT. On run 4cbb5311 (2026-07-22) the fact-checking stage
-    kept re-issuing calls against an account that had already hit its monthly
-    usage cap: 776 hard HTTP 400s in 55 seconds, no result, and the run's
-    verification silently covering only 198 of 1,162 claims. A cap 400 is a
-    STATEMENT ABOUT THE ACCOUNT, not a blip — retrying it can only produce more
-    400s, faster. So: cap/billing wording is never transient, 4xx is never
-    transient, and only 429 / 5xx / timeouts / connection resets are retried.
-    """
-    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError)):
-        return True
-
-    msg = f"{type(exc).__name__} {exc}".lower()
-
-    # Hard account refusal — never retried, whatever status it claims to carry.
-    if any(marker in msg for marker in _CAP_MARKERS):
-        return False
-
-    status = _status_of(exc)
-    if status is not None:
-        if status == 429:
-            return True
-        return 500 <= status < 600
-
-    # No status on the exception: sniff the message for transient signals only.
-    # Anything unrecognised is treated as NON-transient, so an unknown hard error
-    # costs one attempt instead of a storm.
-    if "400" in msg:
-        return False
-    return any(marker in msg for marker in _TRANSIENT_MARKERS)
 
 
 async def _gate_batch(
