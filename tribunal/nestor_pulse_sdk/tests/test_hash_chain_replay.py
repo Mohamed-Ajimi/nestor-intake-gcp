@@ -800,6 +800,66 @@ async def test_chain_green_after_cost_migration():
 
 
 # ===========================================================================
+# TEST 11b: Chain stays GREEN after the whole of phase 15.2 (D-04).
+# Same shape as TEST 11, and deliberately a SEPARATE test rather than an
+# extension of it: the 0011 proof is its own regression and must keep failing
+# for its own reason.
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_chain_green_after_15_2_additive_fields():
+    """verify_chain stays green, the payload stays at 11 fields, and every name
+    phase 15.2 introduced is OUTSIDE it.
+
+    WHY THIS IS A BLOCKING GATE. `_payload_for_row` is the exact column subset
+    that was canonical_json-hashed at write time. Adding ANY field to it changes
+    every future link hash while every existing row keeps the old one, so
+    `verify_chain` goes red for every run already in the database — retroactively
+    and irreversibly. That matters beyond correctness: a verifiable audit chain is
+    an EU AI Act Art. 12 obligation with a 2026-08-02 deadline, and 15.2 added
+    fifteen new names across the funnel, the claim table and the run-status
+    vocabulary. Each one is asserted absent BY NAME rather than by counting,
+    because a count alone would pass if one field were swapped for another."""
+    from nestor_pulse_sdk.audit.hash_chain import _payload_for_row
+
+    run_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+
+    rows = _build_chain_rows(4, run_id, tenant_id)
+    session = _make_mock_session(rows)
+    ok, broken_at = await verify_chain(run_id, session)
+    assert ok is True, f"chain broke at {broken_at} after phase 15.2"
+    assert broken_at is None
+
+    frozen_fields = set(_payload_for_row(rows[0]).keys())
+    assert len(frozen_fields) == 11, (
+        f"_payload_for_row must stay at 11 frozen fields, got "
+        f"{len(frozen_fields)}: {sorted(frozen_fields)}"
+    )
+
+    # D-13 claim columns, WR-10 / D-06 / D-12 funnel keys, and D-17's two new
+    # run-status literals. None of them is an audit_log column, and none of them
+    # may become one without a chain version migration.
+    for new_name in (
+        "certainty",
+        "found_by",
+        "provider_quality",
+        "research_gap",
+        "checked_incidentally",
+        "unresolved_anchors",
+        "degradation_reasons",
+        "completed_degraded",
+        "parked",
+    ):
+        assert new_name not in frozen_fields, (
+            f"{new_name!r} was added to the HASHED payload. That breaks every "
+            f"existing chain in the database at once, and verify_chain green is a "
+            f"legal gate under EU AI Act Art. 12 (deadline 2026-08-02). It belongs "
+            f"OUTSIDE the payload, like cost_pending and verification_summary."
+        )
+
+
+# ===========================================================================
 # TEST 12: Recorded run 4cbb5311 fixture seeds an ENRICHED stage_detail
 # (per-row cost_usd + audit_id) so the D15 feed (Plan 15-05) renders REAL
 # recorded data at UAT -- NOT flat {name,status} rows. Also proves the verdict

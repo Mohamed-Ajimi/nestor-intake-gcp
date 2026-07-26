@@ -282,3 +282,83 @@ every added line).
 `*.ts`/`*.tsx`/`*.js` with `eol=lf` and re-normalise the working tree
 (`git add --renormalize .`), or set `core.autocrlf=input` on the dev box. Repo-wide,
 well outside a single plan's blast radius.
+
+## From 15.2-17 (2026-07-26)
+
+### D17-1 — `own_research` is a DECLARED stage that nothing writes
+
+**Discovered:** the stubbed end-to-end run (Task 1).
+**Scope:** small operator-facing defect, in production since 15.2-03/12/13.
+
+`ENGINE_STAGES["tribunal"]` declares `{"key": "own_research", "label": "Own
+research"}`. Nothing writes it:
+`grep -rn 'own_research"' --include=*.py` outside `tests/` returns exactly ONE
+hit, the declaration itself. 15.2-03 declared it up front (WR-03: declare before
+any plan writes it) and 15.2-12/13 wired the fourth STREAM — it researches, emits
+facts through `emit_fact_list`, and its claims reach the merge — but no
+`set_stage(..., "own_research", ...)` call was ever added.
+
+**Operator consequence:** the run feed shows a stage that never leaves `pending`,
+on every run, including runs where the own-researcher worked perfectly. A
+permanently-pending stage reads as a stage that hung.
+
+**Not fixed here** because this plan writes no production code beyond the three
+Rule-1 defects the e2e caught, and adding a stage write is a feed-design choice
+(where in `run_angles` does it fire, and what does its detail row say when the
+stream is refused before any call?) that belongs to whoever owns the fourth
+stream's UX.
+
+**Pinned rather than left invisible:**
+`test_engine_e2e_stubbed.py::test_own_research_is_a_declared_stage_that_nothing_writes`
+asserts the gap explicitly, in 15.2-15's D15-2 register. It is SELF-RETIRING: the
+moment someone writes the key it fails and forces this item closed.
+
+### D17-2 — the four inherited gate-coverage gaps, RESTATED and re-evidenced
+
+**Scope:** D9-3, D15-1, D16-1 and D19-2 all named 15.2-17's green-gate sweep as
+their natural home. They are **not closed**, and this section says why rather
+than letting them lapse.
+
+Measured on the final tree during the six-gate sweep:
+
+| Item | Where it lands today | Evidence |
+|------|----------------------|----------|
+| D9-3 `test_research_bundle_endpoint.py` | full suite only; its 5 DB tests SKIP | build `1e45857d`, `Docker not available for testcontainers` ×5 |
+| D15-1 `test_citation_roundtrip.py` | full suite only; its 5 DB tests SKIP | build `1e45857d`, same reason ×5 |
+| D16-1 `test_checkpoint_resume.py` | engine gate + full suite; its 8 DB tests SKIP | builds `fcb632ca` / `1e45857d`, `DATABASE_URL not set` ×8 |
+| D19-2 backend non-integration units | deselected by the only committed backend gate | build `1900f247`, `155 deselected` |
+
+**Why none of them is closed here — and this is the load-bearing part.**
+
+*Three of the four share one root cause: the full suite's testcontainers fixture
+does not start* (`"host" network_mode is incompatible with port_bindings`).
+"Just fix the fixture" is the obvious move and it is a TRAP, for a reason
+`tribunal/cloudbuild.test.yaml`'s own header already records: **testcontainers'
+Postgres runs as SUPERUSER, and RLS never applies to a superuser.** Repairing the
+networking would turn 10 currently-honest skips into green assertions, of which
+the RLS-denial half would be VACUOUS — they would pass because the policy was
+never consulted, not because it holds. That is strictly worse than a loud skip,
+and it is the exact false-green class this phase exists to close. The same
+objection blocks the other obvious move, adding these files to
+`cloudbuild.test-critical.yaml`: that config connects as the `postgres`
+superuser and its header documents that exclusion policy deliberately.
+
+The faithful harness is `cloudbuild.test-rls.yaml` (migrations and pytest both as
+the non-superuser owner `app_user`), but **15.2-01 owns it and its anti-false-green
+block pins an exact `6 passed` count** — adding files there breaks the pin that
+exists precisely to stop silent drift. This plan's brief forbids weakening it.
+
+D19-2 is a different shape: the fix is additive (a second step running
+`pytest backend/tests -m "not integration"` on the repo-root `cloudbuild.test.yaml`,
+which no 15.2 plan owns and which pins no count). It is still not done here
+because that step would land RED on day one — **D19-1's
+`test_invite_carries_link` is still failing**, asserting a raw `&` URL against
+autoescaped HTML — so closing D19-2 means first correcting a Phase-11 mail
+assertion, and then deciding what a REQUIRED merge gate means. The second half is
+a structural decision, not an executor's call, and 15.2-19 said so when it filed
+the item.
+
+**The honest summary:** all four remain open, all four now have measured
+evidence and a named blocker, and the blocker is the same one in three cases —
+**the phase has no committed non-superuser DB gate with room in it.** That is one
+decision, not four, and it is the thing to put to the operator.
