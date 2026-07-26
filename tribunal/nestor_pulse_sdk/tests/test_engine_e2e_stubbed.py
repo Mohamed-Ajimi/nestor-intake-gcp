@@ -1621,6 +1621,47 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
     )
 
 
+async def test_own_research_is_a_declared_stage_that_nothing_writes(monkeypatch):
+    """`own_research` is in the schema and no code path ever reports it.
+
+    ASSERTED RATHER THAN PAPERED OVER, following 15.2-15's precedent for the
+    grouping blocking-key limit: an accepted gap is stated in a test, not left as
+    an absence nobody can see.
+
+    15.2-03 declared the key up front (WR-03: declare BEFORE any plan writes it,
+    so the UI never renders a bare unlabelled key), and 15.2-12/13 were to wire
+    the writer. They wired the fourth stream itself — it researches, it emits
+    facts, its claims reach the merge — but `set_stage(..., "own_research", ...)`
+    was never added. `grep -rn 'own_research"' --include=*.py` outside the tests
+    returns exactly one hit: the declaration.
+
+    THE OPERATOR CONSEQUENCE: the run feed shows a stage that never leaves
+    `pending`, on every run, including runs where the own-researcher did its work
+    perfectly. A permanently-pending stage reads as a stage that hung.
+
+    THIS TEST IS SELF-RETIRING. The moment someone writes the key, it fails and
+    forces the deferred item closed rather than letting the gap age quietly."""
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "own_research" in _DECLARED_STAGE_KEYS, (
+        "ENGINE_STAGES['tribunal'] no longer declares own_research — if the stage "
+        "was removed rather than wired, delete this test with it"
+    )
+    stages = _stage_sequence(statements)
+    assert "own_research" not in stages, (
+        "own_research IS now written — the known gap this test pins is closed. "
+        "Delete this test, add the key to the expected-stage set in "
+        "test_clean_four_stream_run_completes_end_to_end, and close the deferred "
+        "item that records it."
+    )
+    # The stream itself really did run: the gap is the REPORTING, not the work.
+    assert audited.routes.get("own_research_facts", 0) > 0, (
+        "the own-researcher did not run at all, so this test is pinning the wrong "
+        "thing — it is meant to record a missing stage WRITE, not a missing stream"
+    )
+
+
 # ===========================================================================
 # 3. THE DEGRADED RUN — a lost stream, a D-14 fallback, an honest terminal state
 # ===========================================================================
