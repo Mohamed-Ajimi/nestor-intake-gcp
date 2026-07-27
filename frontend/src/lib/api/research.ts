@@ -289,8 +289,15 @@ export type StreamHandle = { close: () => void };
  * holding the stream open would burn the server handler to its 10-minute
  * `MAX_STREAM_SECONDS` cap and then drop this client into its bounded reconnect loop.
  * The RUN is not finished — `resumeResearch` restarts it and a fresh stream opens.
+ *
+ * EXPORTED so the dedicated run page imports this set rather than declaring a fourth copy of
+ * it. Terminality decides when the clock stops, when the footer ticker disappears and which
+ * affordances are legal — three answers that must never be able to disagree with the stream's
+ * own stop condition. A consumer that also treats the clarification pause as terminal adds
+ * that ONE literal at the call site; it is deliberately not in this set, because the stream's
+ * behaviour for it is not the same.
  */
-const RESEARCH_TERMINAL = new Set([
+export const RESEARCH_TERMINAL = new Set([
   "completed",
   "completed_degraded",
   "failed",

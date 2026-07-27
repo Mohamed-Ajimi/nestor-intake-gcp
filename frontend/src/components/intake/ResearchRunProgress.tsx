@@ -146,8 +146,19 @@ function toStageRows(run: ResearchRun | null): StageRow[] {
  * needs exactly this — one connection that is the single authority on status, stage, cost,
  * `started_at` and the feed cursor. A second copy of these mechanics on the run page would be
  * a second opinion about when a run ended; there must be only one.
+ *
+ * `reopenKey` (15.3-09, OPTIONAL — omitting it is exactly the previous behaviour) exists for
+ * ONE situation: a paused run's stream is already closed, because a pause waits on a human
+ * click that may be hours away and holding the connection open would burn the handler to its
+ * cap. When the operator then continues that run from the run page, no frame will ever arrive
+ * on the closed connection and the page would sit on the paused card forever. Bumping this
+ * value re-runs the effect and opens a fresh connection. It is NOT a poll and must never be
+ * driven by a timer — it is bumped by a completed operator action and by nothing else.
  */
-export function useActiveResearchRun(intakeId: string | undefined): {
+export function useActiveResearchRun(
+  intakeId: string | undefined,
+  reopenKey?: number,
+): {
   run: ResearchRun | null;
 } {
   const [run, setRun] = useState<ResearchRun | null>(null);
@@ -183,7 +194,7 @@ export function useActiveResearchRun(intakeId: string | undefined): {
       streamRef.current?.close();
       streamRef.current = null;
     };
-  }, [intakeId]);
+  }, [intakeId, reopenKey]);
 
   return { run };
 }

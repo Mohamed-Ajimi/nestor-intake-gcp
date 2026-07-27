@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { ArrowDownToLine, ArrowLeft, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getIntake } from "@/lib/api/intakes";
-import { locateResearchRun } from "@/lib/api/research";
-import { fmtCost, useElapsed } from "@/lib/research/runClock";
+import { locateResearchRun, RESEARCH_TERMINAL, type RunEvent } from "@/lib/api/research";
+import { fmtCost, fmtDuration, useElapsed } from "@/lib/research/runClock";
 import { useRunEvents } from "@/lib/research/useRunEvents";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
+import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
 import { RunFeed } from "@/components/research/RunFeed";
+import { RunStatusCard } from "@/components/research/RunStatusCard";
+import { RunActions } from "@/components/research/RunActions";
 
 // frontend/src/routes/admin.pulse.runs.$runId.tsx — the dedicated research-run page (D-01).
 //
@@ -36,20 +39,6 @@ import { RunFeed } from "@/components/research/RunFeed";
 export const Route = createFileRoute("/admin/pulse/runs/$runId")({
   component: ResearchRunPage,
 });
-
-/**
- * Terminal research-run statuses, VERBATIM from the Tribunal contract (D-05) — the same set
- * the stream and the embedded card use. `completed_degraded` and `parked` are terminal here
- * too; `needs_input` is the engine's parked clarification state and stops the clock as well.
- */
-const RESEARCH_TERMINAL = new Set([
-  "completed",
-  "completed_degraded",
-  "failed",
-  "cancelled",
-  "parked",
-  "needs_input",
-]);
 
 function ResearchRunPage() {
   const { runId } = Route.useParams();
@@ -97,14 +86,35 @@ function ResearchRunPage() {
   }, [intakeId]);
 
   // ── The run itself: ONE SSE connection, the single authority on status/stage/cost/cursor.
-  const { run } = useActiveResearchRun(intakeId ?? undefined);
+  //
+  // `reopenKey` is bumped by a COMPLETED operator action and by nothing else — there is no
+  // timer behind it and it is not a second poll. It exists because continuing a paused run
+  // happens on a connection the server already closed: without a fresh connection the page
+  // would keep showing the paused card while the run was demonstrably moving again.
+  const [reopenKey, setReopenKey] = useState(0);
+  const reloadRun = useCallback(() => setReopenKey((k) => k + 1), []);
+  const { run } = useActiveResearchRun(intakeId ?? undefined, reopenKey);
   const status = run?.status ?? "queued";
-  const isTerminal = RESEARCH_TERMINAL.has(status);
+  // ONE terminality rule, IMPORTED from the transport that owns the stream's stop condition.
+  // The clarification pause is the single literal added at the call site — exactly how the
+  // embedded card computes it, so the two surfaces cannot drift apart.
+  const isTerminal = RESEARCH_TERMINAL.has(status) || status === "needs_input";
 
   // THE CLOCK. Derived from the RUN's own started_at — never from mount. This is the whole
   // point of D-01/D-09: closing this page and reopening it must show the run's real elapsed
   // time, not a counter that restarts at 00:00 on every visit.
-  const elapsed = useElapsed(run?.started_at ?? null, !isTerminal);
+  //
+  // Once the run has FINISHED, a clock counting from its start is no longer its elapsed time —
+  // it is the time since it started, which for a run that ended three days ago reads as an
+  // absurd four-digit figure. A finished run shows the fixed span between its own two
+  // timestamps instead. A run that stopped without stamping a completion (a pause, or a crash
+  // before the stamp) has no such span, so it keeps the counter — the hook is called
+  // unconditionally either way.
+  const liveElapsed = useElapsed(run?.started_at ?? null, !isTerminal);
+  const finished = isTerminal && !!run?.completed_at;
+  const elapsed = finished
+    ? fmtDuration(run?.started_at ?? null, run?.completed_at ?? null)
+    : liveElapsed;
 
   // ── The feed: backfill the full history, then only the delta past the SSE cursor. ──────
   const { events, loading: eventsLoading, truncated } = useRunEvents(
@@ -112,6 +122,14 @@ function ResearchRunPage() {
     intakeId ? runId : null,
     run?.event_seq ?? null,
   );
+
+  // ── The audit-body drill-down (D-10). ────────────────────────────────────────────────
+  // The EU AI Act Art. 12 record: the redacted request and response of one exact model call,
+  // opened beneath the feed row that made it. Superadmin-only twice over — by PLACEMENT under
+  // the admin layout, and by the seam, which is superadmin-gated and space-scoped and hides
+  // the existence of anything else. No client-facing route may import this panel or reach the
+  // verb behind it (D-08).
+  const [openAuditId, setOpenAuditId] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollToLatest = () => {
@@ -154,6 +172,25 @@ function ResearchRunPage() {
       </div>
     );
   }
+
+  // The panel hangs beneath the ONE row whose reference is open, through the seam the feed
+  // declared for it — so the feed renders it without importing it, and it stays outside the
+  // row's memo boundary. It adds no scroll container of its own: it lives inside the page's
+  // single scrolling region like every other row.
+  const renderAuditPanel = (event: RunEvent) => {
+    const auditId = eventAuditId(event);
+    if (!auditId || auditId !== openAuditId) return null;
+    return (
+      <div className="pb-2 pl-[26px]">
+        <AuditBodyPanel
+          intakeId={intakeId}
+          runId={runId}
+          auditId={auditId}
+          onClose={() => setOpenAuditId(null)}
+        />
+      </div>
+    );
+  };
 
   // ONE full-height column: a fixed header, a single scrolling region, a fixed footer ticker
   // while the run is live. The height budget subtracts the shell's TopBar (h-11) and the
@@ -206,7 +243,7 @@ function ResearchRunPage() {
           <div className="flex shrink-0 gap-8">
             <div className="text-right">
               <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink/50">
-                {t("research.elapsed")}
+                {finished ? t("research.runPage.durationLabel") : t("research.elapsed")}
               </div>
               <div className="mt-0.5 font-mono text-xl tabular-nums text-ink">{elapsed}</div>
             </div>
@@ -221,12 +258,12 @@ function ResearchRunPage() {
           </div>
         </div>
 
-        {/* THE live region — status and phase only, never the feed body. */}
-        <div
-          role="status"
-          aria-live="polite"
-          className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] uppercase tracking-wider text-ink/60"
-        >
+        {/* The compact status line. It is the at-a-glance reading that survives when the card
+            below has scrolled out of view, and it is PLAIN TEXT: the card is the page's one
+            live region, so this line no longer announces. Two regions carrying the same status
+            would announce every change twice, which is the assistive-tech equivalent of saying
+            everything twice. */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] uppercase tracking-wider text-ink/60">
           <span className="text-ink">{statusLabel(status, t)}</span>
           {run?.current_stage && (
             <span>{t("research.currentStage", { stage: run.current_stage })}</span>
@@ -237,6 +274,20 @@ function ResearchRunPage() {
       {/* ── The single scrolling region ─────────────────────────────────────────────── */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-4">
         <div className="mx-auto max-w-3xl">
+          {/* THE CARD AND THE FEED ARE SIBLINGS. Not nested, not inside a status branch — the
+              card is one element and the feed is the next one, and the feed's only guard is
+              whether any events exist. That single structural choice is what makes "the
+              history is still there for a failed or a cancelled run" true BY CONSTRUCTION
+              rather than by somebody remembering to add it to two more branches. The embedded
+              card is the counter-example: its failure branches render an error and a button
+              and nothing else, so the two states whose evidence matters most are the two that
+              throw it away. Do not move the feed inside the card. */}
+          <RunStatusCard
+            run={run}
+            elapsed={elapsed}
+            actions={<RunActions intakeId={intakeId} run={run} onReload={reloadRun} />}
+          />
+
           {/* The backfill hit its page cap. Say so in words and say how many rows are held —
               a partial feed presented as if it were whole is worse than a short one. */}
           {truncated && (
@@ -253,7 +304,21 @@ function ResearchRunPage() {
           ) : events.length === 0 ? (
             <EmptyFeed status={status} isTerminal={isTerminal} />
           ) : (
-            <RunFeed events={events} isActive={!isTerminal} />
+            <RunFeed
+              events={events}
+              isActive={!isTerminal}
+              // Wired ONLY when both ids resolved. There is deliberately no stub handler: a
+              // handler that is always defined would make the feed show the affordance on
+              // every row carrying an audit reference even when nothing could be fetched,
+              // which is an offer the page cannot keep.
+              onDrillDown={
+                intakeId && runId
+                  ? (auditId) => setOpenAuditId((cur) => (cur === auditId ? null : auditId))
+                  : undefined
+              }
+              drilldownAuditId={openAuditId}
+              renderAfterRow={intakeId && runId ? renderAuditPanel : undefined}
+            />
           )}
         </div>
       </div>
@@ -278,6 +343,16 @@ function ResearchRunPage() {
       )}
     </div>
   );
+}
+
+/**
+ * The audit reference a feed row carries, if it carries one. `meta` is engine-authored JSON
+ * arriving over the wire, so the read is defensive: anything that is not a non-empty string is
+ * no reference at all, and a row without one shows no drill-down affordance.
+ */
+function eventAuditId(event: RunEvent): string | null {
+  const v = event.meta?.["audit_id"];
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 /**

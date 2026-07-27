@@ -519,6 +519,12 @@
     "cancelError": "The research could not be stopped",
     "errorLabel": "Error message",
     "retry": "Try again",
+    "actions": {
+      "resumeOk": "Research resumed — it picks up where it stopped.",
+      "resumeError": "The research could not be resumed.",
+      "retryOk": "A new research run has been started.",
+      "retryError": "A new research run could not be started."
+    },
     "costFallback": "—",
     "dateFallback": "—",
     "download": "Download raw output",
@@ -544,6 +550,7 @@
       "metaEngine": "engine {{engine}}",
       "metaEvents": "{{count}} events",
       "loadingEvents": "Loading run history…",
+      "durationLabel": "Duration",
       "status": {
         "queued": "Queued",
         "running": "Running",
@@ -554,6 +561,15 @@
         "parked": "Paused",
         "needsInput": "Waiting for input",
         "unknown": "Unknown status"
+      },
+      "card": {
+        "queuedTitle": "Waiting for a worker",
+        "queuedBody": "This run has been accepted and is waiting for a research worker to pick it up. Nothing has started yet and nothing has been charged.",
+        "needsInputTitle": "Waiting for input",
+        "needsInputBody": "The engine paused to ask a clarifying question. There is no way to answer it from here — starting a new run with a repaired brief is the way forward, and that counts as a new attempt and is charged as one.",
+        "needsInputReasonLabel": "What it asked for",
+        "unknownTitle": "Unrecognised status",
+        "unknownBody": "This version of the interface has no wording for the status \"{{status}}\". The run's history below is still complete."
       },
       "feed": {
         "workedFor": "Worked for {{duration}}",

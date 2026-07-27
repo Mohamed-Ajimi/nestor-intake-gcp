@@ -519,6 +519,12 @@
     "cancelError": "Impossible d'arrêter la recherche",
     "errorLabel": "Message d'erreur",
     "retry": "Réessayer",
+    "actions": {
+      "resumeOk": "Recherche reprise — elle repart là où elle s'était arrêtée.",
+      "resumeError": "La recherche n'a pas pu être reprise.",
+      "retryOk": "Une nouvelle exécution de recherche a démarré.",
+      "retryError": "Impossible de démarrer une nouvelle exécution de recherche."
+    },
     "costFallback": "—",
     "dateFallback": "—",
     "download": "Télécharger la sortie brute",
@@ -544,6 +550,7 @@
       "metaEngine": "moteur {{engine}}",
       "metaEvents": "{{count}} événements",
       "loadingEvents": "Chargement de l'historique…",
+      "durationLabel": "Durée",
       "status": {
         "queued": "En file d'attente",
         "running": "En cours",
@@ -554,6 +561,15 @@
         "parked": "En pause",
         "needsInput": "En attente d'une entrée",
         "unknown": "Statut inconnu"
+      },
+      "card": {
+        "queuedTitle": "En attente d'un worker",
+        "queuedBody": "Cette exécution a été acceptée et attend qu'un worker de recherche la prenne en charge. Rien n'a encore démarré et rien n'a été facturé.",
+        "needsInputTitle": "En attente d'une entrée",
+        "needsInputBody": "Le moteur s'est mis en pause pour poser une question de clarification. Il n'est pas possible d'y répondre ici — lancer une nouvelle exécution avec un brief corrigé est la voie à suivre, ce qui compte comme une nouvelle tentative et est facturé comme telle.",
+        "needsInputReasonLabel": "Ce qui a été demandé",
+        "unknownTitle": "Statut non reconnu",
+        "unknownBody": "Cette version de l'interface n'a pas de libellé pour le statut « {{status}} ». L'historique de l'exécution ci-dessous reste complet."
       },
       "feed": {
         "workedFor": "Travaillé pendant {{duration}}",
