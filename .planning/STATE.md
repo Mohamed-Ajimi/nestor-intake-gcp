@@ -39,7 +39,18 @@ DEPLOYED LIVE 2026-07-27 at shared SHA 20260727-085533 (full record: 15.2-UAT.md
   committed deploy scripts (operator decision 2026-07-27); SERPAPI bound from the pre-existing
   Nestor_SERP on both Tribunal services. Two missing IAM grants applied and read back.
 
-WHAT REMAINS (plan 18 Tasks 4-6), all gated on the Anthropic monthly cap reset 2026-08-01:
+CAP NO LONGER BLOCKS V-01 (2026-07-27). Nestor_Claude2 is NOT topped up, so both Tribunal
+  services were repointed to a TEMPORARY burner key in its own secret Nestor_Claude_Temp, via the
+  TRIBUNAL_ANTHROPIC_SECRET override (nothing committed changed). Validated live: 1-token
+  POST /v1/messages returned HTTP 200, so the key works AND is not capped.
+  => Tasks 4-6 can run NOW; 2026-08-01 is now only when Nestor_Claude2 is expected back.
+  THREE DEBTS: (a) the burner key transited assistant chat -> rotate after testing, same class as
+  the Resend key in Phase 20 CLOSE-02; (b) revert to Nestor_Claude2 when topped up by redeploying
+  with NO override; (c) nestor-api was NOT swapped (blocked mid-session) and still holds
+  Nestor_Claude2, so intake AI skills fail until swapped — Tribunal runs are unaffected.
+  Command in 15.2-UAT.md (use --update-secrets, never --set-secrets).
+
+WHAT REMAINS (plan 18 Tasks 4-6):
   Task 4 V-01 — ONE live run on a fresh test intake vs the recorded 4cbb5311 baseline
   Task 5 V-02 — the 16-item checklist + dated operator sign-off
   Task 6 V-03 — a SEPARATE cleanup commit after sign-off (never claim_distiller, D-15)
