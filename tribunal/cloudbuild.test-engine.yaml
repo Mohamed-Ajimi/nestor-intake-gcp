@@ -88,7 +88,15 @@ steps:
             #   * each owning plan proves ITS OWN file is BOTH collected (read
             #     the `collecting:` block) AND green;
             #   * plan 15.2-26 RECONCILES the final collected count before the
-            #     phase closes, so a name that was typo'd cannot survive.
+            #     phase closes, so a MISTYPED name cannot survive.
+            #
+            # NEVER put an apostrophe anywhere in this block — not even inside a
+            # comment, and not to quote this rule. The whole script below is
+            # passed to bash as ONE single-quoted -c argument, so any single
+            # quote CLOSES that string and the remainder is reparsed by the outer
+            # shell. The symptom is bewildering: a bare
+            # "python: command not found" long AFTER pip has succeeded. Cost one
+            # red build on 2026-07-27.
             #     15.2-20 -> test_stale_reclaim.py   (D-E stale reclaim)
             #     15.2-21 -> test_brief_input.py
             #     15.2-22 -> test_web_fetch_replay.py
