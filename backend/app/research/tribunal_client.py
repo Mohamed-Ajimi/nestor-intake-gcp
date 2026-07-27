@@ -491,3 +491,74 @@ def get_audit_body(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Phase 15.3 run-event feed (D-01/D-04/D-05): get_run_events.
+#
+# Same keyword-only + blocking-httpx + raise_for_status + JSON-return shape as
+# get_audit_body — it REUSES _headers / _mint_id_token (no new OIDC code, audience
+# stays the path-less service_url per Pitfall 4). It proxies plan 15.3-02's
+# GET /api/runs/{run_id}/events so the intake backend stays the SOLE caller of
+# Tribunal (the frontend never calls it directly). Persists NOTHING.
+# ---------------------------------------------------------------------------
+
+#: Bounds for :func:`get_run_events`' ``limit``. The ENGINE's clamp is the AUTHORITY
+#: (15.3-02 clamps into this same 1..1000 window server-side, and its own tests pin
+#: it); this client-side clamp exists only so an obviously wrong caller does not
+#: spend a network round trip to learn what it could have known locally. Keep the
+#: two windows identical: a client window WIDER than the engine's would silently
+#: under-deliver against the caller's own ask, and a NARROWER one would cap a
+#: legitimate page for no reason.
+_EVENTS_MIN_LIMIT = 1
+_EVENTS_MAX_LIMIT = 1000
+#: Default page size — mirrors the engine's own default.
+_EVENTS_DEFAULT_LIMIT = 500
+
+
+def get_run_events(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+    after_seq: int = 0,
+    limit: int = _EVENTS_DEFAULT_LIMIT,
+) -> dict:
+    """Fetch one bounded, seq-ordered page of a run's activity feed; return the page dict.
+
+    GETs ``{service_url}/api/runs/{run_id}/events`` with the same headers as
+    :func:`get_audit_body`. Returns 15.3-02's ``RunEventPage`` shape verbatim —
+    ``{run_id, events: [{seq, ts, stage, kind, text, meta}], next_after_seq,
+    has_more}`` — the BACKFILL read that makes closing and reopening the run page
+    show TRUE history instead of only what happened while somebody was watching.
+
+    ``after_seq`` and ``limit`` are sent as QUERY PARAMETERS via httpx ``params=``,
+    never string-formatted into the URL: ``seq`` is a cursor the caller controls, and
+    interpolating caller-controlled values into a request path is how a path-traversal
+    or an injected extra segment gets built by accident.
+
+    The engine 404s an unknown OR cross-tenant ``run_id`` — DELIBERATELY
+    indistinguishable, because a "forbidden" answer would confirm that the run exists
+    and belongs to somebody else. This client shapes NO HTTP response of its own: it
+    ``raise_for_status()``es, and the CALLER decides the mapping
+    (:func:`app.api.research_routes.get_research_events` maps the engine's 404 to its
+    own existence-hidden 404 and everything else to 502, so a seam error is never an
+    unhandled 500).
+
+    Tenant discipline (TENANT-02): the tenant comes SOLELY from the verified
+    ``X-Nestor-Tenant-Id`` header :func:`_headers` sets from the caller's RESOLVED
+    ``space_id``. It is never a request input and never caller-chosen. Persists NOTHING.
+    """
+    resp = httpx.get(
+        f"{service_url}/api/runs/{run_id}/events",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        params={
+            "after_seq": max(0, int(after_seq)),
+            "limit": max(_EVENTS_MIN_LIMIT, min(int(limit), _EVENTS_MAX_LIMIT)),
+        },
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
