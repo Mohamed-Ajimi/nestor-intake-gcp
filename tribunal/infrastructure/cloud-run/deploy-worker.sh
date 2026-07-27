@@ -66,27 +66,35 @@ command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1;
 # script still hardcoded `Nestor_Claude`. An unguarded re-run therefore silently REPOINTED
 # the Anthropic key back at the low-credit secret — walling a real research run mid-flight
 # with no error at deploy time. The worker is the run-EXECUTING side, so it is the service
-# that would actually die on the wall. Self-heal from the live revision first; the literal
-# fallback below is a FIRST-DEPLOY default only, never an assertion about what is live.
-# `nestor-api` deliberately stays on `Nestor_Claude` and is not touched by this script.
+# that would actually die on the wall.
+#
+# WHAT ACTUALLY HAPPENED NEXT, and why this block was inverted (operator decision 2026-07-27):
+# the 2026-07-25 phase-15.1 deploy ran this script, which then ADOPTED the live value. Since
+# the live value had already been reverted to `Nestor_Claude`, self-healing simply re-inherited
+# the drift it was written to prevent, and all three services were verified on `Nestor_Claude`
+# on 2026-07-27. Reading the live value can never correct a clobber — it only ratifies it.
+# So the COMMITTED default now wins, and the live value is read solely to REPORT divergence.
+# Override for a one-off deploy with `TRIBUNAL_ANTHROPIC_SECRET=... ./deploy-worker.sh`.
+# `nestor-api` is ALSO on `Nestor_Claude2` as of 2026-07-27 (it makes Anthropic calls for the
+# intake skills); it is deployed by its own script, not this one.
 # ---------------------------------------------------------------------------
-TRIBUNAL_SERPAPI_SECRET="${TRIBUNAL_SERPAPI_SECRET:-Nestor_SerpApi}"
+TRIBUNAL_SERPAPI_SECRET="${TRIBUNAL_SERPAPI_SECRET:-Nestor_SERP}"
 
-if [ -z "${TRIBUNAL_ANTHROPIC_SECRET:-}" ]; then
-  TRIBUNAL_ANTHROPIC_SECRET="$(gcloud run services describe "${SERVICE_NAME}" \
-    --region="${REGION}" --project="${PROJECT}" \
-    --flatten='spec.template.spec.containers[].env[]' \
-    --filter='spec.template.spec.containers.env.name=ANTHROPIC_API_KEY' \
-    --format='value(spec.template.spec.containers.env.valueFrom.secretKeyRef.name)' \
-    2>/dev/null | head -n1 || true)"
-  if [ -n "${TRIBUNAL_ANTHROPIC_SECRET}" ]; then
-    echo "==> ANTHROPIC secret self-healed from the live revision: ${TRIBUNAL_ANTHROPIC_SECRET}"
-  fi
-fi
-# Not describable (first deploy) or ANTHROPIC_API_KEY not currently mapped: fall back to the
-# credit-bearing secret, NOT the Phase-13 original. A secret NAME is configuration, not a
-# secret — echoing it is safe; the VALUE is never read, echoed or logged by this script.
+# Committed intent wins. A secret NAME is configuration, not a secret — echoing it is safe;
+# the VALUE is never read, echoed or logged by this script.
 TRIBUNAL_ANTHROPIC_SECRET="${TRIBUNAL_ANTHROPIC_SECRET:-Nestor_Claude2}"
+
+LIVE_ANTHROPIC_SECRET="$(gcloud run services describe "${SERVICE_NAME}" \
+  --region="${REGION}" --project="${PROJECT}" \
+  --flatten='spec.template.spec.containers[].env[]' \
+  --filter='spec.template.spec.containers.env.name=ANTHROPIC_API_KEY' \
+  --format='value(spec.template.spec.containers.env.valueFrom.secretKeyRef.name)' \
+  2>/dev/null | head -n1 || true)"
+if [ -n "${LIVE_ANTHROPIC_SECRET}" ] && \
+   [ "${LIVE_ANTHROPIC_SECRET}" != "${TRIBUNAL_ANTHROPIC_SECRET}" ]; then
+  echo "==> NOTE: live revision mounts '${LIVE_ANTHROPIC_SECRET}'; this deploy REPOINTS it to" >&2
+  echo "          '${TRIBUNAL_ANTHROPIC_SECRET}' (operator decision 2026-07-27). Intentional."  >&2
+fi
 echo "==> ANTHROPIC_API_KEY will be mounted from secret: ${TRIBUNAL_ANTHROPIC_SECRET}"
 
 TRIBUNAL_SECRETS="\

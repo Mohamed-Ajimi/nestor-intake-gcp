@@ -2381,7 +2381,7 @@ the intake `nestor` line).
 
 **This is the FIRST phase since Phase 13 to add a secret.** `SERPAPI_API_KEY` (the D10
 own-researcher key) is mounted on **both** Tribunal images from Secret Manager secret
-`Nestor_SerpApi`. Read this before Step 15.2.e: **`--set-secrets` REPLACES the service's ENTIRE
+`Nestor_SERP`. Read this before Step 15.2.e: **`--set-secrets` REPLACES the service's ENTIRE
 secret set**, so the deploy scripts now compose the full mapping list in a variable rather than
 inlining it. Anything omitted from that list is silently dropped from the next revision.
 
@@ -2422,7 +2422,7 @@ export TRIBUNAL_SA="tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
 | `tribunal-migrate` (Job) | **REPIN to the `$SHA` api image**, then execute | alembic **0013** (`claim.certainty`, `claim.found_by`, `claim_source.provider_quality`, table `research_gap`, `ck_run_status` += `completed_degraded`/`parked`) |
 | `nestor-api` | **REBUILD** + redeploy | plan 09's D-12 status vocabulary (`run_status.py`, `run_task.py`), plan 16's Resume route + parked mail |
 | `nestor-frontend` | **REBUILD** + redeploy | plan 09's `RESEARCH_TERMINAL` set, `lib/api/research.ts`, the three `intake.json` locale files |
-| Secret Manager | **CREATE `Nestor_SerpApi`** + resource-scoped accessor + stdin value seed | the D10 own-researcher key |
+| Secret Manager | **`Nestor_SERP` already exists and is seeded** — grant the resource-scoped accessor only (it had none) | the D10 own-researcher key |
 
 **NOT touched this phase:** no intake `nestor` migration and **no `nestor-migrate` Job run** (F3 —
 `nestor.research_runs.status` carries no CHECK constraint, so the new status literals need no DDL);
@@ -2494,47 +2494,78 @@ export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
 ```
 
 Record: the current revision names for all four services, the path-less tribunal-api URL, and **the
-Anthropic secret name each Tribunal service actually mounts**. The scripts self-heal from this
-(Step 15.2.e), but the `describe` is authoritative — as of 2026-07-21 both Tribunal services mounted
-`Nestor_Claude2` while the scripts said `Nestor_Claude`, and `nestor-api` deliberately stays on
-`Nestor_Claude`. Verify rather than assume.
+Anthropic secret name each service actually mounts**.
 
-### Step 15.2.b — Create `Nestor_SerpApi`, grant the accessor, seed the VALUE out-of-band
+**Superseded 2026-07-27 — read this before trusting older wording.** The earlier instruction here
+said the scripts "self-heal" the Anthropic secret from the live revision. That mechanism was proven
+harmful and has been inverted. Sequence of events:
 
-Same idiom as § Phase 10 Step 10.1 / § Phase 13 Step 13.b. House naming style: `Nestor_Claude` /
-`Nestor_Gemini` / `Nestor_OpenAI` → **`Nestor_SerpApi`**. The env var the code reads is
+1. 2026-07-21 — both Tribunal services were switched BY HAND to `Nestor_Claude2` (the credit-bearing
+   key) while the scripts still hardcoded `Nestor_Claude`.
+2. 2026-07-25 — the phase-15.1 deploy ran those scripts, which adopted the live value. By then the
+   live value had already reverted, so self-healing **re-inherited the very drift it was written to
+   prevent**.
+3. 2026-07-27 — verified live: `tribunal-api`, `tribunal-worker` AND `nestor-api` were all on
+   `Nestor_Claude`.
+
+Reading the live value can never correct a clobber — it only ratifies it. The committed default in
+both deploy scripts is now `Nestor_Claude2` and it WINS; the live value is read solely to print a
+divergence notice. **All three services are on `Nestor_Claude2` as of 2026-07-27** — `nestor-api` no
+longer "stays on `Nestor_Claude`", because it makes Anthropic calls for the intake skills and must
+draw on the same credit-bearing key. Verify rather than assume.
+
+### Step 15.2.b — Grant the accessor on the EXISTING `Nestor_SERP` secret
+
+**Superseded 2026-07-27 — do NOT create a new secret.** This step originally told you to create
+`Nestor_SerpApi` and seed a value. That was written from a search for a secret literally named
+`SERPAPI_API_KEY`, which found nothing. In fact **`Nestor_SERP` has existed since 2026-06-03** and
+already holds a valid, active key. Creating a second secret would duplicate a live credential —
+two things to rotate, two chances to miss one. Both deploy scripts therefore default
+`TRIBUNAL_SERPAPI_SECRET=Nestor_SERP`. The env var the code reads is unchanged:
 `SERPAPI_API_KEY` (`serpapi.py::api_key()`).
 
-```bash
-# 1. Create the secret container (empty — no version yet). Idempotent.
-gcloud secrets create Nestor_SerpApi \
-  --replication-policy=automatic --project="$GOOGLE_PROJECT" 2>/dev/null || true
+The only thing genuinely missing was the IAM grant — verified 2026-07-27, `Nestor_SERP` had
+**no IAM bindings whatsoever** (`get-iam-policy` returned a bare `{"etag":"ACAB"}`), so
+`tribunal-run@` could not read it and any revision binding it would have failed to start.
 
-# 2. Resource-scoped secretAccessor to the TRIBUNAL runtime SA ONLY.
+```bash
+# 1. Resource-scoped secretAccessor to the TRIBUNAL runtime SA ONLY.
 #    NEVER nestor-run, NEVER a project-wide binding (least privilege, Phase-14 lockdown).
-gcloud secrets add-iam-policy-binding Nestor_SerpApi \
+gcloud secrets add-iam-policy-binding Nestor_SERP \
   --member="serviceAccount:${TRIBUNAL_SA}" \
   --role="roles/secretmanager.secretAccessor" --project="$GOOGLE_PROJECT"
 
-# 3. Add the key VALUE as a secret version. Reads from stdin: paste the key, then Ctrl-D.
-#    NEVER --data="<key>" and never inline in a command that lands in shell history.
-#    The value is never echoed, never committed, never written into this runbook.
-gcloud secrets versions add Nestor_SerpApi --data-file=- --project="$GOOGLE_PROJECT"
-
-# 4. Verify with METADATA reads only — never `gcloud secrets versions access`.
-gcloud secrets versions list Nestor_SerpApi --project="$GOOGLE_PROJECT" \
+# 2. Verify with METADATA reads only — never `gcloud secrets versions access`.
+gcloud secrets versions list Nestor_SERP --project="$GOOGLE_PROJECT" \
   --format='value(name,state)'                       # expect one ENABLED version
-gcloud secrets get-iam-policy Nestor_SerpApi --project="$GOOGLE_PROJECT" --format=json
+gcloud secrets get-iam-policy Nestor_SERP --project="$GOOGLE_PROJECT" --format=json
 # expect EXACTLY one member: serviceAccount:tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com
 ```
 
-**Record the chosen SerpApi plan/tier BY NAME here** (with its $/month, monthly quota and hourly
-throughput) — the tier is a blocking operator decision, not a runbook default:
+**Step 15.2.b-bis — grant `nestor-run@` on `Nestor_Claude2`.** Required by the 2026-07-27 repoint
+(Step 15.2.a): `Nestor_Claude2` was granted to `tribunal-run@` only, but `nestor-api` runs as
+`nestor-run@` and is now on Claude2 too.
+
+```bash
+gcloud secrets add-iam-policy-binding Nestor_Claude2 \
+  --member="serviceAccount:nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" --project="$GOOGLE_PROJECT"
+gcloud secrets get-iam-policy Nestor_Claude2 --project="$GOOGLE_PROJECT" --format=json
+# expect BOTH tribunal-run@ and nestor-run@
+```
+
+**SerpApi plan/tier in force** — read live from `/account.json` on 2026-07-27, not chosen as a
+purchase. The "blocking operator decision" this step used to demand was a fact to look up:
 
 ```
-SerpApi tier in force: ______________   ($____/month · ______ searches/month · ______ searches/hour)
-Chosen by: ______________   Date: ____________
+SerpApi tier in force: Starter Plan (starter_v4)   ($25/month · 1,000 searches/month · 200 searches/hour)
+Confirmed by: probe of GET /account.json           Date: 2026-07-27
+Unit price for D-16: $25 / 1000 = $0.025 per search
+Observed headroom:   ~42 billable searches/run  =>  ~$1.05 SerpApi spend per run, ~4 runs/hour
 ```
+
+> **Do not `curl` `/account.json` unfiltered.** The response echoes the API key back. Filter to the
+> plan fields only (`plan_name`, `searches_per_month`, `plan_searches_left`, `account_rate_limit_per_hour`).
 
 **No price is hardcoded anywhere in the code.** `serpapi.fetch_plan()` reads `plan_monthly_price` and
 `searches_per_month` live from `GET https://serpapi.com/account.json` at run start (free, off-quota)
@@ -2632,8 +2663,11 @@ unlike `0012`, they are not inherited. A table without them is a cross-tenant le
 Always the retargeted scripts, **never a hand-rolled `gcloud run deploy`**: they pin `IMAGE_TAG` and
 PRESERVE the Phase-14 lockdown (`tribunal-run` SA, `--no-allow-unauthenticated`, invoker `nestor-run`
 only — not re-granted here). As of Phase 15.2 they also compose the full `--set-secrets` list, probe
-`Nestor_SerpApi` for existence before binding it, and **self-heal the Anthropic secret name from the
-live revision** rather than repointing it.
+`Nestor_SERP` for existence before binding it, and **pin the Anthropic secret name to the committed
+default `Nestor_Claude2`** (operator decision 2026-07-27 — see Step 15.2.a). The live value is read
+only to print a divergence notice; it is deliberately NOT adopted, because adopting it is what
+re-inherited the 2026-07-21 drift on 2026-07-25. Override for a one-off with
+`TRIBUNAL_ANTHROPIC_SECRET=<name>` in front of the script.
 
 ```bash
 IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
@@ -2763,8 +2797,10 @@ Three prerequisites before V-01 can run:
 1. **A fresh test intake** reproducing the baseline brief domain (LUKOIL BeNeLux — dynamic pricing,
    coffee, Germany-entry 2027) in a clean space, so the one run that has to prove the phase is not
    entangled with the smoke-tenant cleanup backlog.
-2. **The SerpApi tier live** and `Nestor_SerpApi` seeded (Step 15.2.b), or an explicit decision to
-   accept a 3-stream degraded V-01.
+2. **The SerpApi tier live** — SATISFIED 2026-07-27: `Nestor_SERP` is seeded and active on Starter
+   ($25/mo · 1,000/month · 200/hour). Only the `tribunal-run@` accessor grant was outstanding
+   (Step 15.2.b). The fallback — an explicit decision to accept a 3-stream degraded V-01 — is no
+   longer needed.
 3. **The operator present** for sign-off — V-02 #16 is a human read of the new report beside
    `docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md`.
 
@@ -2857,10 +2893,11 @@ fixture, because run 4cbb5311 exists only as a pytest fixture and was never seed
 - [ ] Step 15.1.f — GAP CLOSURE (plans 15.1-11 … 15.1-16): BOTH Tribunal images REBUILT at ONE `$SHA` **FIRST**, then `tribunal-migrate` REPINNED to that `tribunal-api:$SHA` (image-pin lesson — the Job was found on a 2-deploy-old image; unpinned = silent no-op) and executed `--wait`; log shows **`Running upgrade 0011 -> 0012`** (an exit code is NOT proof); `superseded_note text` nullable confirmed AND `verification_verdict` still ENABLE+FORCE RLS with the `verification_verdict_tenant_isolation` policy intact (0012 issues no security DDL); TRIBUNAL head == **0012** in `tribunal.tribunal_alembic_version` (NOT the intake `nestor` line); ONLY THEN deploy worker-then-api at `$SHA` via the retargeted scripts (Phase-14 lockdown preserved). **Order build → migrate → deploy is load-bearing**: code ahead of the migration makes every verdict INSERT fail into Stage 7's swallow, producing a zero-verdict run that looks green. NO env change, NO new secret, NO `nestor-api` rebuild, NO live research run
 - [ ] Step 15.1.g — GAP CLOSURE: `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.1-16's `verdicts.superseded` section + `superseded_note` caveat fallback in `VerificationReport.tsx`, `lib/api/research.ts`, en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed). **Mandatory this pass** — without it the newly-populated verdict class exists only in the JSON and the operator still cannot see it
 - [ ] Step 15.2.a — PREFLIGHT (read-only): `git status --porcelain` EMPTY + HEAD SHA recorded + a positive on-disk assertion for one artifact per wave (0013 migration, `reliability.py`, `stage_feed.py`, `facts.py`, `anchors.py`, `workshop.py`, `workshop_rank.py`, `own_researcher.py`, `serpapi.py`, `test_engine_e2e_stubbed.py`, `cloudbuild.test-engine.yaml`, `completed_degraded` in `ResearchRunProgress.tsx`) — **Cloud Build ships the tree you submit; a stale worktree deploys code that is not this phase**; the SIX gates green on THAT tree with the `collecting:` block READ (an `ls … || true` config goes green having run nothing); live wiring captured WITHOUT printing values (both Tribunal services' mounted ANTHROPIC secret NAME + revision names + the path-less tribunal-api URL, Pitfall 4)
-- [ ] Step 15.2.b — `Nestor_SerpApi` secret created + resource-scoped `secretAccessor` to `tribunal-run` ONLY (never `nestor-run`, never project-wide) + the key VALUE seeded via `--data-file=-` stdin (never `--data=`, never inline in shell history, never echoed/committed); verified with METADATA reads only (`versions list` + `get-iam-policy` showing exactly one member); the chosen SerpApi **tier recorded by NAME** with $/month + quota + hourly throughput — **no price hardcoded anywhere**, `fetch_plan()` reads `/account.json` live at run start (D-16)
+- [ ] Step 15.2.b — `Nestor_SERP` **already existed since 2026-06-03 with a valid seeded value — do NOT create a second secret**; the only missing piece was IAM, so: resource-scoped `secretAccessor` granted to `tribunal-run` ONLY (never `nestor-run`, never project-wide), verified with METADATA reads only (`versions list` + `get-iam-policy` showing exactly one member); tier **read live, not chosen** — Starter Plan (`starter_v4`), $25/mo · 1,000/month · 200/hour ⇒ D-16 unit price $0.025/search; **no price hardcoded anywhere**, `fetch_plan()` reads `/account.json` live at run start (D-16); never `curl` that endpoint unfiltered — it echoes the key back
+- [ ] Step 15.2.b-bis — `nestor-run@` granted `secretAccessor` on `Nestor_Claude2` (previously granted to `tribunal-run@` only; required by the 2026-07-27 repoint of `nestor-api`)
 - [ ] Step 15.2.c — BOTH Tribunal images BUILT via Cloud Build at ONE `$SHA` (`cloudbuild.worker.yaml` — the whole engine core; `cloudbuild.api.yaml` — the status predicate + feed read surface). **BUILD ONLY — deploy is 15.2.e.** Order build → migrate → deploy is LOAD-BEARING: a worker running ahead of 0013 fails every `certainty`/`found_by`/`provider_quality`/`research_gap` write into a swallowed `except` and the run completes looking clean
 - [ ] Step 15.2.d — `tribunal-migrate` Job REPINNED to the `$SHA` `tribunal-api` image FIRST (image-pin lesson — unpinned = silent no-op) + repin CONFIRMED via `describe`, then executed `--wait`; log shows the literal **`Running upgrade 0012 -> 0013`** (**`Container called exit(0)` is NOT proof**); schema confirmed read-only: `claim.certainty` + `claim.found_by text[]` + `claim_source.provider_quality` all nullable, table `tribunal.research_gap` with **ENABLE+FORCE RLS + its tenant-isolation policy + index (new table — NOT inherited, a table without them is a cross-tenant leak)**, `ck_run_status` accepting `completed_degraded`/`parked`, and TRIBUNAL head == **0013** in `tribunal.tribunal_alembic_version` (NOT the intake `nestor` line, which stays at 0012)
-- [ ] Step 15.2.e — `tribunal-worker` then `tribunal-api` deployed at `IMAGE_TAG=$SHA` via the retargeted scripts (Phase-14 lockdown preserved, not re-granted); **`SERPAPI_API_KEY` bound on BOTH** from `Nestor_SerpApi` (existence-probed — a missing secret WARNS and continues as a clean 3-stream `completed_degraded` run rather than failing the deploy); **ANTHROPIC secret SELF-HEALED from the live revision** (the 2026-07-21 drift: scripts said `Nestor_Claude` while both services mounted `Nestor_Claude2` — an unguarded re-run walls the ~$45 V-01 run); binding confirmed by secret NAME only, never a value; digest-pin proof (`@sha256:`, never `:latest`)
+- [ ] Step 15.2.e — `tribunal-worker` then `tribunal-api` deployed at `IMAGE_TAG=$SHA` via the retargeted scripts (Phase-14 lockdown preserved, not re-granted); **`SERPAPI_API_KEY` bound on BOTH** from `Nestor_SERP` (existence-probed — a missing secret WARNS and continues as a clean 3-stream `completed_degraded` run rather than failing the deploy); **ANTHROPIC secret PINNED to the committed default `Nestor_Claude2`, NOT self-healed** — self-healing was inverted on 2026-07-27 after it was proven to ratify the very drift it was meant to prevent (2026-07-21 manual switch to Claude2 → 2026-07-25 script deploy adopted the reverted live value → all three services verified back on `Nestor_Claude`); the live value is now read only to print a divergence notice, and `nestor-api` is repointed to Claude2 as well; binding confirmed by secret NAME only, never a value; digest-pin proof (`@sha256:`, never `:latest`)
 - [ ] Step 15.2.f — `nestor-api` image REBUILT via Cloud Build (`app/research/run_status.py` + `run_task.py` D-12 status vocabulary, the `POST /{intake_id}/research/resume` route, `render_research_parked`) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap); ordered AFTER the Tribunal services (the Resume route calls the seam); **NO intake `nestor` migration and NO `nestor-migrate` Job run** (F3 — `research_runs.status` has no CHECK; intake head stays 0012); **NO new env/secret** — Phase-10 mail stack reused, `APP_BASE_URL` confirmed present or the parked mail refuse-sends; **`SERPAPI_API_KEY` NEVER bound here** (INTAKE-05)
 - [ ] Step 15.2.g — `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.2-09's `RESEARCH_TERMINAL` set + `lib/api/research.ts` + en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed; the CLAUDE.md note is stale/bun). **Mandatory** — the terminal-status set is COMPILED INTO THE BUNDLE, so without it a `completed_degraded` run spins forever in the browser while every backend surface is correct (the Phase-18 stale-SPA lesson)
 - [ ] Step 15.2.h — VERIFY without printing secrets: the six gates re-run against the deployed tree (`collecting:` block read); **`verify_chain` GREEN on the DEPLOYED audit data — a RED chain is a STOP, no sign-off** (EU AI Act Art. 12, deadline 2026-08-02); secret-binding confirm by NAME; `/readyz` 200 on `tribunal-api` with an identity token against the path-less URL (Pitfall 4); `bash backend/scripts/ci_no_run_research.sh` exit 0 (INTAKE-05 — SerpApi lives in `tribunal/`, which the guard deliberately does not scan)

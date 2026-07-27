@@ -293,9 +293,9 @@ variable "tribunal_gemini_secret_id" {
 }
 
 variable "tribunal_claude_secret_id" {
-  description = "Secret Manager secret ID for Tribunal's ANTHROPIC_API_KEY. Read by secrets_bootstrap.py as `Nestor_Claude`. DISTINCT from the intake `nestor-anthropic-api-key` (the engine reads the `Nestor_*` name verbatim — no bootstrap refactor, RESEARCH Open Q3)."
+  description = "Secret Manager secret ID for Tribunal's ANTHROPIC_API_KEY. Read by secrets_bootstrap.py as a `Nestor_*` name verbatim. DISTINCT from the intake `nestor-anthropic-api-key` (no bootstrap refactor, RESEARCH Open Q3). Default moved `Nestor_Claude` -> `Nestor_Claude2` by operator decision 2026-07-27: Claude2 is the credit-bearing key, and all three services (tribunal-api, tribunal-worker, nestor-api) were repointed to it in § Phase 15.2 Step 15.2.e."
   type        = string
-  default     = "Nestor_Claude"
+  default     = "Nestor_Claude2"
 }
 
 variable "tribunal_openai_secret_id" {
