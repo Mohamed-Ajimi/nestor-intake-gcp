@@ -31,6 +31,14 @@ Design decisions:
     insert_placeholder / finalize_row methods remain in writer.py (unused by this client)
     so writer.py callers are not broken.
 
+  - Long-poll progress events (15.3-04): the two deep-research poll loops narrate
+    themselves onto the run feed -- dispatch, a strided progress line stating
+    elapsed minutes and attempt number IN WORDS, reconnects, timeouts and
+    provider-reported failures. This exists because on 2026-07-27 a run mid
+    long-poll was read as a stall from log silence and idle CPU, and it was not.
+    The events are best-effort and cannot fail a call; the audit row, its payload
+    and its hash chain are untouched by them.
+
 Canonical JSON rule (MUST stay frozen across deploys -- Pitfall 3):
   The payload passed to link_hash is built by _build_payload_dict().
   The fields in this dict MUST match _payload_for_row() in hash_chain.py exactly.
@@ -39,6 +47,7 @@ Canonical JSON rule (MUST stay frozen across deploys -- Pitfall 3):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import re
@@ -54,6 +63,17 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 # no cycle and no load cost. `safe_job_id` is the ONE guard a provider job id
 # passes before it is persisted or interpolated into a poll URL (T-15.2-125).
 from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
+# 15.3-04. THE MODULE OBJECT, NOT ITS NAMES: binding the emitter's functions
+# into this namespace would let a bare call slip past this phase's call-site
+# grep gate while the gate stayed green. Every site below goes through the
+# thunk-taking entry point, so the elapsed-minutes arithmetic and the
+# provider-shaped reads that build a line run INSIDE the emitter's own try
+# (D-06) — which matters here more than anywhere else in the engine, because
+# the loop it sits in is a paid call that can run for thirty-five minutes.
+# The phrasing of this comment and of the ones at the sites is deliberately
+# roundabout: a grep cannot tell a comment from a call, and this phase gates
+# both a forbidden form and a COUNT of the permitted one.
+from nestor_pulse_sdk.runs import run_events
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +92,62 @@ log = logging.getLogger(__name__)
 RESUME_REDISPATCH = (
     os.environ.get("NESTOR_TRIBUNAL_RESUME_REDISPATCH", "false").lower() == "true"
 )
+
+# ---------------------------------------------------------------------------
+# 15.3-04 — A LONG POLL MUST BE DISTINGUISHABLE FROM A STALL, IN WORDS.
+#
+# On 2026-07-27 an operator watched a flat CPU trace and silent logs, concluded
+# a run had hung, and was WRONG: it was mid deep-research long poll and resumed
+# on its own twenty-five minutes later. The misreading cost an hour, produced a
+# defect report that had to be withdrawn, and very nearly re-executed a paid run
+# from the start. THE RUN ROW AND THE FEED ARE THE ONLY AUTHORITIES; log silence
+# and idle CPU are not evidence of anything. The events below are the fix, and
+# they only work if they say, in a sentence, that the wait is expected.
+#
+# _POLL_EVENT_STRIDE: one progress line every N poll attempts. At the default
+# poll_interval of 30 s a stride of 10 is one line every five minutes -- a
+# handful over a 35-minute wait rather than seventy (T-15.3-33). Env-overridable
+# in the house idiom; a value below 1 is clamped to 1 rather than dividing by
+# zero inside a paid loop.
+# ---------------------------------------------------------------------------
+_POLL_EVENT_STRIDE = max(
+    1, int(os.environ.get("NESTOR_RUN_EVENT_POLL_STRIDE", "10") or 10)
+)
+
+#: The run a two-phase deep-research call belongs to.
+#:
+#: WHY A ContextVar AND NOT A PARAMETER. The two raw poll methods take no
+#: `run_id` and their callers -- `tools/gemini_adapter.py`, `tools/openai_adapter.py`
+#: -- are owned by neither this plan nor its siblings, so widening their
+#: signatures here was not available. What IS available is that both adapters
+#: call `start_call` IMMEDIATELY BEFORE the raw method, in the same coroutine
+#: and therefore in the same asyncio Task: a ContextVar set inside `start_call`
+#: is visible to everything that follows in that task, and `asyncio.gather`
+#: gives every concurrently dispatched angle its own copied Context, so two
+#: angles racing in the same worker cannot read each other's run. That property
+#: is what makes this safe and it is the reason the binding lives in
+#: `start_call` rather than on `self`, which twenty-four concurrent angles would
+#: share.
+#:
+#: A call path with no run context reads None and SKIPS its events. It never
+#: invents a run id and never opens a run: a tenant-less write is precisely the
+#: isolation defect this project forbids, and `run_events.open_run` is the only
+#: place a tenant is bound.
+_CURRENT_RUN: "contextvars.ContextVar[Optional[uuid.UUID]]" = contextvars.ContextVar(
+    "nestor_audited_current_run", default=None
+)
+
+
+def _job_id_phrase(raw: Any) -> str:
+    """" (job <id>)" when `safe_job_id` accepts `raw`, else the empty string.
+
+    T-15.2-125 / T-15.3-32: a provider job id reaches a persisted, operator-
+    visible row through this function and no other path. A refused id costs the
+    id, not the line -- the event still names the provider, it simply does not
+    quote an identifier nobody validated.
+    """
+    checked = safe_job_id(raw) if raw else None
+    return f" (job {checked})" if checked else ""
 
 # ---------------------------------------------------------------------------
 # Deep-research model constants -- env-overridable for easy tuning.
@@ -1055,6 +1131,18 @@ class AuditedLLMClient:
         started_dt = datetime.now(tz=timezone.utc)
         audit_id = uuid.uuid4()
 
+        # 15.3-04: bind this task's run so the long poll that follows can narrate
+        # itself. Best-effort and never load-bearing -- a failure here costs the
+        # poll's feed lines, never the call. See `_CURRENT_RUN` for why the
+        # binding lives in this method.
+        try:
+            _CURRENT_RUN.set(run_id)
+        except Exception as exc:  # noqa: BLE001 -- an observability binding may never fail a call
+            log.warning(
+                "audited: could not bind the run for poll events (%r) -- the "
+                "deep-research call proceeds with no progress lines", exc,
+            )
+
         return AuditHandle(
             audit_id=audit_id,
             run_id=run_id,
@@ -1307,12 +1395,27 @@ class AuditedLLMClient:
         # A rejected id is NOT fatal — it falls through to a fresh dispatch — but
         # it never reaches the URL builder.
         resumed_id = safe_job_id(resume_job_id) if resume_job_id else None
+        # 15.3-04: the run this poll belongs to, read ONCE at entry. None on a
+        # call path with no run context, and then every event below is skipped.
+        _run = _CURRENT_RUN.get()
         if resume_job_id and resumed_id is None:
             log.warning(
                 "Gemini deep-research: the recorded job id was refused by the "
                 "job-id guard, so this angle is dispatched fresh rather than "
                 "polled — nothing was reconnected"
             )
+            if _run is not None:
+                run_events.emit_safe(
+                    _run,
+                    stage="deep_research",
+                    kind="thinking",
+                    build=lambda: (
+                        "A recorded Google research job id was refused by the "
+                        "job-id guard — this angle is dispatched fresh rather "
+                        "than rejoined, so it is paid for again.",
+                        {"provider": "google", "model": agent},
+                    ),
+                )
 
         try:
             # Per-request timeout only; the long wait is the poll loop, not one call.
@@ -1327,6 +1430,21 @@ class AuditedLLMClient:
                         "was charged twice",
                         interaction_id, agent,
                     )
+                    # The money-relevant fact, on the feed rather than only in
+                    # Cloud Logging: this angle rejoined work already paid for.
+                    if _run is not None:
+                        run_events.emit_safe(
+                            _run,
+                            stage="deep_research",
+                            kind="thinking",
+                            build=lambda: (
+                                "Rejoined the in-flight Google research job"
+                                f"{_job_id_phrase(interaction_id)} — no second "
+                                "job was dispatched and nothing was charged "
+                                f"twice. Polling every {poll_interval}s.",
+                                {"provider": "google", "model": agent},
+                            ),
+                        )
                 else:
                     log.debug(
                         "Gemini deep-research: starting interaction (agent=%s)", agent
@@ -1371,7 +1489,29 @@ class AuditedLLMClient:
                                 cb_exc,
                             )
 
-                for _ in range(max_attempts):
+                # THE WAIT IS ANNOUNCED BEFORE IT STARTS. Everything after this
+                # line is silence on every other surface for up to 35 minutes.
+                if _run is not None:
+                    run_events.emit_safe(
+                        _run,
+                        stage="deep_research",
+                        kind="thinking",
+                        build=lambda: (
+                            f"Waiting on Google {agent} — background research "
+                            f"dispatched, polling every {poll_interval}s for up "
+                            f"to {max_attempts * poll_interval / 60:.0f} minutes. "
+                            "A long silence here is the normal shape of this "
+                            "call.",
+                            {
+                                "provider": "google",
+                                "model": agent,
+                                "max": max_attempts,
+                                "wait_s": poll_interval,
+                            },
+                        ),
+                    )
+
+                for _attempt in range(max_attempts):
                     await asyncio.sleep(poll_interval)
                     try:
                         g = await http.get(
@@ -1425,15 +1565,77 @@ class AuditedLLMClient:
                     if status in ("failed", "error", "cancelled"):
                         error = interaction.get("error", "unknown error")
                         log.warning("Gemini deep-research failed: %s", error)
+                        if _run is not None:
+                            run_events.emit_safe(
+                                _run,
+                                stage="deep_research",
+                                kind="agent_fail",
+                                build=lambda: (
+                                    f"Google research job reported {status} — "
+                                    f"{str(interaction.get('error') or 'no reason given')[:200]}",
+                                    {"provider": "google", "model": agent},
+                                ),
+                            )
                         return {
                             "status": "error",
                             "error_message": f"Research failed: {error}",
                         }
 
+                    # THE HEARTBEAT, and the whole point of this task. It is
+                    # emitted HERE — after the GET has come back and after the
+                    # terminal checks — so the line can state what the provider
+                    # itself reported rather than merely that we are still in a
+                    # loop. Every clause is load-bearing to the operator's
+                    # decision: elapsed minutes and attempt number say how far
+                    # into the budget the wait is, and the sentence says in words
+                    # that this is a WAIT. The stride is what keeps a 35-minute
+                    # poll to a handful of lines instead of seventy.
+                    if _run is not None and (_attempt + 1) % _POLL_EVENT_STRIDE == 0:
+                        run_events.emit_safe(
+                            _run,
+                            stage="deep_research",
+                            kind="thinking",
+                            build=lambda _n=_attempt: (
+                                "Still waiting on Google "
+                                f"{agent} — {(_n + 1) * poll_interval / 60:.0f} min "
+                                f"elapsed, poll {_n + 1} of {max_attempts}, "
+                                f"provider still reports "
+                                f"{interaction.get('status') or 'no status'}. The "
+                                "provider has not answered yet; a deep-research "
+                                "call routinely runs for tens of minutes. THIS IS "
+                                "A WAIT, NOT A STALL.",
+                                {
+                                    "provider": "google",
+                                    "model": agent,
+                                    "attempt": _n + 1,
+                                    "max": max_attempts,
+                                    "wait_s": poll_interval,
+                                },
+                            ),
+                        )
+
                 timeout_msg = (
                     f"Research timed out after {max_attempts * poll_interval / 60:.0f} minutes"
                 )
                 log.warning("Gemini deep-research timed out (agent=%s)", agent)
+                if _run is not None:
+                    run_events.emit_safe(
+                        _run,
+                        stage="deep_research",
+                        kind="agent_fail",
+                        build=lambda: (
+                            f"Google research gave up after {max_attempts} polls "
+                            f"({max_attempts * poll_interval / 60:.0f} minutes) — "
+                            "the job never reached a terminal state. This is the "
+                            "poll budget running out, not a crash.",
+                            {
+                                "provider": "google",
+                                "model": agent,
+                                "attempt": max_attempts,
+                                "max": max_attempts,
+                            },
+                        ),
+                    )
                 return {"status": "timeout", "error_message": timeout_msg}
 
         except Exception as exc:
@@ -1495,12 +1697,27 @@ class AuditedLLMClient:
         # is deliberately untouched. The two helpers below concern a RESUMED id
         # only, which is a different question with a different answer.
         resumed_id = safe_job_id(resume_job_id) if resume_job_id else None
+        # 15.3-04: the run this poll belongs to, read ONCE at entry. See the
+        # matching line in the Gemini method and `_CURRENT_RUN`.
+        _run = _CURRENT_RUN.get()
         if resume_job_id and resumed_id is None:
             log.warning(
                 "OpenAI deep-research: the recorded response id was refused by the "
                 "job-id guard, so this angle is dispatched fresh rather than "
                 "polled — nothing was reconnected"
             )
+            if _run is not None:
+                run_events.emit_safe(
+                    _run,
+                    stage="deep_research",
+                    kind="thinking",
+                    build=lambda: (
+                        "A recorded OpenAI research response id was refused by "
+                        "the job-id guard — this angle is dispatched fresh "
+                        "rather than rejoined, so it is paid for again.",
+                        {"provider": "openai", "model": model},
+                    ),
+                )
 
         def _is_not_found(exc: Exception) -> bool:
             """True for the "this response no longer exists" family. Never raises.
@@ -1603,6 +1820,18 @@ class AuditedLLMClient:
                     "charged twice",
                     resumed_id, model,
                 )
+                if _run is not None:
+                    run_events.emit_safe(
+                        _run,
+                        stage="deep_research",
+                        kind="thinking",
+                        build=lambda: (
+                            "Rejoined the in-flight OpenAI research response"
+                            f"{_job_id_phrase(resumed_id)} — no second job was "
+                            "dispatched and nothing was charged twice.",
+                            {"provider": "openai", "model": model},
+                        ),
+                    )
                 try:
                     response = await client.responses.retrieve(resumed_id)
                 except Exception as exc:  # noqa: BLE001 — an expired resume degrades, never crashes
@@ -1632,13 +1861,33 @@ class AuditedLLMClient:
                             "resume would re-dispatch it",
                             cb_exc,
                         )
+                # Announced BEFORE the wait, for the same reason as Gemini's.
+                if _run is not None:
+                    run_events.emit_safe(
+                        _run,
+                        stage="deep_research",
+                        kind="thinking",
+                        build=lambda: (
+                            f"Waiting on OpenAI {model} — background research "
+                            f"dispatched, polling every {poll_interval}s for up "
+                            f"to {max_attempts * poll_interval / 60:.0f} minutes. "
+                            "A long silence here is the normal shape of this "
+                            "call.",
+                            {
+                                "provider": "openai",
+                                "model": model,
+                                "max": max_attempts,
+                                "wait_s": poll_interval,
+                            },
+                        ),
+                    )
 
             # ---- Polling loop ----
             # R7: on a resume the first iteration EVALUATES the response we just
             # retrieved instead of sleeping and retrieving again. One flag, one
             # shot — the loop below is otherwise the pre-15.2 loop unchanged.
             _have_fresh = resumed_id is not None
-            for _ in range(max_attempts):
+            for _attempt in range(max_attempts):
                 if _have_fresh:
                     _have_fresh = False
                 else:
@@ -1658,14 +1907,82 @@ class AuditedLLMClient:
                     return {"status": "success", "report": report}
                 elif response.status in ("failed", "cancelled"):
                     error = getattr(response, "error", None) or "Unknown error"
+                    if _run is not None:
+                        run_events.emit_safe(
+                            _run,
+                            stage="deep_research",
+                            kind="agent_fail",
+                            build=lambda: (
+                                f"OpenAI research response reported "
+                                f"{response.status} — "
+                                f"{str(getattr(response, 'error', None) or 'no reason given')[:200]}",
+                                {"provider": "openai", "model": model},
+                            ),
+                        )
                     return {"status": "error", "error_message": f"Research {response.status}: {error}"}
                 elif response.status == "incomplete":
+                    if _run is not None:
+                        run_events.emit_safe(
+                            _run,
+                            stage="deep_research",
+                            kind="agent_fail",
+                            build=lambda: (
+                                "OpenAI research ended incomplete — the provider "
+                                "stopped before it finished, so this angle "
+                                "contributes nothing.",
+                                {"provider": "openai", "model": model},
+                            ),
+                        )
                     return {"status": "error", "error_message": "Research ended incomplete"}
+
+                # The heartbeat. Same wording contract as Gemini's, same stride,
+                # and for the same reason: this is the only surface on which a
+                # long wait and a hang look different.
+                if _run is not None and (_attempt + 1) % _POLL_EVENT_STRIDE == 0:
+                    run_events.emit_safe(
+                        _run,
+                        stage="deep_research",
+                        kind="thinking",
+                        build=lambda _n=_attempt: (
+                            f"Still waiting on OpenAI {model} — "
+                            f"{(_n + 1) * poll_interval / 60:.0f} min elapsed, "
+                            f"poll {_n + 1} of {max_attempts}, provider still "
+                            f"reports {getattr(response, 'status', None) or 'no status'}. "
+                            "The provider has not answered yet; a deep-research "
+                            "call routinely runs for tens of minutes. THIS IS A "
+                            "WAIT, NOT A STALL.",
+                            {
+                                "provider": "openai",
+                                "model": model,
+                                "attempt": _n + 1,
+                                "max": max_attempts,
+                                "wait_s": poll_interval,
+                            },
+                        ),
+                    )
 
             timeout_msg = (
                 f"Research timed out after {max_attempts * poll_interval / 60:.0f} minutes"
             )
             log.warning("OpenAI deep-research timed out (model=%s)", model)
+            if _run is not None:
+                run_events.emit_safe(
+                    _run,
+                    stage="deep_research",
+                    kind="agent_fail",
+                    build=lambda: (
+                        f"OpenAI research gave up after {max_attempts} polls "
+                        f"({max_attempts * poll_interval / 60:.0f} minutes) — the "
+                        "response never reached a terminal state. This is the "
+                        "poll budget running out, not a crash.",
+                        {
+                            "provider": "openai",
+                            "model": model,
+                            "attempt": max_attempts,
+                            "max": max_attempts,
+                        },
+                    ),
+                )
             return {"status": "timeout", "error_message": timeout_msg}
 
         except Exception as exc:
