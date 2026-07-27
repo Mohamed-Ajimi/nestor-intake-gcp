@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-26T13:45:55.866Z"
-last_activity: 2026-07-26 -- Phase 15.2 execution started
+stopped_at: Phase 15.2 plan 18 PARKED after Task 3 (deployed) — Tasks 4-6 wait for 2026-08-01
+last_updated: "2026-07-27T07:30:00.000Z"
+last_activity: 2026-07-27 -- Phase 15.2 deployed live; parked at V-01
 progress:
   total_phases: 10
   completed_phases: 7
   total_plans: 63
-  completed_plans: 44
-  percent: 70
+  completed_plans: 62
+  percent: 92
 ---
 
 # Project State
@@ -25,23 +25,35 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — EXECUTING
-Plan: 1 of 19
-Status: Executing Phase 15.2
-  tribunal images 20260724-214354, migration 0011 applied, suites green — see 15-UAT.md Deploy Record).
-  Browser UAT (SC1/2/3) operator-deferred to end-of-Phase-15.2 session.
-  UAT STATUS (2026-07-24): Gate fix (quick 260724-vyf, rev 00025-4w8) deployed — the "View
-  verification report" button + D15 feed now render on delivered/archived intakes (SURFACING proven).
-  But the recorded run-4cbb5311 exists ONLY as a pytest fixture (loader.load_recorded_run seeds a
-  TEST session), never seeded into the live DB, so the report body is empty on the old delivered run.
-  OPERATOR DECISION 2026-07-24: WAIT for a real live run (seed option declined) — populated SC1-SC4
-  browser walkthrough deferred to a live Tribunal run after the Anthropic monthly cap resets
-  2026-08-01. No live-DB seeding will be done. This aligns with the existing end-of-Phase-15.2 UAT deferral.
-Next: Phase 15.1 (Verification Gates) per order 15->15.1->15.2->19->20.
-Last activity: 2026-07-26 -- Phase 15.2 execution started
-  (research surfaces now visible on delivered/archived, not just in_research) — found in Phase-15 UAT;
-  DEPLOYED frontend rev nestor-frontend-00025-4w8 (image 20260724-231312)
-  (F-01/F-02 fixes previously deployed api 00039-l69, tribunal-api 00010-9qg, worker 00009-ck8)
+Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — PARKED (not complete)
+Plan: 18 of 19 — plan 18 paused after Task 3; Tasks 4-6 blocked until 2026-08-01
+Status: 18/19 plans have SUMMARYs. Plan 18 is the only one open. Phase verification has
+  deliberately NOT been run and the phase is NOT marked complete.
+
+DEPLOYED LIVE 2026-07-27 at shared SHA 20260727-085533 (full record: 15.2-UAT.md § Deploy Record):
+  tribunal-worker-20260727-085533-090959 · tribunal-api-20260727-085533-091105 ·
+  nestor-api-00041-9xp · nestor-frontend-00027-zcr — all 100% traffic.
+  Tribunal alembic 0012 -> 0013 applied, proven by the literal log line (not exit 0).
+  Audit-chain gate re-run POST-migration: 34 passed / 0 skipped (EU AI Act Art. 12, due 2026-08-02).
+  ANTHROPIC repointed Nestor_Claude -> Nestor_Claude2 on ALL THREE services and PINNED in the
+  committed deploy scripts (operator decision 2026-07-27); SERPAPI bound from the pre-existing
+  Nestor_SERP on both Tribunal services. Two missing IAM grants applied and read back.
+
+WHAT REMAINS (plan 18 Tasks 4-6), all gated on the Anthropic monthly cap reset 2026-08-01:
+  Task 4 V-01 — ONE live run on a fresh test intake vs the recorded 4cbb5311 baseline
+  Task 5 V-02 — the 16-item checklist + dated operator sign-off
+  Task 6 V-03 — a SEPARATE cleanup commit after sign-off (never claim_distiller, D-15)
+
+BEFORE V-01, verify by hand:
+  - that Nestor_Claude2 actually holds credit (untestable while capped; a wrong key fails the
+    ~$45 run only AFTER it has spent SerpApi/Gemini/OpenAI budget)
+  - the audit-blob redaction check — the SerpApi key rides in a QUERY PARAMETER, so an
+    unredacted body freezes a live credential into the audit bucket under 7-year retention.
+    Blocking, not advisory.
+  Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
+  live run, not piecemeal.
+Next: park until 2026-08-01, then plan 18 Tasks 4-6; remaining order 15.2 -> 19 -> 20.
+Last activity: 2026-07-27 -- Phase 15.2 deployed live; parked at V-01
 
 Progress: [██████████] 100%
 
