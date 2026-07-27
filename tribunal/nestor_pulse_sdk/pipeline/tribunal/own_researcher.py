@@ -47,8 +47,10 @@ WHAT THIS MODULE REUSES RATHER THAN REBUILDS. There is no second retry policy
 `serpapi.get_breaker`), no second `pause_turn` handler
 (`reliability.PauseContinuation`), no second fact vocabulary or enum clamp
 (`facts.py`), no second cite-marker stripper
-(`audited_llm_client.strip_unresolved_cite_markers`) and no second content
-serialiser (`skeptic.py`). If you are about to write one of those here, stop.
+(`audited_llm_client.strip_unresolved_cite_markers`), no second outbound
+personal-identifier scrub (`pii.scrub_pii`, applied at `_clamp_search_input`)
+and no second content serialiser (`skeptic.py`). If you are about to write one
+of those here, stop.
 
 HAND-OFF. Plan 15.2-13 registers `deep_research_audited` in
 `research_division._PROVIDER_RUNNERS` under the key "own" and is the plan that
@@ -75,6 +77,7 @@ from nestor_pulse_sdk.pipeline.tribunal.facts import (
     QUALITY_VALUES,
     _clamp,
 )
+from nestor_pulse_sdk.pipeline.tribunal.pii import scrub_pii
 from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     CircuitOpenError,
     PauseContinuation,
@@ -231,9 +234,30 @@ def _clamp_search_input(raw: Any, *, default_gl: str = "") -> dict:
     Pre-fill, bounds-check, clamp, never raise — the discipline
     `grouping._parse_cluster_lines` states. `_coerce_json` is the F-01 hardening:
     the model may return `input` itself as a JSON-encoded string.
+
+    D-I (15.2-23) — THE SECOND EGRESS HOP. `research_division.run_angles` scrubs
+    personal identifiers out of the angle before it is dispatched, but THIS
+    stream's searches are written by the MODEL from that angle, so it can still
+    put an identifier back by recalling one from its context. The same scrub
+    therefore applies here, and here only: `_clamp_search_input` is already this
+    stream's untrusted-model-input boundary, and adding a second scrub site
+    elsewhere in this file would be two controls to keep in step instead of one.
+
+    The scrub runs BEFORE `.strip()` and BEFORE truncation, the rule
+    `reliability.redact` states for the same reason: an identifier must not be
+    able to survive by being cut in half.
     """
     inp = _coerce_json(raw, dict) or {}
-    query = str(inp.get("q") or "").strip()[:_QUERY_MAX_CHARS]
+    raw_query, n_pii = scrub_pii(str(inp.get("q") or ""))
+    if n_pii:
+        # The count, never the value (T-15.2-232 / T-15.2-231).
+        log.warning(
+            "own_researcher: the model authored a search carrying %d personal "
+            "identifier(s) — removed before the query reached the search "
+            "provider. The removed value is deliberately not logged.",
+            n_pii,
+        )
+    query = raw_query.strip()[:_QUERY_MAX_CHARS]
     try:
         num = int(inp.get("num"))
     except (TypeError, ValueError):

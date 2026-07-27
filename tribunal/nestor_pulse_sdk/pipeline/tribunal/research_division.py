@@ -78,6 +78,11 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
 # R7 (plan 15.2-16): the ONE job-id guard. A recorded id read back out of an
 # `output` row passes through this before it can reach a provider URL.
 from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
+# D-I (plan 15.2-23): the ONE outbound personal-identifier scrub. Applied at the
+# dispatch choke point below, because that is where every provider call funnels
+# through a single line. `pii` is a pure, stdlib-only module, so importing it at
+# module scope adds no dependency to this module's import surface.
+from nestor_pulse_sdk.pipeline.tribunal.pii import scrub_pii
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -206,13 +211,28 @@ _D8_BLOCK_ENABLED = os.environ.get("NESTOR_TRIBUNAL_D8_FACT_LIST", "true").lower
 # MEASURED, not guessed, against the merged 15.2-04 implementation:
 #   len(build_fact_list_prompt_block())              = 2159
 #   len(build_fact_list_prompt_block(language="Dutch")) = 2399
-# The plan's provisional 2000 predated that module and is below both, so it is set
-# here to 2600 — above the measured worst case with headroom for a longer language
-# name, and still less than half the adapters' 5000-char audit ceiling. Exceeding
-# it only logs; the block is a correctness feature and is never dropped for size.
+# The plan's provisional 2000 predated that module and is below both, so it was set
+# to 2600 — above the measured worst case with headroom for a longer language
+# name, and still less than half the adapters' 5000-char audit ceiling.
+#
+# RE-DERIVED BY 15.2-23, because the thing it budgets for legitimately grew. The
+# gemini variant now prefixes `facts._FACT_LIST_LEAD_IN`, a FIXED four-line
+# restatement of the requirement, so the new worst case is
+# 2399 (Dutch) + len(_FACT_LIST_LEAD_IN), which is under 2800 by construction —
+# four lines of prose cannot reach 400 characters, and `test_fact_list_parser.py`
+# asserts the resulting total against this constant rather than trusting the
+# arithmetic. 3000 keeps the SAME relationship the 2600 had: comfortably above
+# the measured worst case, comfortably below the adapters' 5000-char ceiling.
+#
+# The cap was NOT raised to silence a failing assertion. It was raised so that a
+# DESIGNED, expected condition — a Dutch gemini angle — does not emit a WARNING
+# on every single angle, which is precisely the alarm fatigue D-12 rejects.
+# Exceeding it still only logs; the block is a correctness feature and is never
+# dropped for size, and `test_fact_list_parser.py` pins that behaviour directly
+# by driving the cap DOWN rather than by trusting this number.
 # The block is deterministic and reproducible from `build_fact_list_prompt_block()`,
 # so the audit record stays reconstructable either way.
-_D8_BLOCK_MAX_CHARS = 2600
+_D8_BLOCK_MAX_CHARS = 3000
 
 _PROVIDER_TIMEOUTS: dict[str, int] = {
     # The own-researcher is a BOUNDED tool-use loop (8 turns, 6 searches), not a
@@ -305,7 +325,15 @@ def _with_fact_list_block(query: str, provider: str, language: str) -> tuple[str
         from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
             build_fact_list_prompt_block,
         )
-        block = build_fact_list_prompt_block(language=language or "")
+        # D-M (15.2-23): `provider` selects PLACEMENT, not content. This function
+        # already runs AFTER provider resolution — the ordering 15.2-14 made
+        # load-bearing for the coverage retry — so the resolved provider is
+        # simply passed straight through. Gemini receives a short REQUIRED-OUTPUT
+        # lead-in ahead of the block it honoured on 0 of 8 reports; claude and
+        # openai, which honoured theirs, receive a byte-identical block.
+        block = build_fact_list_prompt_block(
+            language=language or "", provider=provider
+        )
         if len(block) > _D8_BLOCK_MAX_CHARS:
             log.warning(
                 "research_division: D8 fact-list block is %d chars, above the "
@@ -1187,6 +1215,37 @@ async def run_angles(
         runner = _PROVIDER_RUNNERS[provider]
         timeout = _PROVIDER_TIMEOUTS.get(provider, _DEFAULT_TIMEOUT_S)
         base_query = angle.get("query", "")
+        # D-I (15.2-23): THE EGRESS CONTROL. This is the single line every one of
+        # the four streams passes through on its way to a third-party processor,
+        # which is exactly why the scrub lives here and not at any of the many
+        # places text ENTERS the engine.
+        #
+        # THE ORDERING `scrub -> attach D8 block -> dispatch` IS DELIBERATE. The
+        # D8 block is engine-authored, constant and identical on every angle, so
+        # re-scanning it once per angle is pure waste — and, worse, its example
+        # strings would be counted as though a client had written them, turning
+        # the operator-facing count into a number that means nothing.
+        base_query, n_pii = scrub_pii(base_query)
+        if n_pii:
+            # THE COUNT AND THE ANGLE, NEVER THE VALUE (T-15.2-232). Formatting
+            # the removed identifier into this line would write it straight back
+            # into the log and into the audit blob — the two places the whole
+            # point of this control is to keep it out of.
+            log.warning(
+                "research_division.run_angles: angle %d (%s) carried %d personal "
+                "identifier(s) — they were removed before the query left the "
+                "platform. The removed value is deliberately not logged. This "
+                "means personal data reached the research dispatcher, which is a "
+                "defect upstream of here, not a clean outcome (D-I).",
+                i + 1, provider, n_pii,
+            )
+            # Recorded ADDITIVELY on the angle, for the operator-facing layer.
+            # `angle["query"]` is NOT rewritten: `checkpoints.angles_digest` is
+            # derived from exactly that field, so mutating it would change the
+            # live digest, discard the research checkpoint and re-buy every
+            # already-paid angle on a resumed run (T-15.2-123). A NEW key costs
+            # the digest nothing.
+            angle["pii_removed"] = n_pii
         # D8 (15.2-14): the fact-list block is attached AFTER the provider has been
         # resolved. That ordering is load-bearing, not stylistic — it is what makes
         # the coverage retry below (`force_provider=alt`) attach the block for the
