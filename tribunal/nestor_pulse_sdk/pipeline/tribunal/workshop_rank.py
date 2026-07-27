@@ -92,6 +92,7 @@ from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     with_retry,
 )
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import _content_to_serialisable
+from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stage_feed import truncate_task_prompt
 
 if TYPE_CHECKING:
@@ -1214,6 +1215,103 @@ async def _judge_round(
     return winners
 
 
+# ---------------------------------------------------------------------------
+# RUN-FEED EVENTS (plan 15.3-05) — the tournament, at ROUND granularity.
+#
+# ROUND GRANULARITY IS THE WHOLE DESIGN, not a convenience (T-15.3-42). A Swiss
+# tournament over sixty candidates is four rounds of thirty match-ups — hundreds of
+# pairwise judgements. One row per judgement would bury the run in its own
+# telemetry and push every earlier line past the emitter's queue ceiling; the run
+# page would then be least readable exactly when it is most expensive. So: ONE
+# header when the tournament starts, ONE row per ROUND, ONE closing line. The
+# per-round detail already exists in the stage-feed rows this module writes, none
+# of which is removed, moved or changed by this plan.
+#
+# EVERY SITE USES THE THUNK-TAKING ENTRY POINT: a caller's arguments are evaluated
+# before the callee is entered, so composing an event's text in the argument list
+# would put the failure at the call site — inside the ranking loop — where nothing
+# in the emitter could catch it (D-06).
+# ---------------------------------------------------------------------------
+
+#: The feed stage every event here belongs to. The same real `ENGINE_STAGES`
+#: ["tribunal"] key the rest of the workshop writes to.
+_EVENT_STAGE = "workshop"
+
+
+def _emit_tournament_dispatch(run_id: Any, *, candidates: int, rounds: int) -> None:
+    """The tournament header. EXACTLY ONE PER TOURNAMENT — never one per round.
+
+    This is the only `dispatch` in this module, and an acceptance gate pins that
+    count at one so a later edit cannot quietly move it inside the round loop.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="dispatch",
+        build=lambda: (
+            f"Dispatching tournament — {candidates} angle candidate(s) to rank "
+            f"over {rounds} ranking round(s)",
+            {"items": candidates},
+        ),
+    )
+
+
+def _emit_round_run(run_id: Any, *, round_no: int, rounds: int, matches: int) -> None:
+    """One row per ROUND. Called from the round loop, never from a pairing loop."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="agent_run",
+        build=lambda: (
+            f"Ranking round {round_no} of {rounds} — {matches} match-up(s)",
+            {"attempt": round_no, "max": rounds},
+        ),
+    )
+
+
+def _emit_tournament_done(
+    run_id: Any, *, candidates: int, rounds: int, winners: int
+) -> None:
+    """The tournament resolved, in the design of record's own shape.
+
+    `winners` is THIS STAGE'S CUT — the top `winner_count(...)` that reach the
+    evolve step. `enforce_scope_guard` can add more later for a client question
+    left uncovered; that is a different step and gets its own lines. Saying
+    "selected" here is a statement about what the tournament did, which is what the
+    operator is watching at this point in the run.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="agent_done",
+        build=lambda: (
+            f"{winners} winner(s) selected · {candidates} candidates → "
+            f"{rounds} rounds → {winners}",
+            {"items": winners},
+        ),
+    )
+
+
+def _emit_tournament_summary(
+    run_id: Any, *, matches: int, winners: int, cost: Any
+) -> None:
+    """The stats line closing the tournament block.
+
+    `text` is empty and the content lives entirely in `meta`: the design of record
+    composes a summary row from worked / actions / items / cost, so a duplicate
+    human sentence would simply not be rendered. Same choice plan 15.3-03 made.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="summary",
+        build=lambda: (
+            "",
+            {"actions": matches, "items": winners, "cost": str(cost)},
+        ),
+    )
+
+
 async def run_tournament(
     *,
     candidates: list[dict[str, Any]],
@@ -1292,6 +1390,10 @@ async def run_tournament(
         feed, [f"tournament round {r}/{rounds}" for r in range(1, rounds + 1)]
     )
 
+    # AFTER the disabled / too-small guards above, so a tournament that never runs
+    # does not announce itself.
+    _emit_tournament_dispatch(run_id, candidates=len(items), rounds=rounds)
+
     total_calls = 0
     total_cost = Decimal("0")
     total_unjudged = 0
@@ -1312,6 +1414,13 @@ async def run_tournament(
             _present(pair, round_no, match_index)
             for match_index, pair in enumerate(pairs)
         ]
+
+        # INSIDE THE ROUND LOOP, and nowhere deeper. The pairing comprehension
+        # above and the Elo application below both iterate match-ups; an emit in
+        # either would be one row per pairwise judgement.
+        _emit_round_run(
+            run_id, round_no=round_no, rounds=rounds, matches=len(pairs)
+        )
 
         async def _on_retry(attempt: int, maximum: int, wait_s: float, _label: str) -> None:
             await _feed_mark_retry(
@@ -1400,6 +1509,18 @@ async def run_tournament(
         total_matches,
         total_unjudged,
         total_calls,
+    )
+    _emit_tournament_done(
+        run_id,
+        candidates=len(items),
+        rounds=rounds,
+        winners=winner_count(len(items)),
+    )
+    _emit_tournament_summary(
+        run_id,
+        matches=total_matches,
+        winners=winner_count(len(items)),
+        cost=total_cost,
     )
     return ranked, _dedup_reasons(reasons)
 
