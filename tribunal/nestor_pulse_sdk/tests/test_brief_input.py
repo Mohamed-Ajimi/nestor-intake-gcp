@@ -33,10 +33,20 @@ Cloud Build gate (no Postgres and no provider key needed):
 """
 from __future__ import annotations
 
+import logging
+import uuid
+from typing import Any, Optional
+
 import pytest
 
+from nestor_pulse_sdk.pipeline.tribunal import brief_input
 from nestor_pulse_sdk.pipeline.tribunal.brief_input import parse_brief
 from nestor_pulse_sdk.pipeline.tribunal.intake import detect_explicit_questions
+from nestor_pulse_sdk.runs import run_events
+
+#: The emitter's own logger name, so a caplog assertion below names the exact
+#: source of a swallowed exception rather than matching anything in the tree.
+_EMITTER_LOG = "nestor_pulse_sdk.runs.run_events"
 
 
 # The client's eleven real research questions (forensics §3 + §4). None of these
@@ -383,3 +393,234 @@ def test_a_question_longer_than_the_bound_is_clamped_not_dropped():
     assert len(parsed.questions) == 1
     assert len(parsed.questions[0]) == 400
     assert parsed.questions[0].startswith("Welke retailers ")
+
+
+# ===========================================================================
+# SECTION 6 (plan 15.3-05) — THE FEED'S FIRST LINES.
+#
+# `parse_brief` now also opens the run page's feed. Two separate things have to be
+# proved and only one of them can be proved with a recorder:
+#
+#   * that CALLING the emitter is safe — a recorder that raises shows the parse
+#     does not notice;
+#   * that BUILDING the emitter's arguments is safe — which a recorder can NEVER
+#     show, because by the time any recorder runs the arguments already exist.
+#
+# The second is what `emit_safe`'s build() thunk exists for, and the tests marked
+# (a2) below are the only ones that touch it. They monkeypatch NOTHING on
+# `run_events` and drive genuinely malformed input through the real call site.
+# ===========================================================================
+
+
+class _EventRecorder:
+    """Duck-typed to `run_events.emit`. Records the rows; optionally raises.
+
+    A stand-in for the QUEUE APPEND only. Everything between a call site and this
+    object — the thunk, `emit_safe`'s try, the 2-tuple check — is production code
+    doing its real job.
+    """
+
+    def __init__(self, raises: Optional[BaseException] = None) -> None:
+        self.events: list[dict[str, Any]] = []
+        self._raises = raises
+
+    def __call__(self, run_id, *, stage, kind, text, meta=None):
+        self.events.append(
+            {"run_id": run_id, "stage": stage, "kind": kind, "text": text, "meta": meta}
+        )
+        if self._raises is not None:
+            raise self._raises
+
+    def of_kind(self, kind: str) -> list[dict[str, Any]]:
+        return [event for event in self.events if event["kind"] == kind]
+
+    @property
+    def texts(self) -> list[str]:
+        return [str(event["text"]) for event in self.events]
+
+
+_DECISION = "Duitsland lanceren in 2027, of eerst NL consolideren"
+
+
+# ---------------------------------------------------------------------------
+# (a) / (b) — what the opening line says, and what it says when there is nothing
+#             to say.
+# ---------------------------------------------------------------------------
+
+
+def test_a_stated_decision_reaches_the_feed_as_a_thinking_line(monkeypatch):
+    """(a) The feed opens with what the engine understood the brief to be."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    parse_brief(_live_brief(decision_block=_DECISION), run_id=uuid.uuid4())
+
+    thinking = recorder.of_kind("thinking")
+    assert len(thinking) == 1, recorder.events
+    assert _DECISION in thinking[0]["text"]
+    assert "11 client question(s)" in thinking[0]["text"]
+    assert thinking[0]["stage"] == "intake", "the intake block, not an invented stage"
+
+    # The block is a header, a parse step and a stats line — the design's shape.
+    assert len(recorder.of_kind("tool")) == 1
+    summary = recorder.of_kind("summary")
+    assert len(summary) == 1
+    assert summary[0]["meta"]["actions"] == 11, "questions found"
+    assert summary[0]["meta"]["items"] > 0, "context lines kept"
+
+
+def test_without_a_run_id_the_parser_emits_nothing_at_all(monkeypatch):
+    """The `run_id` default keeps every existing caller byte-for-byte unchanged."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    parse_brief(_live_brief(decision_block=_DECISION))
+
+    assert recorder.events == []
+
+
+def test_a_brief_with_no_stated_decision_says_so_in_words(monkeypatch):
+    """(b) The ABSENCE of a decision is information, not an empty half-sentence.
+
+    On run d6bb3aae the brief stated no decision, the tournament judge was handed
+    the project TITLE to rank materiality against, and report metadata out-ranked
+    the client's real questions (D-H). A blank after the comma would render that
+    as though nothing were missing.
+    """
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    parse_brief(_live_brief(), run_id=uuid.uuid4())
+
+    thinking = recorder.of_kind("thinking")[0]["text"]
+    assert brief_input._NO_DECISION_TEXT in thinking
+    assert not thinking.rstrip().endswith((",", "—", "-", ":")), (
+        f"the line trails off into an empty fragment: {thinking!r}"
+    )
+
+    # NON-VACUOUS: the same brief WITH a decision must not claim there is none.
+    other = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", other)
+    parse_brief(_live_brief(decision_block=_DECISION), run_id=uuid.uuid4())
+    assert brief_input._NO_DECISION_TEXT not in other.of_kind("thinking")[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# (c) — D-G through a NEW channel. T-15.3-40.
+# ---------------------------------------------------------------------------
+
+
+def test_no_stakeholder_line_reaches_an_event(monkeypatch):
+    """(c) The four offenders stay out of the feed, by construction.
+
+    `- **Primair contact klant:** MEEMZ (mohamed.ajimi@azentic.be)` is a §9 line of
+    the same context pack whose bullets became 21 workshop parents on d6bb3aae, and
+    it carried a real personal address to two paid third-party providers. A feed row
+    is a NEW egress for it, so D-G has to hold here too. `scrub_pii` at the emitter
+    is the second layer; not putting the line in the text is the first.
+    """
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    parse_brief(_live_brief(decision_block=_DECISION), run_id=uuid.uuid4())
+
+    joined = " || ".join(recorder.texts)
+    for forbidden in (
+        "mohamed.ajimi",
+        "@",
+        "MEEMZ",
+        "Primair contact",
+        "Decision-maker",
+        "NDA-status",
+        "Output-omvang",
+    ):
+        assert forbidden not in joined, (
+            f"{forbidden!r} reached a persisted, operator-visible event row"
+        )
+
+    # NON-VACUOUS: an implementation that emitted NOTHING would pass every
+    # assertion above. The decision is what these rows are FOR.
+    assert _DECISION in joined
+    assert len(recorder.events) == 3
+
+
+# ---------------------------------------------------------------------------
+# (a2) — THE ARGUMENT-CONSTRUCTION PROOF. Nothing on `run_events` is patched.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "brief",
+    [
+        "",
+        None,
+        "   \n\n\t  \n",
+        "Onderzoeksvragen:",
+        "[DECISION]",
+        "[DECISION]\n[END DECISION]",
+        "\x00\x01 binary-ish ﻿ bytes \n Onderzoeksvragen:\n1. Een vraag over de markt",
+        "Onderzoeksvragen:\r\n1. Een vraag met CRLF regeleinden over de markt\r\n",
+    ],
+)
+def test_events_never_change_what_parse_brief_returns(brief):
+    """(a2) The REAL emitter, on the shapes most likely to break a line's text.
+
+    `ParsedBrief` is frozen, so this is a field-by-field equality: the parse with a
+    run id must be indistinguishable from the parse without one.
+    """
+    assert parse_brief(brief, run_id=uuid.uuid4()) == parse_brief(brief)
+
+
+def test_the_events_really_are_emitted_so_the_equality_above_is_not_vacuous(caplog):
+    """A parse that never reached the emitter would pass every (a2) assertion.
+
+    The run is never opened here, so `emit` DROPS its rows and says so once — which
+    is exactly the proof that the call was made rather than skipped.
+    """
+    with caplog.at_level(logging.WARNING, logger=_EMITTER_LOG):
+        parse_brief(_live_brief(), run_id=uuid.uuid4())
+
+    assert "was never opened" in caplog.text
+
+
+def test_a_parse_result_with_none_of_the_keys_the_lines_read_costs_only_the_lines(
+    caplog,
+):
+    """(a2) THE SHARPEST CASE IN THIS FILE.
+
+    `parse_brief` is DOCUMENTED as never raising, and `pipeline.py` relies on that
+    in writing: it sits OUTSIDE the checkpoint branch because it is pure, free and
+    safe. An event whose text was composed in the argument list would revoke that
+    guarantee for every brief that fails to carry what the line reads — and a pure
+    function that starts raising outside a checkpoint branch is a run that dies
+    before it starts.
+
+    Nothing here is monkeypatched. The object handed in has NONE of the attributes
+    the three lines read.
+    """
+    naked = object()
+
+    # NEGATIVE CONTROL FIRST. Without it this test would pass just as happily
+    # against an implementation whose thunks never touched the result at all.
+    with pytest.raises(AttributeError):
+        len(naked.questions)  # type: ignore[attr-defined]
+
+    with caplog.at_level(logging.WARNING, logger=_EMITTER_LOG):
+        assert brief_input._emit_parse_events(uuid.uuid4(), naked) is None
+
+    assert caplog.text.count("AttributeError") >= 3, (
+        "all three lines must have REACHED the fragile construction and been "
+        f"swallowed by the emitter; got: {caplog.text}"
+    )
+
+
+def test_the_parser_still_works_after_an_event_could_not_be_built():
+    """A run whose feed lines fail is DEGRADED. It is not a failed run."""
+    run_id = uuid.uuid4()
+
+    brief_input._emit_parse_events(run_id, object())
+
+    parsed = parse_brief(_live_brief(decision_block=_DECISION), run_id=run_id)
+    assert parsed.questions == _CLIENT_QUESTIONS
+    assert parsed.decision == _DECISION
+    assert parsed.source == "structured"

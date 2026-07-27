@@ -1399,3 +1399,205 @@ async def test_critique_writes_feed_rows_and_does_not_close_the_stage(monkeypatc
     await feed.flush()
     assert handle >= 0
     assert "tournament round 1" in [i["name"] for i in recorder.last_items]
+
+
+# ===========================================================================
+# SECTION 5 (plan 15.3-05) — ORIENTATION'S BRIEF-VS-WORLD CONFLICTS REACH A HUMAN.
+#
+# WHY THIS SECTION IS WORTH MORE THAN ITS SIZE. `brief_conflicts` — "the brief
+# assumes X, the world says Y" — is the ONE channel this engine has for an angle
+# the client did not think of. It has been produced, parsed, de-duplicated and
+# carried as pipeline data since 15.2-10, into a report section that no completed
+# run has ever rendered. Nobody has ever read one. An `agent_done` line naming the
+# count and what conflicted is the cheapest place they become visible.
+#
+# Like everything above, this section MAKES ZERO LLM CALLS, OPENS NO DATABASE,
+# USES NO MOCKING LIBRARY AND NEEDS NO API KEY.
+# ===========================================================================
+
+import logging  # noqa: E402 — appended section, as with the imports above
+
+from nestor_pulse_sdk.runs import run_events  # noqa: E402
+
+#: The emitter's own logger, so a caplog assertion names the exact source.
+_EMITTER_LOG = "nestor_pulse_sdk.runs.run_events"
+
+
+class _EventRecorder:
+    """Duck-typed to `run_events.emit`. Records the rows; optionally raises."""
+
+    def __init__(self, raises: BaseException | None = None) -> None:
+        self.events: list[dict[str, Any]] = []
+        self._raises = raises
+
+    def __call__(self, run_id, *, stage, kind, text, meta=None):
+        self.events.append(
+            {"run_id": run_id, "stage": stage, "kind": kind, "text": text, "meta": meta}
+        )
+        if self._raises is not None:
+            raise self._raises
+
+    def of_kind(self, kind: str) -> list[dict[str, Any]]:
+        return [event for event in self.events if event["kind"] == kind]
+
+
+async def test_orientation_conflicts_reach_the_feed(monkeypatch):
+    """(g) A fixture producing N conflicts emits an `agent_done` naming N."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+    conflicts = [
+        {
+            "assumption": f"the brief assumes proposition {i}",
+            "world_says": f"the Q1 2026 filings say otherwise about {i}",
+            "source_url": "https://example.org/filings",
+        }
+        for i in range(3)
+    ]
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=[_orientation_response(["an orientation fact"], conflicts)]
+    )
+
+    await _orient(audited, [_question("Q1", "Who leads fuel retail in Belgium?")])
+
+    done = recorder.of_kind("agent_done")
+    assert len(done) == 1, recorder.events
+    assert done[0]["text"].startswith("3 conflict(s) found — ")
+    assert "the brief assumes proposition 0" in done[0]["text"]
+    assert done[0]["meta"]["items"] == 3
+    assert done[0]["stage"] == "workshop"
+
+    # The block around it: one header and one live row, never one per question.
+    assert len(recorder.of_kind("dispatch")) == 1
+    assert len(recorder.of_kind("agent_run")) == 1
+
+
+async def test_orientation_with_no_conflicts_says_that_rather_than_nothing(monkeypatch):
+    """"No conflicts" is a finding. A missing line reads as a missing step."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=[_orientation_response(["an orientation fact"], [])]
+    )
+
+    await _orient(audited, [_question("Q1")])
+
+    done = recorder.of_kind("agent_done")
+    assert len(done) == 1
+    assert "the world agrees with the brief" in done[0]["text"]
+    assert done[0]["meta"]["items"] == 0
+
+
+async def test_the_orientation_rows_are_bounded_by_the_step_not_the_questions(
+    monkeypatch,
+):
+    """T-15.3-42: eight questions, still three rows."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=[
+            _orientation_response(["a fact"], [dict(_DEFAULT_CONFLICT)])
+            for _ in range(8)
+        ]
+    )
+
+    await _orient(audited, [_question(f"Q{i}") for i in range(8)])
+
+    assert len(recorder.events) == 3, [event["kind"] for event in recorder.events]
+
+
+async def test_a_raising_recorder_leaves_the_orientation_results_identical(monkeypatch):
+    """Calling the emitter is safe — the half a recorder CAN prove."""
+
+    def _audited() -> ScriptedWorkshopAudited:
+        return ScriptedWorkshopAudited(
+            anthropic_script=[
+                _orientation_response(["a fact"], [dict(_DEFAULT_CONFLICT)])
+            ]
+        )
+
+    quiet = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", quiet)
+    baseline = await _orient(_audited(), [_question("Q1")])
+
+    boom = _EventRecorder(raises=RuntimeError("the feed writer refused this row"))
+    monkeypatch.setattr(run_events, "emit", boom)
+    degraded = await _orient(_audited(), [_question("Q1")])
+
+    assert boom.events, "the raising recorder was never called — this proves nothing"
+    assert degraded == baseline
+
+
+async def test_an_orientation_result_with_no_conflict_list_returns_the_same_value(
+    caplog,
+):
+    """(g2) THE ARGUMENT-CONSTRUCTION PROOF. Nothing on `run_events` is patched.
+
+    A raising recorder cannot reach this: by the time it runs, the arguments have
+    already been built. What can still fail is BUILDING them out of a model-authored
+    result, and the `assumption` read is a deliberate subscript — a placeholder
+    would print a conflict the run never established (T-15.3-23).
+    """
+    audited = ScriptedWorkshopAudited(
+        anthropic_script=[_orientation_response(["an orientation fact"], None)]
+    )
+
+    results = await _orient(audited, [_question("Q1")])
+
+    assert len(results) == 1
+    assert results[0]["ok"] is True
+    assert results[0]["brief_conflicts"] == []
+    assert results[0]["findings"] == ["an orientation fact"]
+
+    # A conflict entry with NO `assumption` at all — the shape a restored or
+    # degraded result can carry. NEGATIVE CONTROL FIRST: the composition genuinely
+    # raises when it is performed outside the emitter.
+    malformed = [{"brief_conflicts": [{"world_says": "no assumption key here"}]}]
+    with pytest.raises(KeyError):
+        workshop._orientation_done_event(malformed)
+
+    with caplog.at_level(logging.WARNING, logger=_EMITTER_LOG):
+        assert workshop._emit_orientation_done(uuid.uuid4(), malformed) is None
+    assert "KeyError" in caplog.text
+
+    # And a result object that is not even iterable costs the line, not the run.
+    assert workshop._emit_orientation_done(uuid.uuid4(), object()) is None
+
+
+def test_the_candidate_line_survives_a_malformed_population(caplog):
+    """(g2, second half) The other composition in `workshop.py`, driven degraded.
+
+    Nothing on `run_events` is patched here either. The parent tally walks the
+    candidate list, so it is computed INSIDE the thunk — passing a finished number
+    would move that walk to the call site, where a malformed entry would raise in
+    the middle of the workshop instead of costing one feed row.
+    """
+    # NEGATIVE CONTROL: the composition raises outside the emitter.
+    with pytest.raises(AttributeError):
+        workshop._candidates_done_event(["not a dict"])
+
+    with caplog.at_level(logging.WARNING, logger=_EMITTER_LOG):
+        assert workshop._emit_candidates_done(uuid.uuid4(), ["not a dict"]) is None
+    assert "AttributeError" in caplog.text
+
+
+async def test_stage_a_is_unchanged_end_to_end_with_the_real_emitter():
+    """The whole funnel, with the REAL `run_events`, still returns its contract."""
+    result = await _stage_a(
+        ScriptedWorkshopAudited(
+            anthropic_script=_stage_script(
+                {
+                    _numbered_label(1): [
+                        _candidate_line(
+                            "a sharper take on segment 1", _numbered_label(1)
+                        )
+                    ]
+                }
+            )
+        ),
+        _numbered_brief(1),
+    )
+
+    assert result["counts"]["questions"] == 1
+    assert result["candidates"], result
+    assert result["brief_conflicts"], "the D4 flags still reach the caller as DATA"
+    assert result["stage_a_fallback"] is False
