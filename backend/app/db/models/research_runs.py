@@ -31,6 +31,10 @@ Phase 17 (RUN-03) adds three NULLABLE chain-guard / bundle columns via migration
 completion path (Plan 02) and read by the SSE dict + download/re-verify routes
 (Plan 03). They inherit ``research_runs``' existing FORCE-RLS row policy; 0012
 adds NO new policy, grant, or index.
+
+Phase 15.3 (plan 15.3-06) adds ONE more NULLABLE column via migration 0013 —
+``event_seq``, the run-event feed CURSOR — on the same additive terms: written
+by the poll driver's mirror, read by the SSE dict, no policy/grant/index change.
 """
 
 from __future__ import annotations
@@ -39,7 +43,17 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -103,6 +117,19 @@ class ResearchRun(Base):
     #: The GCS object key of the materialized raw-output zip (D-04/D-05); NULL
     #: until the completion path builds and uploads the bundle.
     bundle_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ---- Phase 15.3 run-event FEED CURSOR (plan 15.3-06, migration 0013).
+    #: The run's feed POSITION: the highest ``run_event.seq`` the engine has
+    #: written for this run. Source of truth is ``RunMetrics.event_seq`` (plan
+    #: 15.3-02, ``MAX(run_event.seq)``); the poll driver mirrors it here and
+    #: ``read_latest_research_run_dict`` re-emits it on the existing SSE frame,
+    #: so the page can fetch ONLY the delta past its own cursor (D-05).
+    #:
+    #: A POSITION, never a payload — the frame never carries events themselves,
+    #: and this is NOT a completion signal: ``completed_at`` says whether the run
+    #: ended, this says how far its feed got. A ``parked`` run keeps advancing it
+    #: (``run_task.finalize_parked``). NULL means "no events yet" — never 0,
+    #: which would claim a stream positioned at its start.
+    event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
