@@ -138,8 +138,13 @@ function toStageRows(run: ResearchRun | null): StageRow[] {
  * terminal → `stream.close()`, `onFallback` → poll). There is no dedicated poll read for
  * research yet, so the fallback re-opens the stream once after backoff; the terminal event
  * closes the connection deterministically (WR-02 discipline).
+ *
+ * EXPORTED for the dedicated run page (`routes/admin.pulse.runs.$runId.tsx`, 15.3-08), which
+ * needs exactly this — one connection that is the single authority on status, stage, cost,
+ * `started_at` and the feed cursor. A second copy of these mechanics on the run page would be
+ * a second opinion about when a run ended; there must be only one.
  */
-function useActiveResearchRun(intakeId: string | undefined): {
+export function useActiveResearchRun(intakeId: string | undefined): {
   run: ResearchRun | null;
 } {
   const [run, setRun] = useState<ResearchRun | null>(null);

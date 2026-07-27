@@ -531,6 +531,30 @@
     "unverifiedTitle": "Audit chain not yet verified",
     "unverifiedBody": "This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.",
     "verifyChain": "Verify chain",
+    "runPage": {
+      "notFound": "This run is not available.",
+      "backToIntakes": "Back to intakes",
+      "breadcrumbProduct": "Pulse",
+      "breadcrumbIntakes": "Intakes",
+      "breadcrumbRun": "Run",
+      "title": "{{client}} — deep research run",
+      "titleFallback": "Deep research run",
+      "metaRun": "run {{id}}",
+      "metaEngine": "engine {{engine}}",
+      "metaEvents": "{{count}} events",
+      "loadingEvents": "Loading run history…",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "completed": "Completed",
+        "completedDegraded": "Completed — degraded",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "parked": "Paused",
+        "needsInput": "Waiting for input",
+        "unknown": "Unknown status"
+      }
+    },
     "feed": {
       "title": "Activity",
       "scrollToLatest": "Scroll to latest",

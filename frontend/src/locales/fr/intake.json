@@ -531,6 +531,30 @@
     "unverifiedTitle": "Chaîne d'audit pas encore vérifiée",
     "unverifiedBody": "Cette exécution est terminée mais la chaîne de hachage d'audit n'a pas encore été contrôlée. Vérifiez la chaîne pour déverrouiller la sortie brute.",
     "verifyChain": "Vérifier la chaîne",
+    "runPage": {
+      "notFound": "Cette exécution n'est pas disponible.",
+      "backToIntakes": "Retour aux intakes",
+      "breadcrumbProduct": "Pulse",
+      "breadcrumbIntakes": "Intakes",
+      "breadcrumbRun": "Exécution",
+      "title": "{{client}} — recherche approfondie",
+      "titleFallback": "Recherche approfondie",
+      "metaRun": "exécution {{id}}",
+      "metaEngine": "moteur {{engine}}",
+      "metaEvents": "{{count}} événements",
+      "loadingEvents": "Chargement de l'historique…",
+      "status": {
+        "queued": "En file d'attente",
+        "running": "En cours",
+        "completed": "Terminée",
+        "completedDegraded": "Terminée — dégradée",
+        "failed": "Échouée",
+        "cancelled": "Annulée",
+        "parked": "En pause",
+        "needsInput": "En attente d'une entrée",
+        "unknown": "Statut inconnu"
+      }
+    },
     "feed": {
       "title": "Activité",
       "scrollToLatest": "Aller au plus récent",
