@@ -77,6 +77,12 @@ from typing import Any, Optional, TYPE_CHECKING
 # `detect_explicit_questions` is a DIFFERENT thing and survives in use: it is
 # pure, deterministic Python, not the LLM call D-03 retires.
 from nestor_pulse_sdk.pipeline.tribunal.intake import detect_explicit_questions
+# D-G (plan 15.2-21): the pure, never-raising split of a seam brief into the
+# client's QUESTIONS, the client's DECISION and everything else as CONTEXT. It is
+# what stops `detect_explicit_questions` from ever being handed a brief that
+# already has a question block — see this module's Stage 1 and the parser's own
+# docstring for the incident that made it necessary.
+from nestor_pulse_sdk.pipeline.tribunal.brief_input import parse_brief
 from nestor_pulse_sdk.pipeline.tribunal.workshop_rank import run_question_workshop
 from nestor_pulse_sdk.pipeline.tribunal.research_division import (
     run_angles,
@@ -1056,6 +1062,28 @@ class TribunalPipeline:
         # `workshop` stage key, declared by 15.2-03 — this plan declares none.
         await set_stage(run_id, tenant_id, "intake")
 
+        # D-G (plan 15.2-21) — READ THE BRIEF'S STRUCTURE BEFORE ANYTHING SPENDS
+        # MONEY ON IT. `parse_brief` is pure, free and never raises, so it sits
+        # OUTSIDE the checkpoint branch below: the restored path still skips the
+        # whole paid workshop, but `parsed` is defined on both paths because the
+        # decision resolution, the degradation sentence and the operator's division
+        # header all read it after the workshop returns.
+        parsed = parse_brief(brief)
+
+        # The tournament judge is asked "which of these two matters more for THIS
+        # client's decision". Precedence at CALL time is step 1 of the resolution in
+        # `(c)` below — the client's own stated decision — because the workshop's
+        # restatement of it does not exist yet. When the brief states no decision the
+        # judge is handed the project's CONTEXT rather than the brief's opening line:
+        # on run d6bb3aae that opening line was `Deep research for moetest.`, a
+        # project TITLE, and ranking materiality against a title is how report
+        # metadata out-ranked the client's real questions (D-H). Bounded exactly as
+        # before, and never empty — an empty decision context silently weakens every
+        # judgement in the run.
+        _workshop_decision_context = (
+            parsed.decision or parsed.context or (brief or "")
+        ).strip()[:_GATE_DECISION_CONTEXT_CHARS]
+
         # R3 (plan 15.2-16): the question workshop is a MULTI-CALL PAID STAGE —
         # orientation, candidates, clustering, critique, a Swiss tournament and
         # an evolve pass. When an earlier attempt of THIS run already completed
@@ -1093,16 +1121,40 @@ class TribunalPipeline:
                 run_id=run_id, tenant_id=tenant_id, stage_key="workshop"
             ) as workshop_feed:
                 workshop_result = await run_question_workshop(
+                    # `brief=` stays the FULL brief, deliberately. The orientation
+                    # and candidate steps are SUPPOSED to read the client's context
+                    # pack: the defect was never that the workshop saw the pack, it
+                    # was that the pack was treated as a list of questions.
                     brief=brief,
-                    # The workshop's own `normalise_questions` resolves the client
-                    # questions from the brief (via the SAME `detect_explicit_questions`
-                    # this module imports), so no second question list is passed in.
-                    questions=None,
-                    # The tournament judge is asked "which of these two matters more
-                    # for THIS client's decision" — with an empty decision context it
-                    # has no decision to judge against, so the brief's opening is
-                    # handed to it, bounded the same way the gates bound theirs.
-                    decision_context=(brief or "").strip()[:_GATE_DECISION_CONTEXT_CHARS],
+                    # D-G, THE HEADLINE FIX OF THIS PHASE. The workshop's parents are
+                    # the client's decomposed, validated questions and nothing else.
+                    #
+                    # Passing `None` for `questions` used to mean "let
+                    # `normalise_questions` work it out from the brief", which in
+                    # practice meant `detect_explicit_questions`,
+                    # whose enumeration regex accepts `- ` bullets — and the context
+                    # pack is built almost entirely of `- **Bold:** value` bullets. On
+                    # run d6bb3aae that produced 11 real questions + 21 administrative
+                    # bullets = 32 parents, including six paid research sub-questions
+                    # generated for "Output size (hard constraint): Standard (15-25
+                    # pages)". The client's flagship questions were never dispatched.
+                    #
+                    # `None` on the UNSTRUCTURED path is deliberate and is NOT the old
+                    # defect returning: a free-prose brief has no question block, and
+                    # the detector (then the whole-brief case) is the correct, already
+                    # proven behaviour for exactly that shape. A structured brief whose
+                    # question block yielded nothing takes the same route, so a parse
+                    # miss degrades to the old behaviour rather than starting a run
+                    # with no questions at all.
+                    questions=(
+                        [
+                            {"label": q, "text": q, "source": "client"}
+                            for q in parsed.questions
+                        ]
+                        if (parsed.source == "structured" and parsed.questions)
+                        else None
+                    ),
+                    decision_context=_workshop_decision_context,
                     audited=audited,
                     run_id=run_id,
                     tenant_id=tenant_id,
@@ -1151,19 +1203,80 @@ class TribunalPipeline:
                 "tribunal_pipeline: the brief carries no enumerated question — "
                 "researching it as ONE question titled %r", client_questions[0],
             )
+        # D-H — THE DECISION, RESOLVED ONCE, WITH THE ORDER DELIBERATELY CHANGED.
+        # Until now the workshop's own `deep_research_prompt` was preferred and the
+        # brief's opening line was the floor. The precedence is now:
+        #   1. the client's STATED decision, carried across the seam in the brief's
+        #      `[DECISION]` block (written by the intake backend from the context
+        #      pack's "Wat moet beslist worden" line, then the intake's own decision
+        #      answer, then the decomposition summary);
+        #   2. the workshop's own research prompt, when it returned one;
+        #   3. nothing — which is now a NAMED degradation, never a substitution.
+        # The client's own words outrank a model-authored restatement of them because
+        # the tournament is ranking sub-questions by materiality TO THE CLIENT'S
+        # DECISION, and on this brief the client wrote that decision down. A
+        # restatement can only lose fidelity to it.
+        #
+        # SAY THE UNCOMFORTABLE PART ABOUT STEP 2. `run_question_workshop` does not
+        # AUTHOR a research prompt — it ECHOES the `deep_research_prompt` it was
+        # handed, and this call site has never handed it one. So step 2 is empty on
+        # every run from this pipeline, and the log line "the workshop returned no
+        # research prompt" that fired on d6bb3aae was not bad luck: it is the only
+        # thing that can happen here. Step 2 is kept because the parameter is part of
+        # the workshop's published return shape and another caller may populate it,
+        # but nothing in this engine should be read as depending on it.
+        if parsed.decision:
+            if deep_research_prompt and deep_research_prompt != parsed.decision:
+                log.info(
+                    "tribunal_pipeline: the brief carries the client's stated "
+                    "decision, so materiality is judged against that rather than "
+                    "against the workshop's own restatement of it"
+                )
+            deep_research_prompt = parsed.decision
+        _no_stated_decision = False
         if not deep_research_prompt:
-            # This feeds `_gate_decision_context`, and the gates' load-bearing
-            # test is judged AGAINST A DECISION. An empty context silently
-            # weakens every gate decision in the run, so it is never left empty.
-            first_line = next(
-                (ln.strip() for ln in (brief or "").splitlines() if ln.strip()), ""
-            )
-            deep_research_prompt = (first_line or " ".join((brief or "").split()))[:400]
+            # A value MUST keep flowing: this feeds `_gate_decision_context`, and the
+            # gates' load-bearing test is judged AGAINST A DECISION — an empty context
+            # silently weakens every gate decision in the run. What changes is WHAT
+            # the value is, and that the loss is now reported instead of swallowed.
+            # The old floor was the brief's opening line; on run d6bb3aae that line
+            # read `Deep research for moetest.`, a project TITLE, and every tournament
+            # prompt in the run said "The client's decision this research has to
+            # serve: Deep research for moetest." Nothing anywhere said so.
+            deep_research_prompt = (
+                parsed.context or " ".join((brief or "").split())
+            ).strip()[:_GATE_DECISION_CONTEXT_CHARS]
             log.warning(
-                "tribunal_pipeline: the workshop returned no research prompt — "
-                "using the brief's opening line so the gates keep a decision to "
-                "judge materiality against"
+                "tribunal_pipeline: neither the brief nor the workshop stated the "
+                "client's decision — the sub-questions are ranked against the "
+                "project's context instead of against a decision, which is a "
+                "materially weaker ranking"
             )
+            # WHO GETS DEMOTED, AND WHY NOT EVERYONE. The warning above fires on
+            # every decisionless run, because that is a fact the operator should be
+            # able to find in the logs. The run-DEMOTING sentence below is narrower:
+            # it fires only for a STRUCTURED brief — one that came through the intake
+            # seam with a question block, and which therefore also carries a
+            # `[DECISION]` block whenever a decision could be resolved at all. A
+            # structured brief with no decision is a real gap in the client's own
+            # material and is worth reporting.
+            #
+            # An UNSTRUCTURED brief is free prose from a non-seam caller: it has no
+            # decision block by construction and never could have, so demoting it
+            # would mark every such run degraded forever — the alarm fatigue D-12
+            # explicitly rejects, and a marker that is always on is one the operator
+            # learns to ignore.
+            #
+            # THE CHECK THAT MATTERS: run d6bb3aae's brief WAS structured
+            # (`Onderzoeksvragen:` + 11 enumerated questions, no decision), so under
+            # this narrower rule D-H would still have been reported on the run it was
+            # written for. The narrowing does not weaken the fix.
+            #
+            # The SENTENCE itself is deferred to just below, deliberately: the
+            # `workshop_fallback` branch there is guarded on `not
+            # degradation_reasons`, so noting this one first would silently suppress
+            # 15.2-11's own fallback wording. Order of reasons is not cosmetic here.
+            _no_stated_decision = parsed.source == "structured"
 
         mission_brief = build_mission_brief_from_winners(
             winners=winners,
@@ -1183,6 +1296,19 @@ class TribunalPipeline:
                 "The question workshop produced no usable questions of its own, so "
                 "this run researched the client-validated questions verbatim and "
                 "the added-depth half of the redesign did not run."
+            )
+        # D-H, said out loud at last. On run d6bb3aae the decision statement fell
+        # back to `Deep research for moetest.` and NOTHING reported it — the report,
+        # the operator mail and the verification record all showed a clean run.
+        if _no_stated_decision:
+            _note_degradation(
+                "This run had no stated client decision to rank against: the brief "
+                "carried no decision block and the question workshop produced none, "
+                "so the sub-questions were ranked by how much they matter to the "
+                "project's context rather than to a decision. The ranking is "
+                "therefore weaker than usual — the questions themselves are the "
+                "client's, but the order in which they were researched is less "
+                "trustworthy than normal."
             )
         for note in (workshop_result.get("workshop_notes") or [])[:4]:
             log.info("tribunal_pipeline: workshop note — %s", note)
@@ -1249,6 +1375,16 @@ class TribunalPipeline:
         _corroborated = len({
             a.get("corroboration_key") for a in angles if a.get("corroboration")
         } - {None, ""})
+        # SAY WHERE THE CLIENT QUESTIONS CAME FROM. On run d6bb3aae this header read
+        # "32 client question(s) → …" and nothing on the operator's screen hinted
+        # that 21 of those 32 were the intake's own administrative fields. One plain
+        # clause, in the same register as the rest of the line, puts the split that
+        # actually matters in front of the operator.
+        _question_source_clause = (
+            ", taken from the client's validated question list"
+            if parsed.source == "structured"
+            else ", detected from a free-prose brief (no question list was supplied)"
+        )
         _division_items = [{
             "name": (
                 f"{len(client_questions)} client question(s) → "
@@ -1256,6 +1392,7 @@ class TribunalPipeline:
                 f"{len(angles)} research angle(s)"
                 + (f", {_corroborated} of them checked by several streams"
                    if _corroborated else "")
+                + _question_source_clause
             ),
             "status": "done",
         }]
