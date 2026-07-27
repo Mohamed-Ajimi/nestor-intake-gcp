@@ -126,7 +126,7 @@ trail intact.
 **Goal:** A deep-research run has its own page — openable, closeable, bookmarkable and reopenable at `/admin/pulse/runs/:runId` — showing an ordered, durable feed of what the engine actually did at every step, with an elapsed clock that does not restart and every one of the eight run statuses handled honestly. The engine emits the events that page needs (dispatch, tool, search, reasoning, stream config, agent start/finish/retry/fail, per-stage summaries) into a new append-only `run_event` table, best-effort and PII-scrubbed, without changing anything the pipeline decides, dispatches or produces.
 **Requirements**: none assigned — this phase carries no REQUIREMENTS.md id. Its source of record is `15.3-CONTEXT.md` (D-01…D-12) and the operator's design of record `docs/design/prototypes/ResearchRunImproved.tsx`.
 **Depends on:** Phase 15 (feed contract), Phase 15.2 gap closure (`started_at` across the seam, `scrub_pii`, the stage-log choke point). Ships in the SAME deploy batch as the 15.2 gap fixes (D-03).
-**Plans:** 7/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 - [x] 15.3-01-PLAN.md (W1) — `run_event` table (tribunal alembic `0015`) + `RunEvent` model + the never-raising, PII-scrubbing, batched `runs/run_events.py` emitter; engine gate 27 → 28
@@ -136,7 +136,7 @@ Plans:
 - [x] 15.3-05-PLAN.md (W4) — brief-parse events + orientation, candidate generation and tournament rounds at round granularity
 - [x] 15.3-06-PLAN.md (W3) — intake alembic `0013` (`research_runs.event_seq`) + the cursor mirrored onto the existing SSE frame (D-05: one connection, one terminal authority)
 - [x] 15.3-07-PLAN.md (W3) — `get_run_events` seam verb + the superadmin events proxy + the run→intake `locate` verb, all existence-hidden 404
-- [ ] 15.3-08-PLAN.md (W5) — THE PAGE: frontend transport (`getRunEvents`/`locateResearchRun`, backfill-then-delta `useRunEvents`), the shared `runClock` (D-09), the flat route `admin.pulse.runs.$runId.tsx` (D-08), the "Open run" entry point, and `RunFeed` — the twelve-kind renderer with derived grouping, auto-collapse, the live badge and one shared cursor, memoised for thousand-event runs
+- [x] 15.3-08-PLAN.md (W5) — THE PAGE: frontend transport (`getRunEvents`/`locateResearchRun`, backfill-then-delta `useRunEvents`), the shared `runClock` (D-09), the flat route `admin.pulse.runs.$runId.tsx` (D-08), the "Open run" entry point, and `RunFeed` — the twelve-kind renderer with derived grouping, auto-collapse, the live badge and one shared cursor, memoised for thousand-event runs
 - [ ] 15.3-09-PLAN.md (W6) — THE STATES, THE AFFORDANCES AND THE DEPLOY: all eight statuses (D-11, degraded shares the success branch, parked has its own, the feed is a sibling so failed/cancelled keep their evidence); the four carried-over D-10 affordances (audit drill-down, `chain_status` download lock + re-verify, resume-on-parked, Stop confirmation); DEPLOY-RUNBOOK § Step 15.2.k extended to the combined deploy (both alembic lines, corrected gate count) + the what-shipped-together attribution record D-03 requires; two blocking operator checkpoints
 
 ### Phase 15.1: Research Engine Redesign — Verification Gates (INSERTED 2026-07-24)
