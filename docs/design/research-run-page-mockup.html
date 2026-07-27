@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nestor — Research run page (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#EDECE5; --paper2:#E4E3DC; --paperLight:#F5F4ED; --ink:#000000;
+  --pink:#FF2D87; --lime:#DFF940; --olive:#7A8B00;
+  --amber:#D97706; --amber-dark:#B45309; --amber-50:#FFFBEB;
+  --red:#DC2626; --red-700:#B91C1C; --red-50:#FEF2F2;
+  --grey:#9CA3AF; --grey-700:#6B7280; --emerald:#059669;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",Inter,ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5}
+button{font:inherit;cursor:pointer}
+
+/* ---------- mockup banner (not part of the product) ---------- */
+.mockBanner{background:var(--ink);color:var(--paper);padding:10px 22px;font-family:var(--mono);
+  font-size:11px;text-transform:uppercase;letter-spacing:.12em;display:flex;flex-wrap:wrap;gap:16px;
+  align-items:center;justify-content:space-between}
+.mockBanner b{color:var(--pink);font-weight:500}
+
+/* ---------- sticky run header ---------- */
+.runHead{position:sticky;top:0;z-index:40;background:var(--paperLight);
+  border-bottom:1px solid rgba(0,0,0,.25)}
+.runHeadIn{max-width:1560px;margin:0 auto;padding:14px 22px}
+.runTop{display:flex;flex-wrap:wrap;align-items:flex-start;gap:20px}
+.runIdent{flex:1;min-width:260px}
+.crumb{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  color:rgba(0,0,0,.45)}
+.crumb a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(0,0,0,.2)}
+.runTitle{font-family:var(--serif);font-size:24px;font-weight:600;margin:4px 0 0}
+.runMeta{font-family:var(--mono);font-size:11px;color:rgba(0,0,0,.55);margin-top:4px;
+  display:flex;flex-wrap:wrap;gap:4px 16px}
+
+.statusChip{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border:1px solid;
+  font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+.statusChip--running{border-color:var(--pink);color:var(--pink);background:#fff}
+
+.runStats{display:flex;gap:26px;align-items:flex-start}
+.stat{text-align:right}
+.stat .k{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+  color:rgba(0,0,0,.45)}
+.stat .v{font-family:var(--mono);font-size:22px;font-variant-numeric:tabular-nums;line-height:1.25}
+.stat .v.sm{font-size:15px}
+.stat .sub{font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.45)}
+
+.btn{display:inline-flex;align-items:center;gap:7px;border:0;
+  font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;padding:8px 13px}
+.btn--primary{background:var(--ink);color:var(--paper)}
+.btn--outline{background:transparent;color:var(--ink);border:1px solid rgba(0,0,0,.35)}
+.btn--ghost{background:transparent;color:rgba(0,0,0,.6);border:1px solid rgba(0,0,0,.18)}
+.btn--stop{background:transparent;color:var(--ink);border:1px solid rgba(0,0,0,.45)}
+
+/* phase progress strip */
+.phaseStrip{display:flex;gap:3px;margin-top:14px}
+.phaseSeg{flex:1;height:6px;background:rgba(0,0,0,.11);position:relative}
+.phaseSeg.done{background:var(--olive)}
+.phaseSeg.active{background:var(--pink)}
+.phaseSeg.failed{background:var(--red)}
+.phaseLegend{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;
+  text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.5);margin-top:5px}
+
+/* toolbar */
+.toolbar{border-top:1px solid rgba(0,0,0,.12);margin-top:12px;padding-top:10px;
+  display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolbar .lbl{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+  color:rgba(0,0,0,.42);margin-right:2px}
+.chip{font-family:var(--mono);font-size:11px;padding:4px 10px;border:1px solid rgba(0,0,0,.2);
+  background:#fff;color:rgba(0,0,0,.7)}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.chip .n{opacity:.6;margin-left:5px}
+.spacer{flex:1}
+.search{font-family:var(--mono);font-size:12px;padding:5px 9px;border:1px solid rgba(0,0,0,.25);
+  background:#fff;min-width:210px}
+
+/* ---------- layout ---------- */
+.shell{max-width:1560px;margin:0 auto;display:grid;grid-template-columns:246px minmax(0,1fr);
+  gap:26px;padding:22px}
+@media(max-width:1080px){.shell{grid-template-columns:1fr}.rail{position:static!important;max-height:none!important}}
+
+/* left rail */
+.rail{position:sticky;top:186px;align-self:start;max-height:calc(100vh - 210px);overflow:auto}
+.railHead{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+  color:rgba(0,0,0,.45);margin-bottom:8px}
+.railItem{display:flex;align-items:flex-start;gap:8px;padding:7px 9px;border-left:2px solid transparent;
+  text-decoration:none;color:inherit}
+.railItem:hover{background:var(--paperLight)}
+.railItem.is-active{border-left-color:var(--pink);background:var(--paperLight)}
+.railItem .rl{flex:1;min-width:0}
+.railItem .rname{font-family:var(--mono);font-size:12px;line-height:1.35}
+.railItem .rsub{font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.45);margin-top:1px}
+.railItem.is-pending .rname{color:rgba(0,0,0,.38)}
+.railNum{font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.3);width:15px;text-align:right;
+  flex:none;margin-top:2px}
+
+/* ---------- stage block ---------- */
+.stage{border:1px solid rgba(0,0,0,.18);background:var(--paperLight);margin-bottom:16px}
+.stage.is-pending{opacity:.62}
+.stageHead{display:flex;align-items:flex-start;gap:11px;padding:13px 16px;
+  border-left:4px solid transparent;background:#fff;border-bottom:1px solid rgba(0,0,0,.1)}
+.stage--done .stageHead{border-left-color:var(--olive)}
+.stage--active .stageHead{border-left-color:var(--pink)}
+.stage--failed .stageHead{border-left-color:var(--red)}
+.stage--pending .stageHead{border-left-color:rgba(0,0,0,.14)}
+.stageHead .sh{flex:1;min-width:0}
+.stageName{font-family:var(--mono);font-size:13px;text-transform:uppercase;letter-spacing:.07em}
+.stageKey{font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.4);margin-left:8px;
+  text-transform:none;letter-spacing:0}
+.stageStats{font-family:var(--mono);font-size:11px;color:rgba(0,0,0,.55);margin-top:3px;
+  display:flex;flex-wrap:wrap;gap:3px 14px}
+.stageBody{padding:12px 16px 15px}
+
+/* stage-level log lines (the D-F entry/exit lines) */
+.stageLog{background:var(--paper2);border-left:2px solid rgba(0,0,0,.2);padding:6px 11px;margin-bottom:11px}
+
+/* parallel stream lanes */
+.lanes{display:grid;gap:9px;margin-bottom:12px}
+@media(min-width:900px){.lanes{grid-template-columns:repeat(4,1fr)}}
+.lane{border:1px solid rgba(0,0,0,.15);background:#fff;padding:8px 10px}
+.laneHead{display:flex;align-items:center;justify-content:space-between;gap:6px;
+  font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+  color:rgba(0,0,0,.55);margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid rgba(0,0,0,.09)}
+.laneBar{display:flex;gap:2px;margin-bottom:6px}
+.laneBar i{height:4px;flex:1;background:rgba(0,0,0,.12)}
+.laneBar i.done{background:var(--olive)} .laneBar i.run{background:var(--pink)}
+.laneBar i.fail{background:var(--red)} .laneBar i.retry{background:var(--amber)}
+.laneStat{font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.5)}
+
+/* ---------- agent card ---------- */
+.agent{border:1px solid rgba(0,0,0,.14);background:#fff;margin-bottom:8px}
+.agentHead{display:flex;align-items:flex-start;gap:10px;padding:9px 12px;width:100%;
+  background:none;border:0;text-align:left}
+.agentHead:hover{background:var(--paperLight)}
+.agentIco{flex:none;margin-top:1px}
+.agentMain{flex:1;min-width:0}
+.agentName{font-family:var(--mono);font-size:12.5px;line-height:1.4}
+.agent--failed .agentName{color:var(--red-700)}
+.agent--pending .agentName{color:rgba(0,0,0,.4)}
+.agentTags{display:flex;flex-wrap:wrap;gap:4px 8px;margin-top:3px;
+  font-family:var(--mono);font-size:10px;color:rgba(0,0,0,.48)}
+.tag{border:1px solid rgba(0,0,0,.14);padding:1px 6px;background:var(--paperLight)}
+.tag--err{border-color:rgba(220,38,38,.35);color:var(--red);background:var(--red-50)}
+.tag--warn{border-color:rgba(217,119,6,.4);color:var(--amber-dark);background:var(--amber-50)}
+.agentRight{flex:none;text-align:right;font-family:var(--mono);font-size:11px;color:rgba(0,0,0,.55)}
+.caret{flex:none;margin-top:2px;transition:transform .15s}
+.agent.is-open .caret{transform:rotate(180deg)}
+
+/* ---------- the log stream ---------- */
+.logWrap{border-top:1px solid rgba(0,0,0,.1);background:#FBFAF4}
+.agent:not(.is-open) .logWrap{display:none}
+.logBar{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:7px 12px;
+  border-bottom:1px solid rgba(0,0,0,.08);font-family:var(--mono);font-size:10px;
+  text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.45)}
+.logBar button{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+  background:none;border:1px solid rgba(0,0,0,.17);padding:3px 8px;color:rgba(0,0,0,.6)}
+.log{margin:0;padding:9px 12px 12px;font-family:var(--mono);font-size:11.5px;line-height:1.75;
+  max-height:340px;overflow:auto}
+.log.is-tall{max-height:none}
+.ln{display:grid;grid-template-columns:74px 52px minmax(0,1fr);gap:10px;
+  padding:1px 0;border-left:2px solid transparent;padding-left:7px;margin-left:-7px}
+.ln:hover{background:rgba(0,0,0,.035)}
+.ln .t{color:rgba(0,0,0,.35);white-space:nowrap}
+.ln .lv{font-weight:500;letter-spacing:.06em}
+.ln .m{white-space:pre-wrap;word-break:break-word;color:rgba(0,0,0,.82)}
+.ln--info .lv{color:rgba(0,0,0,.4)}
+.ln--warn{border-left-color:var(--amber);background:rgba(217,119,6,.05)}
+.ln--warn .lv{color:var(--amber-dark)} .ln--warn .m{color:var(--amber-dark)}
+.ln--error{border-left-color:var(--red);background:rgba(220,38,38,.05)}
+.ln--error .lv{color:var(--red)} .ln--error .m{color:var(--red-700)}
+.ln--io .lv{color:var(--pink)}
+.ln .k{color:rgba(0,0,0,.45)}
+.ln .q{color:var(--olive)}
+.log.filter-problems .ln--info{display:none}
+.log.filter-problems .ln--io{display:none}
+
+.payload{margin:5px 0 5px 0;background:var(--paper2);border-left:2px solid rgba(0,0,0,.18);
+  padding:7px 11px;white-space:pre-wrap;word-break:break-word;color:rgba(0,0,0,.72);
+  font-size:11px;line-height:1.65}
+
+.hint{font-family:var(--mono);font-size:10.5px;color:rgba(0,0,0,.42);
+  border-top:1px dashed rgba(0,0,0,.18);margin-top:26px;padding-top:14px}
+.hint b{color:var(--pink);font-weight:500}
+.hint ul{margin:8px 0 0;padding-left:19px} .hint li{margin:3px 0}
+
+svg.i{width:15px;height:15px;flex:none;stroke-width:2;fill:none;stroke:currentColor;
+  stroke-linecap:round;stroke-linejoin:round}
+svg.i.sm{width:12px;height:12px} svg.i.lg{width:18px;height:18px}
+.spin{animation:sp 1s linear infinite;transform-origin:50% 50%}
+@keyframes sp{to{transform:rotate(360deg)}}
+.c-emerald{color:var(--emerald)} .c-pink{color:var(--pink)} .c-amber{color:var(--amber)}
+.c-red{color:var(--red)} .c-grey{color:rgba(0,0,0,.28)} .c-olive{color:var(--olive)}
+</style>
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></symbol>
+</svg>
+
+<div class="mockBanner">
+  <span><b>MOCKUP</b> — proposed dedicated run page. Not built. Static data.</span>
+  <span>Nestor Pulse · 27 Jul 2026</span>
+</div>
+
+<!-- ============================ RUN HEADER ============================ -->
+<header class="runHead">
+  <div class="runHeadIn">
+    <div class="runTop">
+      <div class="runIdent">
+        <div class="crumb"><a href="#">Pulse</a> · <a href="#">Intakes</a> · <a href="#">Moetest BV</a> · Run</div>
+        <h1 class="runTitle">Moetest BV — market entry, speciality coffee</h1>
+        <div class="runMeta">
+          <span>run d6bb3aae</span><span>engine tribunal</span>
+          <span>started 27 Jul 14:02:11</span><span>11 questions · 24 angles · 4 streams</span>
+        </div>
+      </div>
+
+      <div class="runStats">
+        <div class="stat">
+          <div class="k">Status</div>
+          <div style="margin-top:4px"><span class="statusChip statusChip--running">
+            <svg class="i sm spin"><use href="#i-loader"/></svg>Running</span></div>
+        </div>
+        <div class="stat">
+          <div class="k">Elapsed</div>
+          <div class="v">18:42</div>
+          <div class="sub">since 14:02:11</div>
+        </div>
+        <div class="stat">
+          <div class="k">Cost</div>
+          <div class="v">$12.84</div>
+          <div class="sub">est. total ~$46</div>
+        </div>
+        <div class="stat">
+          <div class="k">Phase</div>
+          <div class="v sm" style="margin-top:5px">4 / 14</div>
+          <div class="sub">Deep research</div>
+        </div>
+        <div class="stat" style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+          <button class="btn btn--stop"><svg class="i sm"><use href="#i-stop"/></svg>Stop run</button>
+          <button class="btn btn--ghost"><svg class="i sm"><use href="#i-download"/></svg>Export logs</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="phaseStrip" title="14 engine phases">
+      <i class="phaseSeg done"></i><i class="phaseSeg done"></i><i class="phaseSeg done"></i>
+      <i class="phaseSeg active"></i><i class="phaseSeg"></i><i class="phaseSeg"></i>
+      <i class="phaseSeg"></i><i class="phaseSeg"></i><i class="phaseSeg"></i>
+      <i class="phaseSeg"></i><i class="phaseSeg"></i><i class="phaseSeg"></i>
+      <i class="phaseSeg"></i><i class="phaseSeg"></i>
+    </div>
+    <div class="phaseLegend"><span>Adaptive intake</span><span>Deep research — in progress</span><span>Final synthesis</span></div>
+
+    <div class="toolbar">
+      <span class="lbl">Filter</span>
+      <button class="chip" aria-pressed="true" data-filter="all">All<span class="n">214</span></button>
+      <button class="chip" aria-pressed="false" data-filter="problems">Problems only<span class="n">9</span></button>
+      <button class="chip" aria-pressed="false" data-filter="running">In flight<span class="n">3</span></button>
+      <span class="lbl" style="margin-left:12px">Stream</span>
+      <button class="chip" aria-pressed="false">OpenAI</button>
+      <button class="chip" aria-pressed="false">Gemini</button>
+      <button class="chip" aria-pressed="false">Anthropic</button>
+      <button class="chip" aria-pressed="false">Own researcher</button>
+      <span class="spacer"></span>
+      <button class="chip" id="expandAll">Expand all logs</button>
+      <button class="chip" id="collapseAll">Collapse all</button>
+      <input class="search" placeholder="search all logs…">
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+
+  <!-- ============================ LEFT RAIL ============================ -->
+  <nav class="rail">
+    <div class="railHead">Phases</div>
+
+    <a class="railItem" href="#s1"><span class="railNum">01</span>
+      <svg class="i sm c-emerald" style="margin-top:2px"><use href="#i-check"/></svg>
+      <span class="rl"><span class="rname">Adaptive intake</span><span class="rsub">24s · 3 actions · $0.11</span></span></a>
+
+    <a class="railItem" href="#s2"><span class="railNum">02</span>
+      <svg class="i sm c-emerald" style="margin-top:2px"><use href="#i-check"/></svg>
+      <span class="rl"><span class="rname">Question workshop</span><span class="rsub">3m 12s · 47 actions · $1.87</span></span></a>
+
+    <a class="railItem" href="#s3"><span class="railNum">03</span>
+      <svg class="i sm c-emerald" style="margin-top:2px"><use href="#i-check"/></svg>
+      <span class="rl"><span class="rname">Research division</span><span class="rsub">8s · 24 angles dispatched</span></span></a>
+
+    <a class="railItem is-active" href="#s4"><span class="railNum">04</span>
+      <svg class="i sm spin c-pink" style="margin-top:2px"><use href="#i-loader"/></svg>
+      <span class="rl"><span class="rname">Deep research</span><span class="rsub">14m 18s · 18/24 · 1 failed</span></span></a>
+
+    <a class="railItem" href="#s5"><span class="railNum">05</span>
+      <svg class="i sm spin c-pink" style="margin-top:2px"><use href="#i-loader"/></svg>
+      <span class="rl"><span class="rname">Own research</span><span class="rsub">running · 4/6</span></span></a>
+
+    <a class="railItem is-pending"><span class="railNum">06</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Claim distillation</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">07</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Cross-provider merge</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">08</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Verification gates</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">09</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Skeptic verification</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">10</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Adjudication</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">11</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Coverage gate</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">12</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Conflict detection</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">13</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Final synthesis</span><span class="rsub">pending</span></span></a>
+    <a class="railItem is-pending"><span class="railNum">14</span>
+      <svg class="i sm c-grey" style="margin-top:2px"><use href="#i-circle"/></svg>
+      <span class="rl"><span class="rname">Report assembly</span><span class="rsub">pending</span></span></a>
+  </nav>
+
+  <!-- ============================ MAIN ============================ -->
+  <main>
+
+    <!-- ---------------- STAGE 1 ---------------- -->
+    <section class="stage stage--done" id="s1">
+      <div class="stageHead">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="sh">
+          <div class="stageName">01 · Adaptive intake <span class="stageKey">intake</span></div>
+          <div class="stageStats"><span>24s</span><span>3 actions</span><span>$0.11</span>
+            <span>11 questions parsed</span></div>
+        </div>
+      </div>
+      <div class="stageBody">
+        <div class="stageLog">
+          <div class="ln ln--info"><span class="t">14:02:11.402</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_enter</span> stage=intake</span></div>
+          <div class="ln ln--info"><span class="t">14:02:35.918</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_exit</span> stage=intake questions=11 context_lines=32 dropped=21 duration=24.5s cost=$0.11</span></div>
+        </div>
+
+        <div class="agent">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">parse_brief — split seam brief into questions / decision / context</span>
+              <span class="agentTags"><span class="tag">pure</span><span class="tag">no LLM call</span>
+                <span class="tag">11 questions</span><span class="tag">32 context lines</span></span>
+            </span>
+            <span class="agentRight">24s<br>$0.00</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 7 lines</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:02:11.410</span><span class="lv">INFO</span>
+                <span class="m">parse_brief: structured brief detected (delimiter <span class="q">[QUESTIONS]</span>)</span></div>
+              <div class="ln ln--info"><span class="t">14:02:11.411</span><span class="lv">INFO</span>
+                <span class="m">enumerated block found — 11 parents</span></div>
+              <div class="ln ln--info"><span class="t">14:02:11.412</span><span class="lv">INFO</span>
+                <span class="m">context pack retained as CONTEXT (32 lines) — never treated as a question</span></div>
+              <div class="ln ln--warn"><span class="t">14:02:11.413</span><span class="lv">WARN</span>
+                <span class="m">21 non-question lines excluded from the workshop pool: Output-omvang, NDA-status, Decision-maker, contact block (+18)</span></div>
+              <div class="ln ln--info"><span class="t">14:02:11.415</span><span class="lv">INFO</span>
+                <span class="m">decision resolved from <span class="q">[DECISION]</span> block (precedence 1/3)</span></div>
+              <div class="ln ln--io"><span class="t">14:02:11.415</span><span class="lv">DATA</span>
+                <span class="m">decision statement<div class="payload">Should Moetest BV enter the Belgian speciality-coffee
+wholesale market in Q1 2027, and under which sourcing model?</div></span></div>
+              <div class="ln ln--info"><span class="t">14:02:35.900</span><span class="lv">INFO</span>
+                <span class="m">questions handed to workshop: 11</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- STAGE 2 ---------------- -->
+    <section class="stage stage--done" id="s2">
+      <div class="stageHead">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="sh">
+          <div class="stageName">02 · Question workshop <span class="stageKey">workshop</span></div>
+          <div class="stageStats"><span>3m 12s</span><span>47 actions</span><span>$1.87</span>
+            <span>62 candidates → 15 winners</span><span>128 items read</span></div>
+        </div>
+      </div>
+      <div class="stageBody">
+        <div class="stageLog">
+          <div class="ln ln--info"><span class="t">14:02:36.004</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_enter</span> stage=workshop questions=11</span></div>
+          <div class="ln ln--info"><span class="t">14:05:48.221</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_exit</span> stage=workshop candidates=62 winners=15 tournament_rounds=4 duration=192.2s cost=$1.87</span></div>
+        </div>
+
+        <div class="agent">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Orientation — web-grounded brief conflicts</span>
+              <span class="agentTags"><span class="tag">anthropic</span><span class="tag">claude-opus-5</span>
+                <span class="tag">3 conflicts found</span></span>
+            </span>
+            <span class="agentRight">41s<br>$0.38</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 6 lines</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:02:36.120</span><span class="lv">INFO</span>
+                <span class="m">orientation: grounding 11 questions against the open web</span></div>
+              <div class="ln ln--io"><span class="t">14:02:36.121</span><span class="lv">PROMPT</span>
+                <span class="m">task prompt<div class="payload">For each client question, check whether the brief's stated
+assumption still holds against current sources. Where it does
+not, record a brief_conflict: "the brief assumes X, the world
+says Y", with a quoted source. Do NOT invent a conflict.</div></span></div>
+              <div class="ln ln--info"><span class="t">14:03:02.480</span><span class="lv">INFO</span>
+                <span class="m">web_search ×4 · url_context ×7</span></div>
+              <div class="ln ln--io"><span class="t">14:03:16.902</span><span class="lv">DATA</span>
+                <span class="m">brief_conflicts = 3<div class="payload">1. Brief assumes EUDR applies from Dec 2024. Source: EC delay
+   regulation (Dec 2024) moves large operators to 30 Dec 2025.
+2. Brief assumes Belgian speciality volume is flat. Source: ICO
+   2025 annual review reports +3.1% for the segment.
+3. Brief treats "direct trade" as a certification. It is not a
+   certified scheme — no auditable standard exists.</div></span></div>
+              <div class="ln ln--info"><span class="t">14:03:17.010</span><span class="lv">INFO</span>
+                <span class="m">audit_write id=b12f8a04 hash=7c21…9f4d prev=0000…0000</span></div>
+              <div class="ln ln--info"><span class="t">14:03:17.101</span><span class="lv">INFO</span>
+                <span class="m">done · 41.0s · $0.38</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="agent">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Tournament — 4 rounds, 62 candidates ranked</span>
+              <span class="agentTags"><span class="tag">anthropic</span><span class="tag">44 pairwise calls</span>
+                <span class="tag tag--warn">11/15 winners forced by scope guard</span></span>
+            </span>
+            <span class="agentRight">2m 31s<br>$1.49</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 7 lines · 1 warning</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:03:17.200</span><span class="lv">INFO</span>
+                <span class="m">candidate generation: 62 from 11 parents (avg 5.6/parent)</span></div>
+              <div class="ln ln--info"><span class="t">14:03:41.008</span><span class="lv">INFO</span>
+                <span class="m">round 1/4 · 31 pairings · 31 survive</span></div>
+              <div class="ln ln--info"><span class="t">14:04:22.550</span><span class="lv">INFO</span>
+                <span class="m">round 2/4 · 16 pairings · 16 survive</span></div>
+              <div class="ln ln--info"><span class="t">14:05:01.113</span><span class="lv">INFO</span>
+                <span class="m">round 3/4 · 8 pairings · 8 survive</span></div>
+              <div class="ln ln--warn"><span class="t">14:05:44.907</span><span class="lv">WARN</span>
+                <span class="m">D4 scope guard: 11 of 15 winner slots forced to preserve client question coverage — the tournament decided 4 slots</span></div>
+              <div class="ln ln--io"><span class="t">14:05:47.980</span><span class="lv">DATA</span>
+                <span class="m">winners<div class="payload">01 EU speciality coffee import volumes 2024-2026        [forced]
+02 Belgian roaster margin structure, wholesale vs DTC   [forced]
+03 EUDR enforcement timeline for coffee importers       [forced]
+…
+13 Green-coffee price volatility hedging instruments    [ranked]
+14 Speciality certification landscape after direct-trade[ranked]
+15 Port-of-entry logistics cost, Antwerp vs Rotterdam   [ranked]</div></span></div>
+              <div class="ln ln--info"><span class="t">14:05:48.200</span><span class="lv">INFO</span>
+                <span class="m">done · 151.0s · $1.49</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- STAGE 3 ---------------- -->
+    <section class="stage stage--done" id="s3">
+      <div class="stageHead">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="sh">
+          <div class="stageName">03 · Research division <span class="stageKey">research_division</span></div>
+          <div class="stageStats"><span>8s</span><span>24 angles</span><span>4 streams</span><span>$0.00</span></div>
+        </div>
+      </div>
+      <div class="stageBody">
+        <div class="stageLog">
+          <div class="ln ln--info"><span class="t">14:05:48.300</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_enter</span> stage=research_division winners=15</span></div>
+          <div class="ln ln--warn"><span class="t">14:05:52.118</span><span class="lv">WARN</span>
+            <span class="m"><span class="k">pii_scrub</span> angle=6 identifiers_removed=1 — dispatch redacted before leaving the engine</span></div>
+          <div class="ln ln--info"><span class="t">14:05:56.440</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_exit</span> stage=research_division angles=24 top3_fanout=4 single_stream=21 duration=8.1s</span></div>
+        </div>
+
+        <div class="lanes">
+          <div class="lane">
+            <div class="laneHead"><span>OpenAI</span><span>7</span></div>
+            <div class="laneBar"><i class="done"></i><i class="done"></i><i class="run"></i><i class="run"></i><i></i><i></i><i></i></div>
+            <div class="laneStat">gpt-5.6-sol · 2 done · 2 running</div>
+          </div>
+          <div class="lane">
+            <div class="laneHead"><span>Gemini</span><span>7</span></div>
+            <div class="laneBar"><i class="done"></i><i class="done"></i><i class="done"></i><i class="retry"></i><i></i><i></i><i></i></div>
+            <div class="laneStat">gemini-2.5-pro-dr · 3 done · 1 retrying</div>
+          </div>
+          <div class="lane">
+            <div class="laneHead"><span>Anthropic</span><span>4</span></div>
+            <div class="laneBar"><i class="done"></i><i class="done"></i><i class="done"></i><i class="done"></i></div>
+            <div class="laneStat">claude-opus-5 · 4 done</div>
+          </div>
+          <div class="lane">
+            <div class="laneHead"><span>Own researcher</span><span>6</span></div>
+            <div class="laneBar"><i class="done"></i><i class="done"></i><i class="fail"></i><i class="run"></i><i></i><i></i></div>
+            <div class="laneStat">SerpAPI + fetch · 1 failed</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- STAGE 4 : the live one ---------------- -->
+    <section class="stage stage--active" id="s4">
+      <div class="stageHead">
+        <svg class="i lg spin c-pink" style="margin-top:1px"><use href="#i-loader"/></svg>
+        <div class="sh">
+          <div class="stageName">04 · Deep research <span class="stageKey">deep_research</span></div>
+          <div class="stageStats"><span>14m 18s elapsed</span><span>18 of 24 angles</span>
+            <span>1 failed · 1 retrying</span><span>$10.48 so far</span></div>
+        </div>
+      </div>
+      <div class="stageBody">
+        <div class="stageLog">
+          <div class="ln ln--info"><span class="t">14:05:56.500</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_enter</span> stage=deep_research angles=24 streams=4 concurrency=8</span></div>
+          <div class="ln ln--info"><span class="t">14:20:14.000</span><span class="lv">INFO</span>
+            <span class="m">heartbeat · 3 angles in flight · longest poll 812s (angle 3) · no stall</span></div>
+        </div>
+
+        <!-- DONE agent, full log -->
+        <div class="agent is-open">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Angle 01 — EU speciality coffee import volumes 2024–2026</span>
+              <span class="agentTags"><span class="tag">openai</span><span class="tag">gpt-5.6-sol</span>
+                <span class="tag">21 facts</span><span class="tag">18 sources</span>
+                <span class="tag">audit a7f3c2e1</span></span>
+            </span>
+            <span class="agentRight">6m 44s<br>$2.40</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 14 lines</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:05:56.610</span><span class="lv">INFO</span>
+                <span class="m"><span class="k">dispatch</span> angle=1 stream=openai model=gpt-5.6-sol mode=background</span></div>
+              <div class="ln ln--io"><span class="t">14:05:56.611</span><span class="lv">PROMPT</span>
+                <span class="m">task prompt<div class="payload">Research ONLY this sub-question; the sibling sub-questions are
+handled separately.
+
+SUB-QUESTION
+What were EU import volumes of speciality-grade green coffee
+2024-2026, split by port of entry, and what is the trend?
+
+CONSTRAINTS
+- Prefer primary sources (Eurostat, ICO, national customs).
+- Report every claim as a structured fact with SOURCE_URL.
+- Reject a fact whose SOURCE_URL is a placeholder.</div></span></div>
+              <div class="ln ln--info"><span class="t">14:05:57.004</span><span class="lv">INFO</span>
+                <span class="m">accepted · response_id=resp_01H8xQ4m…  status=queued</span></div>
+              <div class="ln ln--warn"><span class="t">14:05:57.005</span><span class="lv">WARN</span>
+                <span class="m">acceptance is not liveness — polling to a terminal state before trusting this model</span></div>
+              <div class="ln ln--info"><span class="t">14:06:27.118</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=30s</span></div>
+              <div class="ln ln--info"><span class="t">14:07:58.442</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=121s · searches=6</span></div>
+              <div class="ln ln--info"><span class="t">14:10:31.900</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=275s · searches=14 · reading eurostat.ec.europa.eu</span></div>
+              <div class="ln ln--info"><span class="t">14:12:40.221</span><span class="lv">INFO</span>
+                <span class="m">poll status=completed elapsed=404s</span></div>
+              <div class="ln ln--info"><span class="t">14:12:40.400</span><span class="lv">INFO</span>
+                <span class="m"><span class="k">collect_provider_facts</span> parsed=23 accepted=21 rejected=2</span></div>
+              <div class="ln ln--warn"><span class="t">14:12:40.401</span><span class="lv">WARN</span>
+                <span class="m">2 facts rejected: SOURCE_URL was a placeholder (<span class="q">"N/A"</span> ×1, <span class="q">"unknown"</span> ×1)</span></div>
+              <div class="ln ln--io"><span class="t">14:12:40.410</span><span class="lv">DATA</span>
+                <span class="m">facts (first 3 of 21)<div class="payload">1. EU28 speciality-grade green imports reached 812kt in 2025,
+   +3.1% YoY. SOURCE_URL: https://ico.org/annual-review-2025
+2. Antwerp handled 31% of Belgian green-coffee entries in 2025.
+   SOURCE_URL: https://ec.europa.eu/eurostat/…/coffee-2025
+3. Rotterdam remains the largest EU entry port by volume at 44%.
+   SOURCE_URL: https://ec.europa.eu/eurostat/…/ports-2025</div></span></div>
+              <div class="ln ln--info"><span class="t">14:12:40.480</span><span class="lv">INFO</span>
+                <span class="m">usage input=18,422 output=6,104 · cost=$2.40</span></div>
+              <div class="ln ln--info"><span class="t">14:12:40.512</span><span class="lv">INFO</span>
+                <span class="m">audit_write id=a7f3c2e1 hash=3f7d…8e10 prev=9c1e…4b2a</span></div>
+              <div class="ln ln--info"><span class="t">14:12:40.600</span><span class="lv">INFO</span>
+                <span class="m">done · 404.0s · 21 facts · $2.40</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RUNNING agent -->
+        <div class="agent is-open">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i spin c-pink"><use href="#i-loader"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Angle 03 — EUDR enforcement timeline for coffee importers</span>
+              <span class="agentTags"><span class="tag">openai</span><span class="tag">gpt-5.6-sol</span>
+                <span class="tag">polling 13m 32s</span><span class="tag tag--warn">longest in flight</span></span>
+            </span>
+            <span class="agentRight">13:32<br>—</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 8 lines · live</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:05:56.620</span><span class="lv">INFO</span>
+                <span class="m"><span class="k">dispatch</span> angle=3 stream=openai model=gpt-5.6-sol mode=background</span></div>
+              <div class="ln ln--info"><span class="t">14:05:57.220</span><span class="lv">INFO</span>
+                <span class="m">accepted · response_id=resp_01H8xR7p…  status=queued</span></div>
+              <div class="ln ln--info"><span class="t">14:07:12.004</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=75s · searches=3</span></div>
+              <div class="ln ln--info"><span class="t">14:11:40.118</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=343s · searches=11 · reading eur-lex.europa.eu</span></div>
+              <div class="ln ln--info"><span class="t">14:15:02.900</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=546s · searches=19</span></div>
+              <div class="ln ln--warn"><span class="t">14:16:31.440</span><span class="lv">WARN</span>
+                <span class="m">long poll — 634s with no state change. This is NOT a stall: the run row is authoritative and the worker heartbeat is fresh (2s ago).</span></div>
+              <div class="ln ln--info"><span class="t">14:19:28.700</span><span class="lv">INFO</span>
+                <span class="m">poll status=in_progress elapsed=812s · searches=26</span></div>
+              <div class="ln ln--info"><span class="t">14:19:29.000</span><span class="lv">INFO</span>
+                <span class="m">next poll in 30s · attempt 27</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RETRY agent -->
+        <div class="agent">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-amber"><use href="#i-rotate"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Angle 04 — Dutch vs Belgian retail price benchmarks</span>
+              <span class="agentTags"><span class="tag">gemini</span><span class="tag">gemini-2.5-pro-dr</span>
+                <span class="tag tag--warn">retry 2/3 — waiting 8s</span></span>
+            </span>
+            <span class="agentRight">2:14<br>$0.31</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 6 lines · 2 warnings</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:05:56.640</span><span class="lv">INFO</span>
+                <span class="m"><span class="k">dispatch</span> angle=4 stream=gemini model=gemini-2.5-pro-deep-research</span></div>
+              <div class="ln ln--warn"><span class="t">14:06:41.002</span><span class="lv">WARN</span>
+                <span class="m">provider 429 RESOURCE_EXHAUSTED — retry 1/3, backoff 4s</span></div>
+              <div class="ln ln--info"><span class="t">14:06:45.118</span><span class="lv">INFO</span>
+                <span class="m">re-dispatched · attempt 2</span></div>
+              <div class="ln ln--warn"><span class="t">14:08:02.550</span><span class="lv">WARN</span>
+                <span class="m">provider 429 RESOURCE_EXHAUSTED — retry 2/3, backoff 8s</span></div>
+              <div class="ln ln--info"><span class="t">14:08:02.551</span><span class="lv">INFO</span>
+                <span class="m">circuit breaker: gemini stream at 2 consecutive soft failures (opens at 5)</span></div>
+              <div class="ln ln--info"><span class="t">14:08:10.000</span><span class="lv">INFO</span>
+                <span class="m">waiting 8s before attempt 3</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FAILED agent -->
+        <div class="agent agent--failed is-open">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-red"><use href="#i-alert"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Angle 06 — competitor landscape, direct-trade importers</span>
+              <span class="agentTags"><span class="tag">own researcher</span><span class="tag">serpapi + fetch</span>
+                <span class="tag tag--err">failed — poisoned tool loop</span>
+                <span class="tag tag--warn">1 identifier redacted before dispatch</span></span>
+            </span>
+            <span class="agentRight">0:04<br>$0.02</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 9 lines · 1 warning · 3 errors</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--warn"><span class="t">14:05:52.118</span><span class="lv">WARN</span>
+                <span class="m"><span class="k">pii_scrub</span> 1 identifier removed from the outbound query before dispatch</span></div>
+              <div class="ln ln--info"><span class="t">14:05:56.660</span><span class="lv">INFO</span>
+                <span class="m"><span class="k">dispatch</span> angle=6 stream=own_researcher</span></div>
+              <div class="ln ln--io"><span class="t">14:05:56.661</span><span class="lv">DATA</span>
+                <span class="m">outbound query (post-scrub)<div class="payload">direct trade speciality coffee importers Belgium 2026
+competitor landscape wholesale [REDACTED]</div></span></div>
+              <div class="ln ln--info"><span class="t">14:05:57.900</span><span class="lv">INFO</span>
+                <span class="m">serpapi search · 10 organic results · $0.025</span></div>
+              <div class="ln ln--info"><span class="t">14:05:59.331</span><span class="lv">INFO</span>
+                <span class="m">web_fetch https://www.beliancoffee-directtrade.be/partners</span></div>
+              <div class="ln ln--error"><span class="t">14:06:00.004</span><span class="lv">ERROR</span>
+                <span class="m">web_fetch failed · 403 Forbidden · robots disallow</span></div>
+              <div class="ln ln--error"><span class="t">14:06:00.006</span><span class="lv">ERROR</span>
+                <span class="m">provider 400 invalid_request_error: unexpected content block <span class="q">web_fetch_tool_result</span> in assistant turn — the failed fetch was not serialisable and poisoned the conversation</span></div>
+              <div class="ln ln--error"><span class="t">14:06:00.008</span><span class="lv">ERROR</span>
+                <span class="m">every subsequent request in this session will 400 with the same body — abandoning the angle</span></div>
+              <div class="ln ln--warn"><span class="t">14:06:00.010</span><span class="lv">WARN</span>
+                <span class="m">own_researcher stream degraded · angle 6 produced 0 facts · degradation recorded for the verification report</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PENDING agent -->
+        <div class="agent agent--pending">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-grey"><use href="#i-circle"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Angle 07 — green-coffee price volatility hedging instruments</span>
+              <span class="agentTags"><span class="tag">openai</span><span class="tag">queued behind concurrency cap 8</span></span>
+            </span>
+            <span class="agentRight">—<br>—</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 1 line</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:05:56.700</span><span class="lv">INFO</span>
+                <span class="m">queued · position 3 of 6 · waiting for a free slot in the openai stream</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- STAGE 5 ---------------- -->
+    <section class="stage stage--active" id="s5">
+      <div class="stageHead">
+        <svg class="i lg spin c-pink" style="margin-top:1px"><use href="#i-loader"/></svg>
+        <div class="sh">
+          <div class="stageName">05 · Own research <span class="stageKey">own_research</span></div>
+          <div class="stageStats"><span>running</span><span>4 of 6</span><span>$0.42</span>
+            <span>SerpAPI 18 searches</span></div>
+        </div>
+      </div>
+      <div class="stageBody">
+        <div class="stageLog">
+          <div class="ln ln--info"><span class="t">14:06:04.000</span><span class="lv">INFO</span>
+            <span class="m"><span class="k">stage_enter</span> stage=own_research queries=6 budget_searches=250</span></div>
+          <div class="ln ln--warn"><span class="t">14:14:22.118</span><span class="lv">WARN</span>
+            <span class="m">serpapi quota · 18 of 830 remaining this month consumed by this run</span></div>
+        </div>
+        <div class="agent">
+          <button class="agentHead">
+            <span class="agentIco"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <span class="agentMain">
+              <span class="agentName">Own query 02 — Antwerp green-coffee terminal handling fees</span>
+              <span class="agentTags"><span class="tag">serpapi</span><span class="tag">6 pages fetched</span>
+                <span class="tag">9 facts</span></span>
+            </span>
+            <span class="agentRight">1m 12s<br>$0.19</span>
+            <svg class="i sm caret"><use href="#i-chevron"/></svg>
+          </button>
+          <div class="logWrap">
+            <div class="logBar"><span>log · 5 lines</span>
+              <button class="lvlFilter">Problems only</button>
+              <button class="tallToggle">Expand</button>
+              <button><svg class="i sm" style="vertical-align:-2px"><use href="#i-copy"/></svg> Copy</button>
+            </div>
+            <div class="log">
+              <div class="ln ln--info"><span class="t">14:06:04.220</span><span class="lv">INFO</span>
+                <span class="m">model-authored search query generated</span></div>
+              <div class="ln ln--warn"><span class="t">14:06:04.221</span><span class="lv">WARN</span>
+                <span class="m"><span class="k">pii_scrub</span> second-hop scrub applied · 0 identifiers found</span></div>
+              <div class="ln ln--info"><span class="t">14:06:05.900</span><span class="lv">INFO</span>
+                <span class="m">serpapi · 10 organic · 6 fetched · 4 skipped (paywall, robots)</span></div>
+              <div class="ln ln--info"><span class="t">14:07:14.004</span><span class="lv">INFO</span>
+                <span class="m">collect_provider_facts parsed=11 accepted=9 rejected=2</span></div>
+              <div class="ln ln--info"><span class="t">14:07:16.118</span><span class="lv">INFO</span>
+                <span class="m">done · 72.0s · 9 facts · $0.19</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PENDING STAGE ---------------- -->
+    <section class="stage stage--pending is-pending">
+      <div class="stageHead">
+        <svg class="i lg c-grey" style="margin-top:1px"><use href="#i-circle"/></svg>
+        <div class="sh">
+          <div class="stageName">06 · Claim distillation <span class="stageKey">distill</span></div>
+          <div class="stageStats"><span>pending</span><span>waits for all research streams</span></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="hint">
+      <b>Notes for the redesign.</b>
+      <ul>
+        <li><b>Everything is loaded.</b> No inner scroll areas — the page is the scroll. The left rail is the only sticky navigation, plus the run header.</li>
+        <li><b>The elapsed clock counts from <code>started_at</code>, not from page load</b> — closing and reopening shows 18:42, not 00:00. The header also states the absolute start time so the number is checkable.</li>
+        <li><b>Every agent carries its own log</b>, collapsed by default, expanded here for the four states that matter. Levels: <code>INFO</code>, <code>WARN</code>, <code>ERROR</code>, plus <code>PROMPT</code>/<code>DATA</code> for payload blocks.</li>
+        <li><b>"Problems only"</b> hides INFO and payload lines, per-agent or run-wide, so a 200-line run collapses to the 9 lines that matter.</li>
+        <li><b>Parallel dispatch is explicit</b> — the four stream lanes in stage 03 show fan-out, per-stream model, and per-stream failures at a glance.</li>
+        <li><b>A long poll is visibly not a stall.</b> The heartbeat line and the 634s warning both say so in words. This is the single most expensive misreading this system has produced.</li>
+        <li><b>A failure explains itself.</b> Angle 06 shows the 403, the resulting poisoned tool loop, and the consequence — instead of the word "failed".</li>
+      </ul>
+    </div>
+
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('.agentHead').forEach(function(h){
+  h.addEventListener('click',function(){ h.closest('.agent').classList.toggle('is-open'); });
+});
+document.querySelectorAll('.lvlFilter').forEach(function(b){
+  b.addEventListener('click',function(){
+    var log=b.closest('.logWrap').querySelector('.log');
+    var on=log.classList.toggle('filter-problems');
+    b.textContent = on ? 'Show all' : 'Problems only';
+  });
+});
+document.querySelectorAll('.tallToggle').forEach(function(b){
+  b.addEventListener('click',function(){
+    var log=b.closest('.logWrap').querySelector('.log');
+    var on=log.classList.toggle('is-tall');
+    b.textContent = on ? 'Collapse' : 'Expand';
+  });
+});
+document.getElementById('expandAll').addEventListener('click',function(){
+  document.querySelectorAll('.agent').forEach(function(a){a.classList.add('is-open');});
+});
+document.getElementById('collapseAll').addEventListener('click',function(){
+  document.querySelectorAll('.agent').forEach(function(a){a.classList.remove('is-open');});
+});
+document.querySelectorAll('.toolbar .chip[data-filter]').forEach(function(c){
+  c.addEventListener('click',function(){
+    document.querySelectorAll('.toolbar .chip[data-filter]').forEach(function(o){o.setAttribute('aria-pressed','false');});
+    c.setAttribute('aria-pressed','true');
+    var problems = c.dataset.filter==='problems';
+    document.querySelectorAll('.log').forEach(function(l){l.classList.toggle('filter-problems',problems);});
+    if(problems){document.querySelectorAll('.agent').forEach(function(a){a.classList.add('is-open');});}
+  });
+});
+</script>
+</body>
+</html>

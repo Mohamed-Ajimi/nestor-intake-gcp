@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nestor — Deep Research Run UI · current state (design handoff)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================================
+   Design tokens — copied verbatim from frontend/src/styles.css
+   ========================================================================= */
+:root{
+  --paper:#EDECE5; --paper2:#E4E3DC; --paperLight:#F5F4ED; --ink:#000000;
+  --pink:#FF2D87;      /* active / running accent */
+  --lime:#DFF940;      /* completed left border */
+  --olive:#7A8B00;     /* completed title text */
+  --amber:#D97706;     /* parked + degraded left border */
+  --amber-dark:#B45309;/* parked title text */
+  --amber-50:#FFFBEB;
+  --red:#DC2626; --red-700:#B91C1C;
+  --grey:#9CA3AF; --grey-700:#6B7280;
+  --emerald:#059669;
+
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",Inter,ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--paper2); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ============================================================================
+   Handoff document chrome  (NOT part of the product UI — this is the wrapper)
+   ========================================================================= */
+.doc{max-width:1180px;margin:0 auto;padding:0 24px 120px}
+.docHead{padding:56px 0 32px;border-bottom:2px solid var(--ink)}
+.docHead h1{font-family:var(--serif);font-size:38px;line-height:1.15;margin:0 0 10px;font-weight:600}
+.docHead .sub{font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:rgba(0,0,0,.55)}
+.docHead p{max-width:76ch;margin:18px 0 0;color:rgba(0,0,0,.78)}
+
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin:24px 0 0}
+.pill{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  padding:4px 10px;border:1px solid rgba(0,0,0,.25);background:var(--paperLight)}
+.pill.live{border-color:var(--pink);color:var(--pink)}
+.pill.gap{border-color:var(--red);color:var(--red)}
+
+h2.sec{font-family:var(--serif);font-size:26px;margin:64px 0 6px;font-weight:600}
+h2.sec .num{font-family:var(--mono);font-size:13px;color:rgba(0,0,0,.4);display:block;
+  text-transform:uppercase;letter-spacing:.14em;margin-bottom:6px}
+.secIntro{max-width:78ch;color:rgba(0,0,0,.75);margin:0 0 26px}
+
+.state{margin:0 0 14px;border:1px solid rgba(0,0,0,.18);background:var(--paper)}
+.stateHead{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;
+  padding:14px 18px;border-bottom:1px solid rgba(0,0,0,.12);background:var(--paperLight)}
+.stateHead h3{margin:0;font-family:var(--mono);font-size:13px;text-transform:uppercase;letter-spacing:.1em}
+.stateHead .when{font-size:13px;color:rgba(0,0,0,.6)}
+.stateHead code{font-family:var(--mono);font-size:12px;background:var(--paper2);padding:1px 6px}
+.stageWrap{padding:26px 22px;background:var(--paper2)}
+.note{padding:14px 18px;border-top:1px solid rgba(0,0,0,.12);background:var(--paperLight);font-size:14px}
+.note b{font-weight:600}
+.note ul{margin:8px 0 0;padding-left:20px}
+.note li{margin:4px 0}
+.flag{border-left:3px solid var(--red);padding-left:10px;margin-top:10px;color:var(--red-700)}
+.flag b{color:var(--red)}
+.ok{border-left:3px solid var(--emerald);padding-left:10px;margin-top:10px}
+
+table.spec{width:100%;border-collapse:collapse;margin:18px 0;font-size:14px}
+table.spec th,table.spec td{border:1px solid rgba(0,0,0,.15);padding:8px 11px;text-align:left;vertical-align:top}
+table.spec th{background:var(--paperLight);font-family:var(--mono);font-size:11px;
+  text-transform:uppercase;letter-spacing:.09em}
+table.spec code{font-family:var(--mono);font-size:12px}
+.scrollx{overflow-x:auto}
+
+/* ============================================================================
+   PRODUCT UI  — faithful reproduction of ResearchRunProgress.tsx
+   Class names mirror the Tailwind utilities used in the real component so a
+   designer can map 1:1 back to the source.
+   ========================================================================= */
+
+/* the host page context (admin intake detail route) */
+.hostPage{background:var(--paper);border:1px dashed rgba(0,0,0,.28);padding:18px}
+.hostLabel{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.14em;
+  color:rgba(0,0,0,.4);margin-bottom:12px}
+.hostChrome{background:var(--paperLight);border:1px solid rgba(0,0,0,.12);padding:14px 18px;margin-bottom:14px}
+.hostChrome .crumb{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.1em;color:rgba(0,0,0,.45)}
+.hostChrome h4{margin:6px 0 0;font-family:var(--serif);font-size:22px;font-weight:600}
+.hostBelow{margin-top:14px;opacity:.4}
+.hostBelow .ghost{height:11px;background:rgba(0,0,0,.14);margin:9px 0}
+.hostBelow .ghost.s{width:42%} .hostBelow .ghost.m{width:68%} .hostBelow .ghost.l{width:88%}
+
+/* ---- the card itself ---------------------------------------------------- */
+.rrp{
+  margin-bottom:20px;
+  border:1px solid rgba(0,0,0,.3);
+  border-left-width:4px;
+  background:var(--paperLight);
+  padding:20px 24px;
+}
+.rrp--active{border-left-color:var(--pink)}
+.rrp--done{border-left-color:var(--lime)}
+.rrp--degraded{border-left-color:var(--amber)}
+.rrp--parked{border-left-color:var(--amber)}
+.rrp--failed{border-left-color:var(--red)}
+.rrp--cancelled{border-left-color:var(--grey)}
+
+.rrpTop{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.rrpTop .grow{flex:1;min-width:0}
+.eyebrow{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+.eyebrow--active{color:var(--pink)}
+.eyebrow--done{color:var(--olive)}
+.eyebrow--parked{color:var(--amber-dark)}
+.eyebrow--failed{color:var(--red)}
+.eyebrow--cancelled{color:var(--grey-700)}
+.rrpBody{font-family:var(--sans);font-size:15px;line-height:1.6}
+.rrpBody--sm{font-size:14px}
+
+.clock{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-family:var(--mono)}
+.clock .big{font-size:24px;font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.clock .cost{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.6)}
+
+.metaRow{display:flex;flex-wrap:wrap;gap:4px 24px;font-family:var(--mono);font-size:12px;color:rgba(0,0,0,.7)}
+.curStage{font-family:var(--mono);font-size:12px;color:rgba(0,0,0,.6);margin-bottom:12px}
+
+.btn{display:inline-flex;align-items:center;gap:8px;border:0;cursor:pointer;
+  font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.1em;padding:9px 16px}
+.btn--primary{background:var(--ink);color:var(--paper)}
+.btn--outline{background:transparent;color:var(--ink);border:1px solid rgba(0,0,0,.3)}
+.btn--stop{margin-top:8px;background:transparent;color:var(--ink);border:1px solid rgba(0,0,0,.4);
+  font-size:11px;padding:6px 12px}
+
+.errLabel{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  color:rgba(0,0,0,.5);margin-bottom:4px}
+.errBody{font-family:var(--mono);font-size:13px;white-space:pre-wrap;word-break:break-word}
+.errBody--red{color:var(--red-700)}
+.errBody--amber{color:var(--amber-dark)}
+
+.inset{margin-top:16px;border-left:4px solid;background:var(--paper);padding:12px 16px}
+.inset--locked{border-left-color:var(--red)}
+.inset--unverified{border-left-color:var(--pink)}
+.inset .insetHead{display:flex;align-items:center;gap:8px;margin-bottom:4px;
+  font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+.inset .insetBody{font-family:var(--sans);font-size:14px;line-height:1.6;margin-bottom:12px}
+
+/* ---- the D15 activity feed ---------------------------------------------- */
+.feedHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.feedHead .ttl,.feedHead .scroll{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.1em;color:rgba(0,0,0,.5)}
+.feedHead .scroll{display:inline-flex;align-items:center;gap:4px;cursor:pointer;background:none;border:0}
+.feed{list-style:none;margin:0;padding:0;max-height:28rem;overflow:auto;
+  display:flex;flex-direction:column;gap:8px}
+.feed--frozen{max-height:none}
+.feedSep{margin-top:20px;border-top:1px solid rgba(0,0,0,.1);padding-top:16px}
+
+.agent{border-left:2px solid rgba(0,0,0,.1);padding-left:12px}
+.agentRow{display:flex;align-items:flex-start;gap:8px;font-family:var(--mono);font-size:13px}
+.agentIcon{margin-top:2px;flex:none}
+.agentMain{min-width:0;flex:1}
+.agentName--done{color:rgba(0,0,0,.8)}
+.agentName--running,.agentName--retry{color:var(--ink)}
+.agentName--failed{color:var(--red-700)}
+.agentName--pending{color:rgba(0,0,0,.4)}
+.agentResult{margin-top:2px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:rgba(0,0,0,.4)}
+.retryChip{display:inline-flex;align-items:center;gap:4px;margin-top:4px;
+  background:var(--amber-50);color:var(--amber-dark);padding:2px 8px;font-size:11px}
+.linkBtn{display:inline-flex;align-items:center;gap:4px;margin-top:4px;background:none;border:0;
+  cursor:pointer;font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.1em;color:rgba(0,0,0,.5);padding:0}
+.promptPre{margin:4px 0 0;max-height:12rem;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  background:var(--paper);padding:8px 12px;font-family:var(--mono);font-size:12px;line-height:1.6;
+  color:rgba(0,0,0,.7)}
+.summaryCard{margin:8px 0;border-left:2px solid rgba(0,0,0,.2);background:var(--paper);
+  padding:6px 12px;font-family:var(--mono);font-size:12px;color:rgba(0,0,0,.7)}
+
+/* audit body drill-down panel (AuditBodyPanel) */
+.auditPanel{margin:8px 0 0 12px;border:1px solid rgba(0,0,0,.2);background:var(--paper);padding:12px 14px}
+.auditPanel .ah{display:flex;align-items:center;justify-content:space-between;
+  font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  color:rgba(0,0,0,.5);margin-bottom:8px}
+.auditPanel pre{margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
+  font-size:12px;line-height:1.65;color:rgba(0,0,0,.8);max-height:18rem;overflow:auto}
+
+/* verification report */
+.vr{margin-top:16px;border:1px solid rgba(0,0,0,.2);background:var(--paper);padding:16px 18px}
+.vr h5{margin:0 0 10px;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+  color:rgba(0,0,0,.5)}
+.vr h6{margin:16px 0 6px;font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.1em;color:rgba(0,0,0,.75)}
+.funnel{display:flex;flex-wrap:wrap;gap:6px}
+.funnel span{font-family:var(--mono);font-size:12px;background:var(--paperLight);
+  border:1px solid rgba(0,0,0,.15);padding:3px 9px}
+.claim{border-left:2px solid rgba(0,0,0,.15);padding:2px 0 2px 10px;margin:7px 0;font-size:13px}
+.claim .ev{font-family:var(--mono);font-size:11px;color:rgba(0,0,0,.5);margin-top:2px}
+
+/* modal (Stop confirmation) */
+.modalStage{position:relative;background:rgba(0,0,0,.45);padding:34px 18px;display:flex;
+  align-items:center;justify-content:center}
+.modal{background:var(--paperLight);border:1px solid rgba(0,0,0,.35);max-width:480px;width:100%;padding:22px 24px}
+.modal h4{margin:0 0 8px;font-family:var(--serif);font-size:19px;font-weight:600}
+.modal p{margin:0 0 18px;font-size:14px;line-height:1.6;color:rgba(0,0,0,.8)}
+.modalFoot{display:flex;justify-content:flex-end;gap:10px}
+
+.dim{opacity:.55}
+svg.i{width:16px;height:16px;flex:none;stroke-width:2;fill:none;stroke:currentColor;
+  stroke-linecap:round;stroke-linejoin:round}
+svg.i.sm{width:13px;height:13px}
+svg.i.lg{width:20px;height:20px}
+.spin{animation:sp 1s linear infinite;transform-origin:50% 50%}
+@keyframes sp{to{transform:rotate(360deg)}}
+.c-emerald{color:var(--emerald)} .c-pink{color:var(--pink)} .c-amber{color:var(--amber)}
+.c-red{color:var(--red)} .c-grey{color:rgba(0,0,0,.3)} .c-ink{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<!-- ===================== icon sprite (lucide geometry) ===================== -->
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><circle cx="11.5" cy="14.5" r="2.5"/><path d="m13.3 16.3 1.7 1.7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-arrowdown" viewBox="0 0 24 24"><path d="M12 17V3"/><path d="m6 11 6 6 6-6"/><path d="M19 21H5"/></symbol>
+</svg>
+
+<div class="doc">
+
+<header class="docHead">
+  <div class="sub">Nestor Pulse · design handoff · captured 27 Jul 2026</div>
+  <h1>Deep research run — every screen, exactly as it looks today</h1>
+  <p>
+    This is a faithful, static reproduction of <code>frontend/src/components/intake/ResearchRunProgress.tsx</code>
+    (924 lines) rendered with mock data in every state it can reach. Copy is verbatim from
+    <code>frontend/src/locales/en/intake.json</code>. Colours, type scale, spacing and borders are the
+    real design tokens from <code>frontend/src/styles.css</code>. Nothing here is a proposal — it is the
+    current build, so you have an accurate starting point to redesign against.
+  </p>
+  <div class="legend">
+    <span class="pill">14 engine stages</span>
+    <span class="pill">8 run statuses</span>
+    <span class="pill">5 agent-card states</span>
+    <span class="pill live">accent #FF2D87</span>
+    <span class="pill gap">red notes = known problems</span>
+  </div>
+</header>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">01 · context</span>Where this lives today, and why that is the core problem</h2>
+<p class="secIntro">
+  There is no research page. The entire run — a process that costs real money and runs for
+  30–60 minutes across 14 stages and dozens of dispatched agents — renders as
+  <b>one card embedded partway down the admin intake detail route</b>
+  (<code>/admin/pulse/intakes/:id</code>), stacked among the intake's other panels. Everything below
+  is that single card in its various states.
+</p>
+
+<div class="state">
+  <div class="stateHead">
+    <h3>Host context</h3>
+    <span class="when">the card in situ on the intake detail route</span>
+  </div>
+  <div class="stageWrap">
+    <div class="hostPage">
+      <div class="hostLabel">/admin/pulse/intakes/4a500d44 — intake detail route (abridged)</div>
+      <div class="hostChrome">
+        <div class="crumb">Pulse · Intakes · Moetest BV</div>
+        <h4>Moetest BV — market entry, speciality coffee</h4>
+      </div>
+      <div class="hostBelow">
+        <div class="ghost l"></div><div class="ghost m"></div><div class="ghost s"></div>
+      </div>
+
+      <div style="margin-top:18px">
+        <div class="rrp rrp--active">
+          <div class="rrpTop">
+            <svg class="i lg spin c-ink" style="margin-top:2px"><use href="#i-loader"/></svg>
+            <div class="grow">
+              <div class="eyebrow eyebrow--active">Deep research running</div>
+              <div class="rrpBody">Nestor's researcher is working through the phases below. This usually takes a few minutes — you may leave this tab open.</div>
+            </div>
+            <div class="clock">
+              <span class="big">18:42</span>
+              <span class="cost">Cost: $12.84</span>
+              <button class="btn btn--stop"><svg class="i sm"><use href="#i-stop"/></svg>Stop research</button>
+            </div>
+          </div>
+          <div class="curStage">Current phase: deep_research</div>
+          <div class="feedHead">
+            <span class="ttl">Activity</span>
+            <button class="scroll"><svg class="i sm"><use href="#i-arrowdown"/></svg>Scroll to latest</button>
+          </div>
+          <div style="font-family:var(--mono);font-size:12px;color:rgba(0,0,0,.35);padding:10px 0">
+            … feed continues (see section 03) …
+          </div>
+        </div>
+      </div>
+
+      <div class="hostBelow">
+        <div class="ghost m"></div><div class="ghost l"></div><div class="ghost s"></div><div class="ghost m"></div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <b>What this means in practice.</b>
+    <ul>
+      <li>The run competes for attention with every other panel on the intake page. It has no URL of its own, so it cannot be bookmarked, shared with a colleague, or opened in a second tab.</li>
+      <li>Scrolling the intake page scrolls the run away. There is no persistent header showing status, elapsed time or cost.</li>
+      <li>The activity feed is capped at <code>max-height: 28rem</code> with its own inner scrollbar — a scroll area inside a scroll area.</li>
+    </ul>
+    <div class="flag">
+      <b>Requested change.</b> A run should open its own page, be closeable and re-openable, and show
+      real progress on return.
+    </div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">02 · data model</span>What the UI is actually driven by</h2>
+<p class="secIntro">
+  Worth knowing before redesigning: the feed is fully data-driven. The component hardcodes no stage
+  count — it renders whatever <code>stage_detail</code> the run reports, so adding engine stages costs
+  the UI nothing. Any new design should preserve that.
+</p>
+
+<div class="scrollx">
+<table class="spec">
+  <tr><th>Field</th><th>Type</th><th>Drives</th></tr>
+  <tr><td><code>status</code></td><td>8 values: <code>queued</code>, <code>running</code>, <code>completed</code>, <code>completed_degraded</code>, <code>failed</code>, <code>cancelled</code>, <code>parked</code>, <code>needs_input</code></td><td>Which of the 6 card variants renders</td></tr>
+  <tr><td><code>current_stage</code></td><td>string key</td><td>The "Current phase: …" line — raw key, not a label</td></tr>
+  <tr><td><code>stage_detail</code></td><td>map: stage_key → <code>{items:[…], summary:{…}}</code></td><td>The whole activity feed, in insertion order</td></tr>
+  <tr><td><code>started_at</code> / <code>completed_at</code></td><td>timestamp</td><td>Elapsed clock and final duration</td></tr>
+  <tr><td><code>cost_usd_total</code></td><td>decimal string</td><td>Running and final cost</td></tr>
+  <tr><td><code>chain_status</code></td><td><code>verified</code> | <code>broken</code> | <code>null</code></td><td>Download vs locked vs unverified inset</td></tr>
+  <tr><td><code>error_message</code></td><td>string</td><td>Failure body / park reason (rendered as-is, incl. the <code>[park#n]</code> marker)</td></tr>
+  <tr><td>item <code>status</code></td><td><code>pending</code>, <code>running</code>, <code>done</code>, <code>retry</code>, <code>failed</code></td><td>Agent-card icon + colour</td></tr>
+  <tr><td>item <code>task_prompt</code>, <code>cost_usd</code>, <code>facts</code>, <code>retry</code>, <code>audit_id</code></td><td>all optional</td><td>Expandable prompt, result line, retry chip, audit drill-down</td></tr>
+</table>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>The 14 engine stages</h3><span class="when">tribunal engine · <code>runs/stages.py</code></span></div>
+  <div class="stageWrap">
+    <div class="scrollx">
+    <table class="spec" style="margin:0">
+      <tr><th>#</th><th>key</th><th>label</th><th>#</th><th>key</th><th>label</th></tr>
+      <tr><td>1</td><td><code>intake</code></td><td>Adaptive intake</td><td>8</td><td><code>merge</code></td><td>Cross-provider merge</td></tr>
+      <tr><td>2</td><td><code>workshop</code></td><td>Question workshop</td><td>9</td><td><code>gate</code></td><td>Verification gates</td></tr>
+      <tr><td>3</td><td><code>research_division</code></td><td>Research division</td><td>10</td><td><code>verify</code></td><td>Skeptic verification</td></tr>
+      <tr><td>4</td><td><code>deep_research</code></td><td>Deep research</td><td>11</td><td><code>adjudicate</code></td><td>Adjudication</td></tr>
+      <tr><td>5</td><td><code>own_research</code></td><td>Own research</td><td>12</td><td><code>coverage</code></td><td>Coverage gate</td></tr>
+      <tr><td>6</td><td><code>distill</code></td><td>Claim distillation</td><td>13</td><td><code>conflict</code></td><td>Conflict detection</td></tr>
+      <tr><td>7</td><td>—</td><td>—</td><td>14</td><td><code>synthesize</code></td><td>Final synthesis</td></tr>
+    </table>
+    </div>
+  </div>
+  <div class="note">
+    <div class="flag">
+      <b>The labels exist but are never shown.</b> The engine defines a human label for every stage
+      ("Deep research", "Skeptic verification"). The UI renders the raw <code>stage_key</code> instead —
+      <code>Current phase: deep_research</code> — and the feed groups by that key with no visible
+      stage heading at all. An operator sees a flat list of agent cards with no indication of which
+      of the 14 phases each belongs to.
+    </div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">03 · state A</span>Running — the live card</h2>
+<p class="secIntro">
+  The state an operator stares at for 30–60 minutes. Shown here mid-run with every agent-card
+  variant present at once: done, running, retrying, failed and pending, plus an expanded task prompt,
+  two per-stage summary cards and an open audit drill-down.
+</p>
+
+<div class="state">
+  <div class="stateHead">
+    <h3>A1 · running, full feed</h3>
+    <span class="when"><code>status: running</code> · this is the default long-lived state</span>
+  </div>
+  <div class="stageWrap">
+    <div class="rrp rrp--active">
+      <div class="rrpTop">
+        <svg class="i lg spin c-ink" style="margin-top:2px"><use href="#i-loader"/></svg>
+        <div class="grow">
+          <div class="eyebrow eyebrow--active">Deep research running</div>
+          <div class="rrpBody">Nestor's researcher is working through the phases below. This usually takes a few minutes — you may leave this tab open.</div>
+        </div>
+        <div class="clock">
+          <span class="big">18:42</span>
+          <span class="cost">Cost: $12.84</span>
+          <button class="btn btn--stop"><svg class="i sm"><use href="#i-stop"/></svg>Stop research</button>
+        </div>
+      </div>
+
+      <div class="curStage">Current phase: deep_research</div>
+
+      <div class="feedHead">
+        <span class="ttl">Activity</span>
+        <button class="scroll"><svg class="i sm"><use href="#i-arrowdown"/></svg>Scroll to latest</button>
+      </div>
+
+      <ul class="feed">
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--done">Adaptive intake — parse brief, 11 client questions</div>
+              <div class="agentResult">done · $0.04</div>
+            </div>
+          </div>
+        </li>
+
+        <div class="summaryCard">Worked for 24s · 3 actions · $0.11</div>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--done">Question workshop — 62 candidates, 15 winners</div>
+              <div class="agentResult">done · $1.87</div>
+              <button class="linkBtn"><svg class="i sm"><use href="#i-chevron"/></svg>Show task</button>
+            </div>
+          </div>
+        </li>
+
+        <div class="summaryCard">Worked for 3m 12s · 47 actions · $1.87 · 128 items read</div>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--done">Angle #1 — EU speciality coffee import volumes 2024–2026 (OpenAI)</div>
+              <div class="agentResult">done · 21 facts · $2.40</div>
+              <button class="linkBtn"><svg class="i sm"><use href="#i-search"/></svg>View audit body</button>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--done">Angle #2 — Belgian roaster margin structure (Gemini)</div>
+              <div class="agentResult">done · 14 facts · $1.95</div>
+              <button class="linkBtn"><svg class="i sm"><use href="#i-search"/></svg>Hide audit body</button>
+
+              <div class="auditPanel">
+                <div class="ah"><span>Audit body — redacted</span><span style="cursor:pointer">Close</span></div>
+<pre>{
+  "audit_id": "a7f3c2e1-…",
+  "provider": "gemini",
+  "model": "gemini-2.5-pro-deep-research",
+  "request": {
+    "query": "Belgian speciality coffee roaster gross margin
+              structure 2024-2026, wholesale vs direct-to-consumer",
+    "tools": ["google_search", "url_context"]
+  },
+  "usage": { "input_tokens": 18422, "output_tokens": 6104 },
+  "cost_usd": "1.95",
+  "prev_hash": "9c1e…4b2a",
+  "hash": "3f7d…8e10"
+}</pre>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i spin c-pink"><use href="#i-loader"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--running">Angle #3 — EU deforestation regulation timeline for cocoa &amp; coffee (OpenAI)</div>
+              <div class="agentResult">running</div>
+              <button class="linkBtn"><svg class="i sm" style="transform:rotate(180deg)"><use href="#i-chevron"/></svg>Show less</button>
+<pre class="promptPre">Research ONLY this sub-question; the sibling sub-questions are
+handled separately.
+
+SUB-QUESTION
+When does EUDR enforcement begin for coffee importers placing
+product on the EU market, and what documentary evidence must a
+Belgian importer hold at the point of first placement?
+
+CONSTRAINTS
+- Prefer primary sources (EUR-Lex, EC guidance, national CA).
+- Report every claim as a structured fact with SOURCE_URL.
+- Do not speculate beyond what the source states.</pre>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-amber"><use href="#i-rotate"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--retry">Angle #4 — Dutch vs Belgian retail price benchmarks (Gemini)</div>
+              <div class="agentResult">retrying</div>
+              <div class="retryChip"><svg class="i sm"><use href="#i-rotate"/></svg>retry 2/3 — waiting 8s</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-red"><use href="#i-alert"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--failed">Angle #6 — competitor landscape, direct-trade importers (own researcher)</div>
+              <div class="agentResult">failed</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-grey"><use href="#i-circle"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--pending">Claim distillation</div>
+              <div class="agentResult">pending</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="agent">
+          <div class="agentRow">
+            <span class="agentIcon"><svg class="i c-grey"><use href="#i-circle"/></svg></span>
+            <div class="agentMain">
+              <div class="agentName--pending">Skeptic verification</div>
+              <div class="agentResult">pending</div>
+            </div>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <div class="note">
+    <b>Anatomy.</b> Left border <code>#FF2D87</code>. Spinner + eyebrow + body on the left; elapsed clock,
+    running cost and Stop stacked right. Then the raw current-stage key, then the feed.
+    <ul>
+      <li><b>Agent card</b> = icon + name + a result line assembled from whatever the item carries:
+          <code>done · 21 facts · $2.40</code>. Optional expandable task prompt, retry chip, audit link.</li>
+      <li><b>Summary card</b> closes out a stage: <code>Worked for 3m 12s · 47 actions · $1.87 · 128 items read</code>.</li>
+      <li><b>Failed agents show no reason.</b> The card says "failed" and stops there — no error text, no link.</li>
+    </ul>
+    <div class="flag">
+      <b>Known problems in this state.</b>
+      <ul>
+        <li><b>No stage grouping.</b> Agent cards from all 14 phases render as one flat list. There is no phase heading, no progress-through-phases indicator, nothing to tell you that the run is 4 of 14 phases in.</li>
+        <li><b>No logs.</b> This feed is the <i>only</i> window into the run. There is no log view anywhere in the product — engine logs are readable only through Cloud Logging by an engineer. "Failed" with no reason is where an operator's understanding ends.</li>
+        <li><b>Parallel dispatch is invisible.</b> Angles #1–#6 are dispatched concurrently across four research streams, but they render as a flat sequential list. Nothing shows what runs in parallel, which stream an agent belongs to, or how many are in flight.</li>
+        <li><b>Inner scroll.</b> The feed is capped at 28rem and scrolls inside the page's own scroll.</li>
+        <li><b>Nothing is filterable.</b> No way to show only failures, only a phase, or only one research stream.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="state">
+  <div class="stateHead">
+    <h3>A2 · starting</h3>
+    <span class="when"><code>status: queued</code> or running with an empty <code>stage_detail</code></span>
+  </div>
+  <div class="stageWrap">
+    <div class="rrp rrp--active">
+      <div class="rrpTop">
+        <svg class="i lg spin c-ink" style="margin-top:2px"><use href="#i-loader"/></svg>
+        <div class="grow">
+          <div class="eyebrow eyebrow--active">Deep research running</div>
+          <div class="rrpBody">Research is starting…</div>
+        </div>
+        <div class="clock">
+          <span class="big">00:07</span>
+          <span class="cost">Cost: —</span>
+          <button class="btn btn--stop"><svg class="i sm"><use href="#i-stop"/></svg>Stop research</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    Body text swaps to "Research is starting…" and the feed is absent entirely. Cost renders as an em-dash.
+    <div class="flag"><b>Problem.</b> This state can persist for minutes with no indication of what is being waited on — queued behind a worker, claiming, or already dispatching.</div>
+  </div>
+</div>
+
+<div class="state">
+  <div class="stateHead">
+    <h3>A3 · Stop confirmation</h3>
+    <span class="when">the only way to stop a run, shipped 27 Jul 2026</span>
+  </div>
+  <div class="stageWrap" style="padding:0">
+    <div class="modalStage">
+      <div class="modal">
+        <h4>Stop research?</h4>
+        <p>This stops the research that is currently running. The costs incurred so far are not refunded, and the run cannot be continued afterwards — you can only start a completely new research run. Continue?</p>
+        <div class="modalFoot">
+          <button class="btn btn--outline">Cancel</button>
+          <button class="btn btn--primary">Stop research</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    Uses the same <code>AlertDialog</code> as the research trigger. While the request is in flight the
+    Stop button shows a spinner and the label "Stopping…".
+    <div class="ok"><b>Note.</b> This is brand new. Until last week the only way to stop a run was to pause the entire Cloud Run worker service — which did not stop the run and nearly caused a fresh worker to re-execute it at full cost.</div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">04 · state B</span>Completed — and its three chain variants</h2>
+<p class="secIntro">
+  On success the card collapses to a summary and the feed freezes but stays clickable. Which
+  download affordance appears depends on <code>chain_status</code> — the audit hash chain that makes the
+  run legally defensible.
+</p>
+
+<div class="state">
+  <div class="stateHead"><h3>B1 · completed, chain verified</h3><span class="when"><code>status: completed</code> · <code>chain_status: verified</code></span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--done">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--done">Research completed</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The deep research is complete. All phases have been worked through.</div>
+      <div class="metaRow">
+        <span>Completed on 27 Jul 2026 14:38</span>
+        <span>Total cost: $46.12</span>
+        <span>Duration: 41:07</span>
+      </div>
+      <div style="margin-top:16px"><button class="btn btn--primary"><svg class="i"><use href="#i-download"/></svg>Download raw output</button></div>
+      <div style="margin-top:16px"><button class="btn btn--outline">View verification report</button></div>
+
+      <div class="feedSep">
+        <div class="feedHead">
+          <span class="ttl">Activity</span>
+          <button class="scroll"><svg class="i sm"><use href="#i-arrowdown"/></svg>Scroll to latest</button>
+        </div>
+        <ul class="feed feed--frozen">
+          <li class="agent"><div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain"><div class="agentName--done">Angle #1 — EU speciality coffee import volumes 2024–2026 (OpenAI)</div>
+            <div class="agentResult">done · 21 facts · $2.40</div>
+            <button class="linkBtn"><svg class="i sm"><use href="#i-search"/></svg>View audit body</button></div>
+          </div></li>
+          <li class="agent"><div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain"><div class="agentName--done">Final synthesis — 8,400 word report, 63 citations</div>
+            <div class="agentResult">done · $3.10</div></div>
+          </div></li>
+        </ul>
+        <div class="summaryCard">Worked for 41m 7s · 214 actions · $46.12 · 1,180 items read</div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <b>The good part.</b> The frozen feed is a genuine replay — every audit drill-down stays reachable
+    after the run. This is the strongest thing in the current design and should survive the redesign.
+    <div class="flag"><b>Problem.</b> Duration renders as <code>—</code> whenever <code>started_at</code> or <code>completed_at</code> is missing from the mirror row. That was the common case until a fix landed on 27 Jul 2026; it is written but not yet deployed.</div>
+  </div>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>B2 · completed, chain broken</h3><span class="when"><code>chain_status: broken</code> — download locked</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--done">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--done">Research completed</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The deep research is complete. All phases have been worked through.</div>
+      <div class="metaRow">
+        <span>Completed on 27 Jul 2026 14:38</span><span>Total cost: $46.12</span><span>Duration: 41:07</span>
+      </div>
+      <div class="inset inset--locked">
+        <div class="insetHead" style="color:var(--red)"><svg class="i sm"><use href="#i-lock"/></svg>Audit chain broken — download locked</div>
+        <div class="insetBody">This run's audit hash chain did not verify, so the raw output is locked. Re-verify the chain to lift the lock.</div>
+        <button class="btn btn--primary"><svg class="i"><use href="#i-alert"/></svg>Re-verify chain</button>
+      </div>
+      <div style="margin-top:16px"><button class="btn btn--outline">View verification report</button></div>
+    </div>
+  </div>
+  <div class="note">A failed re-verify raises a toast — "The chain is still broken — the download stays locked" — and the lock remains.</div>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>B3 · completed, chain never checked</h3><span class="when"><code>chain_status: null</code></span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--done">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--done">Research completed</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The deep research is complete. All phases have been worked through.</div>
+      <div class="metaRow"><span>Completed on 22 Jul 2026 09:14</span><span>Total cost: $38.90</span><span>Duration: —</span></div>
+      <div class="inset inset--unverified">
+        <div class="insetHead" style="color:rgba(0,0,0,.7)">Audit chain not yet verified</div>
+        <div class="insetBody">This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.</div>
+        <button class="btn btn--primary"><svg class="i"><use href="#i-alert"/></svg>Verify chain</button>
+      </div>
+    </div>
+  </div>
+  <div class="note">Happens on older rows, or when the poll driver died before stamping. Note the em-dash duration.</div>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>B4 · completed — degraded</h3><span class="when"><code>status: completed_degraded</code> · amber border, otherwise identical</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--degraded">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-alert"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--done">Research completed — degraded</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The deep research finished, but part of the output fell short. Open the verification report below to see exactly what was lost.</div>
+      <div class="metaRow"><span>Completed on 27 Jul 2026 15:02</span><span>Total cost: $44.80</span><span>Duration: 38:22</span></div>
+      <div style="margin-top:16px"><button class="btn btn--primary"><svg class="i"><use href="#i-download"/></svg>Download raw output</button></div>
+      <div style="margin-top:16px"><button class="btn btn--outline">View verification report</button></div>
+    </div>
+  </div>
+  <div class="note">
+    Deliberately renders the <i>success</i> card, not the failure card — a degraded run still cost ~$45 and
+    must keep its download, verification report and frozen feed.
+    <div class="flag"><b>Problem.</b> The card never says <i>what</i> degraded. The reasons live one click away in the verification report, and the amber alert icon is tinted emerald green — a copy/paste artifact in the current code.</div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">05 · state C</span>Paused, failed, cancelled</h2>
+
+<div class="state">
+  <div class="stateHead"><h3>C1 · parked — resume card</h3><span class="when"><code>status: parked</code> · the engine hit a wall it cannot pass alone</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--parked">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-amber" style="margin-top:1px"><use href="#i-alert"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--parked">Research paused</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The research stopped at a wall it cannot get past on its own — nothing usable could be produced yet. Everything already paid for is saved. Resuming is free and picks up where it stopped.</div>
+      <div style="margin-bottom:16px">
+        <div class="errLabel">Why it paused</div>
+        <div class="errBody errBody--amber">[park#1] coverage gate: 3 of 11 client questions have no supporting claim after 2 passes. Re-entry would exceed the configured pass ceiling.</div>
+      </div>
+      <button class="btn btn--primary">Resume research</button>
+      <div class="feedSep">
+        <div class="feedHead"><span class="ttl">Activity</span>
+          <button class="scroll"><svg class="i sm"><use href="#i-arrowdown"/></svg>Scroll to latest</button></div>
+        <ul class="feed feed--frozen">
+          <li class="agent"><div class="agentRow">
+            <span class="agentIcon"><svg class="i c-emerald"><use href="#i-check"/></svg></span>
+            <div class="agentMain"><div class="agentName--done">Coverage gate — pass 2</div>
+            <div class="agentResult">done · $0.62</div></div></div></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    Deliberately <i>not</i> the failure card: a retry would throw away every checkpoint already paid for,
+    whereas Resume continues the same run for free. No download and no verification report — a parked
+    run has neither.
+    <div class="flag"><b>Problem.</b> The <code>[park#1]</code> marker is shown raw to the operator. It is engine bookkeeping (whether the park mail was sent), deliberately not parsed or stripped.</div>
+  </div>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>C2 · failed</h3><span class="when"><code>status: failed</code> — also where <code>needs_input</code> lands</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--failed">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-red" style="margin-top:1px"><use href="#i-x"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--failed">Research failed</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The research stopped prematurely. Review the error message below and try again.</div>
+      <div style="margin-bottom:16px">
+        <div class="errLabel">Error message</div>
+        <div class="errBody errBody--red">deep_research: provider returned model_not_found for 'o3-deep-research' (6 consecutive angle failures, stream abandoned)</div>
+      </div>
+      <button class="btn btn--primary">Try again</button>
+    </div>
+  </div>
+  <div class="note">
+    <b>No feed.</b> The failure card drops the activity feed entirely — everything the run did before
+    dying becomes unreachable from the UI.
+    <div class="flag"><b>Problem.</b> This is the state where an operator most needs the log and the feed, and it is the one state that shows neither. The single-line error is all there is.</div>
+  </div>
+</div>
+
+<div class="state">
+  <div class="stateHead"><h3>C3 · cancelled</h3><span class="when"><code>status: cancelled</code> — after the Stop button</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--cancelled">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg" style="margin-top:1px;color:rgba(0,0,0,.5)"><use href="#i-alert"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--cancelled">Research cancelled</div></div>
+      </div>
+      <div class="rrpBody" style="margin-bottom:12px">The research was cancelled before it could finish.</div>
+      <button class="btn btn--primary">Try again</button>
+    </div>
+  </div>
+  <div class="note">Grey border, no cost shown, no feed, no duration — the operator is told nothing about what the cancelled run had already produced or spent.</div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">06 · state D</span>Verification report (expanded)</h2>
+<p class="secIntro">
+  Reached from "View verification report" on a completed card. Renders inline, pushing the frozen feed
+  further down the page.
+</p>
+
+<div class="state">
+  <div class="stateHead"><h3>D1 · verification report open</h3><span class="when">superadmin-only surface</span></div>
+  <div class="stageWrap">
+    <div class="rrp rrp--done">
+      <div class="rrpTop" style="margin-bottom:8px">
+        <svg class="i lg c-emerald" style="margin-top:1px"><use href="#i-check"/></svg>
+        <div class="grow"><div class="eyebrow eyebrow--done">Research completed</div></div>
+      </div>
+      <div class="metaRow" style="margin-bottom:4px"><span>Completed on 27 Jul 2026 14:38</span><span>Total cost: $46.12</span><span>Duration: 41:07</span></div>
+      <div style="margin-top:16px"><button class="btn btn--outline">Hide verification report</button></div>
+
+      <div class="vr">
+        <h5>Verification report</h5>
+        <h6>Gate funnel</h6>
+        <div class="funnel">
+          <span>extracted: 284</span><span>deduped: 197</span><span>gated: 152</span>
+          <span>verified: 121</span><span>adjudicated: 118</span><span>cited: 63</span>
+        </div>
+
+        <h6>Refuted claims</h6>
+        <div class="claim">EU import volumes for speciality grade fell 12% in 2025.
+          <div class="ev">Evidence · ICO 2025 annual review reports +3.1% for the same segment · Confidence: high</div></div>
+
+        <h6>Superseded verdicts (true, since changed)</h6>
+        <div class="claim">EUDR enforcement begins 30 Dec 2024.
+          <div class="ev">Effect · superseded by the Dec 2024 delay to 30 Dec 2025 for large operators</div></div>
+
+        <h6>Unverified (7)</h6>
+        <div class="claim" style="border-left-color:rgba(0,0,0,.1);color:rgba(0,0,0,.6)">
+          121 of 128 claims carry a verdict; the rest are unverified.</div>
+
+        <h6>True itemized cost</h6>
+        <div class="funnel">
+          <span>openai: $18.40</span><span>gemini: $14.22</span><span>anthropic: $9.10</span>
+          <span>serpapi: $2.40</span><span>tool fees: pending</span><span>Total so far: $46.12</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    Genuinely valuable content — the funnel, refuted claims, superseded verdicts and itemized cost are
+    the audit story of the run.
+    <div class="flag"><b>Problem.</b> It is buried behind a button on a card that is itself buried on the intake page, it expands inline rather than getting its own space, and it has no relationship to the activity feed showing the same run.</div>
+  </div>
+</div>
+
+<!-- ======================================================================= -->
+<h2 class="sec"><span class="num">07 · brief</span>What the redesign has to solve</h2>
+<p class="secIntro">
+  Collected from the operator, plus what the states above expose. Nothing here is designed yet — this
+  is the problem list to design against.
+</p>
+
+<div class="scrollx">
+<table class="spec">
+  <tr><th>#</th><th>Requirement</th><th>Today</th></tr>
+  <tr>
+    <td>1</td>
+    <td><b>A run gets its own page.</b> Openable, closeable, re-openable, with its own URL.</td>
+    <td>One card embedded in the intake detail route. No URL, not shareable, scrolls away.</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><b>Closing and reopening shows true progress.</b> The elapsed timer must not restart on each visit.</td>
+    <td>The clock falls back to <code>Date.now()</code> whenever <code>started_at</code> is missing, so it restarts from zero on every page load. A fix landed 27 Jul 2026 — written, not yet deployed.</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td><b>Logs are visible in the product.</b> An operator should be able to see what the run is doing and why something failed.</td>
+    <td>No log view exists. The activity feed is the only window. A failed agent shows the word "failed" and nothing else. Engine logs are Cloud Logging only.</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td><b>Agent dispatch is legible.</b> Show what runs in parallel, across which research streams, grouped by phase.</td>
+    <td>A flat, ungrouped, chronological list. Four concurrent research streams and 14 engine phases are all flattened into one column with no headings.</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td><b>Failure states keep their evidence.</b></td>
+    <td>The failed and cancelled cards drop the feed entirely — the states that most need history are the ones that discard it.</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><b>Phase progress is visible.</b> "4 of 14, currently Deep research."</td>
+    <td>A raw key: <code>Current phase: deep_research</code>. The engine's human labels exist and are never used.</td>
+  </tr>
+</table>
+</div>
+
+<div class="state" style="margin-top:26px">
+  <div class="stateHead"><h3>Constraints worth keeping</h3><span class="when">things the current build gets right</span></div>
+  <div class="note" style="border-top:0">
+    <ul>
+      <li><b>Fully data-driven.</b> No hardcoded stage count — the feed renders whatever the run reports. Adding engine phases costs the UI nothing. Preserve this.</li>
+      <li><b>The frozen feed.</b> After a completed run the feed stays clickable, audit drill-downs included. It is a genuine replay of what happened.</li>
+      <li><b>Every optional field degrades cleanly.</b> A legacy item with only <code>{name, status}</code> renders as a plain card with no cost, prompt, retry or audit affordance.</li>
+      <li><b>Three locales.</b> Every string exists in en, nl and fr and is gated in CI. New copy needs all three.</li>
+      <li><b>Superadmin-only by placement.</b> No client-facing route imports this component.</li>
+      <li><b>Design language.</b> IBM Plex Mono for all chrome/metadata, Plex Sans for body, Plex Serif for headings. Flat, no rounded corners, no shadows, 4px left border as the state signal.</li>
+    </ul>
+  </div>
+</div>
+
+<p style="margin-top:56px;font-family:var(--mono);font-size:11px;text-transform:uppercase;
+   letter-spacing:.12em;color:rgba(0,0,0,.4);border-top:1px solid rgba(0,0,0,.2);padding-top:18px">
+  Source · ResearchRunProgress.tsx (924 lines) · locales/en/intake.json · runs/stages.py · styles.css
+  — static reproduction, no live data
+</p>
+
+</div>
+</body>
+</html>

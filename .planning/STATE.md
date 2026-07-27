@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-27T11:51:24.491Z"
+last_updated: "2026-07-27T18:08:34.422Z"
 last_activity: 2026-07-27 -- Phase 15.2 execution started
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 7
   total_plans: 70
-  completed_plans: 62
-  percent: 70
+  completed_plans: 69
+  percent: 64
 ---
 
 # Project State
@@ -116,6 +116,7 @@ Progress: [██████████] 100%
 ### Roadmap Evolution
 
 - Phase 15 edited: Deferred after Phase 19 (operator decision 2026-07-21): spine 16-19 ships on engine as-is; Phase 16 dep on 15 removed (dynamic stage-list contract added); Phase 20 now also depends on 15
+- Phase 15.3 inserted after Phase 15: Research run page — engine run-events + dedicated run route. Operator decisions 2026-07-27: (a) ships in the SAME deploy batch as the 15.2 gap fixes, (b) engine events are built BEFORE the UI. Does not block 15.2's operator deploy; must merge to master before that deploy's image build. (URGENT)
 
 ### Decisions
 
