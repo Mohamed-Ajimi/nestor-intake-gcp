@@ -33,11 +33,34 @@ Coverage, in two halves:
    15. emitted facts are claim-shaped, clamped, and attributed to "own"
    16. no raw HTTP to a model-chosen URL (T-15.2-33, source assertion)
 
+  FEED (plan 15.3-04) — the emit sites, in this same file because
+  `test_own_researcher.py` is ALREADY registered in the engine gate and this
+  plan therefore adds no test file and does not touch `EXPECTED_FILES`
+   17. the tool line names both spending ceilings
+   18. the search line equals the CLAMPED, SCRUBBED string actually dispatched
+   19. a fetched page is named BY HOST and never by URL (T-15.3-30)
+   20. a refused search is NOT reported as a search
+   21. the stream that never ran, and the stream that stops halfway, say so
+   22. `thinking` is capped at one line per tool round (T-15.3-33)
+   23. a recorder that RAISES changes nothing about the session
+   24. NOR does a turn whose shape makes the LINE ITSELF raise — driven through
+       the real emitter, with a negative control (T-15.3-34b)
+   25. a long provider poll narrates itself in words: elapsed minutes, attempt
+       number, and the sentence that separates a wait from a stall
+   26. a rejoined job says so; a refused job id never reaches a stored row
+
+WHY 23 AND 24 ARE BOTH HERE. A raising recorder proves CALLING the emitter is
+safe. It is structurally incapable of proving that BUILDING the arguments is
+safe, because by the time any recorder runs they already exist. 24 uses the REAL
+`run_events` module — nothing on it monkeypatched — and hands the loop a turn
+whose `agent_done` counts and whose fetched URL cannot be read.
+
 Cloud Build gate:
   gcloud builds submit tribunal --config=tribunal/cloudbuild.test-engine.yaml
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import inspect
 import logging
@@ -50,7 +73,17 @@ import pytest
 
 from nestor_pulse_sdk.audit import gcs_blob
 from nestor_pulse_sdk.pipeline.tribunal import own_researcher, reliability, serpapi
+from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
 from nestor_pulse_sdk.pipeline.tribunal.serpapi import SerpApiError, SerpApiPlan
+from nestor_pulse_sdk.runs import run_events
+
+# The emit-site recorder, IMPORTED rather than rebuilt — the same reason
+# `test_run_event_emit.py` gives for importing the stubbed engine harness: a
+# second recorder is a second thing to drift. It is installed over `emit` and
+# NEVER over `emit_safe`, so the real thunk call and the real try/except stay in
+# the path under test; patching `emit_safe` would turn every assertion below
+# into an assertion about the test double.
+from nestor_pulse_sdk.tests.test_run_event_emit import _Recorder
 
 #: A key-shaped string that must never appear in a log record or an exception.
 _FAKE_KEY = "SERPAPI-TEST-KEY-must-never-be-logged-8f3a91"
@@ -792,3 +825,533 @@ async def test_deep_research_audited_report_carries_the_d8_block(monkeypatch):
     assert "Here is what I established." in envelope["report"]
     assert envelope["fact_source"] == "emit_fact_list"
     assert envelope["facts"][0]["found_by"] == ["own"]
+
+
+# ===========================================================================
+# FEED HALF — the run-event emit sites (plan 15.3-04)
+#
+# Nothing here opens a run. `open_run` is 15.3-03's and a second call is refused
+# with a warning; these tests record what the SITES produce, which is the only
+# thing this plan owns.
+# ===========================================================================
+
+
+def _install_recorder(monkeypatch, *, raises: bool = False) -> _Recorder:
+    recorder = _Recorder(raises=raises)
+    monkeypatch.setattr(run_events, "emit", recorder)
+    return recorder
+
+
+def _emitter_log(caplog) -> str:
+    """Only what the EMITTER logged. Records from other loggers would make an
+    assertion about the swallowed exception type pass or fail for the wrong
+    reason."""
+    return "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("nestor_pulse_sdk.runs.run_events")
+    )
+
+
+def _fetch_turn_with(content: Any) -> _ScriptedResponse:
+    """A server-tool turn whose `web_fetch_tool_result` carries `content` verbatim."""
+    return _ScriptedResponse(
+        stop_reason="tool_use",
+        content=[
+            {"type": "server_tool_use", "id": "srv_1", "name": "web_fetch", "input": {}},
+            {
+                "type": "web_fetch_tool_result",
+                "tool_use_id": "srv_1",
+                "content": content,
+            },
+        ],
+    )
+
+
+def _emit_turn_with_raw_input(raw_input: Any) -> _ScriptedResponse:
+    """An emit_fact_list turn whose tool input is whatever the model shaped it as."""
+    return _ScriptedResponse(
+        stop_reason="tool_use",
+        content=[
+            {
+                "type": "tool_use",
+                "id": "tu_emit",
+                "name": "emit_fact_list",
+                "input": raw_input,
+            }
+        ],
+    )
+
+
+async def test_the_tool_line_names_both_spending_ceilings(monkeypatch):
+    """The design's "Loaded X — Y" line, with the two numbers that bound spend."""
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited([_emit_turn()])
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN, max_searches=4, max_fetch_uses=5,
+    )
+
+    tools = recorder.texts("tool")
+    assert len(tools) == 1, "the tool set is loaded once per session, so say it once"
+    assert "serpapi_search" in tools[0]
+    assert "web_fetch" in tools[0]
+    assert "4 searches" in tools[0]
+    assert "5 page reads" in tools[0]
+    assert all(row["stage"] == "own_research" for row in recorder.rows)
+
+
+async def test_the_search_line_is_the_string_that_actually_left_the_platform(
+    monkeypatch,
+):
+    """(a) EQUALITY, not containment, against the value handed to the provider.
+
+    The model authors a query carrying an email address. `_clamp_search_input`
+    scrubs it before dispatch (D-I), and the feed row must carry the SCRUBBED,
+    CLAMPED string — a row describing a different string from the one that left
+    the platform would be a false record, and one carrying the unscrubbed
+    original would be the disclosure the scrub exists to prevent.
+    """
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    authored = "roaster margins contact someone@example.com for the dataset"
+    audited = _ScriptedOwnAudited(
+        [_tool_use_search("tu_1", q=authored), _emit_turn()], results=[]
+    )
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    dispatched = audited.search_calls[0]["q"]
+    assert "someone@example.com" not in dispatched, (
+        "precondition: the clamp must have scrubbed this query"
+    )
+    searches = [
+        text for text in recorder.texts("search") if text.startswith("Searching — ")
+    ]
+    assert len(searches) == 1
+    assert searches[0] == f"Searching — {dispatched}"
+    assert "someone@example.com" not in searches[0]
+
+
+async def test_a_refused_search_is_not_reported_as_a_search(monkeypatch):
+    """(20) The budget is spent, so nothing left the platform and nothing is claimed."""
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited(
+        [
+            _tool_use_search("tu_1", q="a"),
+            _tool_use_search("tu_2", q="b"),
+            _tool_use_search("tu_3", q="c"),
+            _emit_turn(),
+        ],
+        results=[],
+    )
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN, max_searches=1,
+    )
+
+    dispatched = [text for text in recorder.texts("search") if text.startswith("Searching")]
+    assert len(audited.search_calls) == 1
+    assert dispatched == ["Searching — a"], (
+        "two of the three searches never ran; a feed line for them would assert "
+        "work this run did not do"
+    )
+
+
+async def test_a_fetched_page_is_named_by_host_and_never_by_url(monkeypatch):
+    """(b) T-15.3-30: the host, and no scheme, path or query string."""
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited(
+        [
+            _server_fetch_turn("https://beliancoffee.be/prices?client=acme&id=8891"),
+            _emit_turn(),
+        ]
+    )
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    fetches = [text for text in recorder.texts("search") if text.startswith("Fetching")]
+    assert fetches == ["Fetching beliancoffee.be"]
+    for text in recorder.texts("search"):
+        assert "//" not in text, "no scheme reaches the feed row"
+        assert "client=acme" not in text, "no query string reaches the feed row"
+        assert "8891" not in text
+
+
+async def test_the_stream_that_never_ran_says_why(monkeypatch):
+    """(c) The D-12 path stops being SILENT. Silence reads as absence."""
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited([])
+
+    result = await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited,
+        run_id=_RUN_ID, tenant_id=_TENANT_ID,
+    )
+
+    assert result["degradation_reasons"] == ["serpapi_key_missing"]
+    fails = recorder.texts("agent_fail")
+    assert len(fails) == 1
+    assert "serpapi_key_missing" in fails[0], "a lost stream is always NAMED"
+    assert "continues" in fails[0]
+    # Nothing else was claimed: the stream never loaded a tool or ran a search.
+    assert recorder.of("tool") == []
+    assert recorder.of("search") == []
+
+
+async def test_a_stream_that_loses_its_provider_halfway_says_so(monkeypatch):
+    """(21, second half) A 402 mid-session is a named loss, not fewer lines."""
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited(
+        [_tool_use_search("tu_1", q="a"), _emit_turn()],
+        search_error=SerpApiError("credit balance too low", status_code=402),
+    )
+
+    result = await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    assert "serpapi_breaker_open" in result["degradation_reasons"]
+    fails = recorder.texts("agent_fail")
+    assert len(fails) == 1
+    assert "serpapi_breaker_open" in fails[0]
+    assert "mid-session" in fails[0]
+
+
+async def test_thinking_is_capped_at_one_line_per_tool_round(monkeypatch):
+    """(22) T-15.3-33: a chatty turn cannot flood the stage."""
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    chatty = _ScriptedResponse(
+        stop_reason="tool_use",
+        content=[
+            {"type": "text", "text": "First I will check the duty schedule."},
+            {"type": "text", "text": "Then the retail margin series."},
+            {"type": "text", "text": "And finally the import volumes."},
+            {"type": "tool_use", "id": "tu_1", "name": "serpapi_search",
+             "input": {"q": "belgian diesel duty"}},
+        ],
+    )
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited([chatty, _emit_turn()], results=[])
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    thinking = recorder.texts("thinking")
+    # Two turns produced text (the chatty one and the emit turn's prose), so at
+    # most two lines — never one per text block.
+    assert len(thinking) == 2
+    assert "First I will check the duty schedule." in thinking[0]
+    assert "And finally the import volumes." in thinking[0]
+    assert len(thinking[0]) <= own_researcher._THINKING_FEED_CHARS
+
+
+async def test_the_done_line_counts_facts_pages_and_what_was_skipped(monkeypatch):
+    """The design's own-query result line, with a skipped count that is real.
+
+    Two of the three entries the model emitted have no usable source URL, so
+    this module dropped them. `2 skipped` is that difference and nothing else.
+    """
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+    recorder = _install_recorder(monkeypatch)
+    audited = _ScriptedOwnAudited(
+        [
+            _server_fetch_turn("https://fin.belgium.be/duty"),
+            _emit_turn(
+                facts=[
+                    {
+                        "statement": "Diesel duty in Belgium rose in April 2026.",
+                        "source_url": "https://fin.belgium.be/duty",
+                    },
+                    {"statement": "This one cites a scheme we refuse.",
+                     "source_url": "ftp://example.com/x"},
+                    {"statement": "This one cites nothing at all."},
+                ],
+                not_found=[],
+            ),
+        ]
+    )
+
+    await own_researcher.run_own_research(
+        question="q", facet="f", audited=audited, run_id=_RUN_ID,
+        tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    done = recorder.texts("agent_done")
+    assert done == ["Own query done — 1 facts from 1 pages · 2 skipped"]
+
+
+async def test_a_recorder_that_raises_changes_nothing(monkeypatch):
+    """(d) CALLING the emitter is safe — every site, on the real path.
+
+    This says nothing about BUILDING what is passed to it; that is the next
+    test's job, and no raising recorder can ever do it.
+    """
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+
+    def _script():
+        return [
+            _server_fetch_turn("https://example.com/page"),
+            _tool_use_search("tu_1", q="a"),
+            _emit_turn(),
+        ]
+
+    clean = await own_researcher.run_own_research(
+        question="q", facet="f", audited=_ScriptedOwnAudited(_script(), results=[]),
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    broken_recorder = _install_recorder(monkeypatch, raises=True)
+    broken = await own_researcher.run_own_research(
+        question="q", facet="f", audited=_ScriptedOwnAudited(_script(), results=[]),
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    assert broken_recorder.rows, "negative control: the broken recorder was reached"
+    assert broken == clean
+
+
+async def test_a_turn_whose_shape_makes_the_line_itself_raise_changes_nothing(
+    monkeypatch, caplog
+):
+    """(d2) THE ARGUMENT-CONSTRUCTION TEST. The REAL emitter, both halves.
+
+    Nothing on `run_events` is monkeypatched here — not `emit`, not `emit_safe`.
+    A recorder cannot exercise this: by the time one runs, the arguments have
+    already been built successfully. Each half carries a NEGATIVE CONTROL that
+    the construction genuinely raises when performed outside the emitter, so a
+    green result cannot mean "the input was harmless after all", and each half
+    asserts the swallowed exception type reaches the emitter's WARNING log —
+    and that it does NOT for the well-formed shape, so the line cannot pass by
+    being broken for every run.
+    """
+    monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
+
+    # --- half 1: the done line's counts, off a tool input with no `facts` ----
+    malformed_block = {
+        "type": "tool_use", "id": "tu_emit", "name": "emit_fact_list",
+        "input": {"not_found": ["the 2027 tariff schedule"]},
+    }
+    with pytest.raises((KeyError, TypeError)):
+        own_researcher._raw_fact_count(malformed_block)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
+        degraded = await own_researcher.run_own_research(
+            question="q", facet="f",
+            audited=_ScriptedOwnAudited(
+                [_emit_turn_with_raw_input({"not_found": ["the 2027 tariff schedule"]})]
+            ),
+            run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+        )
+    degraded_log = _emitter_log(caplog)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
+        well_formed = await own_researcher.run_own_research(
+            question="q", facet="f",
+            audited=_ScriptedOwnAudited(
+                [
+                    _emit_turn_with_raw_input(
+                        {"facts": [], "not_found": ["the 2027 tariff schedule"]}
+                    )
+                ]
+            ),
+            run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+        )
+    well_formed_log = _emitter_log(caplog)
+
+    assert degraded == well_formed, (
+        "a model that omitted a key it usually sends costs a FEED LINE, never "
+        "the session that produced it"
+    )
+    assert "KeyError" in degraded_log or "TypeError" in degraded_log, (
+        "the fragile construction must actually have been reached and swallowed"
+    )
+    assert "KeyError" not in well_formed_log and "TypeError" not in well_formed_log, (
+        "the well-formed shape must build its line cleanly — otherwise this test "
+        "would pass against a line that is broken for every run"
+    )
+
+    # --- half 2: the fetch line's host, off a web_fetch block with no URL ---
+    with pytest.raises((TypeError, ValueError)):
+        own_researcher._host_of(None)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
+        no_url = await own_researcher.run_own_research(
+            question="q", facet="f",
+            audited=_ScriptedOwnAudited([_fetch_turn_with({}), _emit_turn()]),
+            run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+        )
+    no_url_log = _emitter_log(caplog)
+
+    with_url = await own_researcher.run_own_research(
+        question="q", facet="f",
+        audited=_ScriptedOwnAudited(
+            [_fetch_turn_with({"url": "https://example.com/page"}), _emit_turn()]
+        ),
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
+    )
+
+    assert "TypeError" in no_url_log, (
+        "the host construction must actually have been reached and swallowed"
+    )
+    # Everything the session PRODUCED is identical. `citations` is the one key
+    # that differs, and it differs because one turn really did surface a page
+    # URL and the other did not — a fact about `_collect_citation_urls`, not
+    # about events.
+    assert no_url["citations"] == []
+    assert with_url["citations"] == ["https://example.com/page"]
+    assert {k: v for k, v in no_url.items() if k != "citations"} == {
+        k: v for k, v in with_url.items() if k != "citations"
+    }
+
+
+# ---------------------------------------------------------------------------
+# The long poll — audit/audited_llm_client.py
+#
+# The provider fakes are IMPORTED from `test_provider_resume.py` rather than
+# rebuilt, and imported INSIDE each test: that module gates itself on httpx with
+# `importorskip`, and doing it at module level here would skip this whole file —
+# including the sixteen own-researcher tests that need no such thing.
+# ---------------------------------------------------------------------------
+
+
+async def _no_sleep(_seconds: Any) -> None:
+    """A poll cadence of 30 s, without waiting 30 s. Never a real delay in a test."""
+    return None
+
+
+async def test_a_long_poll_says_in_words_that_it_is_a_wait(monkeypatch):
+    """(e) THE WITHDRAWN-D-C FIX, asserted as behaviour.
+
+    Thirty polls at the production cadence. The count of lines is asserted as an
+    UPPER BOUND (a stride, not an exact schedule), and the content is asserted
+    exactly: minutes elapsed, attempt out of max, and the sentence that tells an
+    operator to wait instead of killing a paid run.
+    """
+    from nestor_pulse_sdk.tests import test_provider_resume as _pr
+
+    fake = _pr._FakeHTTP(
+        get_script=[{"status": "running"}] * 30 + [{"status": "completed"}]
+    )
+    _pr._install_gemini(monkeypatch, fake)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    recorder = _install_recorder(monkeypatch)
+
+    client = _pr._client()
+    await client.start_call(
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, provider="google", model="m",
+        request={"query": "q"},
+    )
+    result = await client.gemini_deep_research_raw(
+        "q", poll_interval=30, max_attempts=70,
+    )
+
+    assert result["status"] == "success"
+    thinking = recorder.texts("thinking")
+    assert 2 <= len(thinking) <= 8, (
+        f"a 31-poll wait must produce a handful of lines, not seventy: {len(thinking)}"
+    )
+    assert any(text.startswith("Waiting on Google") for text in thinking)
+    heartbeats = [text for text in thinking if text.startswith("Still waiting")]
+    assert heartbeats, "a wait with no heartbeat is indistinguishable from a hang"
+    assert any("5 min elapsed" in text for text in heartbeats), (
+        "the elapsed-minute arithmetic is the operator's whole basis for waiting"
+    )
+    assert any("poll 10 of 70" in text for text in heartbeats)
+    assert all("NOT A STALL" in text for text in heartbeats), (
+        "the wording is the deliverable — this run was misread as a stall once"
+    )
+    assert all(
+        row["stage"] == "deep_research" for row in recorder.rows
+    )
+    assert all(
+        row["meta"] and row["meta"].get("provider") == "google"
+        for row in recorder.of("thinking")
+    )
+
+
+async def test_a_poll_with_no_run_context_emits_nothing(monkeypatch):
+    """No `start_call`, no run: the client NEVER invents one and never opens one."""
+    from nestor_pulse_sdk.tests import test_provider_resume as _pr
+
+    fake = _pr._FakeHTTP(get_script=[{"status": "completed"}])
+    _pr._install_gemini(monkeypatch, fake)
+    recorder = _install_recorder(monkeypatch)
+
+    result = await _pr._client().gemini_deep_research_raw("q", poll_interval=0)
+
+    assert result["status"] == "success"
+    assert recorder.rows == [], (
+        "a tenant-less write is the isolation defect this project forbids, so a "
+        "call path with no run context emits nothing at all"
+    )
+
+
+async def test_a_rejoined_job_says_so_and_a_refused_id_is_never_quoted(monkeypatch):
+    """(f) The money-relevant fact, and the id guard, on the same branch pair."""
+    from nestor_pulse_sdk.tests import test_provider_resume as _pr
+
+    # --- accepted: the reconnect branch names the rejoin -------------------
+    fake = _pr._FakeHTTP(get_script=[{"status": "completed"}])
+    _pr._install_gemini(monkeypatch, fake)
+    recorder = _install_recorder(monkeypatch)
+    client = _pr._client()
+    await client.start_call(
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, provider="google", model="m",
+        request={"query": "q"},
+    )
+    result = await client.gemini_deep_research_raw(
+        "q", poll_interval=0, resume_job_id="interaction_in_flight_42",
+    )
+
+    assert result["status"] == "success"
+    assert len(fake.posts) == 0, "precondition: this was a reconnect, not a dispatch"
+    rejoins = [text for text in recorder.texts("thinking") if "Rejoined" in text]
+    assert len(rejoins) == 1
+    assert "job interaction_in_flight_42" in rejoins[0]
+    assert "charged twice" in rejoins[0]
+
+    # --- refused: the id never reaches a stored row ------------------------
+    poisoned = "../../secrets/interactions/9"
+    assert safe_job_id(poisoned) is None, (
+        "precondition: this id must be one the guard refuses"
+    )
+    fake2 = _pr._FakeHTTP(get_script=[{"status": "completed"}])
+    _pr._install_gemini(monkeypatch, fake2)
+    recorder2 = _install_recorder(monkeypatch)
+    client2 = _pr._client()
+    await client2.start_call(
+        run_id=_RUN_ID, tenant_id=_TENANT_ID, provider="google", model="m",
+        request={"query": "q"},
+    )
+    result2 = await client2.gemini_deep_research_raw(
+        "q", poll_interval=0, resume_job_id=poisoned,
+    )
+
+    assert result2["status"] == "success"
+    assert len(fake2.posts) == 1, "a refused id falls through to a fresh dispatch"
+    refusals = [text for text in recorder2.texts("thinking") if "refused" in text]
+    assert len(refusals) == 1
+    assert "paid for again" in refusals[0], (
+        "the operator's question about a refused resume is what it costs"
+    )
+    for row in recorder2.rows:
+        assert poisoned not in row["text"], "T-15.3-32: an unvalidated id is never stored"
+        assert ".." not in row["text"]
