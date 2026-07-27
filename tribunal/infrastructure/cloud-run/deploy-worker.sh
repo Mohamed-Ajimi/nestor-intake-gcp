@@ -53,6 +53,67 @@ WORKER_IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/tribunal-worker:${
 
 command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1; }
 
+# ---------------------------------------------------------------------------
+# Secret composition (Phase 15.2 — the D10 own-researcher SERPAPI key)
+#
+# `--set-secrets` REPLACES the service's ENTIRE secret set on every deploy, exactly as
+# `--set-env-vars` does for the plain env (WR-01). Every mapping the service needs must
+# therefore appear in the composed list below — anything omitted is DROPPED from the next
+# revision. This is the whole reason the list is built in a variable rather than inlined.
+#
+# LIVE-VS-SCRIPT DRIFT, observed 2026-07-21: both Tribunal services were switched LIVE to
+# mount ANTHROPIC_API_KEY from `Nestor_Claude2` (the account that holds credits) while this
+# script still hardcoded `Nestor_Claude`. An unguarded re-run therefore silently REPOINTED
+# the Anthropic key back at the low-credit secret — walling a real research run mid-flight
+# with no error at deploy time. The worker is the run-EXECUTING side, so it is the service
+# that would actually die on the wall. Self-heal from the live revision first; the literal
+# fallback below is a FIRST-DEPLOY default only, never an assertion about what is live.
+# `nestor-api` deliberately stays on `Nestor_Claude` and is not touched by this script.
+# ---------------------------------------------------------------------------
+TRIBUNAL_SERPAPI_SECRET="${TRIBUNAL_SERPAPI_SECRET:-Nestor_SerpApi}"
+
+if [ -z "${TRIBUNAL_ANTHROPIC_SECRET:-}" ]; then
+  TRIBUNAL_ANTHROPIC_SECRET="$(gcloud run services describe "${SERVICE_NAME}" \
+    --region="${REGION}" --project="${PROJECT}" \
+    --flatten='spec.template.spec.containers[].env[]' \
+    --filter='spec.template.spec.containers.env.name=ANTHROPIC_API_KEY' \
+    --format='value(spec.template.spec.containers.env.valueFrom.secretKeyRef.name)' \
+    2>/dev/null | head -n1 || true)"
+  if [ -n "${TRIBUNAL_ANTHROPIC_SECRET}" ]; then
+    echo "==> ANTHROPIC secret self-healed from the live revision: ${TRIBUNAL_ANTHROPIC_SECRET}"
+  fi
+fi
+# Not describable (first deploy) or ANTHROPIC_API_KEY not currently mapped: fall back to the
+# credit-bearing secret, NOT the Phase-13 original. A secret NAME is configuration, not a
+# secret — echoing it is safe; the VALUE is never read, echoed or logged by this script.
+TRIBUNAL_ANTHROPIC_SECRET="${TRIBUNAL_ANTHROPIC_SECRET:-Nestor_Claude2}"
+echo "==> ANTHROPIC_API_KEY will be mounted from secret: ${TRIBUNAL_ANTHROPIC_SECRET}"
+
+TRIBUNAL_SECRETS="\
+DATABASE_URL=DATABASE_URL_WORKER:latest,\
+AUDIT_GCS_BUCKET=AUDIT_GCS_BUCKET:latest,\
+ANTHROPIC_API_KEY=${TRIBUNAL_ANTHROPIC_SECRET}:latest,\
+GOOGLE_API_KEY=Nestor_Gemini:latest,\
+OPENAI_API_KEY=Nestor_OpenAI:latest"
+
+# Append the SERPAPI mapping ONLY when the secret actually exists. Binding a non-existent
+# secret fails the whole `gcloud run deploy`, and a missing D10 stream must never block
+# shipping the rest of the phase.
+if gcloud secrets describe "${TRIBUNAL_SERPAPI_SECRET}" --project="${PROJECT}" >/dev/null 2>&1; then
+  TRIBUNAL_SECRETS="${TRIBUNAL_SECRETS},SERPAPI_API_KEY=${TRIBUNAL_SERPAPI_SECRET}:latest"
+  echo "==> own-researcher key will be mounted from secret: ${TRIBUNAL_SERPAPI_SECRET}"
+else
+  echo "" >&2
+  echo "WARNING: Secret Manager secret '${TRIBUNAL_SERPAPI_SECRET}' does not exist in ${PROJECT}." >&2
+  echo "         Deploying WITHOUT the own-researcher key. This is not a deploy failure:"        >&2
+  echo "         the SerpApi availability probe reports 'serpapi_key_missing', the breaker"      >&2
+  echo "         opens at startup, and runs finish as clean 3-stream 'completed_degraded'"       >&2
+  echo "         runs (D-12) instead of crashing."                                               >&2
+  echo "         V-02 #6 (own-researcher contributed facts) CANNOT be proven in this state."     >&2
+  echo "         To fix: § Phase 15.2 Step 15.2.b of infra/DEPLOY-RUNBOOK.md, then re-run."      >&2
+  echo "" >&2
+fi
+
 echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 
 REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
@@ -72,12 +133,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
   --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1" \
-  --set-secrets="\
-DATABASE_URL=DATABASE_URL_WORKER:latest,\
-AUDIT_GCS_BUCKET=AUDIT_GCS_BUCKET:latest,\
-ANTHROPIC_API_KEY=Nestor_Claude:latest,\
-GOOGLE_API_KEY=Nestor_Gemini:latest,\
-OPENAI_API_KEY=Nestor_OpenAI:latest"
+  --set-secrets="${TRIBUNAL_SECRETS}"
 
 echo
 echo "=================================================================="

@@ -1722,7 +1722,8 @@ This section is the enumerated source of truth for the Plan 15-07 operator live 
 Phase-15 research-engine-redesign OPERATOR SURFACES to production. Phase 15 adds surface to THREE
 deployables — BOTH Tribunal images (`tribunal-worker` AND `tribunal-api`) plus the frontend — and lands
 ONE migration (alembic **0011** in the **tribunal** schema, NOT the intake `nestor` line). There is
-**NO new secret and NO new env** this phase (SERPAPI is Phase 15.2 / D10, not here).
+**NO new secret and NO new env** this phase (SERPAPI is Phase 15.2 / D10, not here). *(SERPAPI has
+since LANDED — see § Phase 15.2, Step 15.2.b.)*
 
 **Why BOTH Tribunal images rebuild (unlike Phase 17, which rebuilt only tribunal-api):**
 
@@ -1752,7 +1753,7 @@ the § Phase 17 Step-17.a dual-rebuild idiom, except Phase 17 left the worker un
 > --update-env-vars` on the current revisions ships NONE of it. Steps 15.a and 15.c are mandatory Cloud
 > Build **image REBUILDs**, not env flips. This phase introduces **NO new env var and NO new secret**
 > (Step 15.d is confirm-only + the verify gates): SERPAPI (the own-researcher key) is **Phase 15.2**
-> (D10), not this phase.
+> (D10), not this phase. *(SERPAPI has since LANDED — see § Phase 15.2, Step 15.2.b.)*
 
 > **NO nestor-api rebuild this phase.** The intake-side seam proxies + frontend transport
 > (`/intakes/{id}/research/{run}/verification`, `/research/sources/{sourceId}`,
@@ -1894,7 +1895,8 @@ gcloud run deploy nestor-frontend \
 ### Step 15.d — Verify without printing secrets (Cloud Build pytest targets + `verify_chain` re-run on deployed data + endpoint role checks) — NO new secret this phase
 
 Phase 15 introduces **NO new env var and NO new secret** (15-RESEARCH § Runtime State Inventory: SERPAPI
-is Phase 15.2 / D10). This step is confirm-only for env + the automated verify gates. All four sub-checks
+is Phase 15.2 / D10). *(SERPAPI has since LANDED — see § Phase 15.2, Step 15.2.b.)* This step is
+confirm-only for env + the automated verify gates. All four sub-checks
 run WITHOUT printing any secret value.
 
 1. **Run the Phase-15 pytest targets in Cloud Build against the fresh images** (authored by-construction
@@ -1947,7 +1949,9 @@ run WITHOUT printing any secret value.
    ```
 
    **Explicitly: NO SERPAPI_API_KEY this phase** — the own-researcher key lands in Phase 15.2 (D10). Do
-   NOT create or seed it here.
+   NOT create or seed it here. *(It HAS since landed — created, granted and seeded in § Phase 15.2,
+   Step 15.2.b, and bound to BOTH Tribunal services in Step 15.2.e. This Phase-15 step stays
+   confirm-only: nothing to do here.)*
 
 ### Step 15.e — (conditional) rebuild `nestor-api` ONLY if the live revision predates the Plan 15-04 proxy routes
 
@@ -2367,6 +2371,416 @@ before this one was `nestor-frontend-00025-4w8`, image `20260724-231312`).
 
 ---
 
+## Phase 15.2 — Research engine core (SERPAPI secret on BOTH tribunal images + dual REBUILD + 0013 migrate + nestor-api REBUILD + frontend REBUILD, then PARK)
+
+This section is the enumerated source of truth for the Plan 15.2-18 operator live session that ships
+the redesigned research **engine core** (plans 15.2-01 … 15.2-17) to production. Phase 15.2 touches
+**four deployables** — `tribunal-worker`, `tribunal-api`, `nestor-api` and `nestor-frontend` — plus
+the `tribunal-migrate` Job, and lands ONE migration (alembic **0013** in the **tribunal** schema, NOT
+the intake `nestor` line).
+
+**This is the FIRST phase since Phase 13 to add a secret.** `SERPAPI_API_KEY` (the D10
+own-researcher key) is mounted on **both** Tribunal images from Secret Manager secret
+`Nestor_SerpApi`. Read this before Step 15.2.e: **`--set-secrets` REPLACES the service's ENTIRE
+secret set**, so the deploy scripts now compose the full mapping list in a variable rather than
+inlining it. Anything omitted from that list is silently dropped from the next revision.
+
+> **IaC-DRIFT reality (carry-over — read first).** As with every prior phase, Terraform state was
+> never adopted and `terraform apply` is **FORBIDDEN** on this project — it would rotate the BUILT_IN
+> Cloud SQL passwords and take down every service. Every step below is a manual gcloud reconciliation
+> run in Cloud Shell; images are built via **Cloud Build** (never locally — the dev box has no
+> Docker and no Python). This runbook, not `infra/*.tf`, is the source of truth for what is live.
+
+> **The recurring deploy-gap (READ FIRST).** "Nothing is real until it is deployed, and a config-only
+> env flip ships a STALE image." Phase 15.2 is the largest code delta of any phase so far — the whole
+> engine core lives inside the two Tribunal images. **A `gcloud run services update --update-env-vars`
+> that only adds `SERPAPI_API_KEY` to the CURRENT revisions ships none of it.** Worse, it would
+> produce a service that looks freshly configured while running an image whose `_run_staged` raises
+> `UnboundLocalError` on its first statement (the defect plan 15.2-17 fixed in commit `e01b7b2` —
+> every run since 15.2-16's stage split would report `failed` with no park and no partial work).
+> **Steps 15.2.c, 15.2.f and 15.2.g are mandatory image REBUILDs, not env flips.**
+
+> **The park is not a failure.** This phase deploys NOW and then waits at UAT. The Anthropic monthly
+> cap is tripped until **2026-08-01**; no step in this section triggers a live LLM run. Step 15.2.i
+> is the park, and V-01/V-02/V-03 run in a fresh session after the reset.
+
+```bash
+# Shared exports for this session (set once in Cloud Shell — same as § Phase 13/14/15/15.1/16/17/18).
+export GOOGLE_PROJECT="project-cb01b861-cb4a-438d-b9a"           # acct tools@dotto.be / tools@epicimpact.be
+export REGION="europe-west1"
+export INSTANCE_NAME="nestor-pg"
+export INTAKE_SA="nestor-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+export TRIBUNAL_SA="tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com"
+```
+
+**What changes this phase:**
+
+| Deployable | Action | Carries |
+|---|---|---|
+| `tribunal-worker` | **REBUILD** + redeploy at `$SHA` | the whole engine core (plans 01-08, 10-17): reliability/retry/breaker, stage feed, workshop, four-stream dispatch, own-researcher + SerpApi client, per-provider fact lists, cross-provider merge, gates, grouped verification, D-08 report sections |
+| `tribunal-api` | **REBUILD** + redeploy at the SAME `$SHA` | plan 09's status predicate + the stage feed read surface |
+| `tribunal-migrate` (Job) | **REPIN to the `$SHA` api image**, then execute | alembic **0013** (`claim.certainty`, `claim.found_by`, `claim_source.provider_quality`, table `research_gap`, `ck_run_status` += `completed_degraded`/`parked`) |
+| `nestor-api` | **REBUILD** + redeploy | plan 09's D-12 status vocabulary (`run_status.py`, `run_task.py`), plan 16's Resume route + parked mail |
+| `nestor-frontend` | **REBUILD** + redeploy | plan 09's `RESEARCH_TERMINAL` set, `lib/api/research.ts`, the three `intake.json` locale files |
+| Secret Manager | **CREATE `Nestor_SerpApi`** + resource-scoped accessor + stdin value seed | the D10 own-researcher key |
+
+**NOT touched this phase:** no intake `nestor` migration and **no `nestor-migrate` Job run** (F3 —
+`nestor.research_runs.status` carries no CHECK constraint, so the new status literals need no DDL);
+no new env or secret on `nestor-api`; no change to the Phase-14 lockdown (`tribunal-run` SA,
+`--no-allow-unauthenticated`, invoker `nestor-run` only — preserved by the scripts, not re-granted).
+
+### Step 15.2.a — Preflight, read-only (stale-base guard + the six gates + capture the live wiring)
+
+**1. Stale-base guard.** Cloud Build ships **the tree you submit**. A stale worktree produces a
+green-looking deploy of code that is not this phase — the failure mode that has bitten every
+executor agent in 15.2. Assert positively, on disk, before building anything:
+
+```bash
+git status --porcelain          # must be EMPTY
+git log --oneline -1            # record this SHA in the session notes
+
+# One artifact per wave — every one of these must exist in the tree you are about to submit.
+ls tribunal/nestor_pulse_sdk/alembic/versions/0013_*.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/reliability.py
+ls tribunal/nestor_pulse_sdk/runs/stage_feed.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/facts.py
+ls tribunal/nestor_pulse_sdk/citations/anchors.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/workshop.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/workshop_rank.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/own_researcher.py
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/serpapi.py
+ls tribunal/nestor_pulse_sdk/tests/test_engine_e2e_stubbed.py
+ls tribunal/cloudbuild.test-engine.yaml
+grep -q 'completed_degraded' frontend/src/components/intake/ResearchRunProgress.tsx && echo "FE ok"
+```
+
+**2. The six gates GREEN on THAT tree.** All six run in Cloud Build (no local Python or Docker):
+
+```bash
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-engine.yaml   --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-gates.yaml    --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-critical.yaml --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test.yaml          --project="$GOOGLE_PROJECT"
+# Intake side — source MUST be `.` (repo root), never `backend` (§ Phase 14.g / 15.d note).
+gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+bash backend/scripts/ci_no_run_research.sh   # exit 0
+```
+
+> ⚠️ **A green gate can prove nothing.** `cloudbuild.test-*.yaml` builds its file list with
+> `ls … 2>/dev/null || true`, so a submitted tree that predates a plan collects **fewer files** and
+> still exits SUCCESS. **Read the `collecting:` block in the build log and reconcile the file count —
+> never accept the exit status alone.** Reference counts from the 15.2-17 sweep on the final tree:
+> engine gate **560 passed / 8 skipped** (22 collected paths), gates **179 passed / 2 deselected**,
+> critical **34 passed**, full suite **1025 passed / 52 skipped**, repo-root intake gate
+> **195 passed / 1 skipped / 155 deselected**.
+
+**3. Capture the live wiring WITHOUT printing any value.** Secret *names* are configuration, not
+secrets; secret *values* are never fetched anywhere in this section.
+
+```bash
+for SVC in tribunal-worker tribunal-api; do
+  echo "--- $SVC ---"
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(spec.template.spec.containers[0].env)' \
+    | tr ',' '\n' | grep -E 'ANTHROPIC_API_KEY|SERPAPI_API_KEY|DATABASE_URL|AUDIT_GCS_BUCKET'
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(status.latestReadyRevisionName,status.traffic)'
+done
+
+# The tribunal-api URL, captured WITHOUT a path (the OIDC audience is the path-less
+# service_url — Pitfall 4). Do NOT re-set the seam env from this; it is a read.
+export TRIBUNAL_URL="$(gcloud run services describe tribunal-api \
+  --region="$REGION" --project="$GOOGLE_PROJECT" --format='value(status.url)')"
+```
+
+Record: the current revision names for all four services, the path-less tribunal-api URL, and **the
+Anthropic secret name each Tribunal service actually mounts**. The scripts self-heal from this
+(Step 15.2.e), but the `describe` is authoritative — as of 2026-07-21 both Tribunal services mounted
+`Nestor_Claude2` while the scripts said `Nestor_Claude`, and `nestor-api` deliberately stays on
+`Nestor_Claude`. Verify rather than assume.
+
+### Step 15.2.b — Create `Nestor_SerpApi`, grant the accessor, seed the VALUE out-of-band
+
+Same idiom as § Phase 10 Step 10.1 / § Phase 13 Step 13.b. House naming style: `Nestor_Claude` /
+`Nestor_Gemini` / `Nestor_OpenAI` → **`Nestor_SerpApi`**. The env var the code reads is
+`SERPAPI_API_KEY` (`serpapi.py::api_key()`).
+
+```bash
+# 1. Create the secret container (empty — no version yet). Idempotent.
+gcloud secrets create Nestor_SerpApi \
+  --replication-policy=automatic --project="$GOOGLE_PROJECT" 2>/dev/null || true
+
+# 2. Resource-scoped secretAccessor to the TRIBUNAL runtime SA ONLY.
+#    NEVER nestor-run, NEVER a project-wide binding (least privilege, Phase-14 lockdown).
+gcloud secrets add-iam-policy-binding Nestor_SerpApi \
+  --member="serviceAccount:${TRIBUNAL_SA}" \
+  --role="roles/secretmanager.secretAccessor" --project="$GOOGLE_PROJECT"
+
+# 3. Add the key VALUE as a secret version. Reads from stdin: paste the key, then Ctrl-D.
+#    NEVER --data="<key>" and never inline in a command that lands in shell history.
+#    The value is never echoed, never committed, never written into this runbook.
+gcloud secrets versions add Nestor_SerpApi --data-file=- --project="$GOOGLE_PROJECT"
+
+# 4. Verify with METADATA reads only — never `gcloud secrets versions access`.
+gcloud secrets versions list Nestor_SerpApi --project="$GOOGLE_PROJECT" \
+  --format='value(name,state)'                       # expect one ENABLED version
+gcloud secrets get-iam-policy Nestor_SerpApi --project="$GOOGLE_PROJECT" --format=json
+# expect EXACTLY one member: serviceAccount:tribunal-run@${GOOGLE_PROJECT}.iam.gserviceaccount.com
+```
+
+**Record the chosen SerpApi plan/tier BY NAME here** (with its $/month, monthly quota and hourly
+throughput) — the tier is a blocking operator decision, not a runbook default:
+
+```
+SerpApi tier in force: ______________   ($____/month · ______ searches/month · ______ searches/hour)
+Chosen by: ______________   Date: ____________
+```
+
+**No price is hardcoded anywhere in the code.** `serpapi.fetch_plan()` reads `plan_monthly_price` and
+`searches_per_month` live from `GET https://serpapi.com/account.json` at run start (free, off-quota)
+and records them alongside the run, so D-16's spend figure is an exact `Decimal` computed from the
+plan actually in force (D-16 reproducibility). A free-tier run therefore reads a true
+`$0.00000/search`, never a blank and never an estimate.
+
+> **If this step is skipped or deferred, the deploy still succeeds.** Both deploy scripts probe for
+> the secret's existence before binding it (Step 15.2.e). Absent secret ⇒
+> `serpapi.unavailable_reason() == "serpapi_key_missing"` ⇒ breaker open at startup ⇒ a clean
+> 3-stream `completed_degraded` run (D-12). It degrades; it never crashes. The cost is that V-02 #6
+> cannot be proven on the V-01 run.
+
+### Step 15.2.c — Build BOTH Tribunal images at ONE `$SHA` (BUILD ONLY — the deploy is Step 15.2.e)
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+gcloud builds submit tribunal --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+```
+
+> ⚠️ **ORDER IS LOAD-BEARING: build BOTH → migrate (15.2.d) → THEN deploy (15.2.e).** Migration 0013
+> must land **before** the worker that writes `certainty` / `found_by` / `provider_quality` /
+> `research_gap` starts running. If the code ships ahead of the column, every write fails into a
+> swallowed `except`, the run completes, and the report renders with silently missing provenance and
+> an empty "What we could not establish" — **it looks like success.** This is the same trap § Phase
+> 15.1 Step 15.1.f documents for `superseded_note`. Second reason: the migrate Job applies the
+> alembic revisions **baked into an image**, so the image carrying `0013` must exist first.
+
+### Step 15.2.d — Repin `tribunal-migrate` to the `$SHA` api image, THEN execute (alembic 0013)
+
+> ⚠️ **LESSON (image-pin, hit live 2026-07-22 on `nestor-migrate` and again 2026-07-25 on
+> `tribunal-migrate`): the Job does NOT track the service image.** Deploying `tribunal-api` at `$SHA`
+> leaves the Job pinned to its OLD image — executing it then is a **silent no-op** (alembic connects,
+> finds itself "at head" on the stale revision set, exits 0, logs no `Running upgrade` line). **ALWAYS
+> repin the Job to the just-built image FIRST.**
+
+```bash
+# 1. REPIN — before executing.
+gcloud run jobs update tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}"
+
+# 2. CONFIRM the repin took (cheap, and the whole step depends on it).
+gcloud run jobs describe tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.template.spec.containers[0].image)'   # must echo :${SHA}
+
+# 3. Execute.
+gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+**4. CONFIRM the upgrade actually ran.** Read the execution log and require the literal line:
+
+```
+Running upgrade 0012 -> 0013
+```
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="tribunal-migrate"
+   AND labels."run.googleapis.com/execution_name"="<EXECUTION_ID>"' \
+  --project="$GOOGLE_PROJECT" --limit=50 --format="value(textPayload)"
+```
+
+**`Container called exit(0)` is NOT proof.** Absence of the `Running upgrade` line means the Job ran
+on a stale image — repin and re-execute. Do not proceed to the deploy without it.
+
+**5. Confirm the schema, read-only.** The tribunal line's version table is
+**`tribunal.tribunal_alembic_version`**, NOT `alembic_version` (set via `version_table` /
+`version_table_schema` in `alembic/env.py`) — querying `tribunal.alembic_version` raises
+`UndefinedTableError` and is a false alarm, not a failed migration. Expect:
+
+```
+col claim.certainty                 nullable=YES
+col claim.found_by                  type=text[]  nullable=YES
+col claim_source.provider_quality   nullable=YES
+table tribunal.research_gap         rls enabled=true forced=true
+policy research_gap_tenant_isolation
+index idx_research_gap_tenant_run
+ck_run_status accepts 'completed_degraded' and 'parked'
+tribunal_head = 0013
+```
+
+The RLS assertions on `research_gap` are load-bearing: it is a **new tenant-scoped table**, so
+ENABLE + FORCE ROW LEVEL SECURITY and its tenant-isolation policy must be present in `0013` itself —
+unlike `0012`, they are not inherited. A table without them is a cross-tenant leak. This is the
+**TRIBUNAL** line — NOT the intake `nestor` line, whose head stays at `0012` (Phase 17).
+
+### Step 15.2.e — Deploy `tribunal-worker`, then `tribunal-api`, at `IMAGE_TAG=$SHA`
+
+Always the retargeted scripts, **never a hand-rolled `gcloud run deploy`**: they pin `IMAGE_TAG` and
+PRESERVE the Phase-14 lockdown (`tribunal-run` SA, `--no-allow-unauthenticated`, invoker `nestor-run`
+only — not re-granted here). As of Phase 15.2 they also compose the full `--set-secrets` list, probe
+`Nestor_SerpApi` for existence before binding it, and **self-heal the Anthropic secret name from the
+live revision** rather than repointing it.
+
+```bash
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-worker.sh
+IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
+```
+
+Each script echoes the secret **names** it will mount (`==> ANTHROPIC_API_KEY will be mounted from
+secret: …`, `==> own-researcher key will be mounted from secret: …`). Confirm the binding landed:
+
+```bash
+for SVC in tribunal-worker tribunal-api; do
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(spec.template.spec.containers[0].env)' \
+    | tr ',' '\n' | grep -E 'SERPAPI_API_KEY|ANTHROPIC_API_KEY'
+done
+# expect the secret REFERENCE on both services, never a value.
+
+# Digest-pin proof: each new revision must resolve to an @sha256: digest, never :latest.
+gcloud run revisions describe <REVISION> --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.containers[0].image)'
+```
+
+> **If the SERPAPI grep comes back empty the deploy is NOT broken.** The own-researcher will run as a
+> clean 3-stream `completed_degraded` run (D-12). But V-01 then cannot prove SC2's D10 clause and
+> V-02 #6 records a miss — **fix the binding (Step 15.2.b) before spending the V-01 run.**
+
+> **Anthropic secret sanity check.** Confirm the mounted `ANTHROPIC_API_KEY` secret name matches what
+> Step 15.2.a recorded as live. If a script re-run ever repoints it to a low-credit secret, the ~$45
+> V-01 run walls mid-flight. Override explicitly with `TRIBUNAL_ANTHROPIC_SECRET=<name>` if needed.
+
+### Step 15.2.f — REBUILD + deploy `nestor-api`
+
+Ordered **after** the Tribunal services, because the Resume route calls the seam.
+
+```bash
+export IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:${SHA}"
+
+gcloud builds submit backend --tag "$IMAGE" --project="$GOOGLE_PROJECT"
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "$IMAGE"
+```
+
+What the rebuild carries: the **D-12 status vocabulary** in `app/research/run_status.py` +
+`app/research/run_task.py` (the `completed_degraded` / `parked` literals the frontend polls), the
+`POST /{intake_id}/research/resume` route in `app/api/research_routes.py`, and
+`render_research_parked` in `app/mail/`.
+
+- **NO intake-line migration and NO `nestor-migrate` Job run this phase** — F3:
+  `nestor.research_runs.status` has no CHECK constraint, so the new status literals need no DDL. The
+  intake `nestor` alembic head stays at **`0012`** (Phase 17).
+- **NO new env and NO new secret on `nestor-api`.** The parked mail reuses the Phase-10 stack
+  (`RESEND_API_KEY` / `APP_BASE_URL` / `NESTOR_ADMIN_EMAIL`). **`APP_BASE_URL` must be present or the
+  mail refuse-sends** — confirm read-only, do not re-set:
+
+```bash
+gcloud run services describe nestor-api --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.containers[0].env)' \
+  | tr ',' '\n' | grep -E 'APP_BASE_URL|NESTOR_ADMIN_EMAIL|RESEND_API_KEY|TRIBUNAL_SERVICE_URL'
+```
+
+- **NEVER bind `SERPAPI_API_KEY` to `nestor-api`.** `backend/scripts/ci_no_run_research.sh` scans
+  `backend/app/**` and `frontend/src`, and INTAKE-05 must stay green.
+
+### Step 15.2.g — REBUILD + deploy the frontend
+
+```bash
+export FE_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:${SHA}"
+
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${FE_IMAGE}",_API_BASE_URL="https://nestor-api-<id>.europe-west1.run.app",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+
+gcloud run deploy nestor-frontend \
+  --image "$FE_IMAGE" --region "$REGION" \
+  --allow-unauthenticated --port 8080 --project="$GOOGLE_PROJECT"
+```
+
+Constraints, each still binding:
+
+- **Install is `npm ci`, never `npm install`.** `frontend/package-lock.json` **is** committed and
+  `frontend/Dockerfile` runs `npm ci`. The "no lockfile" note in CLAUDE.md is **stale** — it refers
+  to *bun* — and following it costs an `ERESOLVE` dead end.
+- **NEVER pass `VITE_SUPABASE_*`.** An in-image bundle guard FAILS the build if a Supabase signature
+  leaks into the bundle.
+- **Deploy with `--port 8080`** (the Nitro node-server binds `$PORT`).
+- **NO `routeTree.gen.ts` regeneration.** Plan 15.2-09 adds **no route** — it edits
+  `ResearchRunProgress.tsx`, `lib/api/research.ts` and the three `intake.json` locale files on the
+  existing `admin.pulse.intakes.$id` anchor. (Contrast § Phase 18, which DID add a route.)
+
+**Why a rebuild is mandatory for what looks like a one-line change:** the terminal-status set
+(`RESEARCH_TERMINAL`) is **compiled into the bundle**. Without a rebuild, a `completed_degraded` run
+spins forever in the operator's browser while every backend surface is correct — the Phase-18
+stale-SPA lesson. Shipping 15.2.f without 15.2.g is a half-deploy.
+
+### Step 15.2.h — Verify without printing secrets
+
+1. **The six gates re-run against the deployed tree** (the Step 15.2.a block, verbatim) — reading the
+   `collecting:` block, not the exit status.
+2. **`verify_chain` GREEN on the deployed audit data.** Gate 3
+   (`tribunal/cloudbuild.test-critical.yaml`). **A RED chain is a STOP** — do not sign off, and
+   investigate whether a non-additive change slipped into `_payload_for_row`. Legal gate: EU AI Act
+   Art. 12, audit-trail deadline **2026-08-02**.
+3. **The secret-binding confirm from Step 15.2.e** — secret *names* only, never values.
+4. **`/readyz` 200 on `tribunal-api`**, against the path-less URL with an identity token:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" "$TRIBUNAL_URL/readyz"
+```
+
+5. **`bash backend/scripts/ci_no_run_research.sh` exits 0.** The SerpApi client lives inside
+   `tribunal/`, which the guard deliberately does not scan. Adding **any** SerpApi reference to
+   `backend/app/**` or `frontend/src` breaks INTAKE-05. (The guard was narrowed with an
+   import-anchored allowlist and verified non-vacuous in 15.2-17 — it still forbids
+   `SERPAPI_API_KEY`, `serpapi.com`, engine-internal imports and run-research invocation.)
+
+### Step 15.2.i — PARK, then V-01 / V-02 / V-03
+
+**The wall: the Anthropic monthly cap resets 2026-08-01.** No live LLM run may be triggered before
+then. Deploying is complete at Step 15.2.h; the phase now waits.
+
+The checklist lives at
+`.planning/phases/15.2-research-engine-redesign-engine-core-inserted-2026-07-24/15.2-UAT.md`.
+
+Three prerequisites before V-01 can run:
+
+1. **A fresh test intake** reproducing the baseline brief domain (LUKOIL BeNeLux — dynamic pricing,
+   coffee, Germany-entry 2027) in a clean space, so the one run that has to prove the phase is not
+   entangled with the smoke-tenant cleanup backlog.
+2. **The SerpApi tier live** and `Nestor_SerpApi` seeded (Step 15.2.b), or an explicit decision to
+   accept a 3-stream degraded V-01.
+3. **The operator present** for sign-off — V-02 #16 is a human read of the new report beside
+   `docs/tribunal-run-reports/run-20260722-4cbb5311/REPORT.md`.
+
+Then, in order: **V-01** (ONE live run, recorded into `docs/tribunal-run-reports/V-01-COMPARISON.md`
+beside the 4cbb5311 baseline — no A/B double-run), **V-02** (the 16-item checklist with named
+evidence per item, ending in a dated operator sign-off), and **V-03** (a SEPARATE commit after
+sign-off removing only unreferenced old-path code — `claim_distiller` (D-15),
+`detect_explicit_questions` and `extract_and_persist_citations` all survive with green tests).
+
+Two items from earlier phases are deliberately batched into the same August operator session
+(STATE.md, operator decision 2026-07-24): the deferred **Phase-15 populated-surface browser UAT**
+(SC1-SC4) and the **Phase-15.1 gate/verdict surfaces** — neither could be walked on the recorded
+fixture, because run 4cbb5311 exists only as a pytest fixture and was never seeded into the live DB.
+
+---
+
 ## Summary checklist
 
 - [ ] Step 1 — two secrets created + resource-scoped secretAccessor to the runtime SA (manual, per drift)
@@ -2432,7 +2846,7 @@ before this one was `nestor-frontend-00025-4w8`, image `20260724-231312`).
 - [ ] Step 15.a — BOTH Tribunal images REBUILT via Cloud Build at ONE `$SHA` (`tribunal-worker` — C1 cost fix in `audited_llm_client`/`cost_table`/`cost_prices.json`/`writer.py`; `tribunal-api` — new `/verification` + enriched `/metrics` + citation numbering + `/audit/{audit_id}`) + redeployed worker-then-api at `$SHA` via the retargeted deploy scripts (Phase-14 lockdown preserved, not re-granted); tribunal-api URL confirmed UNCHANGED via `describe` WITHOUT a path (Pitfall 4). BOTH rebuild because the worker EMITS cost and the api SERVES the read surfaces
 - [ ] Step 15.b — `tribunal-migrate` Job REPINNED to the `$SHA` image FIRST (image-pin lesson — else silent no-op) then executed `--wait` (alembic → **0011** in the **TRIBUNAL** schema, NOT the intake `nestor` line); log shows `Running upgrade 0010 -> 0011`; `audit_log.cache_creation_tokens` + `run.cost_pending`/`verification_summary` + `verification_verdict` FORCE-RLS table (tenant policy from 0003) + index confirmed; tribunal alembic head == 0011
 - [ ] Step 15.c — `nestor-frontend` image REBUILT via Cloud Build (D15 feed + `VerificationReport` + `CitationPanel` + `AuditBodyPanel` + `getVerification`/`getAuditBody`/`getSource` + en/fr/nl i18n) + deployed; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route — components mount on the existing `admin.pulse.intakes.$id` anchor)
-- [ ] Step 15.d — VERIFY without printing secrets: Phase-15 pytest targets green in Cloud Build (tribunal `cloudbuild.test.yaml` cost/verification/citation/chain + intake `cloudbuild.test.yaml` seam denial trios + superadmin funnel happy path); **`verify_chain` re-run GREEN on the DEPLOYED audit data (SC5 — T-15-17 gate)**; recorded-run `/verification` + enriched `/metrics` return 200 for a superadmin and 404 for a client (16-D-08 / T-15-18); CONFIRM-ONLY read that `TRIBUNAL_SERVICE_URL` present on `nestor-api`; NO new env/secret — explicitly NO `SERPAPI_API_KEY` (that is Phase 15.2 / D10)
+- [ ] Step 15.d — VERIFY without printing secrets: Phase-15 pytest targets green in Cloud Build (tribunal `cloudbuild.test.yaml` cost/verification/citation/chain + intake `cloudbuild.test.yaml` seam denial trios + superadmin funnel happy path); **`verify_chain` re-run GREEN on the DEPLOYED audit data (SC5 — T-15-17 gate)**; recorded-run `/verification` + enriched `/metrics` return 200 for a superadmin and 404 for a client (16-D-08 / T-15-18); CONFIRM-ONLY read that `TRIBUNAL_SERVICE_URL` present on `nestor-api`; NO new env/secret — explicitly NO `SERPAPI_API_KEY` (that is Phase 15.2 / D10 — it HAS since landed in § Phase 15.2, Step 15.2.b)
 - [ ] Step 15.e — (conditional) `nestor-api` REBUILT via Cloud Build ONLY if the live revision predates the Plan 15-04 proxy routes (commit `ac6102d`) — else SKIP; NO intake `nestor` migration this phase (0011 is the tribunal line), so NO `nestor-migrate` Job run
 - [ ] Step 15.f — CHECKPOINT: operator RECORDED-RUN UAT (run-4cbb5311, NO live LLM run — Anthropic cap until 2026-08-01) per 15-UAT.md steps 1–5: D15 feed vs `replit view.png` + audit-body drill-down; verification report content; facts-only cost with pending state; every `[n]` resolves; CLIENT sees nothing (16-D-08); `verify_chain` green (SC5); V-02 operator sign-off recorded next to `docs/tribunal-run-reports/run-20260722-4cbb5311/`
 - [ ] Step 15.1.a — CONFIRM-ONLY: **NO migration this phase**; tribunal alembic head stays **0011** (`run.verification_summary` JSONB and `verification_verdict.verdict` free TEXT with NO CHECK both already exist); the `tribunal-migrate` Job is **NOT** executed
@@ -2442,3 +2856,12 @@ before this one was `nestor-frontend-00025-4w8`, image `20260724-231312`).
 - [ ] Step 15.1.e — DEFERRED (not a deploy-time gate): the Phase-15.1 browser checklist in `15.1-UAT.md` § Deferred Browser UAT is batched into the ONE combined Phase-15\* operator session after 2026-08-01, against a real live run, with no live-DB seeding — do NOT run it piecemeal
 - [ ] Step 15.1.f — GAP CLOSURE (plans 15.1-11 … 15.1-16): BOTH Tribunal images REBUILT at ONE `$SHA` **FIRST**, then `tribunal-migrate` REPINNED to that `tribunal-api:$SHA` (image-pin lesson — the Job was found on a 2-deploy-old image; unpinned = silent no-op) and executed `--wait`; log shows **`Running upgrade 0011 -> 0012`** (an exit code is NOT proof); `superseded_note text` nullable confirmed AND `verification_verdict` still ENABLE+FORCE RLS with the `verification_verdict_tenant_isolation` policy intact (0012 issues no security DDL); TRIBUNAL head == **0012** in `tribunal.tribunal_alembic_version` (NOT the intake `nestor` line); ONLY THEN deploy worker-then-api at `$SHA` via the retargeted scripts (Phase-14 lockdown preserved). **Order build → migrate → deploy is load-bearing**: code ahead of the migration makes every verdict INSERT fail into Stage 7's swallow, producing a zero-verdict run that looks green. NO env change, NO new secret, NO `nestor-api` rebuild, NO live research run
 - [ ] Step 15.1.g — GAP CLOSURE: `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.1-16's `verdicts.superseded` section + `superseded_note` caveat fallback in `VerificationReport.tsx`, `lib/api/research.ts`, en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed). **Mandatory this pass** — without it the newly-populated verdict class exists only in the JSON and the operator still cannot see it
+- [ ] Step 15.2.a — PREFLIGHT (read-only): `git status --porcelain` EMPTY + HEAD SHA recorded + a positive on-disk assertion for one artifact per wave (0013 migration, `reliability.py`, `stage_feed.py`, `facts.py`, `anchors.py`, `workshop.py`, `workshop_rank.py`, `own_researcher.py`, `serpapi.py`, `test_engine_e2e_stubbed.py`, `cloudbuild.test-engine.yaml`, `completed_degraded` in `ResearchRunProgress.tsx`) — **Cloud Build ships the tree you submit; a stale worktree deploys code that is not this phase**; the SIX gates green on THAT tree with the `collecting:` block READ (an `ls … || true` config goes green having run nothing); live wiring captured WITHOUT printing values (both Tribunal services' mounted ANTHROPIC secret NAME + revision names + the path-less tribunal-api URL, Pitfall 4)
+- [ ] Step 15.2.b — `Nestor_SerpApi` secret created + resource-scoped `secretAccessor` to `tribunal-run` ONLY (never `nestor-run`, never project-wide) + the key VALUE seeded via `--data-file=-` stdin (never `--data=`, never inline in shell history, never echoed/committed); verified with METADATA reads only (`versions list` + `get-iam-policy` showing exactly one member); the chosen SerpApi **tier recorded by NAME** with $/month + quota + hourly throughput — **no price hardcoded anywhere**, `fetch_plan()` reads `/account.json` live at run start (D-16)
+- [ ] Step 15.2.c — BOTH Tribunal images BUILT via Cloud Build at ONE `$SHA` (`cloudbuild.worker.yaml` — the whole engine core; `cloudbuild.api.yaml` — the status predicate + feed read surface). **BUILD ONLY — deploy is 15.2.e.** Order build → migrate → deploy is LOAD-BEARING: a worker running ahead of 0013 fails every `certainty`/`found_by`/`provider_quality`/`research_gap` write into a swallowed `except` and the run completes looking clean
+- [ ] Step 15.2.d — `tribunal-migrate` Job REPINNED to the `$SHA` `tribunal-api` image FIRST (image-pin lesson — unpinned = silent no-op) + repin CONFIRMED via `describe`, then executed `--wait`; log shows the literal **`Running upgrade 0012 -> 0013`** (**`Container called exit(0)` is NOT proof**); schema confirmed read-only: `claim.certainty` + `claim.found_by text[]` + `claim_source.provider_quality` all nullable, table `tribunal.research_gap` with **ENABLE+FORCE RLS + its tenant-isolation policy + index (new table — NOT inherited, a table without them is a cross-tenant leak)**, `ck_run_status` accepting `completed_degraded`/`parked`, and TRIBUNAL head == **0013** in `tribunal.tribunal_alembic_version` (NOT the intake `nestor` line, which stays at 0012)
+- [ ] Step 15.2.e — `tribunal-worker` then `tribunal-api` deployed at `IMAGE_TAG=$SHA` via the retargeted scripts (Phase-14 lockdown preserved, not re-granted); **`SERPAPI_API_KEY` bound on BOTH** from `Nestor_SerpApi` (existence-probed — a missing secret WARNS and continues as a clean 3-stream `completed_degraded` run rather than failing the deploy); **ANTHROPIC secret SELF-HEALED from the live revision** (the 2026-07-21 drift: scripts said `Nestor_Claude` while both services mounted `Nestor_Claude2` — an unguarded re-run walls the ~$45 V-01 run); binding confirmed by secret NAME only, never a value; digest-pin proof (`@sha256:`, never `:latest`)
+- [ ] Step 15.2.f — `nestor-api` image REBUILT via Cloud Build (`app/research/run_status.py` + `run_task.py` D-12 status vocabulary, the `POST /{intake_id}/research/resume` route, `render_research_parked`) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap); ordered AFTER the Tribunal services (the Resume route calls the seam); **NO intake `nestor` migration and NO `nestor-migrate` Job run** (F3 — `research_runs.status` has no CHECK; intake head stays 0012); **NO new env/secret** — Phase-10 mail stack reused, `APP_BASE_URL` confirmed present or the parked mail refuse-sends; **`SERPAPI_API_KEY` NEVER bound here** (INTAKE-05)
+- [ ] Step 15.2.g — `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.2-09's `RESEARCH_TERMINAL` set + `lib/api/research.ts` + en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed; the CLAUDE.md note is stale/bun). **Mandatory** — the terminal-status set is COMPILED INTO THE BUNDLE, so without it a `completed_degraded` run spins forever in the browser while every backend surface is correct (the Phase-18 stale-SPA lesson)
+- [ ] Step 15.2.h — VERIFY without printing secrets: the six gates re-run against the deployed tree (`collecting:` block read); **`verify_chain` GREEN on the DEPLOYED audit data — a RED chain is a STOP, no sign-off** (EU AI Act Art. 12, deadline 2026-08-02); secret-binding confirm by NAME; `/readyz` 200 on `tribunal-api` with an identity token against the path-less URL (Pitfall 4); `bash backend/scripts/ci_no_run_research.sh` exit 0 (INTAKE-05 — SerpApi lives in `tribunal/`, which the guard deliberately does not scan)
+- [ ] Step 15.2.i — PARK: **Anthropic monthly cap resets 2026-08-01**; NO live LLM run triggered before then — the park is NOT a failure. Then V-01 (ONE live run on a FRESH intake in the baseline brief domain, recorded in `docs/tribunal-run-reports/V-01-COMPARISON.md` beside run-20260722-4cbb5311 — **no A/B double-run**, the `comparison_id` harness stays unused), V-02 (the 16-item checklist in `15.2-UAT.md`, each item pass/fail with NAMED evidence, ending in a dated operator sign-off), then V-03 as a **SEPARATE commit after sign-off** removing only unreferenced old-path code (`claim_distiller`/D-15, `detect_explicit_questions` and `extract_and_persist_citations` all SURVIVE with green tests). Batched into the same August session: the deferred Phase-15 populated-surface browser UAT (SC1-SC4) and the Phase-15.1 verdict/gate surfaces
