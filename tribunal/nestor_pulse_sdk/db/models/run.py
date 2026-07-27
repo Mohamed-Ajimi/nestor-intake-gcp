@@ -68,6 +68,27 @@ class Run(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Liveness clock (0014, D-E): the executing worker bumps this on a timer
+    # while runner.run() is awaited, so a live process holding a 35-minute
+    # deep-research long-poll is distinguishable from a process that died.
+    # worker.py's CLAIM_SQL reads staleness as COALESCE(heartbeat_at,
+    # started_at), so pre-0014 rows keep exactly today's behaviour.
+    # DELIBERATELY NOT the fencing token: started_at is the CR-01 token that
+    # runs/execute.py::_CONSUME_CLAIM_SQL matches to guarantee exactly-once
+    # dispatch, so it may never move on a timer.
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Bounded crash recoveries (0014, D-E): how many times this run has been
+    # re-claimed from a dead worker. A fresh 'queued' claim leaves it at 0; only
+    # a reclaim increments it. Past NESTOR_WORKER_MAX_RECLAIMS the run is failed
+    # with a worded message instead of being started again — an unattended
+    # re-execute loop is a repeating spend. NOT NULL + server_default '0' so the
+    # ceiling arithmetic never meets a NULL (a NULL comparison would match
+    # nothing and re-open the loop) and legacy rows read as never-reclaimed.
+    reclaim_count: Mapped[int] = mapped_column(
+        server_default=text("0"), default=0, nullable=False
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_usd_total: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 4), nullable=True

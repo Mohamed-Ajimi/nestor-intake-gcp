@@ -15,16 +15,48 @@ CRITICAL ORDERING (T-06-02):
      BEFORE any further tenant-scoped DB access.
   DO NOT call set_tenant_context BEFORE the claim step.
 
-Crash recovery (T-06-04, B2 fix):
-  CLAIM_SQL includes `status = 'running' AND started_at < NOW() - make_interval(mins => :stale)`
-  as a reclaimable condition. This handles workers that died mid-execute.
-  IMPORTANT: must use make_interval(mins => :stale), NOT INTERVAL ':stale minutes'
-  (the literal-bind variant fails at runtime with bound params -- B2 fix).
+Crash recovery (T-06-04, B2 fix, REWRITTEN by the D-E fix):
+  A run is reclaimable ONLY when the worker executing it has STOPPED WRITING
+  HEARTBEATS, and only a BOUNDED number of times.
+
+  The old rule was `status = 'running' AND started_at < NOW() - <stale>`. That
+  was wrong, and it fired for real on 2026-07-27: `started_at` is stamped once
+  at claim time and never moves again, so a live process holding a 35-minute
+  deep-research long-poll was INDISTINGUISHABLE from a process that died 35
+  minutes ago. Killing a stuck worker therefore started a fresh one that was
+  seconds from re-executing the same run at full cost, unattended, on a 60-minute
+  loop. It was held back only by a temporary NESTOR_WORKER_STALE_MINUTES=525600
+  on the deployed service -- which is worse in the other direction, because with
+  it set a genuinely crashed worker is NEVER recovered.
+
+  The rule now has two parts:
+    1. LIVENESS. `run.heartbeat_at` (migration 0014) is bumped on a timer by the
+       executing worker while `runner.run()` is awaited, so a live process has a
+       fresh heartbeat even during a silent long-poll and a dead one stops
+       writing within one HEARTBEAT_INTERVAL_SECONDS. Staleness is measured as
+       `COALESCE(heartbeat_at, started_at)`, so a pre-0014 row behaves exactly as
+       it did before.
+    2. A CEILING. `run.reclaim_count` is incremented by the claim ONLY when it
+       re-claims a row that was already 'running'. Past MAX_RECLAIMS the run is
+       no longer claimable at all, and REAP_SQL FAILS it with a worded
+       error_message instead of starting it again. "A permanently stalling run
+       re-bills every 60 minutes forever" is therefore structurally unreachable.
+
+  `started_at` is NOT the heartbeat and must never become one: it is the CR-01
+  FENCING TOKEN that `runs/execute.py::_CONSUME_CLAIM_SQL` matches to guarantee a
+  claim dispatches at most once (ENGINE-08, legally load-bearing for the audit
+  chain). Bumping it on a timer would make every heartbeat invalidate the run's
+  own claim token.
+
+  IMPORTANT (unchanged): must use make_interval(mins => :stale), NOT
+  INTERVAL ':stale minutes' (the literal-bind variant fails at runtime with
+  bound params -- B2 fix).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import socket
 import uuid
@@ -46,14 +78,40 @@ log = structlog.get_logger(__name__)
 WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 POLL_INTERVAL_SECONDS = float(os.environ.get("NESTOR_WORKER_POLL_INTERVAL", "2.0"))
 STALE_RUN_MINUTES = int(os.environ.get("NESTOR_WORKER_STALE_MINUTES", "60"))
+# Liveness cadence (D-E): how often the EXECUTING worker bumps run.heartbeat_at
+# while runner.run() is awaited. Read as float (like POLL_INTERVAL_SECONDS, not
+# like STALE_RUN_MINUTES) so a test can drive it sub-second without a code change.
+#
+# MUST stay well under STALE_RUN_MINUTES * 60. At the defaults that is 30s
+# against 3600s -- a ratio of 120, i.e. a run is only considered abandoned after
+# 120 consecutive heartbeats have failed to land. If you ever raise this, raise
+# STALE_RUN_MINUTES with it or you will start reclaiming live runs again.
+HEARTBEAT_INTERVAL_SECONDS = float(os.environ.get("NESTOR_WORKER_HEARTBEAT_S", "30"))
+# The number of CRASH RECOVERIES a single run is granted -- NOT the number of
+# attempts. A run that keeps dying gets at most this many re-claims; past it,
+# REAP_SQL FAILS it with a sentence rather than starting it again, because an
+# unattended re-execute loop is a repeating spend (D-E: the worst case was a
+# permanently stalling run re-billing every 60 minutes, forever).
+MAX_RECLAIMS = int(os.environ.get("NESTOR_WORKER_MAX_RECLAIMS", "2"))
 
 # ---------------------------------------------------------------------------
 # CLAIM SQL -- SELECT FOR UPDATE SKIP LOCKED
 # ---------------------------------------------------------------------------
 # Two reclaimable conditions:
 #   1. status = 'queued'  (normal work queue)
-#   2. status = 'running' AND started_at < NOW() - make_interval(mins => :stale)
-#      (crash recovery: worker died without completing)
+#   2. status = 'running'
+#        AND COALESCE(heartbeat_at, started_at) < NOW() - make_interval(mins => :stale)
+#        AND reclaim_count < :max_reclaims
+#      (crash recovery: the worker STOPPED WRITING HEARTBEATS, and this run has
+#       not already used up its bounded recoveries)
+#
+# THE STALENESS CLOCK IS THE HEARTBEAT, NOT started_at (D-E, 2026-07-27).
+# started_at is stamped once at claim time and never moves, so measuring
+# staleness by it makes a live 35-minute deep-research long-poll look exactly
+# like a process that died 35 minutes ago -- and the designed response to a dead
+# process is to re-run, at full cost, unattended. COALESCE(heartbeat_at,
+# started_at) keeps pre-0014 rows behaving exactly as they do today while giving
+# every new run a real liveness signal. See the module docstring.
 #
 # B2 fix: use make_interval(mins => :stale) NOT INTERVAL ':stale minutes'
 # The literal-string INTERVAL form cannot accept a bind parameter in SQLAlchemy
@@ -68,18 +126,35 @@ STALE_RUN_MINUTES = int(os.environ.get("NESTOR_WORKER_STALE_MINUTES", "60"))
 #   to restore RLS scope for all subsequent queries.
 #   Phase 4 hardening: swap to SET LOCAL ROLE worker_pg_role for the claim
 #   statement only, then RESET ROLE (or use a per-statement role flip).
+#
+# THE reclaim_count ARITHMETIC IS THE NON-OBVIOUS PART. In a Postgres UPDATE
+# every expression on the right-hand side of SET reads the OLD row, so the
+# `CASE WHEN status = 'running'` below tests the status the row had BEFORE this
+# statement -- even though the same SET list is also assigning status='running'.
+# That is exactly what we want: a reclaim of an already-'running' row counts,
+# a fresh claim of a 'queued' row does not, so reclaim_count is a count of CRASH
+# RECOVERIES and never of ordinary work.
 CLAIM_SQL = text("""
     UPDATE run
-       SET status = 'running', started_at = NOW(), worker_id = :wid
+       SET status = 'running',
+           started_at = NOW(),
+           worker_id = :wid,
+           heartbeat_at = NOW(),
+           reclaim_count = reclaim_count
+                           + CASE WHEN status = 'running' THEN 1 ELSE 0 END
      WHERE id = (
        SELECT id FROM run
         WHERE status = 'queued'
-           OR (status = 'running' AND started_at < NOW() - make_interval(mins => :stale))
+           OR (status = 'running'
+               AND COALESCE(heartbeat_at, started_at)
+                   < NOW() - make_interval(mins => :stale)
+               AND reclaim_count < :max_reclaims)
         ORDER BY created_at
         FOR UPDATE SKIP LOCKED
         LIMIT 1
      )
-   RETURNING id, tenant_id, project_id, engine, brief, worker_id, started_at
+   RETURNING id, tenant_id, project_id, engine, brief, worker_id, started_at,
+             reclaim_count
 """)
 
 
@@ -96,12 +171,93 @@ async def claim_one(session: AsyncSession) -> Optional[dict]:
 
     Returns:
         dict with run fields if a row was claimed, None if queue is empty.
+        `reclaim_count` in that dict is 0 for a fresh claim and >0 when this was
+        a crash recovery (D-E).
     """
-    result = await session.execute(CLAIM_SQL, {"wid": WORKER_ID, "stale": STALE_RUN_MINUTES})
+    result = await session.execute(
+        CLAIM_SQL,
+        {
+            "wid": WORKER_ID,
+            "stale": STALE_RUN_MINUTES,
+            "max_reclaims": MAX_RECLAIMS,
+        },
+    )
     row = result.first()
     if row is None:
         return None
     return dict(row._mapping)
+
+
+# ---------------------------------------------------------------------------
+# LIVENESS HEARTBEAT (D-E)
+# ---------------------------------------------------------------------------
+# The `AND status = 'running'` guard is what ends the heartbeat by itself: the
+# instant a cancel or a terminal write moves the row off 'running', this UPDATE
+# matches zero rows and the run's liveness stops being asserted -- so a heartbeat
+# task that somehow outlives its run cannot keep a finished run looking alive.
+_HEARTBEAT_SQL = text(
+    "UPDATE run SET heartbeat_at = NOW() WHERE id = :id AND status = 'running'"
+)
+
+
+async def _heartbeat_loop(run_id) -> None:
+    """Bump `run.heartbeat_at` on a timer for as long as this task is alive.
+
+    This is the ONLY thing that tells the stale reclaim "the process executing
+    this run is still here". Without it a silent 35-minute deep-research
+    long-poll is indistinguishable from a dead worker (D-E).
+
+    Exception-safe, verbatim per `stages.set_stage`'s contract: any failure is
+    logged at WARNING and swallowed. A liveness write must never break the run it
+    is reporting on -- a transient DB blip should cost one heartbeat, not the run.
+    `asyncio.CancelledError` derives from BaseException, so `except Exception`
+    does NOT swallow the cancellation that ends this task.
+
+    It deliberately does NOT call `set_tenant_context`: like the claim, it is a
+    primary-key UPDATE issued by the RLS-exempt `worker_user` role and it reads
+    and writes no tenant data (T-15.2-205, accepted).
+
+    The interval is read from the module global on every iteration so it can be
+    driven sub-second by a test (the env var is parsed once at import).
+    """
+    sessionmaker = get_sessionmaker()
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        try:
+            async with sessionmaker() as session:
+                async with session.begin():
+                    await session.execute(_HEARTBEAT_SQL, {"id": str(run_id)})
+        except Exception:  # noqa: BLE001
+            log.warning("run_heartbeat_failed", run_id=str(run_id), exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# THE REAP (D-E) -- the ceiling's terminal write
+# ---------------------------------------------------------------------------
+# A run that has used up its recoveries and whose worker has gone silent again
+# must NOT sit in 'running' forever (nothing can retry it: the intake's retry
+# gate excludes 'running') and must NOT be started again (that is the repeating
+# spend). It is FAILED here, with one sentence a human reads.
+REAP_SQL = text("""
+    UPDATE run
+       SET status = 'failed', completed_at = NOW(), error_message = :msg
+     WHERE status = 'running'
+       AND COALESCE(heartbeat_at, started_at) < NOW() - make_interval(mins => :stale)
+       AND reclaim_count >= :max_reclaims
+    RETURNING id
+""")
+
+
+def _reap_message() -> str:
+    """One plain sentence, in the register of `verification/report.py` -- never a
+    code. It has to be readable by whoever opens the run and asks what happened.
+    """
+    return (
+        "This run was stopped because the worker executing it stopped responding, "
+        f"and it had already been recovered and restarted {MAX_RECLAIMS} times. "
+        "Rather than start it again -- which would keep spending money on a run "
+        "that never finishes -- it was failed here so that a person can look at it."
+    )
 
 
 async def execute_run(claimed: dict) -> None:
@@ -125,7 +281,14 @@ async def execute_run(claimed: dict) -> None:
     sessionmaker = get_sessionmaker()
     runner = dispatch_runner(claimed["engine"])
 
+    # LIVENESS (D-E). Declared BEFORE the try so the finally can always reach it,
+    # even if create_task itself raises.
+    _hb: Optional[asyncio.Task] = None
     try:
+        # Start asserting liveness immediately before the long await. runner.run()
+        # can be silent for ~35 minutes (deep research long-polls); without this
+        # task the stale reclaim cannot tell that silence from a dead process.
+        _hb = asyncio.create_task(_heartbeat_loop(claimed["id"]))
         result = await runner.run(
             brief=claimed["brief"],
             run_id=claimed["id"],
@@ -468,6 +631,15 @@ async def execute_run(claimed: dict) -> None:
                     ),
                     {"e": str(exc)[:1000], "id": claimed["id"]},
                 )
+    finally:
+        # Stop asserting liveness on EVERY exit path -- success, RunCancelled and
+        # the exception path alike (T-15.2-202: a heartbeat task that outlived its
+        # run would keep a dead run looking alive forever, which is the D-E defect
+        # with the sign flipped). `return` inside an except still runs this block.
+        if _hb is not None:
+            _hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await _hb
 
 
 async def worker_loop() -> None:
@@ -492,8 +664,50 @@ async def worker_loop() -> None:
             async with session.begin():
                 claimed = await claim_one(session)
         if claimed is None:
+            # REAP (D-E) on the EMPTY-QUEUE tick only: one statement per idle
+            # poll, never competing with real work. Runs that have gone silent
+            # again after using up their recoveries are failed with a sentence
+            # instead of being started a further time.
+            try:
+                async with sessionmaker() as session:
+                    async with session.begin():
+                        reaped = await session.execute(
+                            REAP_SQL,
+                            {
+                                "msg": _reap_message(),
+                                "stale": STALE_RUN_MINUTES,
+                                "max_reclaims": MAX_RECLAIMS,
+                            },
+                        )
+                        reaped_ids = [str(r[0]) for r in reaped.fetchall()]
+                if reaped_ids:
+                    # Fail LOUD and in words, naming the runs (phase rule 7).
+                    log.warning(
+                        "stale_runs_reaped_to_failed",
+                        n=len(reaped_ids),
+                        run_ids=reaped_ids,
+                        max_reclaims=MAX_RECLAIMS,
+                        stale_minutes=STALE_RUN_MINUTES,
+                        cause=(
+                            "worker stopped heartbeating and the run had already "
+                            "used its bounded crash recoveries"
+                        ),
+                    )
+            except Exception:  # noqa: BLE001
+                # Same defensive posture as the dispatch guard below: the reap is
+                # housekeeping and must never stall the queue.
+                log.warning("stale_reap_failed", exc_info=True)
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
             continue
+        if claimed.get("reclaim_count"):
+            # A crash recovery actually happened. Say so by name, with the count,
+            # so a run that keeps dying is visible BEFORE it hits the ceiling.
+            log.warning(
+                "run_reclaimed_from_dead_worker",
+                run_id=str(claimed["id"]),
+                reclaim_count=claimed["reclaim_count"],
+                max_reclaims=MAX_RECLAIMS,
+            )
         log.info("run_claimed", run_id=str(claimed["id"]), engine=claimed["engine"])
         # EXECUTE step: the per-run 64-bit advisory lock WRAPS the dispatch so
         # >1 poller/instance is safe for the audit chain (ENGINE-08, T-13-06).

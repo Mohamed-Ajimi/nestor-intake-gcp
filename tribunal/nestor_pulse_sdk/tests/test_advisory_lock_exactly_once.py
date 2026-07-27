@@ -217,7 +217,15 @@ async def _claim(sessionmaker, wid: str, stale_minutes: int = 60) -> dict | None
             sa = pytest.importorskip("sqlalchemy")
             await session.execute(sa.text("SET search_path TO tribunal"))
             result = await session.execute(
-                worker_mod.CLAIM_SQL, {"wid": wid, "stale": stale_minutes}
+                worker_mod.CLAIM_SQL,
+                {
+                    "wid": wid,
+                    "stale": stale_minutes,
+                    # D-E (plan 15.2-20) added the reclaim ceiling bind. The
+                    # production default is used so this helper keeps modelling
+                    # the production claim exactly.
+                    "max_reclaims": worker_mod.MAX_RECLAIMS,
+                },
             )
             row = result.first()
     return dict(row._mapping) if row is not None else None
@@ -300,12 +308,18 @@ async def test_stolen_claim_does_not_double_dispatch() -> None:
         assert claimed_a is not None
 
         # Force A's claim stale, then B re-claims it (crash-recovery path).
+        # D-E (plan 15.2-20): the staleness clock is now
+        # COALESCE(heartbeat_at, started_at), and the claim stamps a FRESH
+        # heartbeat_at. Backdating started_at alone therefore no longer makes a
+        # run stale — both must move, which is precisely the point of the fix:
+        # a claim whose worker is still heartbeating is never stolen.
         async with sessionmaker() as session:
             async with session.begin():
                 await session.execute(sa.text("SET search_path TO tribunal"))
                 await session.execute(
                     sa.text(
-                        "UPDATE run SET started_at = NOW() - INTERVAL '1 day' "
+                        "UPDATE run SET started_at = NOW() - INTERVAL '1 day', "
+                        "heartbeat_at = NOW() - INTERVAL '1 day' "
                         "WHERE id = :id"
                     ),
                     {"id": str(claimed_a["id"])},
