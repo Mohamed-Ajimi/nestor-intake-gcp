@@ -2952,11 +2952,22 @@ uses it. Do not resolve it by unpausing the worker.
 >
 > Nothing in 15.2.j is wrong; it is a subset with a different tail. Do not run both tails.
 
-## Phase 15.2 gap closure — Step 15.2.k: the GAP-PHASE deploy (plans 15.2-20 … 15.2-26)
+## Phase 15.2 gap closure — Step 15.2.k: the GAP-PHASE deploy (plans 15.2-20 … 15.2-26 **AND 15.3-01 … 15.3-09**)
 
 This is the **single ordered procedure** for shipping the six gap plans that close the twelve defects
 found on run `d6bb3aae`. It supersedes the tail of Step 15.2.j (see the reconciliation note above)
 and is the operator session plan 15.2-26 hands over.
+
+> **THIS STEP NOW COVERS TWO PHASES: plans 15.2-20 … 15.2-26 AND plans 15.3-01 … 15.3-09.**
+> Phase 15.3 has **no deploy of its own** — it rides this one, by operator decision D-03. That
+> decision is the reason no separate numbered step was created for that phase anywhere in this
+> file: two procedures for one deploy is two sources of truth, and the one that gets read is
+> whichever the reader found first. Everything 15.3 adds is folded into the steps below, in place.
+>
+> **The accepted risk that comes with D-03, recorded because it lands during V-01:** the next live
+> run exercises a changed engine AND a changed frontend at once, so a surprising result is harder
+> to attribute to a cause. The mitigation is the **combined deploy record** at the end of this
+> step — fill it in, or the attribution is gone.
 
 **What is being shipped, and by which plan:**
 
@@ -2968,6 +2979,17 @@ and is the operator session plan 15.2-26 hands over.
 | 15.2-23 | D-I (personal identifiers dispatched to third-party providers) + part of D-M | `tribunal-worker` |
 | 15.2-24 | D-F (the engine logged only failures) + D-L (the elapsed clock) | `tribunal-worker` + `tribunal-api` + `nestor-api` |
 | 15.2-25 | D-D (there was no operator cancel path) | `nestor-api` + `nestor-frontend` |
+
+**And phase 15.3 — observability only. It changes nothing about what the pipeline decides,
+dispatches or produces:**
+
+| Plan | Adds | Lands in |
+|---|---|---|
+| 15.3-01…03 | the append-only `run_event` feed + its emit sites | migration **0015** + `tribunal-worker` |
+| 15.3-02 | the bounded, cursor-ordered events read | `tribunal-api` |
+| 15.3-06 | the feed cursor mirrored onto the intake run row | migration **0013** (intake line) + `nestor-api` |
+| 15.3-07 | the events proxy and the run→intake locate verb | `nestor-api` |
+| 15.3-08/09 | the dedicated run page: feed, eight-status card, the four affordances | `nestor-frontend` |
 
 Every step below names its reason. **An ordering constraint without its reason gets reordered by the
 next person in a hurry** — that is how the image once shipped ahead of its migration.
@@ -2990,6 +3012,14 @@ ls tribunal/nestor_pulse_sdk/pipeline/tribunal/pii.py                           
 ls tribunal/nestor_pulse_sdk/tests/test_stage_logging.py                         # 15.2-24
 grep -q "def cancel_run" backend/app/research/tribunal_client.py && echo "cancel seam ok"   # 15.2-25
 grep -q "research/cancel" frontend/src/lib/api/research.ts && echo "cancel FE ok"           # 15.2-25
+
+# ── And the phase-15.3 artifacts riding the same tree. ──────────────────────────────────
+ls tribunal/nestor_pulse_sdk/alembic/versions/0015_run_events.py    # 15.3-01 (engine migration)
+ls backend/app/db/alembic/versions/0013_research_run_event_seq.py   # 15.3-06 (intake migration)
+ls frontend/src/routes/admin.pulse.runs.\$runId.tsx                 # 15.3-08 (the run page)
+ls frontend/src/components/research/RunStatusCard.tsx               # 15.3-09 (the eight statuses)
+ls frontend/src/components/research/RunActions.tsx                  # 15.3-09 (the four affordances)
+grep -q "runs/\$runId" frontend/src/routeTree.gen.ts && echo "run route registered"  # 15.3-08
 ```
 
 Then the gates, on THAT tree. The engine gate now **asserts its own file count** (plan 15.2-26): a
@@ -3004,11 +3034,29 @@ gcloud builds submit tribunal --config=tribunal/cloudbuild.seam-gate.yaml     --
 gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
 ```
 
-Expect on the engine gate: `collecting: 27 of 27 expected files`, then `713 passed, 13 skipped`.
-**The 13 skips are the DB-bound files** (`test_checkpoint_resume.py` ×8, `test_stale_reclaim.py` ×5)
-and each prints a message saying in words that a skip there is not a pass. That is contract-
-compliant for a gate that provisions no Postgres — and it is why `cloudbuild.test-critical.yaml` is
-in the list above.
+Expect on the engine gate: **`collecting: 30 of 30 expected files`**, then the pass/skip summary.
+**The count is not a memory — read it out of `EXPECTED_FILES` in
+`tribunal/cloudbuild.test-engine.yaml` and compare.** It moved from 27 to 30 because plans 15.3-01,
+15.3-02 and 15.3-03 each registered one test file, and a runbook quoting a stale count teaches the
+operator to accept a gate that ran less than it claims. **The DB-bound files skip** (`test_
+checkpoint_resume.py`, `test_stale_reclaim.py`) and each prints a message saying in words that a
+skip there is not a pass — contract-compliant for a gate that provisions no Postgres, and why
+`cloudbuild.test-critical.yaml` is in the list above.
+
+`cloudbuild.test.yaml` (the **backend** gate, `pytest tests -m integration`) is where phase 15.3's
+intake-side work is proven: the cursor mirror, the events proxy and the locate verb. Note what it
+does **not** print — see the intake migration in step 3b.
+
+**The frontend gates are local, and 15.3 lands real code behind all three.** Run them on the same
+tree before the image build in step 1:
+
+```bash
+cd frontend && npm ci && node scripts/i18n-audit.mjs && npx tsc --noEmit && npm run build && cd ..
+```
+
+`npm ci`, never `npm install`. The i18n audit is a HARD gate on checks A/B/C: every user-visible
+string must exist in **en, nl and fr**. Its CHECK D advisories are pre-existing and are not a
+failure — read the `RESULT:` line, not the warning count.
 
 ---
 
@@ -3039,9 +3087,26 @@ api carries 15.2-24's two new `RunMetrics` fields; `nestor-api` carries the canc
 **compiled into the bundle** (the Phase-18 stale-SPA lesson — a backend-only deploy leaves the
 operator with no button and no error).
 
+*And why each of the four ALSO carries phase 15.3 — so that a reader deciding to skip one image can
+see exactly what they would be skipping:*
+
+| Image | What 15.3 puts in it | Skipping it costs |
+|---|---|---|
+| `tribunal-worker` | the `run_event` emit sites in the pipeline and the research division (15.3-03) | the feed stays empty forever — the page renders, with nothing in it |
+| `tribunal-api` | the bounded, cursor-ordered events read endpoint (15.3-02) | the page's backfill 404s and every run reads as having no history |
+| `nestor-api` | the events proxy, the run→intake locate verb and the cursor mirror (15.3-06/07) | the page cannot even resolve which intake a run belongs to — it is a dead URL |
+| `nestor-frontend` | the run page itself, the eight-status card and the four affordances (15.3-08/09) | the route does not exist in the bundle; the link from the intake card 404s |
+
 `npm ci`, never `npm install` — `frontend/package-lock.json` IS committed. Never pass
-`VITE_SUPABASE_*` (the in-image bundle guard fails the build). **No `routeTree.gen.ts`
-regeneration**: 15.2-25 adds no route, it mounts on the existing `admin.pulse.intakes.$id` anchor.
+`VITE_SUPABASE_*` (the in-image bundle guard fails the build).
+
+> ⚠️ **`routeTree.gen.ts` — READ THIS, IT CHANGED.** The pre-15.3 note here said no route was
+> added, because 15.2-25 mounted on the existing `admin.pulse.intakes.$id` anchor. **That is no
+> longer true.** Plan 15.3-08 adds a genuinely new flat route, `/admin/pulse/runs/$runId`, and its
+> regenerated `frontend/src/routeTree.gen.ts` **is already committed**. Nothing needs regenerating
+> at deploy time — but do confirm the guard in step 0 printed `run route registered`. A frontend
+> image built from a tree whose generated route table predates 15.3-08 ships a page that cannot be
+> navigated to, and the symptom is a 404 that looks like a backend fault.
 
 ---
 
@@ -3068,7 +3133,22 @@ SELECT id, status, started_at, heartbeat_at, reclaim_count
 
 ---
 
-**3. Migrate FIRST: repin `tribunal-migrate` to the `$SHA` api image, then execute (alembic 0014).**
+**3. Migrate FIRST — BOTH LINES. Each is its own sequence with its own version table, and each
+needs its own proof.**
+
+There are **two independent alembic lines** in this project and they do not know about each other:
+the **TRIBUNAL** line in `tribunal.tribunal_alembic_version`, and the **INTAKE (`nestor`)** line in
+`public.alembic_version`. This deploy advances BOTH — the first time that has been true — so step 3
+has two halves. Neither half proves the other, and a head read on the wrong table proves nothing at
+all.
+
+**Both migrations go before their respective service images**, for one reason stated twice: the
+engine writes `run_event` from the pipeline, and the intake API reads `research_runs.event_seq`. A
+service that ships ahead of its own migration fails on a missing relation or a missing column, in a
+loop, on every request.
+
+**3a. TRIBUNAL: repin `tribunal-migrate` to the `$SHA` api image, then execute (alembic 0014 AND
+0015).**
 
 Full detail, including the schema read-back, is Step 15.2.j item 1 — do not restate it differently
 here.
@@ -3081,21 +3161,81 @@ gcloud run jobs describe tribunal-migrate --region "$REGION" --project="$GOOGLE_
 gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
 ```
 
-**Prove it by the literal log line. `Container called exit(0)` is NOT proof** — this is the recorded
-phase lesson, and an unpinned Job is a silent no-op that exits 0 having applied nothing:
+**Prove it by the literal log lines. `Container called exit(0)` is NOT proof** — this is the
+recorded phase lesson, and an unpinned Job is a silent no-op that exits 0 having applied nothing.
+There are now **TWO** lines to find, because this run advances the tribunal line by two revisions:
 
 ```
 Running upgrade 0013 -> 0014
+Running upgrade 0014 -> 0015
 ```
+
+Only the first is 15.2's. **`Running upgrade 0014 -> 0015`** is phase 15.3's `run_event` table — the
+append-only feed everything else in 15.3 reads from. Seeing the first line and not the second means
+the Job ran on an image built before 15.3-01: repin and re-execute.
 
 *Why the migration precedes the worker image.* The new `CLAIM_SQL` and `REAP_SQL` reference
 `heartbeat_at` and `reclaim_count`. A worker deployed ahead of 0014 raises `UndefinedColumnError` on
-every claim and poll-crashes in a loop, claiming nothing. The reverse order is safe: between (3) and
-(4) the OLD image runs against the NEW schema, and both columns are purely additive.
+every claim and poll-crashes in a loop, claiming nothing. The same argument now applies twice over:
+a worker carrying 15.3's emit sites, deployed ahead of 0015, raises on a missing `run_event`
+relation from inside the pipeline. The reverse order is safe: between (3) and (4) the OLD image runs
+against the NEW schema, and every one of these changes is purely additive.
 
 Read back: `run.heartbeat_at` nullable=YES · `run.reclaim_count` NOT NULL default 0 ·
-`tribunal_head = 0014` in **`tribunal.tribunal_alembic_version`** (the TRIBUNAL line — the intake
-`nestor` line stays at 0012).
+`tribunal_head = 0015` in **`tribunal.tribunal_alembic_version`** (the TRIBUNAL line).
+
+**3b. INTAKE (`nestor`): repin `nestor-migrate` to the `$SHA` backend image, then execute
+(alembic 0013).**
+
+This half is new to this procedure — previous gap-phase deploys touched only the tribunal line. It
+adds `research_runs.event_seq`, the feed cursor `nestor-api` reads to decide whether new events
+exist. It must run **before** `nestor-api` is repointed in step 5.
+
+```bash
+gcloud run jobs update nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:${SHA}"
+gcloud run jobs describe nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.template.spec.containers[0].image)'   # must echo :${SHA}
+gcloud run jobs execute nestor-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+**The repin is not optional** (lesson hit live 2026-07-22): the Job does NOT track the service
+image, so executing an unrepinned Job is a silent no-op — alembic connects, finds itself at head on
+the stale revision set, exits 0, and logs no upgrade line at all.
+
+**Proof — the literal line, and `exit(0)` is never it:**
+
+```
+Running upgrade 0012 -> 0013
+```
+
+> ⚠️ **DO NOT GO LOOKING FOR THAT LINE IN THE PREFLIGHT GATE — IT IS NOT THERE AND ITS ABSENCE
+> MEANS NOTHING.** The backend gate (`cloudbuild.test.yaml`) runs `alembic upgrade head` inside its
+> own fixture but **does not surface alembic's `Running upgrade` output**; only the alembic version
+> banner and a config deprecation warning appear. This was established directly in plan 15.3-06,
+> which is why that plan added live-schema tests rather than letting "the build did not crash"
+> stand as evidence. So: the literal line is the proof **of the Job in this step**, and the gate is
+> proof of something else entirely.
+
+Because that log line is the only narrative evidence, confirm the schema itself as well — this is
+the same pair of reads the backend gate asserts, run here against live Cloud SQL:
+
+```sql
+-- (i) the column exists, with the right type and nullability
+SELECT column_name, data_type, is_nullable, column_default
+  FROM information_schema.columns
+ WHERE table_schema = 'nestor'
+   AND table_name   = 'research_runs'
+   AND column_name  = 'event_seq';
+-- expect exactly one row: bigint · YES · NULL default
+
+-- (ii) the INTAKE line's own version table — NOT the tribunal one
+SELECT version_num FROM public.alembic_version;
+-- expect: 0013
+```
+
+`event_seq` must be **NULL** on every pre-existing row, never 0: NULL means "this run has emitted no
+events", while 0 would claim a feed positioned at its own start. No backfill runs and none should.
 
 ---
 
@@ -3159,9 +3299,23 @@ Anthropic binding it already carries is unaffected.
 **NEVER bind `SERPAPI_API_KEY` to `nestor-api`** — `backend/scripts/ci_no_run_research.sh` scans
 `backend/app/**` and `frontend/src`, and INTAKE-05 must stay green.
 
+*What 15.3 adds to this same order.* `nestor-api` here also carries the events proxy, the
+run→intake locate verb and the cursor mirror, all of which read `research_runs.event_seq` — so
+**step 3b must already have run**, or every one of those reads fails on a missing column. The
+frontend here also carries the run page, which calls the locate verb before it can render anything
+at all: a frontend shipped ahead of `nestor-api` gives a run page that 404s on open, which looks
+exactly like a broken permission and is not.
+
 ---
 
 **6. Clear run `d6bb3aae` through the UI — BEFORE the unpause. This is D-D's acceptance demo.**
+
+> **THE SAFETY ORDERING IS UNCHANGED BY PHASE 15.3, AND THAT IS WORTH STATING RATHER THAN LEAVING
+> TO BE RE-DERIVED.** Run `d6bb3aae` is still cancelled through the UI **before** any unpause, and
+> `--min-instances=1` is still the **last** thing that happens. Nothing in 15.3 touches the claim
+> query, the reclaim ceiling or the heartbeat — it adds an append-only table, a read endpoint, a
+> proxy and a page, and it changes no pipeline decision. So there is nothing here to re-reason
+> about under time pressure: the order below is the order, for the same reasons it always had.
 
 > ⛔ **DO NOT SKIP THIS AND DO NOT REORDER IT AFTER STEP 7.** The D-E fix does **not** protect this
 > particular row. Staleness is `COALESCE(heartbeat_at, started_at)`, and `d6bb3aae` predates 0014 so
@@ -3233,9 +3387,17 @@ gcloud logging read \
   --project="$GOOGLE_PROJECT" --limit=50 --format="value(textPayload)" | grep -i "deep.research"
 ```
 
+```sql
+-- (e) BOTH alembic heads, each read from its OWN version table. One does not imply the other.
+SELECT version_num FROM tribunal.tribunal_alembic_version;   -- expect: 0015
+SELECT version_num FROM public.alembic_version;              -- expect: 0013
+```
+
 Record: the worker's `NESTOR_WORKER_STALE_MINUTES`, the **absence** of `NESTOR_RUN_ABORTED_MARKER`,
 the resolved deep-research model ids and whether each came from the environment or the default, the
-four revision names, and `d6bb3aae`'s final status.
+four revision names, `d6bb3aae`'s final status, and **both alembic heads — TRIBUNAL == 0015 and
+INTAKE == 0013.** Two heads, two tables, two separate reads; a single "migrations fine" is not a
+record of either.
 
 ---
 
@@ -3375,5 +3537,5 @@ indistinguishable from a dead pipeline (defect D-F; it cost an hour and one with
 - [ ] Step 15.2.g — `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.2-09's `RESEARCH_TERMINAL` set + `lib/api/research.ts` + en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed; the CLAUDE.md note is stale/bun). **Mandatory** — the terminal-status set is COMPILED INTO THE BUNDLE, so without it a `completed_degraded` run spins forever in the browser while every backend surface is correct (the Phase-18 stale-SPA lesson)
 - [ ] Step 15.2.h — VERIFY without printing secrets: the six gates re-run against the deployed tree (`collecting:` block read); **`verify_chain` GREEN on the DEPLOYED audit data — a RED chain is a STOP, no sign-off** (EU AI Act Art. 12, deadline 2026-08-02); secret-binding confirm by NAME; `/readyz` 200 on `tribunal-api` with an identity token against the path-less URL (Pitfall 4); `bash backend/scripts/ci_no_run_research.sh` exit 0 (INTAKE-05 — SerpApi lives in `tribunal/`, which the guard deliberately does not scan)
 - [ ] Step 15.2.j — GAP CLOSURE (D-E, plan 15.2-20): **`tribunal-worker` stays PAUSED until this whole step is done** — unpausing first re-executes the still-`running` run `d6bb3aae` at full cost. Order is load-bearing: (1) `tribunal-migrate` REPINNED to the `$SHA` api image then executed `--wait`, log shows the literal **`Running upgrade 0013 -> 0014`** (an exit code is NOT proof), `run.heartbeat_at` nullable + `run.reclaim_count` NOT NULL default 0 confirmed, TRIBUNAL head == **0014**; (2) the new `tribunal-worker` image deployed via the retargeted script — never before the migration, because the new `CLAIM_SQL`/`REAP_SQL` reference both columns and would poll-crash; (3) `--update-env-vars NESTOR_WORKER_STALE_MINUTES=60` (safe now that the clock is heartbeat SILENCE, not run duration — 120 missed 30s heartbeats); (4) `--remove-env-vars NESTOR_RUN_ABORTED_MARKER` (read by no code — a human annotation); (5) ONLY THEN `--min-instances=1`. A full redeploy through `deploy-worker.sh` performs (3) and (4) by itself because its whole-env flag replaces the plain env — **verify by `describe`, never assume**; never hand-type that flag against a live service (Phase-12 lesson: it drops every binding not restated). Run `d6bb3aae` is NOT resolved here — that is 15.2-25/26. **SUPERSEDED TAIL:** when deploying the gap phase as a whole, execute § Step 15.2.k instead — 15.2.j items 1-4 are 15.2.k steps 3-4, and the unpause MOVES to 15.2.k step 7, after the cancel
-- [ ] Step 15.2.k — GAP-PHASE DEPLOY (plans 15.2-20…26), ONE ordered procedure: (0) stale-base guard on disk, one artifact per gap plan, then the gates — the engine gate now ASSERTS its collected count (`collecting: 27 of 27 expected files`, 713 passed / 13 skipped; the 13 are the DB-bound files and say in words that a skip is not a pass); (1) all FOUR images BUILT at ONE `$SHA` (worker/api/backend/frontend — every one a REBUILD, the Stop button is COMPILED INTO THE BUNDLE); (2) **queue confirmed EMPTY** via `SELECT … FROM tribunal.run WHERE status IN ('queued','running')` — expect EXACTLY the one row `d6bb3aae`, and a `queued` row is a STOP because step 7 would claim it; (3) `tribunal-migrate` REPINNED then executed, proven by the literal **`Running upgrade 0013 -> 0014`** (`exit(0)` is NOT proof), migration BEFORE the image or the new `CLAIM_SQL`/`REAP_SQL` poll-crash on `UndefinedColumnError`; (4) `deploy-worker.sh` at `IMAGE_TAG=$SHA` **WITH `TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude_Temp`** (the committed default `Nestor_Claude2` is NOT topped up — a redeploy without the override silently repoints at an empty key), which also performs the D-E env revert by whole-env replacement — VERIFY by describe, never assume; (5) `tribunal-api` → `nestor-api` → frontend (the Stop button calls a nestor-api route that calls a tribunal-api endpoint; a frontend shipped first 404s); (6) **run `d6bb3aae` CANCELLED THROUGH THE UI BEFORE the unpause** — D-D's acceptance demo AND a hard safety step: that row predates 0014 so `heartbeat_at` is NULL, `COALESCE` falls back to a stale `started_at` and `reclaim_count`=0, so restoring `NESTOR_WORKER_STALE_MINUTES=60` makes it claimable again; D-L verified in the same click (the elapsed clock must NOT reset on refresh); (7) ONLY THEN `--min-instances=1`, and the worker must claim NOTHING; (8) read-backs recorded VERBATIM (threshold=60 not 525600, `NESTOR_RUN_ABORTED_MARKER` ABSENT, `NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol`, secret names only, four revision names, `d6bb3aae` status); (9) the `serviceAccountTokenCreator` grant on `nestor-run@` REVOKED or its retention RECORDED as a decision — undecided is not an answer. Plus the first-live-run log checklist: `stage_enter`/`stage_exit`/`run_stages_complete` (D-F — never diagnose from silence or CPU again) and the two `collect_provider_facts` honour lines (how D-M gets MEASURED). **NO V-01 in this session** — the next live run is a separate, operator-scheduled event on a FRESH intake
+- [ ] Step 15.2.k — GAP-PHASE DEPLOY (plans 15.2-20…26 **AND 15.3-01…09** — 15.3 has no deploy of its own, it RIDES this one per operator decision D-03), ONE ordered procedure: (0) stale-base guard on disk, one artifact per gap plan PLUS the five 15.3 artifacts (both migrations, the run route, the status card, the actions), then the gates — the engine gate ASSERTS its collected count, now **`collecting: 30 of 30 expected files`** (27→30 via plans 15.3-01/02/03; READ THE NUMBER OUT OF `EXPECTED_FILES` in `tribunal/cloudbuild.test-engine.yaml`, never out of memory — the DB-bound skips say in words that a skip is not a pass), plus the backend gate `pytest tests -m integration` and the three FRONTEND gates (`npm ci` → `node scripts/i18n-audit.mjs` → `npx tsc --noEmit` → `npm run build`; the i18n audit is HARD on en/nl/fr and its CHECK D advisories are pre-existing); (1) all FOUR images BUILT at ONE `$SHA` (worker/api/backend/frontend — every one a REBUILD, the Stop button AND the whole run page are COMPILED INTO THE BUNDLE; 15.3-08 DOES add a new route and its regenerated `routeTree.gen.ts` is already committed, superseding the old "no route added" note); (2) **queue confirmed EMPTY** via `SELECT … FROM tribunal.run WHERE status IN ('queued','running')` — expect EXACTLY the one row `d6bb3aae`, and a `queued` row is a STOP because step 7 would claim it; (3) **BOTH migration lines, each with its OWN literal proof and its OWN version table** — (3a) `tribunal-migrate` REPINNED then executed, proven by **`Running upgrade 0013 -> 0014`** AND **`Running upgrade 0014 -> 0015`** (the second is 15.3's `run_event` table; seeing only the first means a pre-15.3 image), and (3b) `nestor-migrate` REPINNED to the `$SHA` backend image then executed, proven by **`Running upgrade 0012 -> 0013`** (`research_runs.event_seq`) — `exit(0)` is NEVER proof for either, and do NOT hunt that line in the preflight backend gate: `cloudbuild.test.yaml` runs alembic but does not surface its upgrade output (established in 15.3-06), so confirm 3b additionally via `information_schema.columns` (bigint · nullable · no default) and `public.alembic_version` = 0013; each migration BEFORE its own service image, or the worker poll-crashes on `UndefinedColumnError`/missing `run_event` and `nestor-api` fails every cursor read; (4) `deploy-worker.sh` at `IMAGE_TAG=$SHA` **WITH `TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude_Temp`** (the committed default `Nestor_Claude2` is NOT topped up — a redeploy without the override silently repoints at an empty key), which also performs the D-E env revert by whole-env replacement — VERIFY by describe, never assume; (5) `tribunal-api` → `nestor-api` → frontend (the Stop button calls a nestor-api route that calls a tribunal-api endpoint; a frontend shipped first 404s); (6) **run `d6bb3aae` CANCELLED THROUGH THE UI BEFORE the unpause** — D-D's acceptance demo AND a hard safety step: that row predates 0014 so `heartbeat_at` is NULL, `COALESCE` falls back to a stale `started_at` and `reclaim_count`=0, so restoring `NESTOR_WORKER_STALE_MINUTES=60` makes it claimable again; D-L verified in the same click (the elapsed clock must NOT reset on refresh); (7) ONLY THEN `--min-instances=1`, and the worker must claim NOTHING; (8) read-backs recorded VERBATIM (threshold=60 not 525600, `NESTOR_RUN_ABORTED_MARKER` ABSENT, `NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol`, secret names only, four revision names, `d6bb3aae` status, and **BOTH alembic heads from their own tables — TRIBUNAL 0015, INTAKE 0013**); (9) the `serviceAccountTokenCreator` grant on `nestor-run@` REVOKED or its retention RECORDED as a decision — undecided is not an answer; (10) **the COMBINED DEPLOY RECORD at the end of § Step 15.2.k filled in** — one `$SHA`, four revisions, both heads with their literal upgrade lines, and the TWO separately labelled change lists (15.2 gap fixes by defect id · 15.3 observability changes) plus the operator-affirmed no-engine-behaviour-change sentence. That split is the whole attribution mechanism D-03 asks for, and **if that sentence cannot honestly be written, the deploy STOPS**. Plus the first-live-run log checklist: `stage_enter`/`stage_exit`/`run_stages_complete` (D-F — never diagnose from silence or CPU again) and the two `collect_provider_facts` honour lines (how D-M gets MEASURED). **NO V-01 in this session** — the next live run is a separate, operator-scheduled event on a FRESH intake
 - [ ] Step 15.2.i — PARK: **Anthropic monthly cap resets 2026-08-01**; NO live LLM run triggered before then — the park is NOT a failure. Then V-01 (ONE live run on a FRESH intake in the baseline brief domain, recorded in `docs/tribunal-run-reports/V-01-COMPARISON.md` beside run-20260722-4cbb5311 — **no A/B double-run**, the `comparison_id` harness stays unused), V-02 (the 16-item checklist in `15.2-UAT.md`, each item pass/fail with NAMED evidence, ending in a dated operator sign-off), then V-03 as a **SEPARATE commit after sign-off** removing only unreferenced old-path code (`claim_distiller`/D-15, `detect_explicit_questions` and `extract_and_persist_citations` all SURVIVE with green tests). Batched into the same August session: the deferred Phase-15 populated-surface browser UAT (SC1-SC4) and the Phase-15.1 verdict/gate surfaces
