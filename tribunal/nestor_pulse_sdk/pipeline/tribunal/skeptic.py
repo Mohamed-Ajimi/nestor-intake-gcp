@@ -54,6 +54,14 @@ from nestor_pulse_sdk.pipeline.tribunal.tools import (
     build_web_search,
     force_emit_verdict,
 )
+# ONE status sniffer and ONE cap-marker list for the whole phase (R1). `reliability`
+# imports nothing from this module by design ("this module needs no skeptic import
+# and no import cycle exists" — reliability.py:471), so this direction is safe.
+from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+    _CAP_MARKERS,
+    _status_of,
+    redact,
+)
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -223,19 +231,127 @@ def _parse_verdict(block: Any, citations: list[str] | None = None) -> dict[str, 
     }
 
 
+def _to_plain(value: Any) -> Any:
+    """Recursively convert a provider value into plain JSON data. Never raises.
+
+    PREFERRING `model_dump` IS THE LOAD-BEARING PART. The Anthropic SDK returns
+    pydantic v2 models, and `model_dump()` is the provider's OWN canonical
+    serialisation of them — it is the one conversion guaranteed to agree with the
+    request schema. An attribute copy only approximates it.
+
+    `exclude_none=True` because a RESPONSE model declares every optional field,
+    so a plain attribute copy leaks them into the next REQUEST as explicit
+    `null`s. The request schema wants such fields ABSENT, not null.
+
+    Order: dict -> list/tuple -> `model_dump` -> `__dict__` -> primitive ->
+    `str(value)` as the final floor, because a stringified value still makes a
+    valid (if lossy) request, whereas a live object makes none.
+    """
+    if isinstance(value, dict):
+        return {
+            k: _to_plain(v)
+            for k, v in value.items()
+            if not str(k).startswith("_") and v is not None
+        }
+    if isinstance(value, (list, tuple)):
+        return [_to_plain(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return _to_plain(dump(mode="json", exclude_none=True))
+        except TypeError:
+            # An older//exotic signature that rejects those keywords.
+            return _to_plain(dump())
+
+    holder = getattr(value, "__dict__", None)
+    if isinstance(holder, dict):
+        return {
+            k: _to_plain(v)
+            for k, v in holder.items()
+            if not str(k).startswith("_") and v is not None
+        }
+
+    return str(value)
+
+
 def _content_to_serialisable(content: list[Any]) -> list[Any]:
-    """Convert response content blocks to serialisable dicts for messages list."""
+    """Convert response content blocks to plain JSON dicts for the messages list.
+
+    THE D-B INCIDENT (run `d6bb3aae`, 2026-07-27). This function used to be a
+    ONE-LEVEL `__dict__` copy. A `web_fetch_tool_result` block's `content` is
+    ITSELF a provider object — for the error variant, `RequestWebFetchToolResultError`
+    — so it survived the copy as a LIVE OBJECT and was replayed into the next
+    request. The API answered:
+
+        messages.N.content.M.web_fetch_tool_result.content.RequestWebFetchToolResultError:
+        Input does not match the expected shape.
+
+    It worked until a fetch failed, which is why it looked intermittent rather
+    than like the shape bug it was: the own-researcher lost 6 of 6 sessions, and
+    every later call in a poisoned session 400'd on the same replayed turn.
+    Retrying could not help — the identical poisoned message list can only
+    produce the identical 400 — so the fix is SHAPE, not repetition.
+
+    Contract (all three depended on by `group_skeptic`, `own_researcher`,
+    `workshop`, `workshop_rank`): same name, same signature, and it NEVER RAISES.
+    One unconvertible block degrades to `{"type": ...}` rather than throwing away
+    a paid loop.
+
+    Regression gate: `tests/test_web_fetch_replay.py` + the recorded
+    `tests/fixtures/web_fetch_error_turn.json`.
+    """
     result = []
     for block in content:
-        if isinstance(block, dict):
-            result.append(block)
-        elif hasattr(block, "__dict__"):
-            result.append({
-                k: v for k, v in block.__dict__.items() if not k.startswith("_")
-            })
+        try:
+            converted = _to_plain(block)
+        except Exception as exc:  # noqa: BLE001 — a serialiser that raises kills a paid loop
+            log.warning(
+                "skeptic: could not serialise a %s content block (%s) — sending it "
+                "as a type-only stub so the loop survives",
+                type(block).__name__,
+                exc,
+            )
+            converted = None
+        if isinstance(converted, dict):
+            result.append(converted)
         else:
-            result.append({"type": str(getattr(block, "type", "unknown"))})
+            result.append({"type": str(_block_get(block, "type") or "unknown")})
     return result
+
+
+# ---------------------------------------------------------------------------
+# The bounded poison-turn predicate (D-B recovery half).
+# ---------------------------------------------------------------------------
+
+
+def is_poisoned_turn_error(exc: BaseException) -> bool:
+    """True only for the D-B 400: a replayed assistant turn the API cannot parse.
+
+    A caller that gets True may drop the offending assistant turn and retry ONCE,
+    so a stream that has already paid for its searches is not thrown away over
+    one bad page. Anything else is False, and deliberately so:
+
+      * CAP / BILLING wording is never poisoned — that is the 776-error class
+        (`reliability._CAP_MARKERS`, and this function consults THAT list rather
+        than re-listing it, so the two can never drift apart). A "drop the turn
+        and retry" recovery must never swallow an account-level refusal.
+      * A non-400 is never poisoned. A 429 is a rate limit and a 5xx is capacity;
+        neither says anything about message shape.
+
+    Never raises: a predicate that raises is worse than a wrong answer.
+    """
+    try:
+        if _status_of(exc) != 400:
+            return False
+        msg = redact(f"{type(exc).__name__} {exc}").lower()
+        if any(marker in msg for marker in _CAP_MARKERS):
+            return False
+        return "web_fetch_tool_result" in msg
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def run_skeptic(

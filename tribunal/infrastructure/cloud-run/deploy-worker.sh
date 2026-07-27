@@ -124,6 +124,25 @@ fi
 
 echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 
+# ---------------------------------------------------------------------------
+# NESTOR_OPENAI_DR_MODEL — D-A (run d6bb3aae, 2026-07-27).
+#
+# This variable was previously NOT BOUND HERE AT ALL, so the deployed worker fell
+# through to the code default in audit/audited_llm_client.py — and that default was
+# `o4-mini-deep-research`, which OpenAI shut down on 2026-07-23. All seven OpenAI
+# deep-research angles on that run failed with `model_not_found`, one WARNING at a
+# time, and the stream was silently dead for the whole run.
+#
+# The replacement is `gpt-5.6-sol` (OpenAI's single migration target for BOTH retired
+# deep-research ids), and it is now pinned in BOTH places — here and as the committed
+# code default — so neither one alone can resurrect the failure. KEEP THE TWO IN STEP.
+# The comment above the constant records how the id was verified, and the caveat that
+# is still open.
+#
+# `--set-env-vars` REPLACES the service's ENTIRE plain env on every deploy (WR-01, the
+# same rule as `--set-secrets` above), so this variable must stay ON that one line.
+# ---------------------------------------------------------------------------
+
 REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
 
 gcloud run deploy "${SERVICE_NAME}" \
@@ -140,7 +159,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=5 \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol" \
   --set-secrets="${TRIBUNAL_SECRETS}"
 
 echo

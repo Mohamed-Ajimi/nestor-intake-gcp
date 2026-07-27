@@ -85,9 +85,67 @@ GEMINI_DEEP_RESEARCH_AGENT = os.environ.get(
     # superseded. Override via NESTOR_GEMINI_DR_AGENT.
     "NESTOR_GEMINI_DR_AGENT", "deep-research-max-preview-04-2026"
 )
+# D-A, found dead on run `d6bb3aae` (2026-07-27). This default used to be the
+# retired o4-mini deep-research id, and OpenAI shut BOTH deep-research models down
+# on 2026-07-23 — four days before that run. The engine did not break; the model
+# was switched off underneath it. OpenAI's deprecations page gives ONE migration
+# target for both retired ids, and it is the one below. It was verified on THIS
+# account by polling a background deep-research probe to a TERMINAL state
+# (queued -> completed) — never by whether the request was accepted, because the
+# dead model also reached `queued` and only then failed asynchronously with
+# `model_not_found`.
+#
+# THIS DEFAULT IS THE FLOOR WHEN THE ENV VAR IS ABSENT, which is exactly how the
+# dead id reached production: `deploy-worker.sh` never bound NESTOR_OPENAI_DR_MODEL,
+# so the deployed worker ran on the code default. Both places are pinned now, so
+# neither alone can resurrect the failure. KEEP THE TWO IN STEP.
+#
+# CAVEAT, STILL OPEN: `gpt-5.6-sol` is a GPT-5.x model, not an o-series
+# deep-research model. The probe proves it is CALLABLE on the background Responses
+# path; it does NOT prove that this file's two-phase start/poll adapter parses its
+# response and `usage` fields identically. That parity is unverified until the
+# next live run.
+#
+# (The retired id is deliberately NOT spelled out anywhere in this file, so the
+# phase's `grep -c` gate for it can be read literally — see 15.2-22 phase rule 9.)
 OPENAI_DEEP_RESEARCH_MODEL = os.environ.get(
-    "NESTOR_OPENAI_DR_MODEL", "o4-mini-deep-research"
+    "NESTOR_OPENAI_DR_MODEL", "gpt-5.6-sol"
 )
+
+# ---------------------------------------------------------------------------
+# D-A's second half: an operator must be able to READ the configuration rather
+# than infer it from seven identical per-angle failures. Emitted ONCE per process
+# from the first `AuditedLLMClient` construction — module import is too early to
+# be useful (the env is read above, but nothing has decided to make a call yet)
+# and too noisy in tests.
+#
+# It names MODEL IDS ONLY. A model id is configuration, not a credential; no
+# secret, key or env VALUE other than these two ids is read, echoed or logged
+# here (T-15.2-223).
+# ---------------------------------------------------------------------------
+_DR_MODELS_LOGGED = False
+
+
+def log_resolved_dr_models() -> None:
+    """Log the resolved deep-research model ids and where each came from. Once."""
+    global _DR_MODELS_LOGGED
+    if _DR_MODELS_LOGGED:
+        return
+    _DR_MODELS_LOGGED = True
+
+    def _origin(var: str) -> str:
+        return f"env {var}" if os.environ.get(var) else "committed default"
+
+    log.info(
+        "resolved deep-research models: gemini=%s (%s), openai=%s (%s). A refused "
+        "model id classifies as reliability.CONFIG_ERROR and trips that provider "
+        "circuit on its FIRST occurrence, so it is one named failure and not one "
+        "per angle.",
+        GEMINI_DEEP_RESEARCH_AGENT,
+        _origin("NESTOR_GEMINI_DR_AGENT"),
+        OPENAI_DEEP_RESEARCH_MODEL,
+        _origin("NESTOR_OPENAI_DR_MODEL"),
+    )
 
 # ---------------------------------------------------------------------------
 # Gemini Interactions REST config (deep research).
@@ -327,6 +385,12 @@ class AuditedLLMClient:
         # Per-run locks: serializes seq+hash assignment at completion order.
         # dict.get/set without an await between is race-free in single-threaded asyncio.
         self._run_locks: dict[uuid.UUID, asyncio.Lock] = {}
+        # D-A: say out loud, once, which deep-research models this process
+        # resolved. Best-effort — a log line must never break client construction.
+        try:
+            log_resolved_dr_models()
+        except Exception:  # noqa: BLE001 — a startup log is never load-bearing
+            pass
 
     def _run_lock(self, run_id: uuid.UUID) -> asyncio.Lock:
         """Return (or create) the per-run asyncio.Lock for seq+hash serialization."""

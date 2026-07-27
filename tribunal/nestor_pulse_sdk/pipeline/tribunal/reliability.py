@@ -146,6 +146,43 @@ _CAP_MARKERS = (
     "billing",
 )
 
+# Wording that marks a REFUSED MODEL ID — a statement about this deployment's
+# CONFIGURATION, not about the provider's health. Same comment discipline as
+# _CAP_MARKERS: each phrase must be specific enough not to match ordinary
+# claim-bearing error text, because a false positive here kills a healthy
+# provider's stream after ONE failure.
+#   "model_not_found"     the API error CODE. Underscored, so it cannot occur in prose.
+#   "model not found"     the spaced spelling some providers use in the message body.
+#   "unknown model"       two words that only ever appear together about a model id.
+#   "has been deprecated" the exact D-A wording. A deprecation notice IS a
+#                         configuration statement whatever it is about, so the
+#                         phrase is deliberately not model-scoped.
+# DELIBERATELY NOT A BARE SUBSTRING: "does not exist". On its own it also matches
+# "the requested file does not exist" and a resumed background response that is
+# past its ~10-minute retention window (R7/DEC-2) — neither is a configuration
+# error, and treating either as one would open the circuit on a healthy provider.
+# It is honoured in its MODEL-SCOPED form only, via _MODEL_MISSING_RE below.
+_CONFIG_ERROR_MARKERS = (
+    "model_not_found",
+    "model not found",
+    "unknown model",
+    "has been deprecated",
+)
+
+# "The model `gpt-5.6-sol` does not exist or you do not have access to it." —
+# OpenAI's phrasing. The bounded `.{0,120}` keeps "model" and "does not exist" in
+# the same clause, so a message that merely mentions a model somewhere and a
+# missing file somewhere else does not match.
+_MODEL_MISSING_RE = re.compile(r"\bmodel\b.{0,120}?\bdoes not exist", re.DOTALL)
+
+
+def _is_config_error(msg: str) -> bool:
+    """True when a lowercased exception message names a refused model id."""
+    if any(marker in msg for marker in _CONFIG_ERROR_MARKERS):
+        return True
+    return bool(_MODEL_MISSING_RE.search(msg))
+
+
 # Signals of a genuinely transient failure when the exception carries no status.
 _TRANSIENT_MARKERS = (
     "429",
@@ -175,6 +212,17 @@ def is_transient(exc: BaseException) -> bool:
     STATEMENT ABOUT THE ACCOUNT, not a blip — retrying it can only produce more
     400s, faster. So: cap/billing wording is never transient, 4xx is never
     transient, and only 429 / 5xx / timeouts / connection resets are retried.
+
+    THE REFUSED MODEL ID (D-A, run d6bb3aae, 2026-07-27). A `model_not_found` is
+    a STATEMENT ABOUT THE CONFIGURATION. OpenAI shut both deep-research models
+    down on 2026-07-23; the deployed worker still asked for one of them, and
+    every one of the seven OpenAI angles failed — one at a time, each a WARNING,
+    none of them saying that the model this deployment is configured with does
+    not exist. Retrying it can only produce more of the same, and degrading it
+    PER ANGLE turns one configuration error into N identical warnings and a whole
+    silently-dead stream. So the wording is checked BEFORE the status code: a
+    refused model id arrives as a 400 on one provider and a 404 on another, and
+    on the deep-research path it arrives asynchronously with no status at all.
     """
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError)):
         return True
@@ -183,6 +231,10 @@ def is_transient(exc: BaseException) -> bool:
 
     # Hard account refusal — never retried, whatever status it claims to carry.
     if any(marker in msg for marker in _CAP_MARKERS):
+        return False
+
+    # Refused model id — never retried, whatever status it claims to carry.
+    if _is_config_error(msg):
         return False
 
     status = _status_of(exc)
@@ -216,8 +268,16 @@ RATE_LIMIT = "rate_limit"
 OVERLOAD = "overload"
 HARD = "hard"
 HARD_WALL = "hard_wall"
+CONFIG_ERROR = "config_error"
 
-FAILURE_CLASSES: tuple[str, ...] = (TRANSIENT, RATE_LIMIT, OVERLOAD, HARD, HARD_WALL)
+FAILURE_CLASSES: tuple[str, ...] = (
+    TRANSIENT,
+    RATE_LIMIT,
+    OVERLOAD,
+    HARD,
+    HARD_WALL,
+    CONFIG_ERROR,
+)
 
 
 def classify(exc: BaseException) -> str:
@@ -230,6 +290,15 @@ def classify(exc: BaseException) -> str:
           codebase; D-17 makes it a PARK trigger, not a degrade trigger. A hard
           wall is a statement about the account: it trips the breaker on its
           FIRST occurrence and is never retried.
+      (a2) CONFIG_ERROR — a REFUSED MODEL ID (D-A, run d6bb3aae). Decided on the
+          WORDING and ahead of every status rung, because `model_not_found`
+          arrives as a 400 from one provider, a 404 from another, and with no
+          status at all on the deep-research path. Like a hard wall it is a
+          STATEMENT rather than a blip, so it takes the SAME breaker path and
+          trips on its FIRST occurrence — seven identical per-angle warnings is
+          exactly the disguise this class exists to remove. It is a SEPARATE
+          class from HARD_WALL because the remedy differs in kind: a wall wants
+          the operator's wallet, a refused model id wants an env var.
       (b) RATE_LIMIT — HTTP 429. Rate limiting is not a failure: it means the
           provider is healthy and we are sending too fast. It IS retried and it
           must NEVER trip the breaker.
@@ -248,6 +317,8 @@ def classify(exc: BaseException) -> str:
 
         if any(marker in msg for marker in _CAP_MARKERS) or status == 402:
             return HARD_WALL
+        if _is_config_error(msg):
+            return CONFIG_ERROR
         if status == 429:
             return RATE_LIMIT
         if status == 529 or isinstance(
@@ -703,16 +774,29 @@ class CircuitBreaker:
             self.rate_limited += 1
             return
 
-        if failure_class == HARD_WALL:
-            # The monthly cap / exhausted credits. Unambiguous and unrecoverable
-            # within the run, so it trips on the FIRST occurrence — waiting for
-            # five is how 776 requests went out in 55 seconds.
+        if failure_class in (HARD_WALL, CONFIG_ERROR):
+            # ONE rule, two causes, because the response is identical: both are
+            # STATEMENTS rather than blips, so both trip on the FIRST occurrence.
+            #   HARD_WALL    the monthly cap / exhausted credits. Waiting for
+            #                five is how 776 requests went out in 55 seconds.
+            #   CONFIG_ERROR a refused model id (D-A). Waiting for five is how
+            #                seven angles were dispatched at a model OpenAI had
+            #                switched off four days earlier.
+            # Only the REASON differs, because what the operator must do differs.
             self.signature = error_signature(exc)
             self.consecutive_hard += 1
-            self.trip(
-                f"{self.name} refused the request at the account level "
-                f"(hard wall: {self.signature}) — no retry can fix this"
-            )
+            if failure_class == CONFIG_ERROR:
+                self.trip(
+                    f"{self.name} refused the model id this deployment is "
+                    f"configured with ({self.signature}) — this is a "
+                    f"CONFIGURATION error, not a provider outage: no retry and "
+                    f"no other angle can fix it"
+                )
+            else:
+                self.trip(
+                    f"{self.name} refused the request at the account level "
+                    f"(hard wall: {self.signature}) — no retry can fix this"
+                )
             return
 
         if self._probe_in_flight:

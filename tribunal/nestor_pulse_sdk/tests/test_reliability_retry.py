@@ -31,6 +31,7 @@ import pytest
 
 from nestor_pulse_sdk.pipeline.tribunal import reliability
 from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+    CONFIG_ERROR,
     HARD,
     HARD_WALL,
     OVERLOAD,
@@ -101,7 +102,14 @@ _CLASSIFICATION_TABLE = [
     (_FakeHTTPError(402, "billing_error: your credit balance is too low"), HARD_WALL, False),
     (_FakeHTTPError(401, "authentication_error: invalid x-api-key"), HARD, False),
     (_FakeHTTPError(403, "permission_error: not allowed"), HARD, False),
-    (_FakeHTTPError(404, "not_found_error: unknown model"), HARD, False),
+    # RECLASSIFIED 2026-07-27 by plan 15.2-22 (D-A), and this is the ONE row that
+    # moved. "unknown model" is a REFUSED MODEL ID — a statement about this
+    # deployment's configuration, not an anonymous hard failure — so it now
+    # classifies as CONFIG_ERROR and trips the provider's breaker on its FIRST
+    # occurrence. The old expectation (HARD, trip after five) is precisely what
+    # let run d6bb3aae dispatch seven angles at a model OpenAI had switched off.
+    # `is_transient` is unchanged: it was False before and it is False now.
+    (_FakeHTTPError(404, "not_found_error: unknown model"), CONFIG_ERROR, False),
     (Exception("weird"), HARD, False),
 ]
 
