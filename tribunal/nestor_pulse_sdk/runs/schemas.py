@@ -249,6 +249,61 @@ class StageDetail(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class RunEventItem(BaseModel):
+    """One line of a run's activity feed -- one `run_event` row on the wire (D-04).
+
+    Mirrors the columns of migration 0015's `run_event` table exactly. `tenant_id`
+    and `id` are DELIBERATELY absent: the tenant key is never a wire value, and the
+    row's surrogate id has no reader -- `seq` is the cursor.
+
+    `kind` IS A PLAIN `str`, NOT A `Literal` OVER `RUN_EVENT_KINDS`, AND THAT IS THE
+    WHOLE POINT OF THE FIELD'S TYPE. The emitter already clamps writes to the twelve
+    known kinds (`run_events.emit` drops an out-of-vocabulary row rather than raising
+    into a paid run), so this annotation guards nothing on the WRITE side -- it would
+    only bite on the READ side, during a rolling deploy. Cloud Run replaces revisions
+    gradually: a newer engine revision writing a thirteenth kind while an older API
+    revision still serves reads is the NORMAL state of a deploy, not an edge case. A
+    `Literal` here turns every read of that run -- the live one an operator is
+    watching -- into a 500 for the length of the rollout. Widening the vocabulary is
+    an ADDITIVE change on the writer and must stay a no-op on the reader.
+
+    The field is named `text` to match the column, the emitter and the design of
+    record. Do not rename it to `body` for tidiness (see db/models/run_event.py).
+    """
+    seq: int
+    ts: datetime
+    stage: str
+    kind: str          # plain str ON PURPOSE -- see the docstring; never a Literal.
+    text: str
+    meta: dict | None = None
+
+
+class RunEventPage(BaseModel):
+    """GET /api/runs/{run_id}/events -- one bounded, seq-ordered page of the feed.
+
+    The backfill read behind D-01: closing the run page and reopening it must show
+    TRUE progress, and the live stream only carries what happened while somebody was
+    watching. A 24-angle run emits thousands of rows, so the history is paged rather
+    than returned whole (T-15.3-12).
+
+    `next_after_seq` is the client's NEXT cursor, not an offset. On an empty page it
+    is the cursor the caller PASSED IN -- never 0 -- because a 0 would rewind a live
+    client to the beginning of the run on the first quiet tick.
+
+    `has_more` is true when the page was cut by `limit`. It is decided by a
+    `limit + 1` probe row, never by a COUNT: a COUNT over a thousand-row run on every
+    page turn is the denial-of-service this endpoint is bounded to avoid.
+
+    NOTE: like every schema in this file, pydantic v2 defaults to `extra="ignore"`,
+    so a key the handler emits that is NOT declared here is silently dropped on the
+    way out. Declare, do not assume.
+    """
+    run_id: uuid.UUID
+    events: list[RunEventItem] = []
+    next_after_seq: int = 0
+    has_more: bool = False
+
+
 class RunMetrics(BaseModel):
     """GET /api/runs/{id}/metrics -- per-run A/B comparison metrics.
 
@@ -281,6 +336,27 @@ class RunMetrics(BaseModel):
     # an older engine build simply omits them and a newer intake patches nothing.
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    # D-01/D-05 (plan 15.3-02), ADDITIVE — THE FEED CURSOR: MAX(run_event.seq) for
+    # this run, or None when the run has emitted nothing yet.
+    #
+    # This is NOT feed content and deliberately carries none. It is the one number
+    # that lets the run page ask "is there anything I have not seen?" without
+    # downloading what it already holds. The intake poll driver already fetches this
+    # endpoint every ~3 seconds; a run that has emitted 2,000 lines would otherwise
+    # have to re-transfer all 2,000 on every tick to discover that nothing changed.
+    # With the cursor the page compares one integer against the highest `seq` it
+    # holds and, only when they differ, spends a request on
+    # GET /{run_id}/events?after_seq=<held> to fetch the DELTA.
+    #
+    # Costs one `SELECT max(seq) FROM run_event WHERE run_id = :rid` — an index-only
+    # backward scan on `idx_run_event_tenant_run_seq`, which is why it is affordable
+    # at the poll cadence (T-15.3-13, accepted).
+    #
+    # ADDITIVE in exactly the sense 15.2-24 established directly above: an engine
+    # revision that predates plan 15.3-02 simply OMITS the field, a newer intake
+    # reads None and shows the feed it already has. Nothing existing is superseded —
+    # `stage_detail` still carries the enriched per-stage progress and is untouched.
+    event_seq: int | None = None
     claim_count: int = 0
     grounded_claim_count: int = 0
     citation_recall: float | None = None   # grounded / claim_count; None if 0 claims
