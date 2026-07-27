@@ -371,3 +371,219 @@ def test_is_poisoned_turn_error_never_raises() -> None:
             raise RuntimeError("nope")
 
     assert is_poisoned_turn_error(_Unprintable()) is False
+
+
+# ===========================================================================
+# Behaviours 6-9 — D-A: a refused model id is a CONFIGURATION error
+#
+# On run d6bb3aae seven OpenAI angles failed one at a time, each a WARNING, none
+# of them saying "the model this deployment is configured with does not exist".
+# The point of these four behaviours is that the eighth angle never gets sent.
+# ===========================================================================
+
+
+class _Clock:
+    """A hand-cranked monotonic clock. `c.t = 61.0` advances time by fiat."""
+
+    def __init__(self, t: float = 0.0) -> None:
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+# The literal message from run d6bb3aae, and its siblings across providers.
+_D_A_MESSAGE = "ResponseError(code='model_not_found', message='The model `o4-mini-deep-research` has been deprecated')"
+
+_CONFIG_ERROR_CASES = [
+    (_FakeHTTPError(404, _D_A_MESSAGE), "the-d-a-message"),
+    (_FakeHTTPError(400, "model_not_found"), "model-not-found-code"),
+    (_FakeHTTPError(404, "The model `gpt-5.6-sol` does not exist or you do not have access to it."), "does-not-exist"),
+    (_FakeHTTPError(400, "unknown model: claude-opus-9"), "unknown-model"),
+    (_FakeHTTPError(400, "this model has been deprecated"), "deprecated"),
+    # No status at all — the WORDING is the signal, not the code.
+    (Exception("model_not_found: no such deep-research model"), "no-status"),
+]
+
+
+@pytest.mark.parametrize(
+    "exc", [c[0] for c in _CONFIG_ERROR_CASES], ids=[c[1] for c in _CONFIG_ERROR_CASES]
+)
+def test_a_refused_model_id_classifies_as_a_configuration_error(exc: BaseException) -> None:
+    """Behaviour 6 — the class exists and the wording reaches it."""
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import CONFIG_ERROR, classify
+
+    assert classify(exc) == CONFIG_ERROR
+
+
+@pytest.mark.parametrize(
+    "exc", [c[0] for c in _CONFIG_ERROR_CASES], ids=[c[1] for c in _CONFIG_ERROR_CASES]
+)
+def test_a_refused_model_id_is_never_retried(exc: BaseException) -> None:
+    """Behaviour 7 — retrying a dead model id can only produce more of the same."""
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import is_transient
+
+    assert is_transient(exc) is False
+
+
+def test_a_configuration_error_trips_the_breaker_on_the_first_occurrence() -> None:
+    """Behaviour 8 — the SECOND angle of that provider is refused without a call.
+
+    Seven identical warnings is how a configuration error disguises itself as a
+    flaky provider. One is a configuration error.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+        CLOSED,
+        CircuitBreaker,
+        CircuitOpenError,
+    )
+
+    breaker = CircuitBreaker("openai", clock=_Clock())
+    assert breaker.state == CLOSED
+
+    breaker.record_failure(_FakeHTTPError(404, _D_A_MESSAGE))
+
+    assert breaker.state != CLOSED, "one refused model id must be enough"
+    assert breaker.allow() is False
+    with pytest.raises(CircuitOpenError):
+        breaker.raise_if_open()
+    assert breaker.reason, "a lost stream is always NAMED, never a silent absence"
+
+
+def test_the_second_call_after_a_refused_model_id_is_never_dispatched() -> None:
+    """Behaviour 8, end to end through `with_retry` — no call, no spend."""
+    import asyncio
+
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+        CircuitBreaker,
+        CircuitOpenError,
+    )
+
+    breaker = CircuitBreaker("openai", clock=_Clock())
+    calls: list[int] = []
+
+    async def _angle() -> None:
+        calls.append(1)
+        raise _FakeHTTPError(404, _D_A_MESSAGE)
+
+    async def _drive() -> None:
+        from nestor_pulse_sdk.pipeline.tribunal.reliability import with_retry
+
+        with pytest.raises(_FakeHTTPError):
+            await with_retry(_angle, label="openai-angle-1", breaker=breaker)
+        # The next angle is refused BEFORE `fn` is called at all.
+        with pytest.raises(CircuitOpenError):
+            await with_retry(_angle, label="openai-angle-2", breaker=breaker)
+
+    asyncio.run(_drive())
+
+    assert calls == [1], (
+        f"the dead model id was dispatched {len(calls)} times; on run d6bb3aae it "
+        f"was dispatched seven"
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "monthly usage cap reached for this account",
+        "billing_error: your credit balance is too low",
+        "insufficient_quota",
+        "you have exceeded your quota",
+    ],
+    ids=["usage-cap", "billing", "insufficient-quota", "exceeded"],
+)
+def test_cap_and_billing_wording_still_classifies_as_a_hard_wall(message: str) -> None:
+    """Behaviour 9 — the 776-error rules are EXTENDED, never re-tuned.
+
+    A regression here would be silent and expensive, so it is asserted on the
+    existing `_CAP_MARKERS` wording directly.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+        CONFIG_ERROR,
+        HARD_WALL,
+        classify,
+        is_transient,
+    )
+
+    exc = _FakeHTTPError(400, message)
+    assert classify(exc) == HARD_WALL
+    assert classify(exc) != CONFIG_ERROR
+    assert is_transient(exc) is False
+
+
+def test_the_ordinary_failure_classes_are_untouched() -> None:
+    """Behaviour 9, the other side: nothing else moved class."""
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+        HARD,
+        OVERLOAD,
+        RATE_LIMIT,
+        TRANSIENT,
+        classify,
+    )
+
+    assert classify(_FakeHTTPError(429, "too many requests")) == RATE_LIMIT
+    assert classify(_FakeHTTPError(529, "overloaded_error")) == OVERLOAD
+    assert classify(_FakeHTTPError(503, "service unavailable")) == TRANSIENT
+    assert classify(_FakeHTTPError(401, "authentication_error invalid x-api-key")) == HARD
+    assert classify(Exception("something nobody has seen before")) == HARD
+
+
+def test_does_not_exist_is_scoped_to_MODELS_not_to_any_missing_thing() -> None:
+    """A bare "does not exist" must NOT trip a provider's breaker on first sight.
+
+    The plan named `does not exist` as a marker. Taken as a bare substring it
+    also matches "the requested file does not exist" and a resumed background
+    response that is past its retention window — neither of which is a statement
+    about this deployment's configuration, and both of which would then open the
+    circuit on a healthy provider after ONE failure. So the phrase is honoured in
+    its model-scoped form only.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.reliability import (
+        CONFIG_ERROR,
+        HARD,
+        classify,
+    )
+
+    assert classify(_FakeHTTPError(404, "The requested file does not exist")) == HARD
+    assert classify(_FakeHTTPError(404, "response resp_0182 does not exist")) == HARD
+    assert (
+        classify(_FakeHTTPError(404, "The model `gpt-5.6-sol` does not exist"))
+        == CONFIG_ERROR
+    )
+
+
+# ===========================================================================
+# The committed model id — D-A's other half. `o4-mini-deep-research` was the
+# CODE DEFAULT and the deploy script never bound the env var, so the deployed
+# worker ran on the dead default. Both places are now pinned.
+# ===========================================================================
+
+
+def test_the_committed_openai_deep_research_default_is_not_the_dead_id() -> None:
+    """No live code path may resolve to `o4-mini-deep-research`."""
+    import os
+
+    from nestor_pulse_sdk.audit import audited_llm_client
+
+    if os.environ.get("NESTOR_OPENAI_DR_MODEL"):
+        pytest.skip("NESTOR_OPENAI_DR_MODEL is set in this environment; the DEFAULT is what this asserts")
+    assert audited_llm_client.OPENAI_DEEP_RESEARCH_MODEL == "gpt-5.6-sol"
+
+
+def test_the_resolved_deep_research_models_are_logged_once(caplog: Any) -> None:
+    """An operator must be able to READ the configuration, not infer it from failures."""
+    import logging
+
+    from nestor_pulse_sdk.audit import audited_llm_client
+
+    audited_llm_client._DR_MODELS_LOGGED = False
+    with caplog.at_level(logging.INFO, logger=audited_llm_client.__name__):
+        audited_llm_client.log_resolved_dr_models()
+        audited_llm_client.log_resolved_dr_models()
+
+    lines = [r for r in caplog.records if "deep-research model" in r.getMessage()]
+    assert len(lines) == 1, "once per process, not once per call"
+    message = lines[0].getMessage()
+    assert audited_llm_client.OPENAI_DEEP_RESEARCH_MODEL in message
+    assert audited_llm_client.GEMINI_DEEP_RESEARCH_AGENT in message
