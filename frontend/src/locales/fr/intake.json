@@ -544,6 +544,7 @@
       "metaEngine": "moteur {{engine}}",
       "metaEvents": "{{count}} événements",
       "loadingEvents": "Chargement de l'historique…",
+      "durationLabel": "Durée",
       "status": {
         "queued": "En file d'attente",
         "running": "En cours",

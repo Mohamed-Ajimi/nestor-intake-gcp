@@ -4,11 +4,12 @@ import { useTranslation } from "react-i18next";
 import { ArrowDownToLine, ArrowLeft, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getIntake } from "@/lib/api/intakes";
-import { locateResearchRun } from "@/lib/api/research";
-import { fmtCost, useElapsed } from "@/lib/research/runClock";
+import { locateResearchRun, RESEARCH_TERMINAL } from "@/lib/api/research";
+import { fmtCost, fmtDuration, useElapsed } from "@/lib/research/runClock";
 import { useRunEvents } from "@/lib/research/useRunEvents";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
 import { RunFeed } from "@/components/research/RunFeed";
+import { RunStatusCard } from "@/components/research/RunStatusCard";
 
 // frontend/src/routes/admin.pulse.runs.$runId.tsx — the dedicated research-run page (D-01).
 //
@@ -36,20 +37,6 @@ import { RunFeed } from "@/components/research/RunFeed";
 export const Route = createFileRoute("/admin/pulse/runs/$runId")({
   component: ResearchRunPage,
 });
-
-/**
- * Terminal research-run statuses, VERBATIM from the Tribunal contract (D-05) — the same set
- * the stream and the embedded card use. `completed_degraded` and `parked` are terminal here
- * too; `needs_input` is the engine's parked clarification state and stops the clock as well.
- */
-const RESEARCH_TERMINAL = new Set([
-  "completed",
-  "completed_degraded",
-  "failed",
-  "cancelled",
-  "parked",
-  "needs_input",
-]);
 
 function ResearchRunPage() {
   const { runId } = Route.useParams();
@@ -99,12 +86,26 @@ function ResearchRunPage() {
   // ── The run itself: ONE SSE connection, the single authority on status/stage/cost/cursor.
   const { run } = useActiveResearchRun(intakeId ?? undefined);
   const status = run?.status ?? "queued";
-  const isTerminal = RESEARCH_TERMINAL.has(status);
+  // ONE terminality rule, IMPORTED from the transport that owns the stream's stop condition.
+  // The clarification pause is the single literal added at the call site — exactly how the
+  // embedded card computes it, so the two surfaces cannot drift apart.
+  const isTerminal = RESEARCH_TERMINAL.has(status) || status === "needs_input";
 
   // THE CLOCK. Derived from the RUN's own started_at — never from mount. This is the whole
   // point of D-01/D-09: closing this page and reopening it must show the run's real elapsed
   // time, not a counter that restarts at 00:00 on every visit.
-  const elapsed = useElapsed(run?.started_at ?? null, !isTerminal);
+  //
+  // Once the run has FINISHED, a clock counting from its start is no longer its elapsed time —
+  // it is the time since it started, which for a run that ended three days ago reads as an
+  // absurd four-digit figure. A finished run shows the fixed span between its own two
+  // timestamps instead. A run that stopped without stamping a completion (a pause, or a crash
+  // before the stamp) has no such span, so it keeps the counter — the hook is called
+  // unconditionally either way.
+  const liveElapsed = useElapsed(run?.started_at ?? null, !isTerminal);
+  const finished = isTerminal && !!run?.completed_at;
+  const elapsed = finished
+    ? fmtDuration(run?.started_at ?? null, run?.completed_at ?? null)
+    : liveElapsed;
 
   // ── The feed: backfill the full history, then only the delta past the SSE cursor. ──────
   const { events, loading: eventsLoading, truncated } = useRunEvents(
@@ -206,7 +207,7 @@ function ResearchRunPage() {
           <div className="flex shrink-0 gap-8">
             <div className="text-right">
               <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink/50">
-                {t("research.elapsed")}
+                {finished ? t("research.runPage.durationLabel") : t("research.elapsed")}
               </div>
               <div className="mt-0.5 font-mono text-xl tabular-nums text-ink">{elapsed}</div>
             </div>
@@ -221,12 +222,12 @@ function ResearchRunPage() {
           </div>
         </div>
 
-        {/* THE live region — status and phase only, never the feed body. */}
-        <div
-          role="status"
-          aria-live="polite"
-          className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] uppercase tracking-wider text-ink/60"
-        >
+        {/* The compact status line. It is the at-a-glance reading that survives when the card
+            below has scrolled out of view, and it is PLAIN TEXT: the card is the page's one
+            live region, so this line no longer announces. Two regions carrying the same status
+            would announce every change twice, which is the assistive-tech equivalent of saying
+            everything twice. */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] uppercase tracking-wider text-ink/60">
           <span className="text-ink">{statusLabel(status, t)}</span>
           {run?.current_stage && (
             <span>{t("research.currentStage", { stage: run.current_stage })}</span>
@@ -237,6 +238,16 @@ function ResearchRunPage() {
       {/* ── The single scrolling region ─────────────────────────────────────────────── */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-4">
         <div className="mx-auto max-w-3xl">
+          {/* THE CARD AND THE FEED ARE SIBLINGS. Not nested, not inside a status branch — the
+              card is one element and the feed is the next one, and the feed's only guard is
+              whether any events exist. That single structural choice is what makes "the
+              history is still there for a failed or a cancelled run" true BY CONSTRUCTION
+              rather than by somebody remembering to add it to two more branches. The embedded
+              card is the counter-example: its failure branches render an error and a button
+              and nothing else, so the two states whose evidence matters most are the two that
+              throw it away. Do not move the feed inside the card. */}
+          <RunStatusCard run={run} elapsed={elapsed} />
+
           {/* The backfill hit its page cap. Say so in words and say how many rows are held —
               a partial feed presented as if it were whole is worse than a short one. */}
           {truncated && (

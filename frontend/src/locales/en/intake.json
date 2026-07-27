@@ -544,6 +544,7 @@
       "metaEngine": "engine {{engine}}",
       "metaEvents": "{{count}} events",
       "loadingEvents": "Loading run history…",
+      "durationLabel": "Duration",
       "status": {
         "queued": "Queued",
         "running": "Running",

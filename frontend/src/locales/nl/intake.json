@@ -544,6 +544,7 @@
       "metaEngine": "engine {{engine}}",
       "metaEvents": "{{count}} gebeurtenissen",
       "loadingEvents": "Runhistoriek wordt geladen…",
+      "durationLabel": "Duur",
       "status": {
         "queued": "In wachtrij",
         "running": "Loopt",
