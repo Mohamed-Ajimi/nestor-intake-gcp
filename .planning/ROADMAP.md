@@ -198,8 +198,8 @@ corruption) are out of scope and get their own phase. Total plans for phase 15.2
   - [x] 15.2-21-PLAN.md (W2) — D-G/D-H: the workshop takes ONLY the client-validated questions; the context pack is context; the decision statement gets a real source
   - [x] 15.2-22-PLAN.md (W2) — D-A/D-B: the OpenAI DR model id (operator checkpoint) + fail-loud config class; the web_fetch error-block replay fix + a genuine fixture
   - [x] 15.2-23-PLAN.md (W2) — D-I/D-M: PII scrub at the dispatch choke point; Gemini fact-list placement + placeholder-URL rejection
-  - [ ] 15.2-24-PLAN.md (W3) — D-F/D-L: stage entry/exit logging with counts; `started_at`/`completed_at` across the seam onto the mirror row
-  - [ ] 15.2-25-PLAN.md (W3) — D-D: `cancel_run` seam method + `POST /intakes/{id}/research/cancel` + the Stop button (operator-confirmed UI placement)
+  - [x] 15.2-24-PLAN.md (W3) — D-F/D-L: stage entry/exit logging with counts; `started_at`/`completed_at` across the seam onto the mirror row
+  - [x] 15.2-25-PLAN.md (W3) — D-D: `cancel_run` seam method + `POST /intakes/{id}/research/cancel` + the Stop button (operator-confirmed UI placement)
   - [ ] 15.2-26-PLAN.md (W4) — gate count assertion, the ordered deploy, clearing run `d6bb3aae`, the IAM revoke decision, findings marked up
 
 **Cross-cutting constraints** *(hold in every plan)*: all LLM egress through `audited.*` · frozen audit payload — fields ADD, never rename (`verify_chain` green is a legal gate, EU AI Act Art. 12, deadline 2026-08-02) · no agent frameworks, hand-written loops (`group_skeptic.py` is the template) · never `json.loads` raw model text · no plan may depend on the budget governor, which is inert (`NESTOR_TRIBUNAL_UNCAPPED=1`) · every new table/endpoint gets FORCE RLS + a cross-tenant denial test in the plan that creates it · no local Python/Docker — Cloud Build only · plans 01-17 + 19 require **zero live Anthropic calls**.
@@ -290,7 +290,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
 | 15.1. Research Engine Redesign — Verification Gates | v1.1 | 16/16 | Complete   | 2026-07-26 |
-| 15.2. Research Engine Redesign — Engine Core | v1.1 | 22/26 | In Progress|  |
+| 15.2. Research Engine Redesign — Engine Core | v1.1 | 24/26 | In Progress|  |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
