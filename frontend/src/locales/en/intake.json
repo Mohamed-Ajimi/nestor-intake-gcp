@@ -519,6 +519,12 @@
     "cancelError": "The research could not be stopped",
     "errorLabel": "Error message",
     "retry": "Try again",
+    "actions": {
+      "resumeOk": "Research resumed — it picks up where it stopped.",
+      "resumeError": "The research could not be resumed.",
+      "retryOk": "A new research run has been started.",
+      "retryError": "A new research run could not be started."
+    },
     "costFallback": "—",
     "dateFallback": "—",
     "download": "Download raw output",

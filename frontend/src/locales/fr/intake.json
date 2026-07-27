@@ -519,6 +519,12 @@
     "cancelError": "Impossible d'arrêter la recherche",
     "errorLabel": "Message d'erreur",
     "retry": "Réessayer",
+    "actions": {
+      "resumeOk": "Recherche reprise — elle repart là où elle s'était arrêtée.",
+      "resumeError": "La recherche n'a pas pu être reprise.",
+      "retryOk": "Une nouvelle exécution de recherche a démarré.",
+      "retryError": "Impossible de démarrer une nouvelle exécution de recherche."
+    },
     "costFallback": "—",
     "dateFallback": "—",
     "download": "Télécharger la sortie brute",

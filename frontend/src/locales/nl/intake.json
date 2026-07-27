@@ -519,6 +519,12 @@
     "cancelError": "De research kon niet worden gestopt",
     "errorLabel": "Foutmelding",
     "retry": "Opnieuw proberen",
+    "actions": {
+      "resumeOk": "Research hervat — hij pikt op waar hij gestopt was.",
+      "resumeError": "De research kon niet hervat worden.",
+      "retryOk": "Een nieuwe research-run is gestart.",
+      "retryError": "Er kon geen nieuwe research-run gestart worden."
+    },
     "costFallback": "—",
     "dateFallback": "—",
     "download": "Ruwe output downloaden",
