@@ -2935,6 +2935,359 @@ Also still outstanding at this point, and **not** solved by this step: run `d6bb
 `running` and blocks retry on its intake. Plan 15.2-25 builds the operator cancel path and 15.2-26
 uses it. Do not resolve it by unpausing the worker.
 
+> **RECONCILIATION (plan 15.2-26, 2026-07-27) — read this before executing 15.2.j on its own.**
+> Step 15.2.j was written by plan 15.2-20 as the standalone D-E revert, when D-E was the only gap
+> plan that had landed. **The gap phase is now SIX plans**, and its whole deploy is § Step 15.2.k
+> below, which WRAPS this step. If you are deploying the gap phase, execute **15.2.k** and treat
+> 15.2.j as the detail reference it cites:
+>
+> - 15.2.j steps **1 and 2** (migrate 0014, then the worker image) are 15.2.k steps **3 and 4**.
+> - 15.2.j steps **3 and 4** (the threshold revert and the marker removal) are performed **by the
+>   redeploy in 15.2.k step 4**, exactly as the shortcut paragraph below explains — verify, do not
+>   assume.
+> - 15.2.j step **5 (the unpause) MOVES LATER**: in the gap phase it is 15.2.k step **7**, after the
+>   other three deployables AND after run `d6bb3aae` has been cancelled. **Unpausing at 15.2.j step 5
+>   during a gap-phase deploy would re-execute `d6bb3aae` at full cost** — see 15.2.k step 6 for why
+>   the D-E fix does NOT protect that particular row.
+>
+> Nothing in 15.2.j is wrong; it is a subset with a different tail. Do not run both tails.
+
+## Phase 15.2 gap closure — Step 15.2.k: the GAP-PHASE deploy (plans 15.2-20 … 15.2-26)
+
+This is the **single ordered procedure** for shipping the six gap plans that close the twelve defects
+found on run `d6bb3aae`. It supersedes the tail of Step 15.2.j (see the reconciliation note above)
+and is the operator session plan 15.2-26 hands over.
+
+**What is being shipped, and by which plan:**
+
+| Plan | Closes | Lands in |
+|---|---|---|
+| 15.2-20 | D-E (the money defect: a stuck run re-billing every 60 min) | migration **0014** + `tribunal-worker` |
+| 15.2-21 | D-G / D-H (the workshop deepened the context pack, not the questions) | `tribunal-worker` + `nestor-api` |
+| 15.2-22 | D-A / D-B (two dead research streams) | `tribunal-worker` |
+| 15.2-23 | D-I (personal identifiers dispatched to third-party providers) + part of D-M | `tribunal-worker` |
+| 15.2-24 | D-F (the engine logged only failures) + D-L (the elapsed clock) | `tribunal-worker` + `tribunal-api` + `nestor-api` |
+| 15.2-25 | D-D (there was no operator cancel path) | `nestor-api` + `nestor-frontend` |
+
+Every step below names its reason. **An ordering constraint without its reason gets reordered by the
+next person in a hurry** — that is how the image once shipped ahead of its migration.
+
+---
+
+**0. Preflight — the stale-base guard, positively, on disk.**
+
+Cloud Build ships **the tree you submit**. Assert the six gap plans are actually present before
+building anything:
+
+```bash
+git status --porcelain          # must be EMPTY
+git log --oneline -1            # record this SHA in the session notes
+
+ls tribunal/nestor_pulse_sdk/alembic/versions/0014_run_liveness_and_reclaim.py   # 15.2-20
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/brief_input.py                    # 15.2-21
+ls tribunal/nestor_pulse_sdk/tests/test_web_fetch_replay.py                      # 15.2-22
+ls tribunal/nestor_pulse_sdk/pipeline/tribunal/pii.py                            # 15.2-23
+ls tribunal/nestor_pulse_sdk/tests/test_stage_logging.py                         # 15.2-24
+grep -q "def cancel_run" backend/app/research/tribunal_client.py && echo "cancel seam ok"   # 15.2-25
+grep -q "research/cancel" frontend/src/lib/api/research.ts && echo "cancel FE ok"           # 15.2-25
+```
+
+Then the gates, on THAT tree. The engine gate now **asserts its own file count** (plan 15.2-26): a
+name whose file is absent or mistyped fails the build naming the path, instead of collecting one
+file fewer and going green.
+
+```bash
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-engine.yaml   --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-gates.yaml    --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.test-critical.yaml --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.seam-gate.yaml     --project="$GOOGLE_PROJECT"
+gcloud builds submit . --config=cloudbuild.test.yaml --project="$GOOGLE_PROJECT"
+```
+
+Expect on the engine gate: `collecting: 27 of 27 expected files`, then `713 passed, 13 skipped`.
+**The 13 skips are the DB-bound files** (`test_checkpoint_resume.py` ×8, `test_stale_reclaim.py` ×5)
+and each prints a message saying in words that a skip there is not a pass. That is contract-
+compliant for a gate that provisions no Postgres — and it is why `cloudbuild.test-critical.yaml` is
+in the list above.
+
+---
+
+**1. Build all four images at ONE shared `$SHA`. BUILD ONLY — no deploy until step 4.**
+
+One SHA so a mixed-revision state is impossible to reach by accident, and so the revision list in
+step 8 can be read as one fact rather than four.
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+
+gcloud builds submit tribunal --config=tribunal/cloudbuild.worker.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-worker:${SHA} \
+  --project="$GOOGLE_PROJECT"
+gcloud builds submit tribunal --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA} \
+  --project="$GOOGLE_PROJECT"
+gcloud builds submit backend --tag "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:${SHA}" \
+  --project="$GOOGLE_PROJECT"
+gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+  --substitutions=_IMAGE="${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:${SHA}",_API_BASE_URL="<the nestor-api URL — same value as the 2026-07-27 deploy>",_FB_API_KEY="<public firebase web apiKey>",_FB_AUTH_DOMAIN="<project>.firebaseapp.com",_FB_PROJECT_ID="${GOOGLE_PROJECT}" \
+  --project="$GOOGLE_PROJECT"
+```
+
+*Why all four rebuild and none is an env flip.* The worker carries five plans of engine code; the
+api carries 15.2-24's two new `RunMetrics` fields; `nestor-api` carries the cancel route, the
+`[DECISION]` block and the `started_at` mirror; the frontend carries the Stop button, which is
+**compiled into the bundle** (the Phase-18 stale-SPA lesson — a backend-only deploy leaves the
+operator with no button and no error).
+
+`npm ci`, never `npm install` — `frontend/package-lock.json` IS committed. Never pass
+`VITE_SUPABASE_*` (the in-image bundle guard fails the build). **No `routeTree.gen.ts`
+regeneration**: 15.2-25 adds no route, it mounts on the existing `admin.pulse.intakes.$id` anchor.
+
+---
+
+**2. Confirm the queue is EMPTY before touching the worker.**
+
+This is the step that makes step 7's unpause safe, and it is the cheapest step in the section.
+Read the run table directly (a Cloud SQL `psql` session; the Phase-14 lockdown blocks the seam HTTP
+verb, not a DB read):
+
+```sql
+SELECT id, status, started_at, heartbeat_at, reclaim_count
+  FROM tribunal.run
+ WHERE status IN ('queued', 'running')
+ ORDER BY created_at;
+```
+
+**Expect EXACTLY ONE row: `d6bb3aae-33e7-49fd-aa35-57dc529e05b3`, status `running`,
+`heartbeat_at` NULL** (it predates 0014), `reclaim_count` 0.
+
+- A second `running` row means another process is or was executing — **STOP** and identify it
+  before deploying anything.
+- Any `queued` row would be claimed the instant step 7 unpauses the worker. **STOP**: decide
+  deliberately whether that run should execute on the new code, and record the decision.
+
+---
+
+**3. Migrate FIRST: repin `tribunal-migrate` to the `$SHA` api image, then execute (alembic 0014).**
+
+Full detail, including the schema read-back, is Step 15.2.j item 1 — do not restate it differently
+here.
+
+```bash
+gcloud run jobs update tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/tribunal-api:${SHA}"
+gcloud run jobs describe tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.template.spec.containers[0].image)'   # must echo :${SHA}
+gcloud run jobs execute tribunal-migrate --region "$REGION" --project="$GOOGLE_PROJECT" --wait
+```
+
+**Prove it by the literal log line. `Container called exit(0)` is NOT proof** — this is the recorded
+phase lesson, and an unpinned Job is a silent no-op that exits 0 having applied nothing:
+
+```
+Running upgrade 0013 -> 0014
+```
+
+*Why the migration precedes the worker image.* The new `CLAIM_SQL` and `REAP_SQL` reference
+`heartbeat_at` and `reclaim_count`. A worker deployed ahead of 0014 raises `UndefinedColumnError` on
+every claim and poll-crashes in a loop, claiming nothing. The reverse order is safe: between (3) and
+(4) the OLD image runs against the NEW schema, and both columns are purely additive.
+
+Read back: `run.heartbeat_at` nullable=YES · `run.reclaim_count` NOT NULL default 0 ·
+`tribunal_head = 0014` in **`tribunal.tribunal_alembic_version`** (the TRIBUNAL line — the intake
+`nestor` line stays at 0012).
+
+---
+
+**4. Deploy `tribunal-worker` via `deploy-worker.sh`. This is also the D-E env revert.**
+
+```bash
+TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude_Temp IMAGE_TAG="$SHA" \
+  tribunal/infrastructure/cloud-run/deploy-worker.sh
+```
+
+What this one command carries: the new `CLAIM_SQL` + the liveness heartbeat + the reclaim ceiling
+and reap (15.2-20), the brief parser (15.2-21), the deep-serialised replay and
+`NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol` (15.2-22), the PII egress scrub (15.2-23), and the stage
+logging (15.2-24).
+
+> ⚠️ **THE `TRIBUNAL_ANTHROPIC_SECRET` OVERRIDE IS NOT OPTIONAL WHILE THE BURNER IS IN FORCE.**
+> The committed default in the script is `Nestor_Claude2`, which is **not topped up**. The live
+> services run on `Nestor_Claude_Temp` (operator decision 2026-07-27), applied via this override so
+> that nothing committed had to change. **A redeploy without the override silently repoints the
+> worker at the empty key and the next run walls mid-flight.** Drop the override only once
+> `Nestor_Claude2` is funded — and then confirm by name in step 8.
+
+> **The env revert happens HERE, as a side effect, and that is deliberate.** The script deploys with
+> a whole-env `--set-env-vars` list whose committed content is
+> `NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1`.
+> Because that flag **replaces** the entire plain env, this deploy restores the threshold to `60` and
+> **drops `NESTOR_RUN_ABORTED_MARKER`**, since neither temporary value is in the committed list. So
+> Step 15.2.j items 3 and 4 normally have nothing left to do. **Verify with the describe in step 8
+> rather than assuming**, and run them explicitly with `--update-env-vars` / `--remove-env-vars` if
+> the read disagrees. Never hand-type `--set-env-vars` against a live service outside this script
+> (the Phase-12 lesson: it drops every binding you did not restate).
+
+*Why `60` is safe now where it was not before.* The number no longer means "how long a run may
+take" — it means "how long the worker may be **silent**". The executing worker writes
+`run.heartbeat_at` every `NESTOR_WORKER_HEARTBEAT_S` (default 30s), so 60 minutes of silence is 120
+consecutive missed heartbeats: the process is gone, not slow. A 35-minute long-poll no longer looks
+stale at any age.
+
+---
+
+**5. Deploy `tribunal-api`, then `nestor-api`, then the frontend. The order is load-bearing.**
+
+```bash
+TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude_Temp IMAGE_TAG="$SHA" \
+  tribunal/infrastructure/cloud-run/deploy-api.sh
+
+gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/backend:${SHA}"
+
+gcloud run deploy nestor-frontend \
+  --image "${REGION}-docker.pkg.dev/${GOOGLE_PROJECT}/nestor/frontend:${SHA}" \
+  --region "$REGION" --allow-unauthenticated --port 8080 --project="$GOOGLE_PROJECT"
+```
+
+*Why this order.* The Stop button calls `POST /intakes/{id}/research/cancel` on `nestor-api`, which
+calls `POST /api/runs/{id}/cancel` on `tribunal-api`. A frontend that ships first shows a button
+whose route does not exist yet — a 404 that looks like a defect in the feature you are about to
+demo. `nestor-api`'s image update touches **no secret and no env** (`--image` only), so the
+Anthropic binding it already carries is unaffected.
+
+**NEVER bind `SERPAPI_API_KEY` to `nestor-api`** — `backend/scripts/ci_no_run_research.sh` scans
+`backend/app/**` and `frontend/src`, and INTAKE-05 must stay green.
+
+---
+
+**6. Clear run `d6bb3aae` through the UI — BEFORE the unpause. This is D-D's acceptance demo.**
+
+> ⛔ **DO NOT SKIP THIS AND DO NOT REORDER IT AFTER STEP 7.** The D-E fix does **not** protect this
+> particular row. Staleness is `COALESCE(heartbeat_at, started_at)`, and `d6bb3aae` predates 0014 so
+> its `heartbeat_at` is NULL — it is measured by `started_at` (2026-07-27 08:09 UTC), which is
+> already hours or days stale. Its `reclaim_count` is 0, under the ceiling of 2. **So the moment
+> step 4 restores `NESTOR_WORKER_STALE_MINUTES=60`, that row becomes claimable again**, and step 7
+> would hand it straight to a fresh worker at full cost. The heartbeat protects every run started
+> from now on; it cannot retro-fit liveness onto a row that never wrote one.
+
+1. Open intake `4a500d44-62b5-4f73-905f-792e31d0d9cc` in the admin UI.
+2. The research card shows the run as active. **Check the elapsed clock: it should show a LARGE
+   value carried from the real `started_at`, and refreshing the page must NOT reset it to zero.**
+   That is D-L verified live (15.2-24 shipped the producer half; the frontend contract already
+   expected the field).
+3. Click **Stop**, confirm the dialog.
+4. Expected: the card resolves to the cancelled state, and the intake becomes retriable — the
+   re-trigger affordance reappears. `_RETRYABLE_RUN_STATUSES` contains `cancelled` and excludes
+   `running`, which is precisely why the stuck row blocked retry.
+5. If the button 404s, the frontend shipped ahead of `nestor-api` — re-check step 5's order before
+   reporting a defect.
+6. Confirm in SQL that the row really resolved, not just the mirror:
+   `SELECT status FROM tribunal.run WHERE id = 'd6bb3aae-33e7-49fd-aa35-57dc529e05b3';` → `cancelled`.
+
+---
+
+**7. ONLY NOW unpause the worker.**
+
+```bash
+gcloud run services update tribunal-worker --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --min-instances=1
+```
+
+Then watch it for one poll cycle and confirm it **claims nothing**. A cancelled run is not in the
+claimable set and step 2 proved the queue is otherwise empty, so the correct observation is an idle
+worker. **If it claims something, STOP and report — that is D-E unfixed**, and the fix's whole
+purpose was to make that impossible.
+
+---
+
+**8. Read back and record — verbatim, in the session notes. Not "looks right".**
+
+```bash
+# (a) The worker's plain env: the threshold must be a REAL value and the marker must be GONE.
+gcloud run services describe tribunal-worker --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' \
+  | grep -E 'NESTOR_WORKER|ABORTED|NESTOR_OPENAI_DR_MODEL'
+# expect: NESTOR_WORKER_STALE_MINUTES=60   (NOT 525600)
+#         NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol
+#         NO line matching NESTOR_RUN_ABORTED_MARKER
+
+# (b) Secret bindings by NAME only, never a value.
+for SVC in tribunal-worker tribunal-api; do
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' \
+    | grep -E 'ANTHROPIC_API_KEY|SERPAPI_API_KEY'
+done
+# expect Nestor_Claude_Temp (while the burner is in force) + Nestor_SERP on both.
+
+# (c) All four revisions, and 100% traffic on each new one.
+for SVC in tribunal-worker tribunal-api nestor-api nestor-frontend; do
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(status.latestReadyRevisionName,status.traffic)'
+done
+
+# (d) The resolved deep-research model ids, from 15.2-22's new startup line
+#     (emitted once per process on first client construction).
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="tribunal-worker"' \
+  --project="$GOOGLE_PROJECT" --limit=50 --format="value(textPayload)" | grep -i "deep.research"
+```
+
+Record: the worker's `NESTOR_WORKER_STALE_MINUTES`, the **absence** of `NESTOR_RUN_ABORTED_MARKER`,
+the resolved deep-research model ids and whether each came from the environment or the default, the
+four revision names, and `d6bb3aae`'s final status.
+
+---
+
+**9. Decide the IAM grant. Either answer closes it; leaving it undecided does not.**
+
+`roles/iam.serviceAccountTokenCreator` on `nestor-run@` was granted to `tools@dotto.be` on
+2026-07-27 to attempt a manual seam cancel. **It did not achieve one** — the seam also requires
+`X-Nestor-Tenant-Id`, which is reachable only by the intake backend — and it is a standing weakening
+of the Phase-14 lockdown. With the UI cancel shipped (step 6) it buys nothing.
+
+```bash
+gcloud iam service-accounts remove-iam-policy-binding \
+  nestor-run@project-cb01b861-cb4a-438d-b9a.iam.gserviceaccount.com \
+  --member="user:tools@dotto.be" --role="roles/iam.serviceAccountTokenCreator"
+```
+
+**Or** record, in one sentence, that the grant is KEPT as a deliberate operator capability and why.
+Write the answer into `15.2-V01-ABORTED-FINDINGS.md` § State left behind either way.
+
+---
+
+### What to check in the logs on the FIRST live run after this deploy
+
+The engine used to log **only failures**, which is what made a healthy 35-minute long-poll
+indistinguishable from a dead pipeline (defect D-F; it cost an hour and one withdrawn misdiagnosis).
+15.2-24 fixed that. On the next run, these lines are the instrument:
+
+1. **`stage_enter` / `stage_exit`** — one INFO line per stage boundary, the exit line carrying that
+   stage's wall seconds plus its counts. **When the run goes quiet, the last `stage_enter` line
+   names the stage it is sitting inside.** Do not diagnose from CPU or from silence again.
+2. **`run_stages_complete: seconds=… stages=…`** — the closing line. A clean run reports
+   `stages=14`. A materially lower number on a run that finished is worth chasing.
+3. **The two `collect_provider_facts` lines** — this is how D-M gets *measured* rather than assumed:
+
+   ```
+   collect_provider_facts: <provider> returned no usable fact list for k of m research report(s)
+   ... %d report(s) with a fact list
+   ```
+
+   On run `d6bb3aae` gemini honoured the fact-list block on **0 of 8** reports. 15.2-23 shipped a
+   placement change and a placeholder-URL rejection; whether gemini now complies is a live-LLM
+   question no CI gate can answer. Read `k of m` for gemini and write the number down — that is the
+   evidence, and a lower `k` is the result.
+4. **`facts: rejecting non-http(s) SOURCE_URL`** — expect these to name a *placeholder* now
+   (`N/A`, `-`, `unknown`) and drop the fact, while a merely malformed URL drops the link and keeps
+   the fact.
+5. **The PII scrub WARNING** — names the angle index, the stream and the **count**, never the value.
+   Any occurrence means a personal identifier was about to leave the engine and was removed; the
+   operator's feed row says so too.
+6. **`run_reclaimed_from_dead_worker`** — should NOT appear on a healthy run. If it does, a claim
+   recovered a run the heartbeat had declared dead; note the `reclaim_count` on it.
+
 ---
 
 ## Summary checklist
@@ -3021,5 +3374,6 @@ uses it. Do not resolve it by unpausing the worker.
 - [ ] Step 15.2.f — `nestor-api` image REBUILT via Cloud Build (`app/research/run_status.py` + `run_task.py` D-12 status vocabulary, the `POST /{intake_id}/research/resume` route, `render_research_parked`) + service repointed (MANDATORY rebuild, not an env flip — the recurring deploy-gap); ordered AFTER the Tribunal services (the Resume route calls the seam); **NO intake `nestor` migration and NO `nestor-migrate` Job run** (F3 — `research_runs.status` has no CHECK; intake head stays 0012); **NO new env/secret** — Phase-10 mail stack reused, `APP_BASE_URL` confirmed present or the parked mail refuse-sends; **`SERPAPI_API_KEY` NEVER bound here** (INTAKE-05)
 - [ ] Step 15.2.g — `nestor-frontend` image REBUILT via Cloud Build at the SAME `$SHA` (plan 15.2-09's `RESEARCH_TERMINAL` set + `lib/api/research.ts` + en/fr/nl `intake.json`) + deployed `--port 8080`; SAME `_API_BASE_URL`/`_FB_*` substitutions as Phase 12 (no URL re-wiring); NO `VITE_SUPABASE_*` (bundle guard green); NO `routeTree.gen.ts` regeneration (no new route); `npm ci` not `npm install` (the lockfile IS committed; the CLAUDE.md note is stale/bun). **Mandatory** — the terminal-status set is COMPILED INTO THE BUNDLE, so without it a `completed_degraded` run spins forever in the browser while every backend surface is correct (the Phase-18 stale-SPA lesson)
 - [ ] Step 15.2.h — VERIFY without printing secrets: the six gates re-run against the deployed tree (`collecting:` block read); **`verify_chain` GREEN on the DEPLOYED audit data — a RED chain is a STOP, no sign-off** (EU AI Act Art. 12, deadline 2026-08-02); secret-binding confirm by NAME; `/readyz` 200 on `tribunal-api` with an identity token against the path-less URL (Pitfall 4); `bash backend/scripts/ci_no_run_research.sh` exit 0 (INTAKE-05 — SerpApi lives in `tribunal/`, which the guard deliberately does not scan)
-- [ ] Step 15.2.j — GAP CLOSURE (D-E, plan 15.2-20): **`tribunal-worker` stays PAUSED until this whole step is done** — unpausing first re-executes the still-`running` run `d6bb3aae` at full cost. Order is load-bearing: (1) `tribunal-migrate` REPINNED to the `$SHA` api image then executed `--wait`, log shows the literal **`Running upgrade 0013 -> 0014`** (an exit code is NOT proof), `run.heartbeat_at` nullable + `run.reclaim_count` NOT NULL default 0 confirmed, TRIBUNAL head == **0014**; (2) the new `tribunal-worker` image deployed via the retargeted script — never before the migration, because the new `CLAIM_SQL`/`REAP_SQL` reference both columns and would poll-crash; (3) `--update-env-vars NESTOR_WORKER_STALE_MINUTES=60` (safe now that the clock is heartbeat SILENCE, not run duration — 120 missed 30s heartbeats); (4) `--remove-env-vars NESTOR_RUN_ABORTED_MARKER` (read by no code — a human annotation); (5) ONLY THEN `--min-instances=1`. A full redeploy through `deploy-worker.sh` performs (3) and (4) by itself because its whole-env flag replaces the plain env — **verify by `describe`, never assume**; never hand-type that flag against a live service (Phase-12 lesson: it drops every binding not restated). Run `d6bb3aae` is NOT resolved here — that is 15.2-25/26
+- [ ] Step 15.2.j — GAP CLOSURE (D-E, plan 15.2-20): **`tribunal-worker` stays PAUSED until this whole step is done** — unpausing first re-executes the still-`running` run `d6bb3aae` at full cost. Order is load-bearing: (1) `tribunal-migrate` REPINNED to the `$SHA` api image then executed `--wait`, log shows the literal **`Running upgrade 0013 -> 0014`** (an exit code is NOT proof), `run.heartbeat_at` nullable + `run.reclaim_count` NOT NULL default 0 confirmed, TRIBUNAL head == **0014**; (2) the new `tribunal-worker` image deployed via the retargeted script — never before the migration, because the new `CLAIM_SQL`/`REAP_SQL` reference both columns and would poll-crash; (3) `--update-env-vars NESTOR_WORKER_STALE_MINUTES=60` (safe now that the clock is heartbeat SILENCE, not run duration — 120 missed 30s heartbeats); (4) `--remove-env-vars NESTOR_RUN_ABORTED_MARKER` (read by no code — a human annotation); (5) ONLY THEN `--min-instances=1`. A full redeploy through `deploy-worker.sh` performs (3) and (4) by itself because its whole-env flag replaces the plain env — **verify by `describe`, never assume**; never hand-type that flag against a live service (Phase-12 lesson: it drops every binding not restated). Run `d6bb3aae` is NOT resolved here — that is 15.2-25/26. **SUPERSEDED TAIL:** when deploying the gap phase as a whole, execute § Step 15.2.k instead — 15.2.j items 1-4 are 15.2.k steps 3-4, and the unpause MOVES to 15.2.k step 7, after the cancel
+- [ ] Step 15.2.k — GAP-PHASE DEPLOY (plans 15.2-20…26), ONE ordered procedure: (0) stale-base guard on disk, one artifact per gap plan, then the gates — the engine gate now ASSERTS its collected count (`collecting: 27 of 27 expected files`, 713 passed / 13 skipped; the 13 are the DB-bound files and say in words that a skip is not a pass); (1) all FOUR images BUILT at ONE `$SHA` (worker/api/backend/frontend — every one a REBUILD, the Stop button is COMPILED INTO THE BUNDLE); (2) **queue confirmed EMPTY** via `SELECT … FROM tribunal.run WHERE status IN ('queued','running')` — expect EXACTLY the one row `d6bb3aae`, and a `queued` row is a STOP because step 7 would claim it; (3) `tribunal-migrate` REPINNED then executed, proven by the literal **`Running upgrade 0013 -> 0014`** (`exit(0)` is NOT proof), migration BEFORE the image or the new `CLAIM_SQL`/`REAP_SQL` poll-crash on `UndefinedColumnError`; (4) `deploy-worker.sh` at `IMAGE_TAG=$SHA` **WITH `TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude_Temp`** (the committed default `Nestor_Claude2` is NOT topped up — a redeploy without the override silently repoints at an empty key), which also performs the D-E env revert by whole-env replacement — VERIFY by describe, never assume; (5) `tribunal-api` → `nestor-api` → frontend (the Stop button calls a nestor-api route that calls a tribunal-api endpoint; a frontend shipped first 404s); (6) **run `d6bb3aae` CANCELLED THROUGH THE UI BEFORE the unpause** — D-D's acceptance demo AND a hard safety step: that row predates 0014 so `heartbeat_at` is NULL, `COALESCE` falls back to a stale `started_at` and `reclaim_count`=0, so restoring `NESTOR_WORKER_STALE_MINUTES=60` makes it claimable again; D-L verified in the same click (the elapsed clock must NOT reset on refresh); (7) ONLY THEN `--min-instances=1`, and the worker must claim NOTHING; (8) read-backs recorded VERBATIM (threshold=60 not 525600, `NESTOR_RUN_ABORTED_MARKER` ABSENT, `NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol`, secret names only, four revision names, `d6bb3aae` status); (9) the `serviceAccountTokenCreator` grant on `nestor-run@` REVOKED or its retention RECORDED as a decision — undecided is not an answer. Plus the first-live-run log checklist: `stage_enter`/`stage_exit`/`run_stages_complete` (D-F — never diagnose from silence or CPU again) and the two `collect_provider_facts` honour lines (how D-M gets MEASURED). **NO V-01 in this session** — the next live run is a separate, operator-scheduled event on a FRESH intake
 - [ ] Step 15.2.i — PARK: **Anthropic monthly cap resets 2026-08-01**; NO live LLM run triggered before then — the park is NOT a failure. Then V-01 (ONE live run on a FRESH intake in the baseline brief domain, recorded in `docs/tribunal-run-reports/V-01-COMPARISON.md` beside run-20260722-4cbb5311 — **no A/B double-run**, the `comparison_id` harness stays unused), V-02 (the 16-item checklist in `15.2-UAT.md`, each item pass/fail with NAMED evidence, ending in a dated operator sign-off), then V-03 as a **SEPARATE commit after sign-off** removing only unreferenced old-path code (`claim_distiller`/D-15, `detect_explicit_questions` and `extract_and_persist_citations` all SURVIVE with green tests). Batched into the same August session: the deferred Phase-15 populated-surface browser UAT (SC1-SC4) and the Phase-15.1 verdict/gate surfaces
