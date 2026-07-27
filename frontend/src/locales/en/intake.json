@@ -554,6 +554,13 @@
         "parked": "Paused",
         "needsInput": "Waiting for input",
         "unknown": "Unknown status"
+      },
+      "feed": {
+        "workedFor": "Worked for {{duration}}",
+        "actionsCount": "{{count}} actions",
+        "itemsCount": "{{count}} items",
+        "liveBadge": "live",
+        "showMore": "Show more"
       }
     },
     "feed": {

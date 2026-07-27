@@ -554,6 +554,13 @@
         "parked": "Gepauzeerd",
         "needsInput": "Wacht op invoer",
         "unknown": "Onbekende status"
+      },
+      "feed": {
+        "workedFor": "Gewerkt gedurende {{duration}}",
+        "actionsCount": "{{count}} acties",
+        "itemsCount": "{{count}} items",
+        "liveBadge": "live",
+        "showMore": "Meer tonen"
       }
     },
     "feed": {
