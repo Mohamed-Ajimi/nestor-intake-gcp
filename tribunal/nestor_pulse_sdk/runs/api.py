@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,8 @@ from nestor_pulse_sdk.runs.schemas import (
     CreateCompareRequest,
     CreateRunRequest,
     ReportSpecRequest,
+    RunEventItem,
+    RunEventPage,
     RunMetrics,
     RunResponse,
     VerificationReport,
@@ -896,6 +898,25 @@ async def get_run_metrics(
 
     recall = (grounded_claim_count / claim_count) if claim_count else None
 
+    # THE FEED CURSOR (D-01/D-05, plan 15.3-02). An aggregate without GROUP BY always
+    # returns EXACTLY ONE row, so scalar_one() is safe here and matches the three
+    # counts above; on a run that has emitted nothing that single row is NULL, which
+    # arrives as None and publishes as `event_seq: null` rather than a misleading 0.
+    #
+    # RLS injects `tenant_id = current_setting(...)`, so the planner sees equality on
+    # the leading column of idx_run_event_tenant_run_seq (tenant_id, run_id, seq) and
+    # resolves max(seq) as an index-only BACKWARD scan -- it touches the last entry of
+    # one index range, not the run's history. That is what makes it affordable on an
+    # endpoint the intake poll driver hits every ~3 seconds, alongside the three
+    # counts above (T-15.3-13, accepted).
+    #
+    # This carries no feed CONTENT on purpose. It is the one integer that lets the run
+    # page decide whether to spend a request on GET /{run_id}/events at all.
+    event_seq = (await session.execute(
+        text("SELECT max(seq) FROM run_event WHERE run_id = :rid"),
+        {"rid": str(run_id)},
+    )).scalar_one()
+
     # Elapsed: completed runs use the closed interval; running runs measure to now.
     elapsed_seconds: int | None = None
     if run.started_at is not None:
@@ -918,6 +939,8 @@ async def get_run_metrics(
         # when it began.
         started_at=run.started_at,
         completed_at=run.completed_at,
+        # ADDITIVE (see RunMetrics.event_seq). None on a run with no events yet.
+        event_seq=(int(event_seq) if event_seq is not None else None),
         claim_count=int(claim_count),
         grounded_claim_count=int(grounded_claim_count),
         citation_recall=recall,
@@ -1023,6 +1046,138 @@ async def get_run_audit_body(
         model=body.get("model") or row.model,
         request=body.get("request"),
         response=body.get("response"),
+    )
+
+
+# Page bounds for the run-event feed (T-15.3-12). `limit` is CLAMPED into this
+# range rather than rejected outside it: a client that asks for 99999 gets a
+# bounded page, not a 422. The ceiling is what makes an unbounded read of a
+# 24-angle run impossible; the floor is what stops `limit=0` from turning a page
+# turn into an infinite loop of empty pages.
+_EVENTS_MAX_LIMIT = 1000
+_EVENTS_DEFAULT_LIMIT = 500
+
+
+def _event_meta(value) -> dict | None:
+    """The `meta` JSONB of one run_event row, as a dict, or None.
+
+    SQLAlchemy's asyncpg dialect registers a jsonb codec, so this column normally
+    arrives already decoded. Read it defensively anyway: `meta` is JSONB written by
+    the worker, it reaches us through a raw `text()` SELECT rather than the ORM, and
+    a driver or dialect change that hands back a string must degrade to a dropped
+    `meta` on one line -- never to a 500 on the feed an operator is reading.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        import json
+
+        try:
+            decoded = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+        return decoded if isinstance(decoded, dict) else None
+    return None
+
+
+@router.get("/{run_id}/events", response_model=RunEventPage)
+async def get_run_events(
+    run_id: uuid.UUID,
+    after_seq: int = Query(
+        0, description="Return events with seq STRICTLY GREATER than this. 0 = from the start."
+    ),
+    limit: int = Query(
+        _EVENTS_DEFAULT_LIMIT,
+        description=f"Max events in this page; clamped to 1..{_EVENTS_MAX_LIMIT}.",
+    ),
+    session: AsyncSession = Depends(get_db_session),
+) -> RunEventPage:
+    """One bounded, seq-ordered page of a run's activity feed (D-01/D-04/D-05).
+
+    THE BACKFILL READ. The live stream only carries what happens while somebody is
+    watching; this is what makes closing the run page and reopening it show TRUE
+    history instead of a snapshot. Ordering is `seq ASC` and there is NO descending
+    mode and NO offset paging: `seq` is monotonic per run, so a cursor is both
+    cheaper and stable under concurrent appends, which an OFFSET is not.
+
+    ISOLATION. The run is resolved ONLY through `Depends(get_db_session)`, which sets
+    the tenant GUC that the FORCE-RLS policies read. Another tenant's run is therefore
+    INVISIBLE here, `scalar_one_or_none` is None, and the caller gets the SAME 404,
+    with the SAME body, as a run_id that never existed. That non-distinguishability is
+    the security property, not a rough edge (T-15.3-10/T-15.3-11): a "forbidden"
+    answer would confirm the run exists and belongs to somebody else, and an empty
+    200 would leak the same fact through the response SHAPE instead of its status.
+    There is no forbidden arm in this handler and there must never be one.
+
+    ("Forbidden" is spelled out rather than given as its status code on purpose --
+    the source gate in tests/test_run_events_api.py asserts that number appears
+    NOWHERE in this handler, and a docstring quoting it would defeat its own gate.
+    Same convention as `resume_run` above.)
+
+    BOUNDS. A 24-angle run emits thousands of rows, so `limit` is clamped into
+    1..1000 and `after_seq` floored at 0 (T-15.3-12/T-15.3-14 -- both arrive as typed
+    query params, so a non-integer is rejected before this body runs, and both are
+    passed as BOUND parameters, never interpolated into SQL). `has_more` is decided by
+    fetching `limit + 1` rows and noticing whether the extra one came back; issuing a
+    COUNT over the run's whole history on every page turn is the denial of service
+    this endpoint exists to avoid.
+
+    `next_after_seq` on an EMPTY page is the cursor the caller PASSED IN, never 0 --
+    returning 0 would rewind a live client to the beginning of the run on its first
+    quiet tick and make it re-download everything it already holds.
+
+    NO STATUS GATE, DELIBERATELY. A failed, cancelled or parked run is exactly the run
+    whose events an operator most needs, and today's failed/cancelled cards DROP the
+    feed -- the defect this endpoint exists to end. Follow `get_run_verification`,
+    which is deliberately gate-free, NOT `get_run_report`, which is gated. Adding a
+    readability predicate here is the regression; a source gate in
+    tests/test_run_events_api.py pins its absence.
+    """
+    run = (await session.execute(
+        select(Run).where(Run.id == run_id)
+    )).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "run not found")
+
+    # Clamp, do not reject: an over-large ask is answered with a bounded page.
+    limit = max(1, min(int(limit), _EVENTS_MAX_LIMIT))
+    after = max(0, int(after_seq))
+
+    # RLS injects `tenant_id = current_setting(...)` into this statement, so the
+    # planner sees equality on the LEADING column of idx_run_event_tenant_run_seq
+    # (tenant_id, run_id, seq) and this is an ordered index range scan -- no sort,
+    # no heap scan of the run's whole history. Fetch limit + 1: the extra row IS
+    # the has_more signal, which is why no COUNT is issued here.
+    rows = (await session.execute(
+        text(
+            'SELECT seq, ts, stage, kind, "text", meta FROM run_event '
+            "WHERE run_id = :rid AND seq > :after "
+            "ORDER BY seq ASC LIMIT :lim"
+        ),
+        {"rid": str(run_id), "after": after, "lim": limit + 1},
+    )).all()
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]          # drop the probe row before it reaches the client
+
+    events = [
+        RunEventItem(
+            seq=int(r._mapping["seq"]),
+            ts=r._mapping["ts"],
+            stage=r._mapping["stage"],
+            kind=r._mapping["kind"],
+            text=r._mapping["text"],
+            meta=_event_meta(r._mapping["meta"]),
+        )
+        for r in rows
+    ]
+
+    return RunEventPage(
+        run_id=run_id,
+        events=events,
+        # Anti-rewind: hold the caller's cursor when the page is empty.
+        next_after_seq=(events[-1].seq if events else after),
+        has_more=has_more,
     )
 
 
