@@ -37,7 +37,7 @@
 #     permits into a RED build.
 # Drop the `|| true` and a single missing file kills the script before pytest
 # runs. Drop the assertion and a single mistyped path makes this gate go green
-# having run 28 of 29 files while reporting nothing about the 29th.
+# having run 29 of 30 files while reporting nothing about the 30th.
 #
 # OWNERSHIP: this file was owned EXCLUSIVELY by plan 15.2-02 for the main phase.
 # Ownership passed to plan 15.2-20 for the GAP PHASE (plans 15.2-20…26), which
@@ -51,7 +51,9 @@
 # the EXPECTED_FILES bump (27 -> 28) in ONE edit, for the reason stated above:
 # the list and the number are one change, and splitting them is how a gate goes
 # green having run less than it claims. Plan 15.3-02 follows the same rule for
-# its own file (28 -> 29). Unlike 15.2, no 15.3 name is added AHEAD of its file:
+# its own file (28 -> 29), and plan 15.3-03 for its own (29 -> 30) — the emit
+# sites in pipeline.py and research_division.py.
+# Unlike 15.2, no 15.3 name is added AHEAD of its file:
 # each plan registers its test file in the same commit that creates it, so the
 # `ls ... || true` silent-skip window never opens for this phase.
 # Any file listed here must be pure (no Postgres, no provider key, no network)
@@ -77,12 +79,13 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
-            # 29 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
+            # 30 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
             # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
             # does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
-            # added by plan 15.2-20, plus the 2 PHASE-15.3 files added by plans
-            # 15.3-01 and 15.3-02. ALL 29 NOW EXIST — the count is asserted
-            # below, so this number and the list must be changed together.
+            # added by plan 15.2-20, plus the 3 PHASE-15.3 files added by plans
+            # 15.3-01, 15.3-02 and 15.3-03. ALL 30 NOW EXIST — the count is
+            # asserted below, so this number and the list must be changed
+            # together.
             #
             # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
             #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
@@ -128,6 +131,16 @@ steps:
             #     15.2-24 -> test_stage_logging.py
             #     15.3-01 -> test_run_events.py    (run_event emitter, D-06/D-07)
             #     15.3-02 -> test_run_events_api.py (run_event READ surface)
+            #     15.3-03 -> test_run_event_emit.py (the EMIT SITES: dividers
+            #                carry labels, one dispatch header per batch, a
+            #                failed angle says why, and neither calling the
+            #                emitter nor BUILDING its arguments can fail a run)
+            #
+            # test_run_event_emit.py is PURE for the same two reasons as the two
+            # files above it: the run_events Postgres seams are replaced by the
+            # suite, and its end-to-end behaviours drive the stubbed harness that
+            # test_engine_e2e_stubbed.py already installs. No Postgres, no key,
+            # no network.
             #
             # test_run_events.py is PURE: no Postgres, no provider key, no
             # network. The two operations in runs/run_events.py that touch the
@@ -182,13 +195,14 @@ steps:
                     nestor_pulse_sdk/tests/test_dispatch_pii.py \
                     nestor_pulse_sdk/tests/test_stage_logging.py \
                     nestor_pulse_sdk/tests/test_run_events.py \
-                    nestor_pulse_sdk/tests/test_run_events_api.py"
+                    nestor_pulse_sdk/tests/test_run_events_api.py \
+                    nestor_pulse_sdk/tests/test_run_event_emit.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=29
+            EXPECTED_FILES=30
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then

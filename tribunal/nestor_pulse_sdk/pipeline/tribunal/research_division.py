@@ -83,6 +83,23 @@ from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
 # through a single line. `pii` is a pure, stdlib-only module, so importing it at
 # module scope adds no dependency to this module's import surface.
 from nestor_pulse_sdk.pipeline.tribunal.pii import scrub_pii
+# 15.3-03: the run-event emitter (plan 15.3-01), IMPORTED AS A MODULE. The
+# from-import form is forbidden here and that is not style: the D-06 call-site
+# gate is a grep for qualified calls to the BARE emit entry point, and a bare
+# `emit(...)` bound by a from-import evades it completely while the gate stays
+# green. Every site in this file calls `emit_safe` with a `build` thunk.
+#
+# THE THUNK IS THE WHOLE POINT, AND IT IS NOT DEFENSIVE HABIT. A caller's
+# arguments are evaluated BEFORE the callee is entered, so a `text=` argument
+# built from a direct
+#     result[...]
+# subscript would raise `KeyError` HERE — inside the semaphore, inside the paid
+# angle-dispatch loop, on a provider that degraded and returned a short dict —
+# and no code inside the emitter could
+# catch it. Note also that `_notify` / `_record_result` below wrap ONLY their
+# awaited callback, so a statement placed BESIDE one of them is OUTSIDE its try.
+# `emit_safe` is what protects these sites; proximity to an existing try is not.
+from nestor_pulse_sdk.runs import run_events
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -1091,6 +1108,38 @@ async def run_angles(
     if not enabled:
         raise InsufficientProvidersError(failed=list(ALL_PROVIDERS))
 
+    # 15.3-03: the two lines that describe the run's ROUTING before a cent is
+    # spent. `plan` names how the angles were divided; `streams` names which peer
+    # streams are actually live, so a run with a DARK provider says so in the feed
+    # instead of silently having fewer researchers than the operator expects.
+    # Emitted after the guard above, because a run with zero streams never gets
+    # this far.
+    run_events.emit_safe(
+        run_id,
+        stage="research_division",
+        kind="plan",
+        build=lambda: (
+            f"Planning angle routing — {len(angles)} angles across "
+            f"{len(set(str(a.get('provider') or '?') for a in angles))} streams",
+            None,
+        ),
+    )
+    run_events.emit_safe(
+        run_id,
+        stage="research_division",
+        kind="streams",
+        build=lambda: (
+            "Configured streams — "
+            + " · ".join(enabled)
+            + (
+                " · DARK: " + ", ".join(p for p in ALL_PROVIDERS if p not in enabled)
+                if [p for p in ALL_PROVIDERS if p not in enabled]
+                else ""
+            ),
+            None,
+        ),
+    )
+
     sem = asyncio.Semaphore(_ANGLE_CONCURRENCY)
 
     # --- R3 restore map. Read TOLERANTLY: these values came back out of a JSON
@@ -1119,6 +1168,32 @@ async def run_angles(
 
     async def _record_result(i: int, provider: str, result: dict) -> None:
         """Checkpoint one completed angle. Best-effort, same rule as `_notify`."""
+        # 15.3-03: the feed's `agent_done` child, emitted BEFORE the early return
+        # below on purpose — the line describes what the ANGLE did, and it must
+        # not disappear on a caller that wired no checkpoint callback.
+        #
+        # `result["facts"]` IS A SUBSCRIPT AND THAT IS DELIBERATE. It is the
+        # concrete raise this plan exists to contain: a degrading provider returns
+        # an envelope with no fact list at all, and the alternative — a `.get`
+        # defaulting to 0 — would print "0 facts" for an angle whose fact count is
+        # simply UNKNOWN, which is a feed row asserting something the run never
+        # established (T-15.3-23). Inside the thunk the missing key costs this
+        # LINE and nothing else; outside it, it would cost the paid run.
+        run_events.emit_safe(
+            run_id,
+            stage="deep_research",
+            kind="agent_done",
+            build=lambda: (
+                f"Angle {i + 1:02d} done — "
+                f"{len(result['facts'])} facts · {provider}",
+                {
+                    "angle": i + 1,
+                    "provider": provider,
+                    "cost": result.get("cost_usd"),
+                    "audit_id": result.get("audit_id"),
+                },
+            ),
+        )
         if on_angle_result is None:
             return
         try:
@@ -1163,6 +1238,19 @@ async def run_angles(
                 "on this attempt",
                 i + 1, provider,
             )
+            # 15.3-03: an angle that was NOT dispatched must be VISIBLE, not
+            # absent. Without this line a resumed run shows a feed with holes in
+            # it and no explanation for why those angles never appear.
+            run_events.emit_safe(
+                run_id,
+                stage="deep_research",
+                kind="agent_done",
+                build=lambda: (
+                    f"Angle {i + 1:02d} restored from checkpoint — not "
+                    f"re-dispatched, cost nothing on this attempt · {provider}",
+                    {"angle": i + 1, "provider": provider},
+                ),
+            )
             await _notify(i, True)
             return (provider, result)
 
@@ -1195,6 +1283,20 @@ async def run_angles(
                     preferred, preferred,
                     str(angle.get("sub_question") or angle.get("focus_area") or "")[:80],
                     len(survivors),
+                )
+                # 15.3-03: a DELIBERATE non-dispatch, stated as such. An angle
+                # that is simply missing from the feed reads as a bug; an angle
+                # that says why it was skipped reads as a decision.
+                run_events.emit_safe(
+                    run_id,
+                    stage="deep_research",
+                    kind="agent_done",
+                    build=lambda: (
+                        f"Angle {i + 1:02d} not researched — stream {preferred} is "
+                        f"unavailable and {len(survivors)} independent stream(s) "
+                        f"already cover this sub-question",
+                        {"angle": i + 1, "provider": preferred},
+                    ),
                 )
                 await _notify(i, False)
                 return None
@@ -1262,6 +1364,27 @@ async def run_angles(
                 i + 1, len(angles), provider, timeout, stakes, fa,
                 bool(angle.get("corroboration")), prompted,
             )
+            # 15.3-03: the indented child that hangs under the dispatch header.
+            # Emitted INSIDE the semaphore, so the feed says an angle is running
+            # when it is running rather than when it was queued behind it.
+            # `is_live` is what lets the page draw the blinking cursor on it.
+            run_events.emit_safe(
+                run_id,
+                stage="deep_research",
+                kind="agent_run",
+                build=lambda: (
+                    # `.get` here and NOT a subscript, unlike the `agent_done`
+                    # line below: the focus-area division path produces angles
+                    # with no `sub_question` key at all, so a subscript would
+                    # drop the live line for every angle on that whole path
+                    # rather than for a degraded provider. Same chain the
+                    # corroboration-skip log above already uses.
+                    f"Angle {i + 1:02d} — "
+                    f"{angle.get('sub_question') or angle.get('focus_area') or ''}"
+                    f" · {provider}",
+                    {"angle": i + 1, "provider": provider, "is_live": True},
+                ),
+            )
             # R7: the two resume kwargs are added ONLY for the two background
             # providers (`_RESUMABLE_PROVIDERS`). The other runners do not accept
             # them, and passing them unconditionally would be a TypeError on
@@ -1303,6 +1426,27 @@ async def run_angles(
                     )
                 except Exception:
                     pass
+                # 15.3-03: THE LINE THIS PHASE EXISTS FOR. Today a failed angle
+                # renders as the word "failed" and nothing else, so an operator
+                # watching a run cannot tell a timeout from a 429 from a poisoned
+                # tool conversation. The exception TYPE and its message carry the
+                # why.
+                #
+                # `exc` is bound as a DEFAULT ARGUMENT, not captured: Python
+                # deletes the `except ... as exc` name when the block exits. The
+                # thunk is called synchronously inside `emit_safe` so a plain
+                # capture would work today, but a default argument cannot rot if
+                # this ever moves.
+                run_events.emit_safe(
+                    run_id,
+                    stage="deep_research",
+                    kind="agent_fail",
+                    build=lambda _exc=exc: (
+                        f"Angle {i + 1:02d} failed — {type(_exc).__name__}: "
+                        f"{str(_exc)[:160]} · 0 facts · {provider}",
+                        {"angle": i + 1, "provider": provider},
+                    ),
+                )
                 await _notify(i, False)
                 return None
         if isinstance(result, dict) and result.get("status") == "success":
@@ -1331,9 +1475,41 @@ async def run_angles(
             "research_division.run_angles: angle %d (%s) did not succeed: %s",
             i + 1, provider, str(reason)[:300],
         )
+        # 15.3-03: the SECOND failure shape — the provider answered, and said no.
+        # It gets its own line for the same reason as the exception path above:
+        # `error_message` is the only place the account cap, the refusal or the
+        # empty envelope is ever named.
+        run_events.emit_safe(
+            run_id,
+            stage="deep_research",
+            kind="agent_fail",
+            build=lambda: (
+                f"Angle {i + 1:02d} failed — "
+                f"{str(reason)[:160] or 'provider returned no reason'} "
+                f"· 0 facts · {provider}",
+                {"angle": i + 1, "provider": provider},
+            ),
+        )
         await _notify(i, False)
         return None
 
+    # 15.3-03: THE DISPATCH HEADER, AND THERE IS EXACTLY ONE OF IT IN THIS FILE.
+    # It is the line the indented `agent_run` children hang under, so it describes
+    # the BATCH handed to the semaphore, not an angle. One per angle would emit
+    # twenty-four headers with one child each and destroy the grouping the whole
+    # design is built around. The angle numbers are capped rather than clamped
+    # mid-number by the emitter's 400-char bound.
+    run_events.emit_safe(
+        run_id,
+        stage="deep_research",
+        kind="dispatch",
+        build=lambda: (
+            f"Dispatching {len(angles)} agents — Angles "
+            + ", ".join(f"{n + 1:02d}" for n in range(min(len(angles), 12)))
+            + (f" +{len(angles) - 12} more" if len(angles) > 12 else ""),
+            None,
+        ),
+    )
     gathered = await asyncio.gather(*(_one_angle(i, a) for i, a in enumerate(angles)))
     all_results: list[tuple[str, dict]] = [r for r in gathered if r is not None]
 
@@ -1358,6 +1534,27 @@ async def run_angles(
                 "research_division.run_angles: focus_area %r got NO research — "
                 "retrying angle %d on %s (was %s)",
                 a.get("focus_area"), i + 1, alt, original,
+            )
+            # 15.3-03: the retry line names the CAUSE and the ATTEMPT, never the
+            # bare word. `wait_s` is 0 and stated rather than omitted: the
+            # coverage gate re-dispatches immediately on a different stream, and
+            # an absent backoff is a fact about this retry, not missing data.
+            run_events.emit_safe(
+                run_id,
+                stage="deep_research",
+                kind="agent_retry",
+                build=lambda: (
+                    f"Angle {i + 1:02d} retrying — focus area "
+                    f"{a.get('focus_area')!r} got NO research from {original} "
+                    f"· retry 2/2 · now on {alt} · no backoff",
+                    {
+                        "angle": i + 1,
+                        "provider": alt,
+                        "attempt": 2,
+                        "max": 2,
+                        "wait_s": 0,
+                    },
+                ),
             )
             retries.append(_one_angle(i, a, force_provider=alt))
         retry_results = await asyncio.gather(*retries)

@@ -98,6 +98,18 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
     InsufficientProvidersError,
 )
 from nestor_pulse_sdk.runs.stage_feed import StageFeed
+# 15.3-03: the run-event emitter (plan 15.3-01). IMPORTED AS A MODULE, never as
+# `from ... .run_events import emit`. The module form is what makes the D-06
+# call-site gate meaningful: that gate counts qualified calls to the BARE emit
+# entry point and requires zero, and a bare `emit(...)` bound by a from-import
+# would slip straight past it and rebuild the whole defect while the gate stayed
+# green. (This comment states the rule WITHOUT writing that qualified call out,
+# because the gate is a grep and a comment matches it just as a call does.)
+# Every site below calls `emit_safe`, whose `build`
+# thunk moves text/meta construction INSIDE the emitter's try — a caller's
+# arguments are evaluated BEFORE the callee is entered, so wrapping the
+# emitter's body protects nothing about the f-string that fed it.
+from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     # D8/D-14 (15.2-14): the per-stream fact-list collector that REPLACED the
     # whole-corpus `claim_distiller` call as this pipeline's primary claim
@@ -167,7 +179,15 @@ from nestor_pulse_sdk.pipeline.tribunal.budget import (
     SURVIVAL_RULE,
 )
 from nestor_pulse_sdk.pipeline.synthesis.quality_gate import build_quality_gate
-from nestor_pulse_sdk.runs.stages import set_stage, raise_if_cancelled, RunCancelled
+from nestor_pulse_sdk.runs.stages import (
+    set_stage,
+    raise_if_cancelled,
+    RunCancelled,
+    # 15.3-03: the fourteen `{key, label}` pairs. The feed's divider carries the
+    # LABEL ("Deep research"), never the key ("deep_research") — the labels have
+    # existed since Phase 15 and no surface has ever rendered one.
+    stages_for,
+)
 from nestor_pulse_sdk.pipeline.tribunal.taxonomy import TAXONOMY
 from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
 from nestor_pulse_sdk.pipeline.synthesis.steps import extract_focus_areas
@@ -307,6 +327,12 @@ def _stage_log_state(run_id: Any) -> dict[str, Any]:
             "entered": 0,          # how many stage_enter lines this run emitted
             "counts": {},          # stage key -> {name: int} for its exit line
             "started_at": now,     # monotonic() at the run's first stage write
+            # 15.3-03: the last `summary` block seen on the CURRENTLY-OPEN stage's
+            # detail, so the feed's per-stage summary line can carry its
+            # `items_read` / `cost_usd` when the stage reported them. Reset at
+            # every transition. Additive: every reader below uses `.get`, so this
+            # key changes nothing about the stage log itself.
+            "event_summary": None,
         }
         _STAGE_LOGS[key] = state
     return state
@@ -386,6 +412,122 @@ def _stage_log_exit(run_id: Any, state: dict[str, Any]) -> None:
     )
 
 
+# ===========================================================================
+# 15.3-03 — THE FEED'S SPINE, riding the SAME transition choke point.
+#
+# `_stage_log_transition` below is the ONE place this engine decides that a run
+# has actually LEFT one stage and ENTERED another, and it already owns the two
+# things a feed divider and a stage summary need: the outgoing stage key and the
+# monotonic clock it was opened at. So the run-event emits ride it rather than
+# the `set_stage` shim in `_run_staged`.
+#
+# WHY THE TRANSITION FUNCTION AND NOT THE SHIM. The shim covers every stage
+# boundary the STAGED BODY crosses, but it is not the only caller here:
+# `_write_final_report` is a MODULE-LEVEL function and calls this transition
+# directly for `synthesize` and `done` (see its two call sites). Emitting from
+# the shim alone would leave the last two stages of every run with no divider and
+# no summary — the feed would simply stop before the report was written, which is
+# precisely the "goes quiet and you cannot tell why" defect this phase exists to
+# end. One edit here covers all three call sites; three edits would be three
+# chances to miss one.
+#
+# NOTHING HERE MAY RAISE INTO THE PIPELINE. Both helpers are called from inside
+# an existing `try/except Exception` (T-15.2-241), AND every value they derive is
+# built inside an `emit_safe(build=...)` thunk, so a malformed state dict or an
+# absent summary block costs the LINE and never the run (D-06). The two layers
+# are not redundant: the outer try covers the bookkeeping, the thunk covers the
+# f-string, and neither one covers the other.
+# ===========================================================================
+
+
+def _stage_event_label(stage_key: Any) -> str:
+    """The stage's HUMAN LABEL, falling back to the raw key.
+
+    `ENGINE_STAGES["tribunal"]` has carried a label for all fourteen stages since
+    Phase 15 and no surface has ever rendered one — `ResearchRunProgress` shows
+    `Current phase: deep_research`. The divider is where that ends. A key with no
+    schema entry (`done`, or a stage added ahead of its declaration) falls back to
+    the key rather than to an empty line.
+    """
+    key = str(stage_key)
+    for entry in stages_for("tribunal"):
+        if entry.get("key") == key:
+            return str(entry.get("label") or key)
+    return key
+
+
+def _stage_event_worked(seconds: Any) -> str:
+    """`8s` / `12m 24s` / `1h 05m` — the design's `Worked for X` register."""
+    total = max(0, int(round(float(seconds))))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+def _stage_event_summary_meta(state: dict[str, Any]) -> dict[str, Any]:
+    """The `summary` line's meta. CALLED ONLY FROM INSIDE AN `emit_safe` THUNK.
+
+    Every read below is deliberately a direct subscript or a float/int coercion
+    over run-scoped bookkeeping that a defect elsewhere could leave malformed.
+    That is safe here and ONLY here: this function runs inside the emitter's try,
+    so a `KeyError` or a `ValueError` drops the summary line and leaves the run
+    untouched. Do NOT hoist a call to it above an `emit_safe`.
+    """
+    meta: dict[str, Any] = {
+        "worked": _stage_event_worked(time.monotonic() - float(state["opened_at"])),
+        "actions": int(state["items"] or 0),
+    }
+    summary = state.get("event_summary")
+    if isinstance(summary, dict):
+        if summary.get("items_read") is not None:
+            meta["items"] = int(summary["items_read"])
+        if summary.get("cost_usd") is not None:
+            meta["cost"] = float(summary["cost_usd"])
+    return meta
+
+
+def _stage_event_note_summary(state: dict[str, Any], detail: Any) -> None:
+    """Remember a `summary` block reported on the currently-open stage."""
+    if isinstance(detail, dict) and isinstance(detail.get("summary"), dict):
+        state["event_summary"] = dict(detail["summary"])
+
+
+def _stage_event_boundary(
+    run_id: Any, state: dict[str, Any], stage_key: Optional[str]
+) -> None:
+    """Close the outgoing stage with a `summary`, open the next with a `divider`.
+
+    SUMMARY FIRST, DIVIDER SECOND, so replaying the events reads exactly as the
+    design's timeline does: work, then the stage's own summary, then the next
+    stage's label. `stage_key=None` is the run's LAST boundary (from
+    `_stage_log_close`) — the final stage still gets its summary and no divider
+    is opened for a stage that will never run.
+    """
+    outgoing = state.get("current")
+    if outgoing is not None:
+        run_events.emit_safe(
+            run_id,
+            stage=outgoing,
+            kind="summary",
+            # `text` is empty BY DESIGN: the design of record renders a summary
+            # line entirely from `worked / actions / items / cost`
+            # (ResearchRunImproved.tsx, every `kind:"summary"` entry).
+            build=lambda: ("", _stage_event_summary_meta(state)),
+        )
+    state["event_summary"] = None
+    if stage_key is not None:
+        run_events.emit_safe(
+            run_id,
+            stage=stage_key,
+            kind="divider",
+            build=lambda: (_stage_event_label(stage_key), None),
+        )
+
+
 def _stage_log_transition(run_id: Any, stage_key: str, detail: Any = None) -> None:
     """Record a stage write; emit exit+entry lines only on a real TRANSITION.
 
@@ -402,11 +544,22 @@ def _stage_log_transition(run_id: Any, stage_key: str, detail: Any = None) -> No
         if state.get("current") == stage_key:
             if n_items is not None:
                 state["items"] = n_items
+            # A RE-REPORT IS NOT A BOUNDARY. `deep_research` is re-written on
+            # every angle callback; a divider per write would emit dozens per run
+            # and destroy the grouping the design exists to show. Only the
+            # summary's own inputs are refreshed here.
+            _stage_event_note_summary(state, detail)
             return
+        # 15.3-03: BEFORE `_stage_log_exit`, which pops this stage's counts and
+        # is where a corrupt `opened_at` would abort the rest of this function.
+        # The feed's summary/divider pair is the thing an operator watches, so it
+        # goes first and cannot be lost to bookkeeping that fails afterwards.
+        _stage_event_boundary(run_id, state, stage_key)
         _stage_log_exit(run_id, state)
         state["current"] = stage_key
         state["opened_at"] = time.monotonic()
         state["items"] = n_items or 0
+        _stage_event_note_summary(state, detail)
         _stage_log_line("stage_enter", run_id, stage_key, items=state["items"])
     except Exception as exc:  # noqa: BLE001 — T-15.2-241
         _stage_log_swallow(exc)
@@ -425,6 +578,11 @@ def _stage_log_close(run_id: Any) -> None:
         state = _STAGE_LOGS.pop(str(run_id), None)
         if state is None:
             return
+        # 15.3-03: the LAST stage of the run gets its summary line here and
+        # nowhere else — there is no next transition to close it. No divider:
+        # nothing follows. Idempotent for the same reason this function is (the
+        # registry entry is already popped).
+        _stage_event_boundary(run_id, state, None)
         _stage_log_exit(run_id, state)
         _stage_log_line(
             "run_stages_complete",
@@ -1227,6 +1385,16 @@ class TribunalPipeline:
             # `run_stages_complete` line (the operator's answer to "how far did it
             # get"), and that no run leaves an entry behind in the registry.
             _stage_log_close(run_id)
+            # 15.3-03. SAME `finally`, SAME REASON, AND THE ORDER IS LOAD-BEARING:
+            # the line above emits the run's FINAL stage summary into the event
+            # buffer, and this line drains and closes that buffer. Closing first
+            # would throw that summary away.
+            #
+            # `close_run` is idempotent (it pops the registry entry before doing
+            # any work), so a later writer on the `done` path may also call it;
+            # and it never raises, so a failing drain cannot turn a completed run
+            # into a failed one (D-06).
+            await run_events.close_run(run_id)
 
     async def _run_staged(
         self,
@@ -1306,6 +1474,14 @@ class TribunalPipeline:
         # questions identified", and it is still where `_intake_detail` renders
         # the final research plan. The workshop's own fan-out rows go to the
         # `workshop` stage key, declared by 15.2-03 — this plan declares none.
+        # 15.3-03: OPEN THE RUN'S EVENT BUFFER, ONCE, HERE. It binds the tenant
+        # (the six pipeline modules that emit do not carry one and must not have
+        # to) and seeds the sequence from `MAX(seq)`, so a RESUMED run continues
+        # its own numbering instead of colliding with the history it already
+        # wrote. A second `open_run` anywhere would orphan this buffer's undrained
+        # events, so there is exactly one call in this file. It never raises: a
+        # failed open costs the feed, not the run.
+        await run_events.open_run(run_id, tenant_id)
         await set_stage(run_id, tenant_id, "intake")
 
         # D-G (plan 15.2-21) — READ THE BRIEF'S STRUCTURE BEFORE ANYTHING SPENDS
