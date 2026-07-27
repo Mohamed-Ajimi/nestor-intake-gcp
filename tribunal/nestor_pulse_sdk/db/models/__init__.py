@@ -16,6 +16,7 @@ from nestor_pulse_sdk.db.models.claim_source import ClaimSource
 from nestor_pulse_sdk.db.models.research_gap import ResearchGap
 from nestor_pulse_sdk.db.models.audit_log import AuditLog
 from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
+from nestor_pulse_sdk.db.models.run_event import RunEvent
 
 __all__ = [
     "Org",
@@ -29,4 +30,5 @@ __all__ = [
     "ResearchGap",
     "AuditLog",
     "VerificationVerdict",
+    "RunEvent",
 ]
