@@ -182,6 +182,70 @@ export type Citation = {
   first_claim_id?: string | null;
 };
 
+/**
+ * The twelve line kinds of the design of record
+ * (`docs/design/prototypes/ResearchRunImproved.tsx`, `type LineKind`), verbatim and in the
+ * same order as the engine's `RUN_EVENT_KINDS` tuple (tribunal `runs/run_events.py`). That
+ * tuple and this union are ONE contract in two languages.
+ *
+ * This type exists for exhaustive switches in the renderer — NOT for parsing. See
+ * `RunEvent.kind` below for why the wire field is a plain `string`.
+ */
+export type RunEventKind =
+  | "thinking"
+  | "tool"
+  | "search"
+  | "plan"
+  | "streams"
+  | "dispatch"
+  | "agent_run"
+  | "agent_done"
+  | "agent_retry"
+  | "agent_fail"
+  | "summary"
+  | "divider";
+
+/**
+ * One line of a run's activity feed — one `run_event` row on the wire (D-04), mirroring the
+ * backend `RunEventItem` (tribunal `runs/schemas.py`) field for field.
+ *
+ * `kind` IS A PLAIN `string`, NOT `RunEventKind`, AND THAT IS THE POINT OF THE FIELD'S TYPE.
+ * The backend already declares it as a plain `str` for the same reason: Cloud Run replaces
+ * revisions gradually, so a NEWER engine revision writing a thirteenth kind while this
+ * frontend build is still deployed is the NORMAL state of a rollout. Narrowing it here would
+ * push that mismatch into the renderer, where an unhandled kind must still produce a line.
+ * The renderer's default branch is what makes that safe — it never returns nothing.
+ *
+ * `meta` carries only the keys the engine's `_META_FIELDS` allowlist permits: `sub`,
+ * `is_live`, `worked`, `actions`, `items`, `cost`, `audit_id`, `provider`, `model`, `angle`,
+ * `attempt`, `max`, `wait_s`. It is typed loosely on purpose — the same additive-rollout
+ * argument applies.
+ */
+export type RunEvent = {
+  seq: number;
+  ts: string;
+  stage: string;
+  kind: string;
+  text: string;
+  meta?: Record<string, unknown> | null;
+};
+
+/**
+ * One bounded, `seq`-ordered page of the feed — the backfill read behind D-01.
+ *
+ * `next_after_seq` is the caller's NEXT cursor, not an offset. On an EMPTY page it is the
+ * cursor the caller passed IN, never 0 (15.3-02's anti-rewind property) — so a client must
+ * never reset it locally on a quiet tick, or a live feed rewinds to the run's first row.
+ *
+ * `has_more` is true when the page was cut by `limit`.
+ */
+export type RunEventPage = {
+  run_id: string;
+  events: RunEvent[];
+  next_after_seq: number;
+  has_more: boolean;
+};
+
 export type ResearchRun = {
   id: string;
   status: string;
@@ -199,6 +263,13 @@ export type ResearchRun = {
   chain_status: string | null;
   chain_broken_at: number | null;
   bundle_key: string | null;
+  // ── THE FEED CURSOR (15.3-06). `MAX(run_event.seq)` for this run, mirrored onto the
+  // research_runs row and carried on the EXISTING SSE frame rather than by a second
+  // transport. It is the ONLY thing that tells the run page new events exist: the page
+  // fetches the delta past its own held position, so a tick where this has not advanced
+  // costs ZERO requests. NULL means the run has emitted no events (a pre-15.3 run, or one
+  // that has not started) — NOT 0, which would claim a feed positioned at its start.
+  event_seq: number | null;
 };
 
 /** Handle returned to the caller; `close()` aborts the fetch and stops all retries. */
@@ -357,6 +428,63 @@ export function getSource(
 ): Promise<ApiResult<CitationSource>> {
   return apiFetch<CitationSource>(
     `/intakes/${intakeId}/research/sources/${sourceId}`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Fetch one page of a run's persisted activity feed (15.3-07 proxy → 15.3-02 engine read).
+ * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
+ * method GET, hitting `/intakes/{id}/research/{runId}/events`.
+ *
+ * Server contract this transport relies on:
+ * - superadmin-only and space-scoped; a client / cross-space / null-space caller is
+ *   existence-hidden as **404**, never 403 and never 200 — so a failure here is never a
+ *   signal the caller may interpret as "the run exists but you may not read it";
+ * - a run whose `tribunal_run_id` is still NULL is **404** on THIS verb (the engine has
+ *   never heard of it, so there is nothing to page) — which is exactly the freshly-queued
+ *   window, and is why the page must render sensibly with no events rather than treat a
+ *   failure as fatal;
+ * - the engine page rides through VERBATIM, `next_after_seq` and `has_more` included.
+ *
+ * `limit` is bounded 1..1000 server-side in two places; the engine's clamp is the authority,
+ * so nothing is clamped here. Returns `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function getRunEvents(
+  intakeId: string,
+  runId: string,
+  afterSeq = 0,
+  limit = 500,
+): Promise<ApiResult<RunEventPage>> {
+  const qs = new URLSearchParams({ after_seq: String(afterSeq), limit: String(limit) });
+  return apiFetch<RunEventPage>(
+    `/intakes/${intakeId}/research/${runId}/events?${qs.toString()}`,
+    { method: "GET" },
+  );
+}
+
+/**
+ * Resolve a run id to the intake that owns it — the COLD-OPEN path for the standalone run
+ * URL (D-01). A one-shot `apiFetch` (never fork the transport), method GET, hitting
+ * `/intakes/research/runs/{runId}/locate`.
+ *
+ * This is the ONLY way the run page learns its intake id. It deliberately does NOT accept an
+ * intake id from the URL: a bookmarked link will not carry one, and a URL-supplied tenant
+ * hint is exactly what TENANT-02 forbids.
+ *
+ * Server contract (15.3-07): superadmin-only and space-scoped; a client / cross-space /
+ * null-space caller is existence-hidden as **404**. Unlike the events verb it does NOT 404 a
+ * run whose `tribunal_run_id` is still NULL — a freshly triggered run carries no engine id
+ * for exactly the window in which an operator opens this page, and "which intake owns this
+ * run" is knowable without the engine ever having heard of it. It returns exactly two ids
+ * and NO run state: a status here would be a second source of truth that can disagree with
+ * the SSE frame (D-05). Returns `ApiResult` — never throws.
+ */
+export function locateResearchRun(
+  runId: string,
+): Promise<ApiResult<{ intake_id: string; research_run_id: string }>> {
+  return apiFetch<{ intake_id: string; research_run_id: string }>(
+    `/intakes/research/runs/${runId}/locate`,
     { method: "GET" },
   );
 }
