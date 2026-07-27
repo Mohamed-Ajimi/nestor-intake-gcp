@@ -211,13 +211,28 @@ _D8_BLOCK_ENABLED = os.environ.get("NESTOR_TRIBUNAL_D8_FACT_LIST", "true").lower
 # MEASURED, not guessed, against the merged 15.2-04 implementation:
 #   len(build_fact_list_prompt_block())              = 2159
 #   len(build_fact_list_prompt_block(language="Dutch")) = 2399
-# The plan's provisional 2000 predated that module and is below both, so it is set
-# here to 2600 — above the measured worst case with headroom for a longer language
-# name, and still less than half the adapters' 5000-char audit ceiling. Exceeding
-# it only logs; the block is a correctness feature and is never dropped for size.
+# The plan's provisional 2000 predated that module and is below both, so it was set
+# to 2600 — above the measured worst case with headroom for a longer language
+# name, and still less than half the adapters' 5000-char audit ceiling.
+#
+# RE-DERIVED BY 15.2-23, because the thing it budgets for legitimately grew. The
+# gemini variant now prefixes `facts._FACT_LIST_LEAD_IN`, a FIXED four-line
+# restatement of the requirement, so the new worst case is
+# 2399 (Dutch) + len(_FACT_LIST_LEAD_IN), which is under 2800 by construction —
+# four lines of prose cannot reach 400 characters, and `test_fact_list_parser.py`
+# asserts the resulting total against this constant rather than trusting the
+# arithmetic. 3000 keeps the SAME relationship the 2600 had: comfortably above
+# the measured worst case, comfortably below the adapters' 5000-char ceiling.
+#
+# The cap was NOT raised to silence a failing assertion. It was raised so that a
+# DESIGNED, expected condition — a Dutch gemini angle — does not emit a WARNING
+# on every single angle, which is precisely the alarm fatigue D-12 rejects.
+# Exceeding it still only logs; the block is a correctness feature and is never
+# dropped for size, and `test_fact_list_parser.py` pins that behaviour directly
+# by driving the cap DOWN rather than by trusting this number.
 # The block is deterministic and reproducible from `build_fact_list_prompt_block()`,
 # so the audit record stays reconstructable either way.
-_D8_BLOCK_MAX_CHARS = 2600
+_D8_BLOCK_MAX_CHARS = 3000
 
 _PROVIDER_TIMEOUTS: dict[str, int] = {
     # The own-researcher is a BOUNDED tool-use loop (8 turns, 6 searches), not a
@@ -310,7 +325,15 @@ def _with_fact_list_block(query: str, provider: str, language: str) -> tuple[str
         from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
             build_fact_list_prompt_block,
         )
-        block = build_fact_list_prompt_block(language=language or "")
+        # D-M (15.2-23): `provider` selects PLACEMENT, not content. This function
+        # already runs AFTER provider resolution — the ordering 15.2-14 made
+        # load-bearing for the coverage retry — so the resolved provider is
+        # simply passed straight through. Gemini receives a short REQUIRED-OUTPUT
+        # lead-in ahead of the block it honoured on 0 of 8 reports; claude and
+        # openai, which honoured theirs, receive a byte-identical block.
+        block = build_fact_list_prompt_block(
+            language=language or "", provider=provider
+        )
         if len(block) > _D8_BLOCK_MAX_CHARS:
             log.warning(
                 "research_division: D8 fact-list block is %d chars, above the "

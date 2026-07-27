@@ -494,6 +494,241 @@ def test_non_ascii_statements_survive() -> None:
     assert result.facts[0]["evidence"] == evidence
 
 
+# ---------------------------------------------------------------------------
+# Group D — provider-aware placement, and placeholder SOURCE_URLs (15.2-23).
+#
+# D-M: Gemini honoured the fact-list block on 0 of 8 reports on run d6bb3aae
+# while Claude and OpenAI honoured theirs. These tests pin what is PROVABLE
+# offline — that the requirement is now stated where a long-context agent will
+# still see it, and that the two providers which complied were not disturbed.
+# Whether Gemini then COMPLIES is a live-LLM question no test can answer; the
+# two log lines that will measure it are named in
+# `build_fact_list_prompt_block`'s docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_gemini_block_leads_with_the_requirement() -> None:
+    """The requirement is RESTATED up front — and nothing is dropped to make room."""
+    block = build_fact_list_prompt_block(provider="gemini")
+
+    first_line = next(ln for ln in block.splitlines() if ln.strip())
+    assert first_line.startswith("REQUIRED OUTPUT")
+    assert FACTS_START in first_line or FACTS_START in block.splitlines()[1]
+
+    # The lead-in names both blocks by their sentinel...
+    lead_in = block.split("--- MACHINE-READABLE FACT LIST", 1)[0]
+    assert FACTS_START in lead_in
+    assert NOT_FOUND_START in lead_in
+    assert len(lead_in.splitlines()) <= 6, "a lead-in, not a second instruction set"
+
+    # ...and the FULL format contract still follows, unchanged.
+    for token in (FACTS_START, FACTS_END, NOT_FOUND_START, NOT_FOUND_END):
+        assert token in block
+    assert "STATEMENT<TAB>SOURCE_URL<TAB>QUALITY<TAB>CERTAINTY<TAB>EVIDENCE" in block
+    for value in QUALITY_VALUES + CERTAINTY_VALUES:
+        assert value in block
+    assert "VERBATIM" in block
+
+    # The default block is a strict SUFFIX of the gemini one: placement changed,
+    # content did not.
+    assert block.endswith(build_fact_list_prompt_block())
+
+
+@pytest.mark.parametrize("provider", ["claude", "openai", "own", "", "brand-new"])
+def test_the_honouring_providers_block_is_byte_identical(provider: str) -> None:
+    """The two providers that COMPLIED must not be disturbed by a fix for a third.
+
+    Byte-equality against the no-provider call is the strongest available
+    statement that their prompts did not change.
+    """
+    baseline = build_fact_list_prompt_block()
+    assert build_fact_list_prompt_block(provider=provider) == baseline
+
+    localised = build_fact_list_prompt_block(language="Nederlands")
+    assert build_fact_list_prompt_block(language="Nederlands", provider=provider) == (
+        localised
+    )
+
+
+def test_an_oversize_block_is_still_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_D8_BLOCK_MAX_CHARS` is an AUDIT-TRUNCATION BUDGET, not a correctness bound.
+
+    The adapters record `request={"query": query[:5000]}`, so the constant governs
+    how much of the brief survives into the audit ROW — the CALL always receives
+    the whole query. A block that exceeds it must therefore be logged and SENT,
+    never trimmed and never dropped: trimming it would corrupt the format
+    instruction and hand every stream to the D-14 fallback.
+
+    Driven by pushing the cap DOWN rather than by trusting today's number, so this
+    stays true whatever the constant is later re-derived to.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import research_division
+
+    monkeypatch.setattr(research_division, "_D8_BLOCK_MAX_CHARS", 10)
+    sent, prompted = research_division._with_fact_list_block(
+        "QUERY", "gemini", "Nederlands"
+    )
+
+    assert prompted is True
+    assert sent.startswith("QUERY")
+    for token in (FACTS_START, FACTS_END, NOT_FOUND_START, NOT_FOUND_END):
+        assert token in sent
+    assert "REQUIRED OUTPUT" in sent
+    assert len(sent) > 10, "the block is sent whole, not trimmed to the budget"
+
+
+@pytest.mark.parametrize("provider", ["gemini", "claude", "openai"])
+def test_every_dispatched_block_fits_the_declared_budget(provider: str) -> None:
+    """The budget is re-derived, not assumed — including the longest variant.
+
+    Asserted for every prose-instructed stream in both the neutral and the
+    language-qualified form, so a future edit that grows the block past the
+    declared budget fails HERE, in a test, rather than as a WARNING on every
+    angle of a live run.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import research_division
+
+    cap = research_division._D8_BLOCK_MAX_CHARS
+    assert len(build_fact_list_prompt_block(provider=provider)) <= cap
+    assert (
+        len(build_fact_list_prompt_block(language="Nederlands", provider=provider))
+        <= cap
+    )
+    assert cap < 5000, "the block must never consume the whole audited request field"
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["N/A", "n/a", "none", "None", "-", "--", "unknown", "UNKNOWN", "nvt", "tbd",
+     "not available", " N/A ", "?"],
+)
+def test_placeholder_source_urls_are_rejected_by_name(placeholder: str) -> None:
+    """T-15.2-234 — a stated absence of a source is not a source.
+
+    `facts: rejecting non-http(s) SOURCE_URL 'N/A'` was observed live, but only as
+    an accident of the scheme test. Now it is a named list with a test.
+    """
+    assert facts.is_placeholder_url(placeholder) is True
+
+    line = (
+        f"De marktomvang bedroeg EUR 1,2 miljard in 2024.\t{placeholder}"
+        f"\tpress\tcertain\tEUR 1,2 miljard"
+    )
+    result = parse_fact_list(_fact_block([line]), provider=PROVIDER, facet=FACET)
+
+    assert result.facts == [], "an admittedly unsourced claim is not persisted"
+    assert result.placeholder_urls == 1
+    assert result.rejected_urls == 1
+
+
+@pytest.mark.parametrize(
+    "real_url",
+    [
+        "https://example.com/report",
+        "http://example.com/a",
+        "[spglobal.com](https://www.spglobal.com/report-2024)",
+        f"https://{VERTEX_REDIRECT_HOST}/grounding-api-redirect/AbCd1234",
+    ],
+)
+def test_real_urls_are_still_accepted(real_url: str) -> None:
+    """The reject list must not catch anything that IS a source."""
+    assert facts.is_placeholder_url(real_url) is False
+
+    line = f"Een feit dat lang genoeg is om te tellen.\t{real_url}\tpress\tcertain\tbewijs"
+    result = parse_fact_list(_fact_block([line]), provider=PROVIDER, facet=FACET)
+
+    assert len(result.facts) == 1
+    assert result.placeholder_urls == 0
+    assert result.rejected_urls == 0
+    assert result.facts[0]["source_urls"], "the link survived"
+
+
+def test_one_placeholder_line_never_voids_the_rest_of_the_block() -> None:
+    """A single bad line degrades a report's fact list; it must not empty it."""
+    result = parse_fact_list(
+        _fact_block(
+            [
+                "Shell bouwt acht tot negen locaties per week om.\thttps://example.com/a\tofficial\tcertain\tacht tot negen",
+                "Circle K rekent circa EUR 3,50 voor een koffie.\tN/A\tpress\tsingle\tcirca EUR 3,50",
+                "De ombouw duurt maximaal zeven dagen per station.\thttps://example.com/b\tother\tsingle\tzeven dagen",
+            ],
+            ["Exacte marge per verkochte koffie."],
+        ),
+        provider=PROVIDER,
+        facet=FACET,
+    )
+
+    assert len(result.facts) == 2, "the two sourced facts survived"
+    assert result.placeholder_urls == 1
+    assert result.had_block is True
+    assert result.needs_distiller_fallback is False, (
+        "a partly usable block is not a D-14 fallback"
+    )
+    assert result.not_found == ["Exacte marge per verkochte koffie."]
+
+
+def test_a_wholly_placeholder_block_falls_back_and_says_why() -> None:
+    """D-14 STILL FIRES, and the reason must not read '0 lines ignored'.
+
+    The lines parsed; every one of them admitted it had no source. Wording that
+    as a malformed block would mislead the operator about what the provider did.
+    """
+    result = parse_fact_list(
+        _fact_block(
+            [
+                "Een eerste feit dat lang genoeg is.\tN/A\tpress\tsingle\tbewijs een",
+                "Een tweede feit dat lang genoeg is.\t-\tother\tsingle\tbewijs twee",
+            ]
+        ),
+        provider=PROVIDER,
+        facet=FACET,
+    )
+
+    assert result.facts == []
+    assert result.placeholder_urls == 2
+    assert result.needs_distiller_fallback is True, "D-14 must still catch this"
+    assert isinstance(result.fallback_reason, str)
+    assert "placeholder" in result.fallback_reason
+    assert "0 line(s) ignored" not in result.fallback_reason
+    assert PROVIDER in result.fallback_reason
+
+
+def test_a_non_http_url_still_keeps_its_fact() -> None:
+    """The two rejection paths are DELIBERATELY different, asserted side by side.
+
+    A malformed URL means the model had a source and wrote it badly — the link
+    goes, the fact stays (the rule since 15.2-04). A placeholder means the model
+    had no source — the fact goes. Pinned together so a future edit cannot
+    quietly collapse the two.
+    """
+    malformed = parse_fact_list(
+        _fact_block(
+            ["De marktomvang bedroeg EUR 1,2 miljard.\tjavascript:alert(1)\tpress\tcertain\tEUR 1,2"]
+        ),
+        provider=PROVIDER,
+        facet=FACET,
+    )
+    assert len(malformed.facts) == 1
+    assert malformed.rejected_urls == 1
+    assert malformed.placeholder_urls == 0
+
+    placeholder = parse_fact_list(
+        _fact_block(
+            ["De marktomvang bedroeg EUR 1,2 miljard.\tN/A\tpress\tcertain\tEUR 1,2"]
+        ),
+        provider=PROVIDER,
+        facet=FACET,
+    )
+    assert placeholder.facts == []
+    assert placeholder.placeholder_urls == 1
+
+
+def test_is_placeholder_url_never_raises() -> None:
+    """A predicate that raises inside the parser would be worse than a wrong answer."""
+    for hostile in (None, 123, object(), [], {}, "", "   ", "\t", "x" * 10_000):
+        assert isinstance(facts.is_placeholder_url(hostile), bool)
+
+
 def test_no_json_parsing_of_model_text() -> None:
     """T-15.2-45 — the ASVS V5 rule stated at grouping.py:214.
 

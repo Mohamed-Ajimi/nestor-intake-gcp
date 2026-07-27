@@ -130,13 +130,68 @@ _DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}\.[a-z]{2,24}$", re.IGNORECA
 #: Upper bound on the url -> label map built from one report (DoS guard).
 _MAX_LABEL_INDEX = 2000
 
+#: SOURCE_URL spellings that mean "I have no source", REJECTED BY NAME (D-M).
+#:
+#: `facts: rejecting non-http(s) SOURCE_URL 'N/A'` was observed live on run
+#: `d6bb3aae`, and it was caught only as an ACCIDENT of the http(s) scheme test —
+#: `N/A` happens not to parse as a URL. That is the wrong reason to be right: a
+#: placeholder is a model stating plainly that it could not source the claim,
+#: which is a different event from a malformed URL and deserves both its own
+#: words in the log and its own test. Compared after `.strip().lower()`.
+#:
+#: THE TWO OUTCOMES DIFFER, DELIBERATELY:
+#:   * a MALFORMED url -> the link is dropped, THE FACT SURVIVES. The model had a
+#:     source and wrote it badly; losing the link must not lose the fact
+#:     (`FactListResult.rejected_urls`, and its own test since 15.2-04).
+#:   * a PLACEHOLDER url -> THE FACT IS DROPPED. The model said it had no source.
+#:     Keeping it would put an admittedly unsourced claim into the tribunal
+#:     wearing the same clothes as a sourced one (T-15.2-234).
+_PLACEHOLDER_URLS: frozenset[str] = frozenset({
+    "n/a", "n.a.", "na", "none", "null", "nil", "nvt", "n.v.t.",
+    "-", "--", "---", "_", ".", "?", "??",
+    "unknown", "unspecified", "not available", "not applicable", "not found",
+    "no source", "no url", "source", "url", "tbd", "todo", "pending",
+})
+
+
+def is_placeholder_url(raw: object) -> bool:
+    """True when a SOURCE_URL cell carries no source at all. PURE, never raises.
+
+    An EMPTY or whitespace-only cell answers True as well — it also carries no
+    source — but note that `_parse_url_cell` treats the two differently on the
+    way through: an ABSENT cell is not a rejection to be counted (a two-column
+    fact line simply has no URL column), whereas a cell that was WRITTEN and
+    says `N/A` is a stated absence and is counted as one.
+    """
+    try:
+        if not isinstance(raw, str):
+            return raw is None
+        return raw.strip().lower() in _PLACEHOLDER_URLS or not raw.strip()
+    except Exception:  # noqa: BLE001 — a predicate that raises is worse than a coarse one
+        return False
+
 
 # ---------------------------------------------------------------------------
 # The prompt side: what a provider is told to emit.
 # ---------------------------------------------------------------------------
 
 
-def build_fact_list_prompt_block(*, language: str = "") -> str:
+#: The providers that receive the REQUIRED-OUTPUT lead-in below. Exactly one
+#: today, and named rather than defaulted so adding a second is a decision.
+_LEAD_IN_PROVIDERS: tuple[str, ...] = ("gemini",)
+
+#: A short restatement of the requirement, placed at the TOP of the block for a
+#: long-context deep-research agent. Four lines, on purpose — see
+#: `build_fact_list_prompt_block`'s docstring for what it is and is not.
+_FACT_LIST_LEAD_IN = (
+    "REQUIRED OUTPUT — READ THIS BEFORE YOU START. Your finished report MUST end\n"
+    f"with two blocks: a {FACTS_START} block listing the facts you established, and a\n"
+    f"{NOT_FOUND_START} block listing what you looked for and could not establish.\n"
+    "The exact format of both is defined at the END of this message. Follow it.\n"
+)
+
+
+def build_fact_list_prompt_block(*, language: str = "", provider: str = "") -> str:
     """Build the D8 instruction block appended to a provider's research prompt.
 
     Mirrors `_build_distiller_prompt` (`steps.py:619`): one concatenated string, a
@@ -146,6 +201,38 @@ def build_fact_list_prompt_block(*, language: str = "") -> str:
     `language`, when non-empty, requires STATEMENT in that language while EVIDENCE
     stays in the report's original language — EVIDENCE is a locator, not prose, and a
     translated locator matches nothing.
+
+    `provider` (15.2-23, additive — the default reproduces today's output BYTE FOR
+    BYTE) selects PLACEMENT, never content. For a provider in `_LEAD_IN_PROVIDERS`
+    the block is prefixed with `_FACT_LIST_LEAD_IN`, a four-line restatement of the
+    requirement; the full format rules then follow verbatim, unchanged, in the same
+    place they have always been.
+
+    WHY, AND WHAT ITS STATUS IS. On run `d6bb3aae` Gemini honoured this block on
+    **0 of 8** reports while Claude and OpenAI honoured theirs. The most likely
+    cause for a long-context deep-research agent is mundane: the agent composes its
+    report from a summarised prompt, and a 2.1 KB formatting block sitting at the
+    very END of that prompt is the easiest part of it to lose. Restating the
+    requirement up front is the cheapest intervention available that does not touch
+    the format itself, and it costs one paid angle nothing.
+
+    THIS IS A HYPOTHESIS, NOT A FIX. Whether a model COMPLIES with an instruction is
+    a live-LLM question and no live run may be spent to answer it, so nothing here
+    claims Gemini's compliance is repaired. What makes the next live run a
+    MEASUREMENT rather than another guess is that the honour rate is already logged,
+    per provider and in aggregate, by `pipeline/synthesis/steps.py`:
+
+        collect_provider_facts: <provider> returned no usable fact list for
+        k of m research report(s)
+        ... %d report(s) with a fact list
+
+    Read those two lines after the next run. A second counter is deliberately NOT
+    added: `synthesis/steps.py` is the D-15 file and a nicer log line is not worth
+    entering it.
+
+    AND THE FALLBACK MUST NOT BE WEAKENED BY ANY OF THIS. D-14's full-extraction
+    distiller caught all five non-compliant Gemini reports live, first time, and is
+    the reason run `d6bb3aae` produced claims at all. It stays exactly as it is.
     """
     lang = (language or "").strip()
     lang_rule = (
@@ -156,7 +243,14 @@ def build_fact_list_prompt_block(*, language: str = "") -> str:
         if lang else ""
     )
 
+    lead_in = (
+        _FACT_LIST_LEAD_IN
+        if str(provider or "").strip().lower() in _LEAD_IN_PROVIDERS
+        else ""
+    )
+
     return (
+        f"{lead_in}"
         "\n--- MACHINE-READABLE FACT LIST (required) ---\n\n"
         "After you have written your report, append a fact list for the facts you\n"
         "established. Emit it ONCE, at the VERY END of your output, AFTER any source\n"
@@ -270,8 +364,14 @@ class FactListResult:
         Lines inside the block that were ignored: no TAB, an echoed header row, or a
         statement below the minimum length. Also counts a second, ignored fact block.
     rejected_urls:
-        SOURCE_URL cells dropped for a non-http(s) scheme or excess length. The
-        statement SURVIVES a rejected URL — losing the link must not lose the fact.
+        SOURCE_URL cells dropped for a non-http(s) scheme, excess length, or a
+        named placeholder. For the first two the statement SURVIVES — losing the
+        link must not lose the fact.
+    placeholder_urls:
+        The subset of ``rejected_urls`` whose cell was a NAMED placeholder
+        (`N/A`, `none`, `-`, `unknown`, …). These are counted separately and the
+        FACT IS DROPPED, because the model is stating it had no source at all —
+        a different event from writing a source down badly (T-15.2-234).
     dropped_over_cap:
         Facts discarded because the provider exceeded ``_MAX_FACTS``.
     needs_distiller_fallback:
@@ -288,6 +388,7 @@ class FactListResult:
     had_block: bool = False
     parse_errors: int = 0
     rejected_urls: int = 0
+    placeholder_urls: int = 0
     dropped_over_cap: int = 0
     needs_distiller_fallback: bool = True
     fallback_reason: str | None = None
@@ -500,6 +601,7 @@ def parse_fact_list(
     not_found: list[str] = []
     parse_errors = 0
     rejected_urls = 0
+    placeholder_urls = 0
     dropped_over_cap = 0
 
     body = text or ""
@@ -537,9 +639,15 @@ def parse_fact_list(
             continue
 
         url_cell = parts[1].strip() if len(parts) > 1 else ""
-        url, link_label, rejected = _parse_url_cell(url_cell)
+        url, link_label, rejected, placeholder = _parse_url_cell(url_cell)
         if rejected:
             rejected_urls += 1
+        if placeholder:
+            # The model said it had no source. Drop the FACT, not just the link,
+            # and keep parsing: one unsourced line never voids a report's whole
+            # fact list (T-15.2-234).
+            placeholder_urls += 1
+            continue
 
         domain = display_domain(url, label=link_label, label_index=label_index) if url else ""
 
@@ -572,6 +680,14 @@ def parse_fact_list(
             "quality_tier_hint": _quality_tier_hint(provider, domain),
         })
 
+    if placeholder_urls:
+        log.warning(
+            "facts: %s emitted %d fact line(s) whose SOURCE_URL was a placeholder "
+            "rather than a source — those facts were dropped. A stated absence of "
+            "a source is not a source (D-M).",
+            provider or "provider", placeholder_urls,
+        )
+
     if dropped_over_cap:
         log.warning(
             "facts: %s exceeded the %d-fact cap — %d fact(s) dropped",
@@ -596,6 +712,17 @@ def parse_fact_list(
                 f"{who} returned no {FACTS_START}/{FACTS_END} block — its report will "
                 f"be run through the full-extraction distiller instead (D-14)."
             )
+        elif placeholder_urls and not parse_errors:
+            # The lines PARSED; every one of them admitted it had no source. That
+            # is a different failure from a garbled block and must not be worded
+            # as one, or the operator reads "0 lines ignored" and is misled.
+            fallback_reason = (
+                f"{who} returned a {FACTS_START}/{FACTS_END} block in which every "
+                f"fact named a placeholder instead of a source "
+                f"({placeholder_urls} line(s)) — nothing in it was usable, so its "
+                f"report will be run through the full-extraction distiller "
+                f"instead (D-14)."
+            )
         else:
             fallback_reason = (
                 f"{who} returned a {FACTS_START}/{FACTS_END} block but not one line in "
@@ -610,6 +737,7 @@ def parse_fact_list(
         had_block=had_block,
         parse_errors=parse_errors,
         rejected_urls=rejected_urls,
+        placeholder_urls=placeholder_urls,
         dropped_over_cap=dropped_over_cap,
         needs_distiller_fallback=needs_distiller_fallback,
         fallback_reason=fallback_reason,
@@ -637,17 +765,33 @@ def _clean_statement(cell: str) -> str:
     return cleaned.strip()[:_MAX_STATEMENT_CHARS]
 
 
-def _parse_url_cell(cell: str) -> tuple[str, str | None, bool]:
-    """Parse a SOURCE_URL cell into (url, label, rejected).
+def _parse_url_cell(cell: str) -> tuple[str, str | None, bool, bool]:
+    """Parse a SOURCE_URL cell into (url, label, rejected, placeholder).
 
     Accepts a bare URL or a ``[label](url)`` markdown link. Only ``http`` and
     ``https`` survive: this URL is later rendered as a CLICKABLE LINK in the
     superadmin citation panel, so a ``javascript:`` or ``data:`` URL chosen by an
     untrusted model would be an elevation-of-privilege path into the operator's own
     tool. A rejected URL drops the link and KEEPS the fact.
+
+    A PLACEHOLDER is checked FIRST and answered separately (15.2-23). `N/A`,
+    `none`, `-`, `unknown` and their siblings are not malformed URLs — they are the
+    model stating that it had no source — so they are named in the log as such and
+    the CALLER drops the fact rather than keeping an admittedly unsourced claim
+    (T-15.2-234). Checking before the scheme test is what makes the log line
+    honest; leaving it to the http(s) test was how the case was caught live, by
+    accident, wearing the wrong name.
     """
     if not cell:
-        return "", None, False
+        return "", None, False, False
+    if is_placeholder_url(cell):
+        log.warning(
+            "facts: SOURCE_URL %r is a placeholder, not a URL — the provider is "
+            "stating it had no source, so this fact is dropped rather than "
+            "persisted as an unsourced claim",
+            cell.strip()[:40],
+        )
+        return "", None, True, True
     label: str | None = None
     url = cell
     match = _MD_LINK_RE.fullmatch(cell)
@@ -656,12 +800,12 @@ def _parse_url_cell(cell: str) -> tuple[str, str | None, bool]:
         url = (match.group(2) or "").strip()
     if len(url) > _MAX_URL_CHARS:
         log.warning("facts: rejecting over-long SOURCE_URL (%d chars)", len(url))
-        return "", label, True
+        return "", label, True, False
     try:
         scheme = urlparse(url).scheme.lower()
     except Exception:  # noqa: BLE001 — unparseable is rejected, not fatal
         scheme = ""
     if scheme not in ("http", "https"):
         log.warning("facts: rejecting non-http(s) SOURCE_URL %r", url[:80])
-        return "", label, True
-    return url, label, False
+        return "", label, True, False
+    return url, label, False, False
