@@ -531,6 +531,7 @@
     "unverifiedTitle": "Audit-keten nog niet geverifieerd",
     "unverifiedBody": "Deze run is voltooid maar de audit-hashketen is nog niet gecontroleerd. Verifieer de keten om de ruwe output te ontgrendelen.",
     "verifyChain": "Keten verifiëren",
+    "openRun": "Run openen",
     "runPage": {
       "notFound": "Deze run is niet beschikbaar.",
       "backToIntakes": "Terug naar intakes",

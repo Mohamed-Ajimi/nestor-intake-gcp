@@ -531,6 +531,7 @@
     "unverifiedTitle": "Audit chain not yet verified",
     "unverifiedBody": "This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.",
     "verifyChain": "Verify chain",
+    "openRun": "Open run",
     "runPage": {
       "notFound": "This run is not available.",
       "backToIntakes": "Back to intakes",
