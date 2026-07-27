@@ -362,3 +362,65 @@ the item.
 evidence and a named blocker, and the blocker is the same one in three cases —
 **the phase has no committed non-superuser DB gate with room in it.** That is one
 decision, not four, and it is the thing to put to the operator.
+
+---
+
+## D24-1 — `caplog` captures NOTHING for `app.research.run_task` in the backend suite
+
+**Filed by:** plan 15.2-24, wave 3, 2026-07-27.
+**Status:** OPEN. Worked around, not diagnosed.
+
+Plan 15.2-24 added `pytestmark = pytest.mark.integration` to
+`backend/tests/test_research_run_task.py` — a NARROW fix for D19-2 scoped to that
+one file, because the plan adds behaviour to `run_task.py` and shipping an ungated
+proof of it would be the "green because it ran nothing" failure this phase spent
+six waves removing.
+
+Putting the file in the gate immediately surfaced a **pre-existing** failure that
+nothing had ever run:
+
+```
+tests/test_research_run_task.py::test_parked_mail_not_resent_for_same_seq FAILED
+>       assert "[park#1]" in caplog.text
+E       AssertionError: a SKIPPED mail must be logged at WARNING naming the marker
+E       assert '[park#1]' in ''
+```
+
+`caplog.text` is the EMPTY STRING. The WARNING itself is definitely emitted — the
+same test proves the branch that logs it ran (zero mails sent, finalize still
+written). So the record is produced and pytest's capture does not see it. There is
+no `logging.config`, no `basicConfig`, no `propagate = False` and no `setLevel`
+anywhere in `backend/`, and this was the ONLY file in the whole backend suite
+using `caplog`, so there is no working counter-example to compare against.
+
+**A second capture route was tried and ALSO came back empty.** Before settling on
+a workaround, a real `logging.Handler` was attached directly to `run_task.log`
+with the logger's level explicitly lowered to `WARNING`. It recorded nothing
+either — measured in build `b0a94294`, where the failure reads
+`warning_sink = [], bad = 1785159456`. Two independent capture routes going silent
+is consistent with logging being globally suppressed in this suite (a
+`logging.disable()` at WARNING or above short-circuits `Logger.isEnabledFor` and
+would defeat both), but that is a HYPOTHESIS — nothing in `backend/` calls it, and
+the dependency set was not searched.
+
+**What 15.2-24 did:** replaced the capture mechanism with a `warning_sink` fixture
+that monkeypatches `run_task.log` with a recording double, sidestepping the
+logging framework entirely. **The assertion is unchanged** — the same WARNING, the
+same marker, the same property; what it now proves is that the module CALLED
+`log.warning` with the right content. The pre-existing test was NOT deleted and
+NOT skipped.
+
+**What is still open:** why both capture routes are inert here. Candidates not yet
+excluded: a global `logging.disable()` from a third-party import, a pytest plugin
+interaction, or something in the `uv pip install -e '.[dev]'` dependency set. It
+matters beyond this file — the next person to reach for `caplog` in
+`backend/tests` will write an assertion that cannot fail, which is the same
+false-green class in a new place.
+
+**Not closed by this plan** because it is a suite-wide diagnosis, not an
+executor's call, and the workaround is strictly stronger than what it replaced (it
+asserts on the module's own logger rather than on global capture).
+
+D19-2's broader question — whether the non-integration backend unit suite gets a
+committed gate at all — is UNCHANGED and still open. One file joining the gate is
+not that decision.

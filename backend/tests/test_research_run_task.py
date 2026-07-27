@@ -27,8 +27,10 @@ LAZILY (``importorskip``) so this collects on a box without the app installed
 
 from __future__ import annotations
 
+import contextlib
 import types
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -37,11 +39,85 @@ identity_mod = pytest.importorskip("app.auth.identity")
 
 Identity = identity_mod.Identity
 
+# WHAT THIS MARKER MEANS IN *THIS* REPOSITORY, said plainly because the name lies.
+#
+# The only committed backend gate is the repo-root `cloudbuild.test.yaml`, and it
+# runs `pytest tests -m integration`. So in this repo the `integration` marker is
+# the "RUNS IN THE COMMITTED MERGE GATE" flag — it is NOT a claim that the file
+# touches a database. This file touches none: every seam is monkeypatched and the
+# session is a stub. Without the marker it was collected and then DESELECTED
+# (measured: `155 deselected`), which means the poll driver's contracts — pool
+# safety, terminal mail, park idempotency, on_error — have been running in NO
+# committed gate at all (deferred item D19-2).
+#
+# Plan 15.2-24 adds the marker as a DELIBERATE, NARROW fix for THIS file, because
+# this plan adds behaviour to `run_task.py` and shipping an ungated proof of it
+# would be the "green because it ran nothing" failure this phase spent six waves
+# removing. D19-2's broader question — whether the non-integration unit suite gets
+# a committed gate of its own — is still OPEN and is NOT closed by this plan.
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(autouse=True)
 def _fast_poll(monkeypatch):
     """Collapse the inter-tick sleep so the poll loop runs instantly in tests."""
     monkeypatch.setattr(run_task, "POLL_SECONDS", 0.0)
+
+
+@pytest.fixture
+def warning_sink(monkeypatch):
+    """Every WARNING this module logs, captured by REPLACING its logger.
+
+    NOT `caplog`, and NOT a handler either — both were tried and both captured
+    NOTHING for records `app.research.run_task` emits under this suite:
+
+      * `caplog.text` came back as the empty string (the pre-existing
+        `test_parked_mail_not_resent_for_same_seq` fails on exactly that, and had
+        been failing unnoticed for as long as the file was DESELECTED by the only
+        committed gate — plan 15.2-24 added `pytestmark` and it surfaced);
+      * a `logging.Handler` attached directly to `run_task.log`, with the logger's
+        level explicitly lowered to WARNING, captured nothing either.
+
+    Two independent capture routes going silent is consistent with logging being
+    globally suppressed somewhere in this suite's dependency set. The cause is
+    UNCONFIRMED and is filed as D24-1 in `deferred-items.md` — it matters beyond
+    this file, because the next person to reach for `caplog` in `backend/tests`
+    will write an assertion that cannot fail.
+
+    Replacing the logger object sidesteps the framework entirely and asserts the
+    thing that actually matters: that this module CALLED `log.warning` with the
+    right content. A WARNING that is asserted on is a WARNING an operator can rely
+    on — this driver runs headless, and silence here has already cost a full UAT
+    day (16-05).
+    """
+    seen: list[str] = []
+
+    class _RecordingLog:
+        """Duck-typed stand-in for `logging.Logger`; records the rendered message."""
+
+        def _record(self, bucket: list, msg, args) -> None:
+            try:
+                bucket.append(str(msg) % args if args else str(msg))
+            except Exception:  # noqa: BLE001 - a bad format string is the test's bug
+                bucket.append(str(msg))
+
+        def warning(self, msg, *args, **kwargs) -> None:
+            self._record(seen, msg, args)
+
+        def error(self, msg, *args, **kwargs) -> None:
+            self._record(seen, msg, args)
+
+        def exception(self, msg, *args, **kwargs) -> None:
+            self._record(seen, msg, args)
+
+        def info(self, msg, *args, **kwargs) -> None:
+            pass
+
+        def debug(self, msg, *args, **kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(run_task, "log", _RecordingLog())
+    return seen
 
 
 def _superadmin() -> "Identity":
@@ -553,9 +629,20 @@ def test_parked_terminal_finalizes_parked_and_mails(
 
 
 def test_parked_mail_not_resent_for_same_seq(
-    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend, caplog
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend, warning_sink
 ):
-    """Re-observing the SAME park event sends ZERO mails but still finalizes (DEC-5)."""
+    """Re-observing the SAME park event sends ZERO mails but still finalizes (DEC-5).
+
+    CAPTURE MECHANISM CHANGED BY PLAN 15.2-24, ASSERTION UNCHANGED. This test used
+    `caplog`, and `caplog.text` is EMPTY for this module's records in this suite —
+    so the last assertion below could never have passed. It went unnoticed because
+    the whole file was DESELECTED by the only committed gate (`pytest tests -m
+    integration`, measured: 155 deselected). Adding `pytestmark` put the file in
+    the gate and the failure surfaced immediately. The property being asserted is
+    exactly the same; only the way the WARNING is captured changed — see the
+    `warning_sink` fixture, and D24-1 in `deferred-items.md` for what is still
+    unexplained. It is not this plan's to chase.
+    """
     patches: list = []
     _install_context(monkeypatch)
     _capture_mirror(monkeypatch)
@@ -569,10 +656,9 @@ def test_parked_mail_not_resent_for_same_seq(
 
     fake_tribunal_client["metrics_script"] = _park_script(seq=1)
 
-    with caplog.at_level("WARNING"):
-        run_task.run_poll_driver(
-            _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
-        )
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
 
     assert len(fake_resend["calls"]) == 0, (
         "a re-observed park event must send ZERO mails (the [park#n] marker is the "
@@ -581,8 +667,9 @@ def test_parked_mail_not_resent_for_same_seq(
     assert written and written[-1][1]["status"] == "parked", (
         "the finalize must still run even when the mail is skipped."
     )
-    assert "[park#1]" in caplog.text, (
-        "a SKIPPED mail must be logged at WARNING naming the marker — never silent."
+    assert any("[park#1]" in line for line in warning_sink), (
+        "a SKIPPED mail must be logged at WARNING naming the marker — never "
+        f"silent. WARNINGs seen: {warning_sink}"
     )
 
 
@@ -701,3 +788,228 @@ def test_parked_malformed_descriptor_still_finalizes(
     # The reason falls back to a readable sentence, never an empty tail or "None".
     tail = values["error_message"][len("[park#1] "):].strip()
     assert tail and tail != "None", f"the fallback reason must be readable, got {tail!r}."
+
+
+# ===========================================================================
+# D-L (plan 15.2-24) — the run's own clock reaches the mirror row
+#
+# `ResearchRunProgress.tsx` does
+# `const start = startedAt ? new Date(startedAt).getTime() : Date.now();`
+# and `research.ts` has declared `started_at: string | null` since Phase 15 — but
+# the backend never sent it. So the field was always null, the elapsed counter
+# counted from PAGE LOAD (restarting on every refresh), and the same null made the
+# summary card's `fmtDuration(started_at, completed_at)` render an em-dash.
+#
+# This is a PRODUCER-SIDE fix with three hops, of which only the first two were
+# missing: engine run row -> RunMetrics -> research_runs -> (already emitted by
+# read_latest_research_run_dict) -> the component. No frontend file changes, and
+# no migration: both columns already exist on `research_runs`.
+# ===========================================================================
+
+#: A representative pair, as the engine serialises them (pydantic ISO-8601 + Z).
+_STARTED_ISO = "2026-07-27T08:09:00Z"
+_COMPLETED_ISO = "2026-07-27T09:07:00Z"
+_STARTED_DT = datetime(2026, 7, 27, 8, 9, 0, tzinfo=timezone.utc)
+_COMPLETED_DT = datetime(2026, 7, 27, 9, 7, 0, tzinfo=timezone.utc)
+
+
+def _capture_repo_patch(monkeypatch) -> list:
+    """Record the values ``mirror_tick`` PATCHes, without a session or a database.
+
+    Reads the values the REAL ``mirror_tick`` writes rather than trusting that a
+    stub was called — the same discipline ``_capture_patch_run`` applies to the
+    finalize writers.
+    """
+    calls: list = []
+
+    class _Repo:
+        def __init__(self, session, identity) -> None:
+            pass
+
+        def patch(self, row_id, **values):
+            calls.append(dict(values))
+            return 1
+
+    @contextlib.contextmanager
+    def _fake_tenant_session(identity):
+        yield object()
+
+    monkeypatch.setattr(run_task, "ResearchRunRepository", _Repo)
+    monkeypatch.setattr(run_task, "tenant_session", _fake_tenant_session)
+    return calls
+
+
+def test_mirror_tick_patches_the_timestamps_when_the_metrics_carry_them(monkeypatch):
+    """D-L: ``started_at`` reaches ``research_runs`` on the very first tick.
+
+    WHAT BREAKS WITHOUT THIS: the panel's elapsed counter restarts from zero every
+    time the operator refreshes the page during a ~50-minute run, which is exactly
+    how long the run they most need to watch takes.
+    """
+    calls = _capture_repo_patch(monkeypatch)
+
+    run_task.mirror_tick(
+        _superadmin(),
+        uuid.uuid4(),
+        "trib-1",
+        {
+            "status": "running",
+            "current_stage": "deep_research",
+            "started_at": _STARTED_ISO,
+        },
+    )
+
+    assert calls, "the mirror write never happened"
+    values = calls[-1]
+    assert values["started_at"] == _STARTED_DT, (
+        f"the engine's start time must land on the mirror row parsed, got "
+        f"{values.get('started_at')!r}"
+    )
+    # A running run has not completed — the field is absent, never a guess.
+    assert "completed_at" not in values
+
+
+def test_mirror_tick_patches_nothing_when_the_metrics_omit_them(monkeypatch):
+    """An OLDER engine build sends neither field and must patch neither.
+
+    A deploy is never atomic. The existing rule of this function — "a missing field
+    is simply not patched" — is what makes the new fields safe to add, and NULLing
+    a column because the far side is a version behind would be worse than the
+    defect being fixed.
+    """
+    calls = _capture_repo_patch(monkeypatch)
+
+    run_task.mirror_tick(
+        _superadmin(), uuid.uuid4(), "trib-1",
+        {"status": "running", "current_stage": "deep_research"},
+    )
+
+    values = calls[-1]
+    assert "started_at" not in values, f"an absent field must not be patched: {values}"
+    assert "completed_at" not in values
+    # The fields the tick ALREADY mirrored are untouched by this plan.
+    assert values["status"] == "running"
+    assert values["current_stage"] == "deep_research"
+
+
+def test_finalize_completed_writes_the_engines_completed_at(monkeypatch):
+    """The ENGINE's completion time wins over the mirror's own ``func.now()``.
+
+    The engine knows when the run finished; the driver only knows when it got
+    round to writing. Both timestamps on the row then come from one clock, so the
+    duration the card renders is the duration the run actually took.
+    """
+    written = _capture_patch_run(monkeypatch)
+
+    run_task.finalize_completed(
+        _StubSession([]),
+        uuid.uuid4(),
+        {
+            "status": "completed",
+            "current_stage": "done",
+            "started_at": _STARTED_ISO,
+            "completed_at": _COMPLETED_ISO,
+        },
+        {"markdown": "# report"},
+    )
+
+    _, values = written[-1]
+    assert values["completed_at"] == _COMPLETED_DT, (
+        f"the engine's completion time must be preferred, got "
+        f"{values.get('completed_at')!r}"
+    )
+    assert values["started_at"] == _STARTED_DT
+    assert values["status"] == "completed"
+
+
+def test_finalize_parked_still_writes_no_completion_time(monkeypatch):
+    """A parked run is PAUSED, not finished — ``completed_at`` stays NULL.
+
+    15.2-19's explicit rule, and the one place this plan deliberately does NOT
+    prefer the engine's timestamp. Stamping a completion time here would make the
+    intake card render a duration for a run that is still waiting on a superadmin
+    click, and would make the row indistinguishable from a real terminal in any
+    later reporting.
+    """
+    written = _capture_patch_run(monkeypatch)
+
+    run_task.finalize_parked(
+        _StubSession([]),
+        uuid.uuid4(),
+        {
+            "status": "parked",
+            "current_stage": "deep_research",
+            # Present in the payload ON PURPOSE: the proof is that the finalizer
+            # ignores it, not that the engine happened not to send one.
+            "completed_at": _COMPLETED_ISO,
+            "started_at": _STARTED_ISO,
+        },
+        "[park#1] Anthropic monthly cap reached",
+    )
+
+    _, values = written[-1]
+    assert values["completed_at"] is None, (
+        f"a parked run must keep completed_at NULL even when the engine sent one, "
+        f"got {values.get('completed_at')!r}"
+    )
+    assert values["status"] == "parked"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [1785159456, "not-a-timestamp", {"iso": "2026-07-27"}, ["2026-07-27"], "", True],
+    ids=["int", "garbage-string", "dict", "list", "empty-string", "bool"],
+)
+def test_a_malformed_timestamp_is_ignored_and_never_raises(monkeypatch, warning_sink, bad):
+    """Remote JSON is UNTRUSTED INPUT (ASVS V5) — a bad value patches nothing.
+
+    ``metrics`` crosses the engine seam into a ``BackgroundTask``. A raise here
+    routes to ``on_error`` and finalizes the row ``failed``; on a park that would
+    also destroy the resume affordance and lose paid, checkpointed work. No
+    ``pytest.raises`` here on purpose: nothing may escape.
+    """
+    calls = _capture_repo_patch(monkeypatch)
+
+    run_task.mirror_tick(
+        _superadmin(), uuid.uuid4(), "trib-1",
+        {"status": "running", "started_at": bad, "completed_at": bad},
+    )
+
+    values = calls[-1]
+    assert "started_at" not in values, (
+        f"a malformed timestamp must leave the column untouched rather than "
+        f"guessed: {values}"
+    )
+    assert "completed_at" not in values
+    assert values["status"] == "running", "the rest of the tick must still mirror"
+    assert any("started_at" in line for line in warning_sink), (
+        "an ignored value must be VISIBLE at WARNING and must name the field — a "
+        f"silent drop looks identical to a field the engine never sent. Seen: "
+        f"{warning_sink}"
+    )
+    # The rejected VALUE is deliberately not in the line: it is remote content of
+    # unknown shape and this driver's log is not the place to reproduce it.
+    assert not any(str(bad) in line for line in warning_sink if str(bad)), (
+        f"the rejected value must not be echoed into the log: {warning_sink}"
+    )
+
+
+def test_a_malformed_completed_at_falls_back_to_the_mirror_clock(monkeypatch):
+    """A finalize must still stamp SOMETHING — a terminal row with a NULL
+    ``completed_at`` would read as parked."""
+    written = _capture_patch_run(monkeypatch)
+
+    run_task.finalize_completed(
+        _StubSession([]),
+        uuid.uuid4(),
+        {"status": "completed", "completed_at": "garbage", "started_at": None},
+        {"markdown": "# report"},
+    )
+
+    _, values = written[-1]
+    assert values["completed_at"] is not None
+    assert not isinstance(values["completed_at"], datetime), (
+        "a malformed value must fall back to the database clock (func.now()), not "
+        f"be coerced into a datetime: {values['completed_at']!r}"
+    )
+    assert "started_at" not in values, "a None started_at must not NULL the column"

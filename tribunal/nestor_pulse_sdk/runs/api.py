@@ -908,6 +908,16 @@ async def get_run_metrics(
         status=run.status,
         cost_usd_total=run.cost_usd_total,
         elapsed_seconds=elapsed_seconds,
+        # D-L (plan 15.2-24). The handler ALREADY read both columns, three lines
+        # above, to compute `elapsed_seconds` — so this projection adds no query,
+        # no branch and no cost to an endpoint the intake poll driver hits every
+        # ~3 seconds. It is what lets the intake mirror row carry the run's own
+        # clock, so the elapsed counter survives a page refresh and the summary
+        # card renders a duration instead of an em-dash. Unconditional on
+        # purpose: a parked run is paused, not un-started, and must still report
+        # when it began.
+        started_at=run.started_at,
+        completed_at=run.completed_at,
         claim_count=int(claim_count),
         grounded_claim_count=int(grounded_claim_count),
         citation_recall=recall,

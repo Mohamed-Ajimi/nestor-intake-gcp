@@ -93,6 +93,50 @@ POLL_SECONDS = 3.0
 _MAX_METRICS_5XX_RETRIES = 3
 
 
+def _seam_datetime(value: Any, field: str) -> Any:
+    """Parse an ISO-8601 timestamp from the seam, or return ``None``. NEVER raises.
+
+    D-L (plan 15.2-24). ``metrics`` is REMOTE JSON crossing the engine seam into a
+    ``BackgroundTask`` — the phase's ASVS V5 rule applies in full: never assume the
+    type, never let a malformed value raise here. A raise inside the poll driver
+    routes to ``on_error`` and mislabels the run ``failed``, which for a park would
+    also destroy the resume affordance. So an int, a garbage string, a dict, a list
+    and ``None`` all take the same route: a WARNING naming the field, and ``None``
+    back, which the callers treat as "not sent" and therefore "not patched".
+
+    Accepts what the engine actually sends — pydantic serialises
+    ``datetime | None`` to an ISO-8601 string, including the ``Z`` suffix that
+    ``datetime.fromisoformat`` rejects before Python 3.11 — and passes a
+    ``datetime`` straight through so a caller holding a real object is not forced
+    to round-trip it through text.
+    """
+    from datetime import datetime as _dt
+
+    if value is None:
+        return None
+    if isinstance(value, _dt):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        log.warning(
+            "seam timestamp %s is not a string (%s) — ignored, the column is left "
+            "untouched rather than guessed",
+            field, type(value).__name__,
+        )
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        return _dt.fromisoformat(text)
+    except (TypeError, ValueError):
+        log.warning(
+            "seam timestamp %s is not ISO-8601 — ignored, the column is left "
+            "untouched rather than guessed",
+            field,
+        )
+        return None
+
+
 def get_engine_for_pool_check() -> Any:
     """Return the user-path engine — the pool the release contract must not starve.
 
@@ -154,6 +198,20 @@ def mirror_tick(
         values["stage_detail"] = metrics["stage_detail"]
     if metrics.get("cost_usd_total") is not None:
         values["cost_usd_total"] = metrics["cost_usd_total"]
+    # D-L (plan 15.2-24) — THE RUN'S OWN CLOCK, mirrored the moment the engine
+    # publishes it. ``ResearchRunProgress.tsx`` already consumes both fields; until
+    # now nothing produced them, so ``useElapsed(startedAt)`` fell back to
+    # ``Date.now()`` and the counter restarted on every page refresh.
+    #
+    # Follows this function's existing rule to the letter: patch ONLY when the
+    # field is present AND parses. An older engine build sends neither and patches
+    # nothing; a malformed value is a WARNING and patches nothing (never a guess,
+    # never a raise — see ``_seam_datetime``).
+    for _field in ("started_at", "completed_at"):
+        if metrics.get(_field) is not None:
+            _parsed = _seam_datetime(metrics[_field], _field)
+            if _parsed is not None:
+                values[_field] = _parsed
 
     with tenant_session(identity) as session:
         rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)
@@ -192,6 +250,18 @@ def finalize_completed(
     """
     from sqlalchemy import func
 
+    # D-L (plan 15.2-24): prefer the ENGINE's own timestamps over this row's
+    # ``func.now()``. The engine knows when the run actually finished; the mirror
+    # only knows when the driver got round to writing. ``func.now()`` remains the
+    # fallback, so an older engine build that sends neither field finalizes exactly
+    # as it does today. ``started_at`` is added only when present — a missing field
+    # is never patched, and NULLing a column the poll loop already filled would
+    # take the elapsed clock back to zero at the very end of the run.
+    _stamps: dict[str, Any] = {}
+    _started = _seam_datetime(metrics.get("started_at"), "started_at")
+    if _started is not None:
+        _stamps["started_at"] = _started
+
     _patch_run(
         session,
         research_run_id,
@@ -204,7 +274,9 @@ def finalize_completed(
         chain_status=chain_status,
         chain_broken_at=chain_broken_at,
         bundle_key=bundle_key,
-        completed_at=func.now(),
+        completed_at=_seam_datetime(metrics.get("completed_at"), "completed_at")
+        or func.now(),
+        **_stamps,
     )
 
 
@@ -238,12 +310,24 @@ def finalize_failed(
         if status not in {"failed", "cancelled", "parked"}:
             status = "failed"
 
+    # D-L (plan 15.2-24), same rule as the completed path: the engine's own
+    # timestamps win when it sent them, ``func.now()`` when it did not. ``metrics``
+    # is None on the ``on_error`` route, which is exactly the case where the engine
+    # said nothing and the mirror's clock is the only one there is.
+    _stamps: dict[str, Any] = {}
+    _started = _seam_datetime((metrics or {}).get("started_at"), "started_at")
+    if _started is not None:
+        _stamps["started_at"] = _started
+
     _patch_run(
         session,
         research_run_id,
         status=status,
         error_message=error_message or _default_error(metrics),
-        completed_at=func.now(),
+        completed_at=_seam_datetime(
+            (metrics or {}).get("completed_at"), "completed_at"
+        ) or func.now(),
+        **_stamps,
     )
 
 
@@ -275,6 +359,15 @@ def finalize_parked(
     is the DEC-5 mail-idempotency record and MUST land in the column verbatim (that
     column IS the record of whether the operator was already told). No bundle, no
     report row and no chain verdict are written: a parked run has none of them.
+
+    D-L (plan 15.2-24) DELIBERATELY STOPS AT THIS DOOR: ``completed_at`` stays NULL
+    here and NO ``completed_at`` is read from ``metrics``, even though the two
+    finalize paths above now prefer the engine's own timestamp. That is 15.2-19's
+    rule restated, not an oversight — a parked run has not ended, and stamping a
+    completion time would make the intake card render a duration for a run that is
+    still waiting on a superadmin click. Do not "fix" the omission. ``started_at``
+    is not written here either: the poll loop's ``mirror_tick`` already put it on
+    the row, and re-patching it buys nothing.
     """
     _patch_run(
         session,
