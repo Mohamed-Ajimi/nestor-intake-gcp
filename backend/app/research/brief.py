@@ -28,6 +28,7 @@ Authoritative references:
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 #: The interactive-report pause-gate marker. It is a module constant ONLY so a
@@ -65,6 +66,63 @@ _PROPOSED_QUESTIONS_KEY = "extra_questions_proposed"
 #: operator-validated brief as vague — so the brief carries the full context pack
 #: verbatim under this header (no truncation, no clarification framing).
 _CONTEXT_PACK_HEADER = "[CONTEXT PACK]"
+
+#: Delimiters for the CLIENT'S STATED DECISION (D-H, plan 15.2-21). The engine's
+#: ``pipeline/tribunal/brief_input.py::parse_brief`` reads exactly these two lines
+#: and lifts what sits between them into the string the Swiss tournament judges
+#: materiality against. Before this block existed, the engine had no decision to
+#: judge against and fell back to the brief's opening line: on run ``d6bb3aae``
+#: every tournament prompt in the run read "The client's decision this research has
+#: to serve: Deep research for moetest." — a project TITLE. Ranking by materiality
+#: to a title is arbitrary, which is how report-format and NDA metadata out-ranked
+#: the client's real research questions. Changing either string is a SEAM CHANGE:
+#: the engine-side parser must change in the same commit.
+_DECISION_HEADER = "[DECISION]"
+_DECISION_FOOTER = "[END DECISION]"
+
+#: Intake answer field keys carrying the client's own decision, in the same shape
+#: as :data:`_SECTOR_FIELD_KEYS` above. ``decision_or_goal`` and ``decision`` are
+#: the English form-field keys; ``beslissing`` / ``beslisvraag`` / ``doel_beslissing``
+#: are the Dutch ones the live Pulse template uses. Matched case-insensitively by
+#: :func:`_first_nonempty`, which is why no cased variants are listed.
+_DECISION_FIELD_KEYS = (
+    "decision_or_goal",
+    "decision",
+    "beslissing",
+    "beslisvraag",
+    "doel_beslissing",
+)
+
+#: The context pack's §3 decision line, as written by
+#: ``app.ai.prompts.CONTEXT_PACK_SKILL_PROMPT``:
+#: ``- **Wat moet beslist worden:** [concreet]``. Tolerant of a leading ``-``/``*``
+#: bullet, of ``**`` or ``__`` emphasis, of the colon sitting inside or outside the
+#: emphasis, and of the English label — the pack is authored by an AI skill and its
+#: punctuation is not a contract.
+_DECISION_LINE_RE = re.compile(
+    r"^\s*[-*•]?\s*(?:\*\*|__)?\s*"
+    r"(?:wat moet beslist worden|what must be decided)"
+    r"\s*:?\s*(?:\*\*|__)?\s*:?\s*(?P<value>.*)$",
+    re.IGNORECASE,
+)
+
+#: Values the context pack writes when the intake is too thin to state a decision.
+#: The pack is being HONEST when it emits these, and a placeholder is not a
+#: decision — accepting one would put "[concreet]" in front of the tournament as
+#: though the client had decided something.
+_DECISION_PLACEHOLDERS = frozenset({"concreet", "nog in te vullen", "tbd", ""})
+
+#: The deterministic opening-line shape :func:`assemble_brief` falls back to when a
+#: decomposition has no summary. It is a TITLE, and step 3 of
+#: :func:`derive_decision_statement` must never return it as a decision — that
+#: exact string, ``Deep research for moetest.``, IS defect D-H.
+_TITLE_FALLBACK_PREFIX = "deep research for "
+
+#: Characters kept of the resolved decision statement. Matched to the engine's own
+#: ``brief_input._DECISION_MAX_CHARS``, so the two sides of the seam clamp at the
+#: same place and the engine's ``_GATE_DECISION_CONTEXT_CHARS`` never has to cut a
+#: decision mid-sentence.
+_DECISION_MAX_CHARS = 400
 
 
 def _answers_map(intake: Any) -> dict[str, Any]:
@@ -157,6 +215,89 @@ def derive_report_hint(intake: Any, question_count: int = 0) -> str:
     return _FALLBACK_HINT
 
 
+def _is_decision_placeholder(value: str) -> bool:
+    """True when a §3 value is the pack's own "not filled in yet" text, not a decision."""
+    return value.strip().strip("[]*_ ").strip().lower() in _DECISION_PLACEHOLDERS
+
+
+def _decision_from_context_pack(context_pack_text: str | None) -> str:
+    """The context pack's §3 "Wat moet beslist worden" value, or ``""``. Never raises."""
+    for raw_line in str(context_pack_text or "").splitlines():
+        match = _DECISION_LINE_RE.match(raw_line)
+        if not match:
+            continue
+        value = (match.group("value") or "").strip()
+        # Trailing emphasis the label group did not consume (`**value**`).
+        value = value.strip("*_ ").strip()
+        if not value or _is_decision_placeholder(value):
+            continue
+        return value
+    return ""
+
+
+def derive_decision_statement(
+    intake: Any,
+    decomposition: Any = None,
+    context_pack_text: str | None = None,
+) -> str:
+    """The CLIENT'S OWN DECISION, in one bounded line (D-H). Pure; never raises.
+
+    The Tribunal's Swiss tournament ranks candidate sub-questions by how much they
+    matter *to a decision*. Its entire output is arbitrary if it has no decision to
+    judge against — which is exactly what happened on run ``d6bb3aae``, where the
+    engine had none and fell back to the brief's opening line, so every tournament
+    prompt in the run judged materiality against ``Deep research for moetest.``
+
+    Resolution, most specific source first. Each step says why it ranks where it
+    does, because the ORDER is the whole design:
+
+    1. **The context pack's §3 line** — ``- **Wat moet beslist worden:** …``. This
+       is the sharpest statement of the decision that exists anywhere in the flow:
+       it is written by the context-pack skill FROM the validated intake, reviewed
+       by the operator, and it is the one place the decision is expressed as a
+       decision rather than as a goal or a topic. A value that is the pack's own
+       placeholder (``[concreet]``, ``nog in te vullen``) is rejected — the pack
+       writes those honestly when the intake is thin, and a placeholder is not a
+       decision.
+    2. **The intake's own decision answer** (:data:`_DECISION_FIELD_KEYS`) — the
+       client's raw words. Below the pack because it is unreviewed and often
+       phrased as an aim rather than a choice, but it is still the client's.
+    3. **The decomposition summary** — a model's one-line framing of the whole
+       assignment. Usable as a last resort, but ONLY when it is not the
+       deterministic ``"Deep research for …"`` fallback :func:`assemble_brief`
+       produces when there is no summary at all. That string is a TITLE. Returning
+       it here would re-create D-H one layer earlier, and quietly.
+    4. ``""`` — no decision could be resolved. The engine then says so as a named
+       degradation reason. Silence is what this function exists to end, so it
+       returns nothing rather than something plausible.
+
+    The result is whitespace-collapsed and bounded to
+    :data:`_DECISION_MAX_CHARS`, matching the engine-side clamp so neither side has
+    to truncate the other mid-sentence.
+    """
+    try:
+        # 1. The context pack's §3 decision line.
+        statement = _decision_from_context_pack(context_pack_text)
+
+        # 2. The intake's own decision answer.
+        if not statement:
+            statement = _first_nonempty(_answers_map(intake), _DECISION_FIELD_KEYS) or ""
+
+        # 3. The decomposition summary — but never the deterministic title fallback.
+        if not statement:
+            summary = getattr(decomposition, "summary", None)
+            if summary is None and isinstance(decomposition, dict):
+                summary = decomposition.get("summary")
+            summary = str(summary or "").strip()
+            if summary and not summary.lower().startswith(_TITLE_FALLBACK_PREFIX):
+                statement = summary
+
+        # 4. Nothing.
+        return " ".join(str(statement or "").split())[:_DECISION_MAX_CHARS]
+    except Exception:  # noqa: BLE001 — a brief must never fail to compose
+        return ""
+
+
 def _item_text(item: Any) -> str:
     """Best-effort question text from a list/proposal_list entry (never raises)."""
     if isinstance(item, str):
@@ -234,8 +375,14 @@ def assemble_brief(
        blank);
     2. an ``Onderzoeksvragen:`` header followed by the research questions
        ENUMERATED in ascending ``priority`` order (``1. ...`` / ``2. ...``);
-    3. the :func:`derive_report_hint` PROSE tail;
-    4. a labeled :data:`_CONTEXT_PACK_HEADER` Context section carrying the FULL
+    3. a :data:`_DECISION_HEADER` / :data:`_DECISION_FOOTER` block carrying the
+       client's stated decision (:func:`derive_decision_statement`), emitted ONLY
+       when a decision actually resolves — an empty block would parse, on the
+       engine side, as a decision made of whitespace. It sits between the questions
+       and the hint so the decision reads as part of the ASSIGNMENT rather than as
+       one more line of context (D-H, plan 15.2-21);
+    4. the :func:`derive_report_hint` PROSE tail;
+    5. a labeled :data:`_CONTEXT_PACK_HEADER` Context section carrying the FULL
        ``context_pack_text`` verbatim (untruncated) — or, when no context pack is
        supplied, a compact entity-bits fallback (title / sector / goals) under the
        same header.
@@ -270,12 +417,21 @@ def assemble_brief(
             text = q.get("question_text")
         question_lines.append(f"{index}. {(text or '').strip()}")
 
-    # 3) Report-spec hint prose (never the marker).
+    sections = [opening, "", *question_lines]
+
+    # 3) The client's stated decision (D-H). Emitted ONLY when one resolves: an
+    # empty `[DECISION]` / `[END DECISION]` pair would give the engine a decision
+    # made of whitespace, which is worse than none — none is reported as a named
+    # degradation, whitespace is silently ranked against.
+    decision = derive_decision_statement(intake, decomposition, context_pack_text)
+    if decision:
+        sections += ["", _DECISION_HEADER, decision, _DECISION_FOOTER]
+
+    # 4) Report-spec hint prose (never the marker).
     hint = derive_report_hint(intake, question_count=len(ordered))
+    sections += ["", hint]
 
-    sections = [opening, "", *question_lines, "", hint]
-
-    # 4) Context section (quick task 260721-twy): fold the FULL context pack into
+    # 5) Context section (quick task 260721-twy): fold the FULL context pack into
     # the brief verbatim under a labeled header — no truncation, no clarification
     # framing. The engine's intake stage is a delegator that always produces a
     # research plan, so it consumes this context to write self-contained research
