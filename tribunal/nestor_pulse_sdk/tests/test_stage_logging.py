@@ -21,10 +21,18 @@ This file proves those lines exist, that they are emitted once per TRANSITION
 rather than once per write, that they carry no client content, and that a broken
 logger cannot cost a paid run.
 
+It also carries the ENGINE HALF of the same plan's second defect, D-L: `RunMetrics`
+and `get_run_metrics` must publish `started_at` / `completed_at`, because the
+frontend has declared and CONSUMED both since Phase 15 and nothing ever produced
+them — so the elapsed counter counted from PAGE LOAD and the summary card's
+duration rendered an em-dash. The intake half of that seam is pinned in
+`backend/tests/test_research_run_task.py`.
+
 NO LLM CALL, NO DATABASE, NO NETWORK. The end-to-end behaviours drive the SAME
 stubbed harness `test_engine_e2e_stubbed.py` uses — imported, never re-built, for
 the reason that file states about its own coupling guards: a second harness is a
-second thing to drift. No mocking library.
+second thing to drift. The metrics behaviours use a hand-written duck-typed
+session. No mocking library.
 
 NO PYTEST MARKER, deliberately, for the same reason `test_engine_e2e_stubbed.py`
 carries none: the engine gate runs `-m "not live"` and this file must be SELECTED
@@ -39,9 +47,13 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+import pytest
 
 from nestor_pulse_sdk.pipeline.tribunal import pipeline as _pipeline_mod
+from nestor_pulse_sdk.runs.schemas import RunMetrics
 
 # The stubbed end-to-end harness, IMPORTED rather than rebuilt. `_engine_run`
 # installs every seam (no DB, no provider, no key) and returns the run result plus
@@ -459,3 +471,156 @@ def test_a_clean_angle_row_is_unchanged():
         row = _pipeline_mod._angle_label({**base, "pii_removed": junk}, 0)
         assert row == clean, f"pii_removed={junk!r} changed the row: {row!r}"
 
+
+
+# ===========================================================================
+# 7. D-L, THE ENGINE HALF — RunMetrics publishes the two timestamps
+# ===========================================================================
+def test_run_metrics_carries_the_two_timestamps():
+    """`RunMetrics` accepts and serialises `started_at` / `completed_at`.
+
+    WHAT BREAKS WITHOUT THIS: `ResearchRunProgress.tsx` does
+    `startedAt ? new Date(startedAt).getTime() : Date.now()`, so a null
+    `started_at` makes the elapsed counter restart on every page refresh, and the
+    same null makes `fmtDuration(started_at, completed_at)` render an em-dash
+    (D-L). The frontend has declared and consumed both fields since Phase 15 —
+    nothing ever produced them.
+    """
+    started = datetime(2026, 7, 27, 8, 9, 0, tzinfo=timezone.utc)
+    completed = started + timedelta(minutes=58)
+
+    metrics = RunMetrics(
+        run_id=uuid.uuid4(),
+        engine="tribunal",
+        status="completed",
+        started_at=started,
+        completed_at=completed,
+    )
+    assert metrics.started_at == started
+    assert metrics.completed_at == completed
+
+    payload = metrics.model_dump(mode="json")
+    assert payload["started_at"].startswith("2026-07-27T08:09:00")
+    assert payload["completed_at"].startswith("2026-07-27T09:07:00")
+
+
+def test_run_metrics_still_validates_without_the_timestamps():
+    """The fields are ADDITIVE: omitting them must not 500 a newer intake.
+
+    A deploy is never atomic. An older engine build answering a newer intake's
+    poll sends no timestamps at all, and the mirror's rule is "a missing field is
+    simply not patched" — which only holds if the schema tolerates the absence.
+    """
+    metrics = RunMetrics(
+        run_id=uuid.uuid4(), engine="tribunal", status="running"
+    )
+    assert metrics.started_at is None
+    assert metrics.completed_at is None
+    # And `elapsed_seconds` is NOT superseded — the A/B compare screen reads it.
+    assert "elapsed_seconds" in RunMetrics.model_fields
+
+
+# --- the metrics handler, driven without a database -------------------------
+class _FakeResult:
+    """Duck-typed stand-in for a SQLAlchemy Result."""
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> Any:
+        return self._value
+
+    def scalar_one(self) -> Any:
+        return self._value
+
+
+class _FakeRun:
+    """The subset of `Run` that `get_run_metrics` actually reads."""
+
+    def __init__(
+        self,
+        *,
+        started_at: Optional[datetime],
+        completed_at: Optional[datetime],
+        status: str = "completed",
+    ) -> None:
+        self.id = uuid.uuid4()
+        self.engine = "tribunal"
+        self.status = status
+        self.cost_usd_total = None
+        self.started_at = started_at
+        self.completed_at = completed_at
+        self.current_stage = "done"
+        self.stage_detail = None
+        self.verification_summary = None
+
+
+class _FakeMetricsSession:
+    """The run SELECT first, then the three count queries. No database."""
+
+    def __init__(self, run: Any) -> None:
+        self._run = run
+        self._calls = 0
+
+    async def execute(self, statement, params=None):  # noqa: ANN001 - duck type
+        self._calls += 1
+        if self._calls == 1:
+            return _FakeResult(self._run)
+        return _FakeResult(0)
+
+
+async def test_get_run_metrics_projects_both_timestamps():
+    """The handler passes the run row's two columns straight into `RunMetrics`.
+
+    It already READ both columns to compute `elapsed_seconds`, so this adds no
+    query and no branch — which is why it can be an additive projection rather
+    than new work on a hot polling endpoint.
+    """
+    from nestor_pulse_sdk.runs.api import get_run_metrics
+
+    started = datetime(2026, 7, 27, 8, 9, 0, tzinfo=timezone.utc)
+    completed = started + timedelta(minutes=58)
+    run = _FakeRun(started_at=started, completed_at=completed)
+
+    metrics = await get_run_metrics(run.id, session=_FakeMetricsSession(run))
+
+    assert metrics.started_at == started
+    assert metrics.completed_at == completed
+    # The pre-existing elapsed computation is untouched and still agrees.
+    assert metrics.elapsed_seconds == 58 * 60
+
+
+async def test_get_run_metrics_tolerates_a_null_started_at():
+    """A queued run has no `started_at` — that is None, never an error.
+
+    The poll driver hits this endpoint every ~3 seconds from the moment the run is
+    created, so the not-yet-started shape is the FIRST shape it ever sees.
+    """
+    from nestor_pulse_sdk.runs.api import get_run_metrics
+
+    run = _FakeRun(started_at=None, completed_at=None, status="queued")
+
+    metrics = await get_run_metrics(run.id, session=_FakeMetricsSession(run))
+
+    assert metrics.started_at is None
+    assert metrics.completed_at is None
+    assert metrics.elapsed_seconds is None
+
+
+@pytest.mark.parametrize("status", ["running", "completed", "parked"])
+async def test_get_run_metrics_timestamps_do_not_depend_on_status(status):
+    """The projection is unconditional — no status gate was added to the handler.
+
+    `get_run_metrics` carries deliberate status rules (F2's `report_readable`
+    -driven `current_stage`), and this plan touches none of them. A parked run in
+    particular must still report when it started: it is paused, not un-started.
+    """
+    from nestor_pulse_sdk.runs.api import get_run_metrics
+
+    started = datetime(2026, 7, 27, 8, 9, 0, tzinfo=timezone.utc)
+    run = _FakeRun(started_at=started, completed_at=None, status=status)
+
+    metrics = await get_run_metrics(run.id, session=_FakeMetricsSession(run))
+
+    assert metrics.started_at == started
+    assert metrics.completed_at is None

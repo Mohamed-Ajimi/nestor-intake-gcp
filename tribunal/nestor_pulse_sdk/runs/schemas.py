@@ -262,6 +262,25 @@ class RunMetrics(BaseModel):
     status: RunStatus
     cost_usd_total: Decimal | None = None
     elapsed_seconds: int | None = None
+    # D-L (plan 15.2-24), ADDITIVE — the RUN'S OWN CLOCK, published at last.
+    #
+    # `research_runs` has had both columns since Phase 16 and
+    # `ResearchRunProgress.tsx` has declared and CONSUMED both since Phase 15
+    # (`useElapsed(startedAt, active)` and `fmtDuration(started_at, completed_at)`).
+    # Nothing ever PRODUCED them: this schema carried `elapsed_seconds` only, so
+    # the mirror row's timestamps stayed NULL, `useElapsed` fell back to
+    # `Date.now()` and the elapsed counter restarted on every page refresh — while
+    # the summary card's duration rendered an em-dash for the same reason. The
+    # contract already expected these two fields; only the producer was missing.
+    #
+    # `elapsed_seconds` is KEPT and is NOT superseded: the A/B compare screen
+    # reads it, and it is the only value that is correct for a still-running run
+    # measured against the SERVER's clock rather than the browser's.
+    #
+    # Declaration style copied verbatim from `RunResponse` above. ADDITIVE means
+    # an older engine build simply omits them and a newer intake patches nothing.
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     claim_count: int = 0
     grounded_claim_count: int = 0
     citation_recall: float | None = None   # grounded / claim_count; None if 0 claims
