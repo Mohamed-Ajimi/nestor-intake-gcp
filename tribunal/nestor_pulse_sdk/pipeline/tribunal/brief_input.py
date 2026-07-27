@@ -46,6 +46,38 @@ It NEVER raises: a parse failure degrades to ``source="error"`` with the whole b
 preserved as context, so the caller takes its legacy whole-brief detector path
 rather than losing the brief.
 
+THE FEED'S FIRST LINES (plan 15.3-05), AND WHY THEY DO NOT COST THE GUARANTEE ABOVE.
+:func:`parse_brief` now also opens the run page's feed, describing what it understood
+the brief to be. Three properties are load-bearing and none of them is optional:
+
+  1. **Still pure in the sense that matters.** The emitter is a SYNCHRONOUS append to
+     a bounded in-memory deque (``runs/run_events.py``): no socket, no session, no
+     cursor, no ``await``. Nothing here reads a clock — the emitter timestamps its
+     own rows on its own drain task, which this module never waits for.
+  2. **Still never raises.** ``pipeline.py`` places the ``parse_brief`` call OUTSIDE
+     its checkpoint branch *precisely because* this function is pure, free and safe
+     (see the D-G comment there). Every emit therefore goes through
+     ``run_events.emit_safe``, which takes a ZERO-ARGUMENT ``build()`` thunk so the
+     f-strings and attribute reads that compose an event run INSIDE the emitter's
+     ``try`` — a caller's arguments are evaluated before the callee is entered, so
+     the plain entry point would move the failure back out to this call site and
+     silently revoke the guarantee for every brief that states no decision (D-06).
+  3. **THE EMIT IS OUTSIDE THIS FUNCTION'S OWN ``try``.** Inside it, a failing event
+     would be caught by the parser's ``except`` and turn a perfectly good parse into
+     ``source="error"`` — an observability path rewriting the result it observes.
+
+  ``run_id`` is OPTIONAL and keyword-only. Omitted (every test, and any non-pipeline
+  caller) the function is byte-for-byte what it was; the pipeline passes the run's id
+  and the same parse additionally narrates itself.
+
+D-G AND THE FEED (T-15.3-40). NO CONTEXT LINE IS EVER PUT INTO AN EVENT. The events
+name the client's stated DECISION — a delimited, structured field — and COUNTS, and
+nothing else. Reaching for "the brief's opening line" as a project label would make
+``§9 Stakeholders`` the event text for any brief that leads with its context pack,
+and ``- **Primair contact klant:** … (mohamed.ajimi@…)`` is one of the four lines
+this module exists to keep away from third parties. ``scrub_pii`` at the emitter is
+the SECOND layer here, never the first.
+
 WHAT THIS MODULE IS NOT. It does not decide anything. It does not call the
 workshop, it does not rank, and it does not know what a research angle is. The
 Stage-1 wiring that consumes it lives in ``pipeline.py``; the producer of the
@@ -60,9 +92,35 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
+from typing import Any, Optional
+
+# MODULE-IMPORT FORM, MANDATORY. Binding the emitter's names directly into this
+# namespace would let a bare, unqualified call slip past the machine-checkable
+# call-site gate this phase runs over every file that emits, while the gate stayed
+# green — so the module is imported and every use stays qualified.
+from nestor_pulse_sdk.runs import run_events
 
 log = logging.getLogger(__name__)
+
+#: The feed stage these events belong to. `intake` is a real `ENGINE_STAGES`
+#: ["tribunal"] key ("brief received, client-validated questions identified") and it
+#: is the stage `pipeline.py` is in when it calls this parser. Not invented here.
+_EVENT_STAGE = "intake"
+
+#: Characters of the client's stated decision echoed into the feed. Shorter than
+#: `_DECISION_MAX_CHARS` on purpose: the event is a one-line orientation, and the
+#: emitter clamps at 400 for the WHOLE row, so an unbounded decision would push the
+#: sentence that frames it off the end of its own line.
+_EVENT_DECISION_CHARS = 180
+
+#: What the `thinking` line says when the brief carries no `[DECISION]` block. THE
+#: ABSENCE IS THE INFORMATION (D-H): on run d6bb3aae there was no stated decision, the
+#: judge was handed the project TITLE `Deep research for moetest.` to rank materiality
+#: against, and report metadata out-ranked the client's real questions. An empty
+#: half-sentence here would render that as though nothing were missing.
+_NO_DECISION_TEXT = "no decision stated in the brief"
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +224,64 @@ def _blank_ends_unclosed_block(lines: list[str], index: int) -> bool:
     return True
 
 
-def parse_brief(brief: str | None) -> ParsedBrief:
+def _emit_parse_events(run_id: Optional[uuid.UUID], parsed: Any) -> None:
+    """Narrate one parse into the run feed. Best-effort; NEVER raises.
+
+    ``parsed`` is annotated ``Any`` and read by plain attribute access on purpose.
+    In production it is always a :class:`ParsedBrief`, whose fields cannot be absent
+    — but a *degraded* result is exactly what these thunks have to survive, and the
+    only way to prove that at this call site is to be able to hand it one. Every read
+    below therefore happens inside a ``build()`` thunk, so an object with none of
+    these attributes costs three feed lines and provably not the parse.
+
+    No context line is ever put into an event: see the D-G / T-15.3-40 paragraph in
+    the module docstring.
+    """
+    if run_id is None:
+        # No run context — a test, or any caller that is not the pipeline. Nothing
+        # to attribute the events to, and `emit` refuses a tenant-less write anyway.
+        return
+
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="thinking",
+        build=lambda: (
+            "Analyzing brief — "
+            f"{len(parsed.questions)} client question(s), "
+            f"{(parsed.decision or '')[:_EVENT_DECISION_CHARS] or _NO_DECISION_TEXT}",
+            None,
+        ),
+    )
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="tool",
+        build=lambda: (
+            "Loaded parse_brief — split the client's enumerated questions from the "
+            f"context pack ({parsed.source} brief, "
+            f"{len(parsed.context.splitlines())} context line(s) kept)",
+            None,
+        ),
+    )
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="summary",
+        # `text` is empty and the content lives entirely in `meta`, matching the
+        # design of record: a summary row is composed from worked / actions / items /
+        # cost, so a duplicate human sentence here would simply not be rendered.
+        build=lambda: (
+            "",
+            {
+                "actions": len(parsed.questions),
+                "items": len(parsed.context.splitlines()),
+            },
+        ),
+    )
+
+
+def parse_brief(brief: str | None, *, run_id: Optional[uuid.UUID] = None) -> ParsedBrief:
     """Split ``brief`` into its questions / decision / context. NEVER raises.
 
     Recognised structure, resolved in ONE forward pass:
@@ -184,6 +299,11 @@ def parse_brief(brief: str | None) -> ParsedBrief:
 
     A line consumed as a delimiter, as a decision line or as a question item does
     not also appear in ``context``; nothing else is dropped.
+
+    ``run_id`` is OPTIONAL and KEYWORD-ONLY. Omitted, this call is byte-for-byte the
+    function it has always been. Supplied, the same parse ALSO writes the run page's
+    first three feed lines (see the module docstring) — which cannot change what is
+    returned, cannot slow the parse by an I/O wait, and cannot raise.
     """
     raw = str(brief or "")
     try:
@@ -302,7 +422,7 @@ def parse_brief(brief: str | None) -> ParsedBrief:
                 "detector path deliberately rather than by accident"
             )
 
-        return ParsedBrief(
+        result = ParsedBrief(
             questions=questions,
             decision=decision,
             context=context,
@@ -315,4 +435,12 @@ def parse_brief(brief: str | None) -> ParsedBrief:
             "detector, so nothing is lost and nothing is guessed",
             exc,
         )
-        return ParsedBrief(questions=[], decision="", context=raw, source="error")
+        result = ParsedBrief(questions=[], decision="", context=raw, source="error")
+
+    # OUTSIDE THE `try` ABOVE, DELIBERATELY. Inside it, a failing event would be
+    # caught by this parser's own `except` and would rewrite a perfectly good parse
+    # as `source="error"` — an observability path corrupting the result it observes,
+    # which is a far worse failure than a missing feed line. Both paths are narrated:
+    # a brief that could not be parsed is exactly the one an operator needs to see.
+    _emit_parse_events(run_id, result)
+    return result
