@@ -137,6 +137,70 @@ def _seam_datetime(value: Any, field: str) -> Any:
         return None
 
 
+def _seam_event_seq(value: Any) -> int | None:
+    """Parse the engine's feed cursor from the seam, or return ``None``. NEVER raises.
+
+    Plan 15.3-06 (D-05). ``metrics["event_seq"]`` is ``MAX(run_event.seq)`` for the
+    run, produced by ``RunMetrics.event_seq`` (plan 15.3-02). Like
+    :func:`_seam_datetime` this is REMOTE JSON crossing the engine seam into a
+    ``BackgroundTask``, so the same ASVS V5 rule applies in full (T-15.3-50): never
+    assume the type, never let a malformed value raise here. A raise inside the poll
+    driver routes to ``on_error`` and mislabels the run ``failed`` — for a cursor,
+    which is pure observability, that would be an absurd way to lose a paid run.
+
+    Rejected, each with a WARNING naming the field and returning ``None`` (which the
+    callers treat as "not sent" and therefore "not patched"):
+
+    * a ``bool`` — ``int(True)`` is ``1``, and a cursor that silently became 1 would
+      rewind a live feed to its second row;
+    * anything ``int()`` refuses (a dict, a list, ``"abc"``, ``None`` handled above);
+    * a NEGATIVE value — there is no such position. The 15.3-02 reader floors
+      ``after_seq`` at 0, so a negative cursor would not lose events, but it would
+      make every tick re-fetch the whole run.
+
+    A float truncates toward zero, which is the SAFE direction: an under-stated
+    cursor re-fetches rows the page already holds, while an over-stated one would
+    skip rows it never saw.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        log.warning(
+            "seam cursor event_seq is a bool — ignored, the column is left "
+            "untouched rather than coerced to 0/1",
+        )
+        return None
+    try:
+        seq = int(value)
+    except (TypeError, ValueError):
+        log.warning(
+            "seam cursor event_seq is not an integer (%s) — ignored, the column "
+            "is left untouched rather than guessed",
+            type(value).__name__,
+        )
+        return None
+    if seq < 0:
+        log.warning(
+            "seam cursor event_seq is negative — ignored, the column is left "
+            "untouched rather than rewound",
+        )
+        return None
+    return seq
+
+
+def _cursor_values(metrics: dict[str, Any] | None) -> dict[str, Any]:
+    """Return ``{"event_seq": n}`` when the engine reported a usable cursor, else ``{}``.
+
+    The ADDITIVE property in one place, shared by :func:`mirror_tick` and all THREE
+    finalize writers: an engine build that does not report a cursor produces an EMPTY
+    dict, so the patch never mentions the column and the mirrored value is left
+    exactly as it was. A deploy is never atomic, and NULLing a cursor because the far
+    side is a version behind would truncate a live feed.
+    """
+    seq = _seam_event_seq((metrics or {}).get("event_seq"))
+    return {} if seq is None else {"event_seq": seq}
+
+
 def get_engine_for_pool_check() -> Any:
     """Return the user-path engine — the pool the release contract must not starve.
 
@@ -212,6 +276,18 @@ def mirror_tick(
             _parsed = _seam_datetime(metrics[_field], _field)
             if _parsed is not None:
                 values[_field] = _parsed
+    # Plan 15.3-06 (D-05) — THE FEED CURSOR. ``event_seq`` is a POSITION, not a
+    # payload: the SSE frame carries this number so the page can tell that events
+    # past its own cursor exist, then fetches ONLY that delta from the 15.3-07
+    # proxy. A tick whose cursor did not move issues no request at all.
+    #
+    # The cursor advancing is ALSO what wakes the frame: the SSE handler compares
+    # whole dicts (``view != last_sent``) for its emit-on-change decision, so this
+    # one number moving is by itself a new frame. The stream stays the SOLE
+    # authority on terminality — nothing here touches that.
+    #
+    # Same present-only discipline as the timestamps above (see ``_cursor_values``).
+    values.update(_cursor_values(metrics))
 
     with tenant_session(identity) as session:
         rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)
@@ -277,6 +353,10 @@ def finalize_completed(
         completed_at=_seam_datetime(metrics.get("completed_at"), "completed_at")
         or func.now(),
         **_stamps,
+        # 15.3-06: the final cursor, so the page's last delta fetch reaches the end
+        # of the feed. The terminal frame carries the number; the events themselves
+        # are still pulled, never pushed.
+        **_cursor_values(metrics),
     )
 
 
@@ -328,6 +408,12 @@ def finalize_failed(
             (metrics or {}).get("completed_at"), "completed_at"
         ) or func.now(),
         **_stamps,
+        # 15.3-06: a failed or cancelled run's feed is the EVIDENCE of what went
+        # wrong, and today's cards drop it entirely — the two states that most need
+        # the feed are the only ones that discard it. The cursor is carried here so
+        # the page can still read that feed to its end. ``metrics`` is None on the
+        # ``on_error`` route; ``_cursor_values`` returns {} for it.
+        **_cursor_values(metrics),
     )
 
 
@@ -368,6 +454,16 @@ def finalize_parked(
     still waiting on a superadmin click. Do not "fix" the omission. ``started_at``
     is not written here either: the poll loop's ``mirror_tick`` already put it on
     the row, and re-patching it buys nothing.
+
+    ``event_seq`` (plan 15.3-06) DELIBERATELY GOES THE OTHER WAY, and this is the
+    one place in this module where a park is treated like any other terminal. The
+    cursor is NOT a completion claim — it says how far the run's feed got, not
+    whether the run ended — so it is carried here exactly as it is on the completed
+    and failed paths. A parked run's feed is precisely the feed the operator is
+    about to read before deciding whether to resume, and freezing its cursor one
+    tick early would hide the very rows that explain the park. This is deliberately
+    the OPPOSITE call from ``completed_at`` above; it is written down because
+    otherwise someone will "fix" it to match its neighbour.
     """
     _patch_run(
         session,
@@ -377,6 +473,7 @@ def finalize_parked(
         current_stage=metrics.get("current_stage"),
         cost_usd_total=metrics.get("cost_usd_total"),
         completed_at=None,
+        **_cursor_values(metrics),
     )
 
 

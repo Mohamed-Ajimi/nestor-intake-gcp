@@ -97,9 +97,21 @@ def read_latest_research_run_dict(identity: Identity, intake_id: Any) -> dict | 
     (a ``Decimal`` is not JSON-serializable). Phase-17 (RUN-03) adds three lock-state keys
     — ``chain_status`` / ``chain_broken_at`` / ``bundle_key`` — so the summary card can
     render the chain-verified / complete-but-locked state + the raw-output download (D-06).
-    Returns ``None`` when the intake has no research runs yet (the stream then emits
-    ``data: null``). The connection returns to the pool on block exit — nothing held between
-    ticks.
+    Phase-15.3 (plan 15.3-06, D-05) adds ONE more key — ``event_seq``, the run-event
+    FEED CURSOR — so the run page can tell that new events exist WITHOUT a second
+    connection. Returns ``None`` when the intake has no research runs yet (the stream
+    then emits ``data: null``). The connection returns to the pool on block exit —
+    nothing held between ticks.
+
+    **The frame carries the cursor, NEVER the events.** ``event_seq`` is a POSITION
+    (``MAX(run_event.seq)``, mirrored from ``RunMetrics.event_seq``); the page fetches
+    only the delta past it, from the separate 15.3-07 proxy. Two reasons this dict must
+    never grow an event-list key: (1) this frame is re-sent IN FULL on every change, so
+    a thousand-row history would be re-transmitted per tick; (2) D-05 keeps the SSE
+    stream the SOLE authority on whether a run has ended, and a second copy of the
+    run's history riding the same frame is the first step toward two sources of truth.
+    The cursor moving is by itself what wakes the frame — ``stream_research_run``
+    compares whole dicts (``view != last_sent``) and needs no change.
     """
     with tenant_session(identity) as session:
         run = ResearchRunRepository(session, identity).latest_for_intake(intake_id)
@@ -125,6 +137,11 @@ def read_latest_research_run_dict(identity: Identity, intake_id: Any) -> dict | 
             "chain_status": run.chain_status,
             "chain_broken_at": run.chain_broken_at,
             "bundle_key": run.bundle_key,
+            # Phase-15.3 run-event feed cursor (plan 15.3-06 / D-05):
+            #   event_seq  MAX(run_event.seq) for this run, or None when the run has
+            #              produced no events (never 0 — see migration 0013).
+            # A cursor, NOT a payload: the page fetches the delta past this number.
+            "event_seq": run.event_seq,
         }
 
 
