@@ -25,10 +25,16 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — PARKED (not complete)
-Plan: 18 of 19 — plan 18 paused after Task 3; Tasks 4-6 blocked until 2026-08-01
-Status: 18/19 plans have SUMMARYs. Plan 18 is the only one open. Phase verification has
-  deliberately NOT been run and the phase is NOT marked complete.
+Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — GAP CLOSURE PLANNED
+Plan: 18 of 19 done; plan 18 paused after Task 3. PLUS 7 gap plans 15.2-20..26 (commit 621ed09).
+Status: The first live run (d6bb3aae, 2026-07-27) was ABORTED after finding 12 defects. Gap plans
+  20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
+  Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
+
+  CAP RESET IS NO LONGER THE BLOCKER — the burner key works. The blockers are now the 12 defects.
+  Do NOT start another live run before wave 1 (D-E) lands: a stalled or killed run currently
+  re-executes itself every 60 min at full cost, held back only by a TEMPORARY env hack
+  (NESTOR_WORKER_STALE_MINUTES=525600 on tribunal-worker) that plan 15.2-20 reverts.
 
 DEPLOYED LIVE 2026-07-27 at shared SHA 20260727-085533 (full record: 15.2-UAT.md § Deploy Record):
   tribunal-worker-20260727-085533-090959 · tribunal-api-20260727-085533-091105 ·
