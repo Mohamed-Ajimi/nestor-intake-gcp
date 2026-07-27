@@ -1269,31 +1269,40 @@ def _emit_round_run(run_id: Any, *, round_no: int, rounds: int, matches: int) ->
     )
 
 
-def _emit_tournament_done(
-    run_id: Any, *, candidates: int, rounds: int, winners: int
-) -> None:
-    """The tournament resolved, in the design of record's own shape.
+def _tournament_done_event(candidates: int, rounds: int) -> tuple[str, dict[str, Any]]:
+    """Compose the tournament's closing line. ONLY FROM INSIDE A build() THUNK.
 
-    `winners` is THIS STAGE'S CUT — the top `winner_count(...)` that reach the
-    evolve step. `enforce_scope_guard` can add more later for a client question
-    left uncovered; that is a different step and gets its own lines. Saying
-    "selected" here is a statement about what the tournament did, which is what the
-    operator is watching at this point in the run.
+    `winner_count(...)` IS CALLED HERE AND NOT PASSED IN. Handing this function a
+    finished number would mean computing it in the argument list at the call site,
+    outside the emitter's try — the precise shape of the defect `emit_safe` exists
+    to prevent, smuggled back in by an argument that merely looks like data.
+
+    The number is THIS STAGE'S CUT — the top candidates that reach the evolve step.
+    `enforce_scope_guard` can add more later for a client question left uncovered;
+    that is a different step and gets its own lines. Saying "selected" here is a
+    statement about what the tournament did, which is what the operator is watching
+    at this point in the run.
     """
+    winners = winner_count(candidates)
+    return (
+        f"{winners} winner(s) selected · {candidates} candidates → "
+        f"{rounds} rounds → {winners}",
+        {"items": winners},
+    )
+
+
+def _emit_tournament_done(run_id: Any, *, candidates: int, rounds: int) -> None:
+    """The tournament resolved, in the design of record's own shape."""
     run_events.emit_safe(
         run_id,
         stage=_EVENT_STAGE,
         kind="agent_done",
-        build=lambda: (
-            f"{winners} winner(s) selected · {candidates} candidates → "
-            f"{rounds} rounds → {winners}",
-            {"items": winners},
-        ),
+        build=lambda: _tournament_done_event(candidates, rounds),
     )
 
 
 def _emit_tournament_summary(
-    run_id: Any, *, matches: int, winners: int, cost: Any
+    run_id: Any, *, matches: int, candidates: int, cost: Any
 ) -> None:
     """The stats line closing the tournament block.
 
@@ -1307,7 +1316,11 @@ def _emit_tournament_summary(
         kind="summary",
         build=lambda: (
             "",
-            {"actions": matches, "items": winners, "cost": str(cost)},
+            {
+                "actions": matches,
+                "items": winner_count(candidates),
+                "cost": str(cost),
+            },
         ),
     )
 
@@ -1510,17 +1523,9 @@ async def run_tournament(
         total_unjudged,
         total_calls,
     )
-    _emit_tournament_done(
-        run_id,
-        candidates=len(items),
-        rounds=rounds,
-        winners=winner_count(len(items)),
-    )
+    _emit_tournament_done(run_id, candidates=len(items), rounds=rounds)
     _emit_tournament_summary(
-        run_id,
-        matches=total_matches,
-        winners=winner_count(len(items)),
-        cost=total_cost,
+        run_id, matches=total_matches, candidates=len(items), cost=total_cost
     )
     return ranked, _dedup_reasons(reasons)
 

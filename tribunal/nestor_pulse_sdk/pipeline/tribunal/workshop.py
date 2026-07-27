@@ -465,17 +465,31 @@ def _emit_candidates_dispatch(run_id: Any, *, questions: int, per_question: int)
     )
 
 
-def _emit_candidates_done(run_id: Any, *, generated: int, parents: int) -> None:
+def _candidates_done_event(candidates: Any) -> tuple[str, dict[str, Any]]:
+    """Compose the candidate-generation DONE line. ONLY FROM INSIDE A build() THUNK.
+
+    The parent tally is computed HERE rather than passed in, so that walking the
+    candidate list happens inside the emitter's try. Handing this function a
+    finished number would move that walk back to the call site, where a malformed
+    entry would raise in the middle of the workshop instead of costing a feed row —
+    which is the entire failure D-06 exists to prevent, reintroduced by an argument.
+    """
+    generated = len(candidates)
+    parents = len({str(entry.get("parent") or "") for entry in candidates})
+    return (
+        f"{generated} candidate sub-question(s) generated across "
+        f"{parents} client question(s)",
+        {"items": generated},
+    )
+
+
+def _emit_candidates_done(run_id: Any, candidates: Any) -> None:
     """What candidate generation actually produced, before clustering."""
     run_events.emit_safe(
         run_id,
         stage=_EVENT_STAGE,
         kind="agent_done",
-        build=lambda: (
-            f"{generated} candidate sub-question(s) generated across "
-            f"{parents} client question(s)",
-            {"items": generated},
-        ),
+        build=lambda: _candidates_done_event(candidates),
     )
 
 
@@ -1439,11 +1453,7 @@ async def generate_candidates(
         stats["calls"] = total_calls
         stats["cost_usd"] = str(total_cost)
 
-    _emit_candidates_done(
-        run_id,
-        generated=len(candidates),
-        parents=len({str(c.get("parent") or "") for c in candidates}),
-    )
+    _emit_candidates_done(run_id, candidates)
 
     return candidates, reasons
 
