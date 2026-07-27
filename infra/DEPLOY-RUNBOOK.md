@@ -3419,6 +3419,63 @@ Write the answer into `15.2-V01-ABORTED-FINDINGS.md` § State left behind either
 
 ---
 
+**10. THE COMBINED DEPLOY RECORD — fill this in during the deploy, with real values.**
+
+D-03 put two phases in one batch and accepted a named risk for it: **the next live run exercises a
+changed engine AND a changed frontend at once, so a surprising result is harder to attribute.** This
+table is the whole mitigation. Six weeks from now, when V-01 does something unexpected, the first
+question will be *"was that a behaviour change or an observability change?"* — and either this
+answers it in ten seconds or it is answered by archaeology.
+
+| Field | Value (fill in) |
+|---|---|
+| Date · who ran it | |
+| The single `$SHA` | |
+| `tribunal-worker` revision | |
+| `tribunal-api` revision | |
+| `nestor-api` revision | |
+| `nestor-frontend` revision | |
+| TRIBUNAL head after (expect 0015) | |
+| ↳ literal line(s) observed | `Running upgrade 0013 -> 0014` · `Running upgrade 0014 -> 0015` |
+| INTAKE head after (expect 0013) | |
+| ↳ literal line observed | `Running upgrade 0012 -> 0013` |
+| Engine gate count observed | `collecting: __ of __ expected files` |
+
+**The two change lists. Keep them SEPARATE — merging them destroys the mechanism.**
+
+| 15.2 gap fixes in this batch (behaviour) | landed? |
+|---|---|
+| D-A / D-B — two dead research streams (15.2-22) | |
+| D-D — the operator cancel path (15.2-25) | |
+| D-E — a stuck run re-billing every 60 min (15.2-20) | |
+| D-F — the engine logged only failures (15.2-24) | |
+| D-G / D-H — the workshop deepened the pack, not the questions (15.2-21) | |
+| D-I — personal identifiers sent to third parties (15.2-23) | |
+| D-L — the elapsed clock (15.2-24) | |
+| D-M — provider fact-list compliance (15.2-23, partial — MEASURED on the next run) | |
+| any other that landed: | |
+
+*(D-C was withdrawn as a misdiagnosis; D-J and D-K are deliberately out of scope.)*
+
+| 15.3 changes in this batch (observability only) | landed? |
+|---|---|
+| engine run-events: the append-only `run_event` table + its emit sites | |
+| the bounded, cursor-ordered events read endpoint | |
+| the seam: events proxy, run→intake locate verb, feed cursor mirror | |
+| the dedicated run page: feed, eight-status card, four affordances | |
+
+**The sentence the operator writes at deploy time, in their own words:**
+
+> _"Phase 15.3 changed no engine behaviour — what the pipeline decides, dispatches and produces is
+> identical to before this deploy. Therefore an unexpected V-01 outcome is attributable to the 15.2
+> gap fixes or to the live environment, not to phase 15.3."_
+
+⛔ **If that sentence cannot honestly be written, the deploy STOPS and the discrepancy is
+investigated first.** It is not a formality: it is the only thing standing between "we know what
+changed" and a week of bisecting two phases at forty-five dollars a run.
+
+---
+
 ### What to check in the logs on the FIRST live run after this deploy
 
 The engine used to log **only failures**, which is what made a healthy 35-minute long-poll
