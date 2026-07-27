@@ -555,6 +555,15 @@
         "needsInput": "En attente d'une entrée",
         "unknown": "Statut inconnu"
       },
+      "card": {
+        "queuedTitle": "En attente d'un worker",
+        "queuedBody": "Cette exécution a été acceptée et attend qu'un worker de recherche la prenne en charge. Rien n'a encore démarré et rien n'a été facturé.",
+        "needsInputTitle": "En attente d'une entrée",
+        "needsInputBody": "Le moteur s'est mis en pause pour poser une question de clarification. Il n'est pas possible d'y répondre ici — lancer une nouvelle exécution avec un brief corrigé est la voie à suivre, ce qui compte comme une nouvelle tentative et est facturé comme telle.",
+        "needsInputReasonLabel": "Ce qui a été demandé",
+        "unknownTitle": "Statut non reconnu",
+        "unknownBody": "Cette version de l'interface n'a pas de libellé pour le statut « {{status}} ». L'historique de l'exécution ci-dessous reste complet."
+      },
       "feed": {
         "workedFor": "Travaillé pendant {{duration}}",
         "actionsCount": "{{count}} actions",

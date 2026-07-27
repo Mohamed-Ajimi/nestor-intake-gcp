@@ -555,6 +555,15 @@
         "needsInput": "Wacht op invoer",
         "unknown": "Onbekende status"
       },
+      "card": {
+        "queuedTitle": "Wacht op een worker",
+        "queuedBody": "Deze run is aangenomen en wacht tot een research-worker hem oppakt. Er is nog niets gestart en er is nog niets in rekening gebracht.",
+        "needsInputTitle": "Wacht op invoer",
+        "needsInputBody": "De engine is gepauzeerd met een verduidelijkende vraag. Die kun je hier niet beantwoorden — een nieuwe run starten met een aangepaste briefing is de weg vooruit, en dat telt als een nieuwe poging en wordt ook zo doorbelast.",
+        "needsInputReasonLabel": "Wat er gevraagd werd",
+        "unknownTitle": "Onbekende status",
+        "unknownBody": "Deze versie van de interface heeft geen tekst voor de status \"{{status}}\". De geschiedenis van de run hieronder is wel volledig."
+      },
       "feed": {
         "workedFor": "Gewerkt gedurende {{duration}}",
         "actionsCount": "{{count}} acties",

@@ -555,6 +555,15 @@
         "needsInput": "Waiting for input",
         "unknown": "Unknown status"
       },
+      "card": {
+        "queuedTitle": "Waiting for a worker",
+        "queuedBody": "This run has been accepted and is waiting for a research worker to pick it up. Nothing has started yet and nothing has been charged.",
+        "needsInputTitle": "Waiting for input",
+        "needsInputBody": "The engine paused to ask a clarifying question. There is no way to answer it from here — starting a new run with a repaired brief is the way forward, and that counts as a new attempt and is charged as one.",
+        "needsInputReasonLabel": "What it asked for",
+        "unknownTitle": "Unrecognised status",
+        "unknownBody": "This version of the interface has no wording for the status \"{{status}}\". The run's history below is still complete."
+      },
       "feed": {
         "workedFor": "Worked for {{duration}}",
         "actionsCount": "{{count}} actions",
