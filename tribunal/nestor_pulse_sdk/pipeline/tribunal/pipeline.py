@@ -3606,16 +3606,41 @@ def _dr_model_display(provider: str | None) -> str:
 def _angle_label(angle: dict[str, Any], idx: int) -> str:
     """Short human label for a research angle's deep-research sub-progress row.
 
-    Shows the focus area, the actual DR model the angle was routed to, and stakes —
-    so the live per-angle status answers "which model, for what, succeeded/failed".
+    Shows the focus area, the actual DR model the angle was routed to, stakes —
+    so the live per-angle status answers "which model, for what, succeeded/failed"
+    — and, when D-I fired, that this dispatch was REDACTED before it left the
+    platform.
+
+    THE REDACTION CLAUSE IS PLAN 15.2-23'S CARRY-FORWARD (its deviation 1). That
+    plan installed the egress scrub in `research_division.run_angles`, logged the
+    count at WARNING and recorded it additively as `angle["pii_removed"]` — but it
+    could not surface it, because the operator's feed row is built HERE, in a file
+    it did not own. Without this clause the must-have "the operator sees that a
+    dispatch was redacted" is only half met: reported and recorded, never
+    rendered. The `deep_research` rows are re-built from the live angle dicts on
+    every `_on_angle_done` callback, so reading the key here is all it takes.
+
+    THE COUNT, NEVER THE VALUE (T-15.2-232). What was removed is deliberately
+    absent from this string, exactly as it is absent from 15.2-23's log line: the
+    feed row is stored in `run.stage_detail` and rendered in the browser, which
+    are two more places the removed identifier must not reach.
     """
     label = (angle.get("focus_area") or angle.get("label") or "").strip()
     provider = (angle.get("provider") or "").strip()
     stakes = (angle.get("stakes") or "med").strip()
     base = label[:40] if label else f"Angle {idx + 1}"
+    # Read defensively: `pii_removed` is absent on every clean angle (15.2-23
+    # sets it only when the scrub actually removed something), and a non-int
+    # value must never reach the row.
+    _pii = angle.get("pii_removed")
+    redacted = (
+        f" · {int(_pii)} personal identifier(s) removed"
+        if isinstance(_pii, int) and not isinstance(_pii, bool) and _pii > 0
+        else ""
+    )
     if provider:
-        return f"{base} → {_dr_model_display(provider)} · {stakes}"
-    return base
+        return f"{base} → {_dr_model_display(provider)} · {stakes}{redacted}"
+    return f"{base}{redacted}"
 
 
 def _angle_copies(angles: list[dict[str, Any]], angle: dict[str, Any]) -> int:

@@ -402,3 +402,60 @@ def test_the_registry_is_bounded():
         for rid in ids:
             _pipeline_mod._stage_log_close(rid)
 
+
+# ===========================================================================
+# 6. CARRY-FORWARD FROM PLAN 15.2-23 — the D-I redaction reaches the operator
+#
+# 15.2-23 installed the egress PII scrub in `research_division.run_angles`,
+# logged the count at WARNING and recorded it additively as
+# `angle["pii_removed"]` — but could NOT render it, because the operator's feed
+# row is built in `pipeline.py`, a file that plan did not own (its deviation 1).
+# The one-line read lives in `_angle_label`, which is in THIS plan's
+# `files_modified`, so the proof lives here rather than in 15.2-23's
+# `test_dispatch_pii.py` — which this plan does not own and must not edit.
+# ===========================================================================
+def test_a_redacted_angle_says_so_on_its_feed_row():
+    """The operator SEES that a dispatch was redacted — as a count, never a value.
+
+    WHAT BREAKS WITHOUT THIS: personal data reaching the research dispatcher is a
+    defect upstream of the scrub, and the operator's only in-product signal that
+    it happened is this row. Without the clause the fact lives only in a WARNING
+    log line nobody is watching.
+    """
+    angle = {
+        "focus_area": "Benelux fuel-retail market share",
+        "provider": "openai",
+        "stakes": "high",
+        "pii_removed": 2,
+    }
+    label = _pipeline_mod._angle_label(angle, 0)
+
+    assert "2 personal identifier(s) removed" in label, (
+        f"a redacted dispatch must say so on its own feed row: {label!r}"
+    )
+    # The identifier itself is NEVER rendered — the row is stored in
+    # `run.stage_detail` and displayed in a browser (T-15.2-232).
+    assert "@" not in label
+
+
+def test_a_clean_angle_row_is_unchanged():
+    """No clause on a clean angle — 15.2-23 sets the key ONLY when it scrubbed.
+
+    A count of zero rendered as "0 personal identifier(s) removed" on every row of
+    every run would be the alarm fatigue this phase keeps rejecting, and it would
+    read as if a scrub had been necessary when none was.
+    """
+    base = {
+        "focus_area": "Benelux fuel-retail market share",
+        "provider": "openai",
+        "stakes": "high",
+    }
+    clean = _pipeline_mod._angle_label(dict(base), 0)
+    assert "removed" not in clean, f"a clean angle must gain no clause: {clean!r}"
+
+    # Defensive: a malformed value from a replayed checkpoint is ignored, not
+    # stringified into the operator's row.
+    for junk in (0, None, "two", True, {"n": 2}):
+        row = _pipeline_mod._angle_label({**base, "pii_removed": junk}, 0)
+        assert row == clean, f"pii_removed={junk!r} changed the row: {row!r}"
+
