@@ -52,7 +52,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
 import { ResearchRunProgress } from "@/components/intake/ResearchRunProgress";
-import { resumeResearch, triggerResearch } from "@/lib/api/research";
+import { cancelResearch, resumeResearch, triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
@@ -825,6 +825,27 @@ function IntakeDetailPage() {
     await load();
   };
 
+  // Stop from the ACTIVE card in ResearchRunProgress (D-D, plan 15.2-25). The confirm
+  // dialog lives in that component (the same AlertDialog affordance the trigger uses), so
+  // this handler is only reached AFTER the operator confirms. Return-no-throw, exactly
+  // like `onResumeResearch`. The `await load()` matters more here than anywhere else: the
+  // whole point is that the run row RESOLVES, and the re-read is what swaps the live panel
+  // for the cancelled card and re-enables the re-trigger path.
+  //
+  // The toast strings live in the `intake` namespace beside the rest of `research.*`
+  // (this route's own `t` is bound to `admin`), hence the explicit `intake:` prefix —
+  // the same cross-namespace form already used for `common:actions.save` below.
+  const onCancelResearch = async () => {
+    const res = await cancelResearch(id);
+    if (!res.success) {
+      const codeKey = resolveErrorKey(res.code);
+      toast.error(codeKey ? t(codeKey) : res.error || t("intake:research.cancelError"));
+      return;
+    }
+    toast.success(t("intake:research.cancelOk"));
+    await load();
+  };
+
   const onDownloadContextPack = () => {
     const el = document.querySelector("[data-context-pack-block]");
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1197,7 +1218,12 @@ function IntakeDetailPage() {
            replay card (feed + verification report + cost + citations), so a superadmin can
            still review the run after the report PDF flips the intake to `delivered`/`archived`. */}
        {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
-         <ResearchRunProgress intakeId={intake.id} onRetry={onRetryResearch} onResume={onResumeResearch} />
+            <ResearchRunProgress
+              intakeId={intake.id}
+              onRetry={onRetryResearch}
+              onResume={onResumeResearch}
+              onCancel={onCancelResearch}
+            />
        )}
       </div>
 

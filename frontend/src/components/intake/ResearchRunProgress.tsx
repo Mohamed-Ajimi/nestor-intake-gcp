@@ -11,6 +11,7 @@ import {
   Loader2,
   Lock,
   RotateCw,
+  StopCircle,
   XCircle,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -27,6 +28,20 @@ import {
 } from "@/lib/api/research";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
 import { VerificationReport } from "@/components/intake/VerificationReport";
+// The confirm gate for the Stop button. This is the SAME affordance the research
+// TRIGGER already uses (NextStepBanner's `researchConfirm*` AlertDialog) — the existing
+// house pattern for a destructive/paid research action. No new dialog component is
+// introduced and `components/ui/**` is not modified (CLAUDE.md).
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // frontend/src/components/intake/ResearchRunProgress.tsx — the admin's live window into a
 // Tribunal deep-research run (Phase 16, RUN-01/D-07/D-09). It mirrors SkillRunProgress's
@@ -562,12 +577,18 @@ function AgentFeed({
  * `onResume` is the route-supplied handler that POSTs the resume for a PARKED run and then
  * re-loads. Distinct from `onRetry` on purpose: a retry starts a NEW attempt and re-charges
  * the engine, while a resume continues the SAME run from its checkpoints for free (F-02).
+ *
+ * `onCancel` (D-D, plan 15.2-25) is the route-supplied handler that POSTs the cancel for a
+ * LIVE run and then re-loads. It is the operator's only stop path: before it existed, the
+ * only way to stop a run was to pause the whole tribunal-worker service, which does not
+ * stop the run and nearly caused a fresh worker to re-claim it at full cost.
  */
 export function ResearchRunProgress({
   intakeId,
   runId: runIdProp,
   onRetry,
   onResume,
+  onCancel,
 }: {
   intakeId: string;
   // Optional: the route may lift the run id explicitly. When omitted (the default), the
@@ -576,13 +597,19 @@ export function ResearchRunProgress({
   runId?: string;
   onRetry?: () => void;
   onResume?: () => void | Promise<void>;
+  onCancel?: () => void | Promise<void>;
 }) {
   const { t } = useTranslation("intake");
   const { run } = useActiveResearchRun(intakeId);
-  // T-15.2-193: guards a double-click while the resume request is in flight. The engine
-  // 409s the second call anyway (the state guard is server-side and authoritative); this
-  // only stops the operator firing two requests at once.
-  const [resuming, setResuming] = useState(false);
+  // T-15.2-193: guards a double-click while a run-lifecycle request is in flight. The
+  // backend is the authoritative state guard anyway; this only stops the operator firing
+  // two requests at once. ONE flag deliberately serves BOTH resume and cancel — they can
+  // never be on screen at the same time (resume is the parked card, cancel is the active
+  // card), so a second flag would be two names for one condition.
+  const [actionBusy, setActionBusy] = useState(false);
+  // Open-state of the Stop confirmation. Not a second busy flag — the dialog's own
+  // visibility, matching NextStepBanner's `researchConfirmOpen`.
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   // The run id used to scope the audit drill-down: prefer an explicit route prop, else the
   // SSE run's id. When neither exists, the drill-down affordance is hidden by AgentFeed.
   const runId = runIdProp ?? run?.id ?? null;
@@ -727,18 +754,18 @@ export function ResearchRunProgress({
           {onResume && (
             <button
               type="button"
-              disabled={resuming}
+              disabled={actionBusy}
               onClick={async () => {
-                setResuming(true);
+                setActionBusy(true);
                 try {
                   await onResume?.();
                 } finally {
-                  setResuming(false);
+                  setActionBusy(false);
                 }
               }}
               className="inline-flex items-center gap-2 bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85 disabled:opacity-60"
             >
-              {resuming && <Loader2 className="h-4 w-4 animate-spin" />}
+              {actionBusy && <Loader2 className="h-4 w-4 animate-spin" />}
               {t("research.resume")}
             </button>
           )}
@@ -826,8 +853,60 @@ export function ResearchRunProgress({
           <span className="text-[11px] uppercase tracking-wider text-ink/60">
             {t("research.cost")}: {fmtCost(run?.cost_usd_total ?? null, costFallback)}
           </span>
+          {/* D-D: the Stop control. Rendered ONLY when the route supplies `onCancel`, and
+              only here — this whole block is the ACTIVE card, unreachable once the run is
+              terminal, so a terminal run can never show it. It sits BENEATH the cost line
+              in the right-hand column deliberately: the cost is the number that makes an
+              operator want to stop, and placing it here keeps it out of competition with
+              the stage feed for attention. Secondary (outline) styling, not the primary
+              ink fill — stopping is a rare escape hatch, not the expected next action. */}
+          {onCancel && (
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={() => setCancelConfirmOpen(true)}
+              className="mt-2 inline-flex items-center gap-2 border border-ink/40 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-ink hover:bg-ink/5 disabled:opacity-60"
+            >
+              {actionBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <StopCircle className="h-3.5 w-3.5" />
+              )}
+              {actionBusy ? t("research.cancelling") : t("research.cancel")}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* The confirm gate — the same AlertDialog affordance the research TRIGGER uses.
+          The POST fires ONLY on the confirm action; Cancel is a no-op. The body states
+          that the cost so far is not refunded and that the run cannot be continued
+          afterwards, only re-triggered — both are true and both are irreversible. */}
+      {onCancel && (
+        <AlertDialog open={cancelConfirmOpen} onOpenChange={setCancelConfirmOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("research.cancelConfirmTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("research.cancelConfirm")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("nextStep.researchConfirmCancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  setActionBusy(true);
+                  try {
+                    await onCancel?.();
+                  } finally {
+                    setActionBusy(false);
+                  }
+                }}
+              >
+                {t("research.cancel")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       {run?.current_stage && (
         <div className="mb-3 font-mono text-[12px] text-ink/60">
