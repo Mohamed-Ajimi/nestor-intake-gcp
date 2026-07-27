@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 15.2 plan 18 PARKED after Task 3 (deployed) — Tasks 4-6 wait for 2026-08-01
-last_updated: "2026-07-27T07:30:00.000Z"
-last_activity: 2026-07-27 -- Phase 15.2 deployed live; parked at V-01
+stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
+last_updated: "2026-07-27T11:51:24.491Z"
+last_activity: 2026-07-27 -- Phase 15.2 execution started
 progress:
   total_phases: 10
   completed_phases: 7
-  total_plans: 63
+  total_plans: 70
   completed_plans: 62
-  percent: 92
+  percent: 70
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — GAP CLOSURE PLANNED
-Plan: 18 of 19 done; plan 18 paused after Task 3. PLUS 7 gap plans 15.2-20..26 (commit 621ed09).
-Status: The first live run (d6bb3aae, 2026-07-27) was ABORTED after finding 12 defects. Gap plans
+Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — EXECUTING
+Plan: 1 of 26
+Status: Executing Phase 15.2
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
@@ -62,15 +62,17 @@ WHAT REMAINS (plan 18 Tasks 4-6):
   Task 6 V-03 — a SEPARATE cleanup commit after sign-off (never claim_distiller, D-15)
 
 BEFORE V-01, verify by hand:
+
   - that Nestor_Claude2 actually holds credit (untestable while capped; a wrong key fails the
     ~$45 run only AFTER it has spent SerpApi/Gemini/OpenAI budget)
+
   - the audit-blob redaction check — the SerpApi key rides in a QUERY PARAMETER, so an
     unredacted body freezes a live credential into the audit bucket under 7-year retention.
     Blocking, not advisory.
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: park until 2026-08-01, then plan 18 Tasks 4-6; remaining order 15.2 -> 19 -> 20.
-Last activity: 2026-07-27 -- Phase 15.2 deployed live; parked at V-01
+Last activity: 2026-07-27 -- Phase 15.2 execution started
 
 Progress: [██████████] 100%
 

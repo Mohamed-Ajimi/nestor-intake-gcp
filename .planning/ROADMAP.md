@@ -194,7 +194,7 @@ Source: `15.2-V01-ABORTED-FINDINGS.md` (D-A, D-B, D-D, D-E, D-F, D-L, D-M + the 
 withdrawn (a misdiagnosis); D-J (audit prompt truncation — EU AI Act record) and D-K (text
 corruption) are out of scope and get their own phase. Total plans for phase 15.2: **26**.
 
-  - [ ] 15.2-20-PLAN.md (W1) — D-E: heartbeat liveness + reclaim ceiling + reap-to-failed, migration 0014, the `NESTOR_WORKER_STALE_MINUTES=525600` revert, gate seeded
+  - [x] 15.2-20-PLAN.md (W1) — D-E: heartbeat liveness + reclaim ceiling + reap-to-failed, migration 0014, the `NESTOR_WORKER_STALE_MINUTES=525600` revert, gate seeded
   - [ ] 15.2-21-PLAN.md (W2) — D-G/D-H: the workshop takes ONLY the client-validated questions; the context pack is context; the decision statement gets a real source
   - [ ] 15.2-22-PLAN.md (W2) — D-A/D-B: the OpenAI DR model id (operator checkpoint) + fail-loud config class; the web_fetch error-block replay fix + a genuine fixture
   - [ ] 15.2-23-PLAN.md (W2) — D-I/D-M: PII scrub at the dispatch choke point; Gemini fact-list placement + placeholder-URL rejection
@@ -290,7 +290,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 14. Auth Retirement + Integration Seam | v1.1 | 4/4 | Complete    | 2026-07-20 |
 | 15. Research Engine Redesign — Operator Surfaces | v1.1 | 7/7 | Complete   | 2026-07-24 |
 | 15.1. Research Engine Redesign — Verification Gates | v1.1 | 16/16 | Complete   | 2026-07-26 |
-| 15.2. Research Engine Redesign — Engine Core | v1.1 | 18/19 | In Progress|  |
+| 15.2. Research Engine Redesign — Engine Core | v1.1 | 19/26 | In Progress|  |
 | 16. Research Trigger + Progress Bridge | v1.1 | 5/5 | Complete   | 2026-07-22 |
 | 17. Raw Output + Audit Chain Guard | v1.1 | 4/4 | Complete   | 2026-07-22 |
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
