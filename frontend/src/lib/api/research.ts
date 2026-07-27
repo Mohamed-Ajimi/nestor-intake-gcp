@@ -260,6 +260,34 @@ export function resumeResearch(intakeId: string): Promise<ApiResult<{ research_r
 }
 
 /**
+ * Stop a live research run — the operator's ONLY stop path (D-D, plan 15.2-25). Mirrors
+ * `resumeResearch`: a one-shot `apiFetch` over the token-attaching transport (never fork
+ * the transport), method POST. Returns `{ research_run_id, status }` on 202.
+ *
+ * Server-side guarantees this transport relies on:
+ * - superadmin-only and space-scoped; a client / cross-space caller is existence-hidden
+ *   as **404**, never 403 and never 200;
+ * - an already-terminal run is a **200-shaped no-op** that echoes the run's own status
+ *   rather than an error — there is no 409 arm, because the engine reports none;
+ * - the intake row is NOT touched. Resolving the run row to `cancelled` is by itself what
+ *   makes the intake re-triggerable, because `cancelled` is a retryable run status
+ *   server-side while `running` is not.
+ *
+ * `RESEARCH_TERMINAL` already contains `cancelled`, so the open stream closes on the
+ * cancelled frame by itself — nothing here needs to touch that set.
+ *
+ * Returns `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function cancelResearch(
+  intakeId: string,
+): Promise<ApiResult<{ research_run_id: string; status: string }>> {
+  return apiFetch<{ research_run_id: string; status: string }>(
+    `/intakes/${intakeId}/research/cancel`,
+    { method: "POST" },
+  );
+}
+
+/**
  * Mint a signed download URL for a verified completed run's raw-output bundle (RUN-03 SC1).
  * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
  * method GET. Superadmin-only + space-scoped server-side; a client / cross-space caller is

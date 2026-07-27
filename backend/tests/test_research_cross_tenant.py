@@ -21,6 +21,17 @@ after). This suite is the HTTP-level proof that both new surfaces deny cross-ten
 |                                         | (never the null-space 403).                              |
 | ``resume_superadmin_happy_path_...``    | superadmin resume of a ``parked`` run → 202, row         |
 |                                         | ``queued``, ``attempt`` UNCHANGED (F-02 free resume).    |
+| ``cancel_cross_tenant_404``             | space-B user POST of space-A's cancel → EXACTLY 404,     |
+|                                         | NOT 403, NOT 200; no seam call; space-A run untouched.   |
+| ``cancel_user_role_404``                | a ``user``-role caller in the RIGHT space → EXACTLY 404. |
+| ``cancel_null_space_404``               | a null-space user → EXACTLY 404 from ``_superadmin_gate``|
+| ``cancel_superadmin_resolves_...``      | superadmin cancel of a ``running`` run → 202, row        |
+|                                         | ``cancelled`` — and ``cancelled`` IS retryable, which is |
+|                                         | the whole point (``running`` is not).                    |
+| ``cancel_no_run_404`` / ``..._no_engine_id_404`` | existence-hidden, never a seam 500 unshaped.     |
+| ``cancel_already_terminal_...``         | a terminal run → 202 reporting its OWN status, NO state  |
+|                                         | change (a no-op that reports itself, not an error).      |
+| ``cancel_seam_404_...`` / ``..._5xx_...`` / ``..._transport_...`` | 404 → 404; anything else → 502. |
 
 DESIGN mirrors ``test_intake_cross_tenant.py``: the engine FACTORIES that ``session.py`` /
 ``ai_session.py`` import are patched to the conftest engines so the REAL ``get_tenant_repo``
@@ -180,6 +191,12 @@ def _count_runs(engine, set_space, space_id, intake_id) -> int:
         ).scalar_one()
 
 
+#: Sentinel for :func:`_seed_run`'s ``tribunal_run_id`` — "derive the usual
+#: ``trib-{run_id}``". Passing ``None`` explicitly seeds a NULL engine id instead
+#: (the WR-03 case: a run the seam could never resolve).
+_TRID_AUTO = "__auto__"
+
+
 def _seed_run(
     engine,
     set_space,
@@ -190,14 +207,20 @@ def _seed_run(
     status="completed",
     chain_status="verified",
     bundle_key=None,
+    tribunal_run_id=_TRID_AUTO,
 ) -> None:
     """Seed a ``research_runs`` row so the availability gate is not what produces a 404.
 
     The bundle-url / verify-chain denial cases must fail on the SCOPE / ROLE wall, not on
     a missing run or the 409 availability gate — so seed a completed + chain-verified run.
+
+    ``tribunal_run_id`` defaults to the derived ``trib-{run_id}`` (every pre-existing
+    caller's behaviour, unchanged); pass ``None`` to seed a NULL engine id for the WR-03
+    "no engine id can never resolve at the seam" arm.
     """
     from sqlalchemy import text
 
+    trid = f"trib-{run_id}" if tribunal_run_id == _TRID_AUTO else tribunal_run_id
     with engine.begin() as conn:
         set_space(conn, space_id)
         conn.execute(
@@ -215,7 +238,7 @@ def _seed_run(
                 "status": status,
                 "chain_status": chain_status,
                 "bundle_key": bundle_key or f"{space_id}/{intake_id}/artifacts/x-raw.zip",
-                "trid": f"trib-{run_id}",
+                "trid": trid,
             },
         )
 
@@ -1220,6 +1243,477 @@ def test_resume_superadmin_happy_path_requeues_without_consuming_an_attempt(
             f"({before['attempt']} -> {after['attempt']})."
         )
         assert len(scheduled) == 1, "exactly one fresh poll driver must be scheduled."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# cancel (POST) denial trio + behaviour — D-D (plan 15.2-25). The Stop verb is the
+# ONE new tenant-crossing surface this plan adds, so its denial trio lands WITH it
+# (Pitfall 5), each case pinning ONE exact status code.
+#
+# WHY THIS SURFACE EXISTS AT ALL: before it, the only way an operator could stop a
+# run they were paying for was to pause the whole tribunal-worker Cloud Run service —
+# which does not stop the run (the in-flight process ran 16 more minutes) and nearly
+# caused a fresh worker to RE-CLAIM it at full cost (D-E, 2026-07-27). Only resolving
+# the ROW stops a run, and `running` is NOT in `_RETRYABLE_RUN_STATUSES` while
+# `cancelled` IS — so resolving the row is also what un-blocks the intake.
+# ===========================================================================
+
+
+def _capture_cancel(monkeypatch, *, returns=None):
+    """Record every ``tribunal_client.cancel_run`` call; return the recorder list.
+
+    A denial MUST make no seam call at all: an engine run stopped behind a 404 would
+    be a cross-tenant WRITE dressed up as a denial. ``returns`` overrides the fake's
+    RunResponse (used by the already-terminal no-op case, where the engine returns
+    the run AS-IS rather than flipping it).
+    """
+    from app.research import tribunal_client as tc_mod
+
+    calls: list = []
+
+    def _fake_cancel(**kwargs):
+        calls.append(kwargs)
+        if returns is not None:
+            return returns
+        return {"id": kwargs.get("run_id"), "status": "cancelled"}
+
+    monkeypatch.setattr(tc_mod, "cancel_run", _fake_cancel, raising=False)
+    return calls
+
+
+def _assert_exactly_404(resp, what: str) -> None:
+    """Pin EXACTLY 404 — and say out loud that 403 and 200 are the failures we fear.
+
+    403 leaks that the resource exists (the non-distinguishability rule); 200 would
+    mean the denial did not deny. Asserting only ``!= 200`` or ``>= 400`` would let
+    either regression through, so both are pinned by name.
+    """
+    assert resp.status_code != 403, (
+        f"{what} must NEVER be 403 — a 403 confirms the intake exists to a caller "
+        f"who must not learn that (body={resp.text!r})."
+    )
+    assert resp.status_code != 200, (
+        f"{what} must NEVER be 200 — that is not a denial at all (body={resp.text!r})."
+    )
+    assert resp.status_code == 404, (
+        f"{what} must be EXACTLY 404, got {resp.status_code} (body={resp.text!r})."
+    )
+
+
+def test_cancel_cross_tenant_404(engine, set_space, two_spaces, monkeypatch):
+    """space-B user POST of space-A's cancel → EXACTLY 404, no seam call, row untouched."""
+    from fastapi.testclient import TestClient
+
+    space_a, space_b = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (cancel denial)")
+    _seed_space(engine, space_b, "Space B (cancel denial)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a, status="running")
+    _patch_engines(monkeypatch, engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_b))
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "a cross-tenant cancel")
+        assert str(intake_a) not in r.text, "404 body leaked the foreign intake id."
+        assert str(run_a) not in r.text, "404 body leaked the foreign run id."
+        assert cancel_calls == [], "a denied cancel must make NO seam call."
+        assert (
+            _read_run_row(engine, set_space, space_a, run_a)["status"] == "running"
+        ), "the space-A run must be untouched after a denied cancel."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a, space_b)
+
+
+def test_cancel_user_role_404(engine, set_space, two_spaces, monkeypatch):
+    """A ``user``-role caller IN the correct space → EXACTLY 404 (never 403)."""
+    from fastapi.testclient import TestClient
+
+    space_a, _ = two_spaces
+    intake_a, run_a = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space_a, "Space A (cancel user-role)")
+    _seed_intake(engine, set_space, space_a, intake_a, status="in_research")
+    _seed_run(engine, set_space, space_a, intake_a, run_a, status="running")
+    _patch_engines(monkeypatch, engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_user(space_a))  # OWNS the space
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_a}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "a user-role cancel (the verb is superadmin-only)")
+        assert str(run_a) not in r.text, "404 body leaked the run id."
+        assert cancel_calls == [], "a denied cancel must make NO seam call."
+        assert (
+            _read_run_row(engine, set_space, space_a, run_a)["status"] == "running"
+        ), "the run must be untouched after a denied cancel."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space_a)
+
+
+def test_cancel_null_space_404(engine, set_space, monkeypatch):
+    """A null-space ``user`` → EXACTLY 404 from _superadmin_gate, never the 403.
+
+    This is what the dependency ORDER buys: ``_superadmin_gate`` is declared BEFORE
+    ``get_tenant_repo`` in the handler signature, so it resolves first and the
+    null-space default-deny 403 inside ``get_tenant_repo`` is never reached.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (cancel null-space)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="running")
+    _patch_engines(monkeypatch, engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_null_space_user())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "a null-space cancel")
+        assert str(run_id) not in r.text, "404 body leaked the run id."
+        assert cancel_calls == [], "a denied cancel must make NO seam call."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_superadmin_resolves_the_run_row_and_unblocks_retry(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """A superadmin cancelling a ``running`` run → 202 ``cancelled``, and the ROW resolves.
+
+    This is the acceptance behaviour for run ``d6bb3aae``: that run is still
+    ``running`` in the DB although its process is dead, and because
+    ``_RETRYABLE_RUN_STATUSES`` excludes ``running`` its intake cannot be retried.
+    Cancelling moves it to ``cancelled``, which IS retryable — so the stop and the
+    unblocking are the SAME action. The membership assertion below is the part that
+    would catch a "cancel" that merely looked like it worked.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (cancel happy-path)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="running")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 202, (
+            f"a superadmin cancel of a running run must be 202, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        body = r.json()
+        assert body["status"] == "cancelled", body
+        assert body["research_run_id"] == str(run_id), body
+
+        assert len(cancel_calls) == 1, (
+            f"the cancel must make EXACTLY one seam call, got {len(cancel_calls)}."
+        )
+        assert cancel_calls[0]["run_id"] == f"trib-{run_id}", (
+            "the seam must be called with the SEEDED tribunal_run_id — cancelling "
+            "some other engine run would stop the wrong thing."
+        )
+
+        after = _read_run_row(engine, set_space, space, run_id)
+        assert after["status"] == "cancelled", (
+            f"the mirror row must RESOLVE to cancelled — a Stop that leaves the row "
+            f"unresolved ships the appearance of a fix without the fix. Got {after}."
+        )
+        assert after["completed_at"] is not None, (
+            "a resolved run must carry completed_at: the poll driver that would "
+            "normally stamp it may itself be dead, which is exactly the condition "
+            "that makes an operator reach for this button."
+        )
+
+        # The unblocking half, asserted against the production constant itself so a
+        # future edit to that set cannot silently re-break retry for a cancelled run.
+        assert "cancelled" in research_mod._RETRYABLE_RUN_STATUSES, (
+            "cancelled MUST be retryable — that membership is what makes the Stop "
+            "button unblock the intake."
+        )
+        assert "running" not in research_mod._RETRYABLE_RUN_STATUSES, (
+            "running must NOT be retryable — that exclusion is the reason a run "
+            "stuck at running blocks its intake in the first place."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_no_run_404(engine, superadmin_engine, set_space, monkeypatch):
+    """An intake with NO research run at all → existence-hidden 404, no seam call."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space, "Space (cancel no-run)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "a cancel of an intake with no run")
+        assert cancel_calls == [], "there is nothing to cancel — no seam call."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_run_without_engine_id_404(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """A run carrying NO ``tribunal_run_id`` → 404 (WR-03), never a seam 500 leaking out.
+
+    The seam URL would be ``/api/runs/None/cancel``. Refusing intake-side keeps the
+    failure shaped and existence-hidden instead of letting an unshaped engine error
+    reach the operator.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (cancel no-engine-id)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(
+        engine, set_space, space, intake_id, run_id,
+        status="running", tribunal_run_id=None,
+    )
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    cancel_calls = _capture_cancel(monkeypatch)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "a cancel of a run with no engine id")
+        assert cancel_calls == [], "a run with no engine id must not reach the seam."
+        assert (
+            _read_run_row(engine, set_space, space, run_id)["status"] == "running"
+        ), "the row must be untouched."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_already_terminal_run_is_a_reporting_no_op(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """An ALREADY-TERMINAL run → 202 reporting its own status, and NO state change.
+
+    The engine treats cancelling a terminal run as an idempotent no-op, not a
+    conflict, so this route must not invent a 409 the engine never reports. It echoes
+    whatever status the engine returned — and crucially does NOT re-stamp
+    ``completed_at``, which would clobber the real completion time of a finished run.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _seed_space(engine, space, "Space (cancel terminal no-op)")
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="completed")
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    # The engine returns the run AS-IS on a terminal cancel.
+    cancel_calls = _capture_cancel(
+        monkeypatch, returns={"id": f"trib-{run_id}", "status": "completed"}
+    )
+
+    before = _read_run_row(engine, set_space, space, run_id)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 202, (
+            f"a terminal cancel is a no-op that REPORTS itself, not an error — "
+            f"expected 202, got {r.status_code} (body={r.text!r}). There is no 409 "
+            f"arm because the engine has none."
+        )
+        assert r.json()["status"] == "completed", (
+            "the route must ECHO the engine's status, never assume 'cancelled'."
+        )
+        assert len(cancel_calls) == 1
+        after = _read_run_row(engine, set_space, space, run_id)
+        assert after == before, (
+            f"a terminal cancel must make NO state change: {before} -> {after}."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def _raise_cancel_http_status(monkeypatch, status_code: int):
+    """Patch ``cancel_run`` to raise ``httpx.HTTPStatusError(status_code)``."""
+    import httpx
+
+    from app.research import tribunal_client as tc_mod
+
+    def _raiser(*args, **kwargs):
+        req = httpx.Request("POST", "http://tribunal.local/api/runs/x/cancel")
+        resp = httpx.Response(status_code, request=req)
+        raise httpx.HTTPStatusError(
+            f"{status_code} from seam", request=req, response=resp
+        )
+
+    monkeypatch.setattr(tc_mod, "cancel_run", _raiser, raising=False)
+
+
+def _cancel_seam_case(engine, set_space, space, intake_id, run_id, name):
+    """Seed the shared scaffolding for the three seam-error mapping cases.
+
+    Engine patching is left to the caller (each case needs the superadmin engine so the
+    request reaches the seam call at all — the failure under test must be the SEAM's,
+    never an earlier scope wall).
+    """
+    _seed_space(engine, space, name)
+    _seed_intake(engine, set_space, space, intake_id, status="in_research")
+    _seed_run(engine, set_space, space, intake_id, run_id, status="running")
+
+
+def test_cancel_seam_404_maps_to_existence_hidden_404(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """An engine-side 404 (missing OR cross-tenant run) → intake 404, row untouched."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _cancel_seam_case(
+        engine, set_space, space, intake_id, run_id, "Space (cancel seam-404)"
+    )
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    _raise_cancel_http_status(monkeypatch, 404)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        _assert_exactly_404(r, "an engine-side 404 on cancel")
+        assert (
+            _read_run_row(engine, set_space, space, run_id)["status"] == "running"
+        ), "a failed seam call must leave NO half-transitioned row."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_seam_5xx_maps_to_502(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """Any NON-404 seam failure → 502, never an unhandled 500, row untouched."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _cancel_seam_case(
+        engine, set_space, space, intake_id, run_id, "Space (cancel seam-5xx)"
+    )
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+    _raise_cancel_http_status(monkeypatch, 500)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 502, (
+            f"a non-404 seam failure must map to 502, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        assert (
+            _read_run_row(engine, set_space, space, run_id)["status"] == "running"
+        ), "a failed seam call must leave NO half-transitioned row."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_cancel_seam_transport_failure_maps_to_502(
+    engine, superadmin_engine, set_space, monkeypatch
+):
+    """A TRANSPORT failure (timeout / connect error) → 502, never an unhandled 500.
+
+    Distinct arm from the 5xx case: a ``ConnectTimeout`` is an ``httpx.HTTPError`` but
+    NOT an ``httpx.HTTPStatusError``, so it misses the status-mapping except block
+    entirely and would escape as a 500 without its own handler.
+    """
+    from fastapi.testclient import TestClient
+
+    import httpx
+
+    from app.research import tribunal_client as tc_mod
+
+    space = uuid.uuid4()
+    intake_id, run_id = uuid.uuid4(), uuid.uuid4()
+    _cancel_seam_case(
+        engine, set_space, space, intake_id, run_id, "Space (cancel transport)"
+    )
+    _patch_engines(monkeypatch, engine, sa_engine=superadmin_engine)
+
+    def _boom(*args, **kwargs):
+        raise httpx.ConnectTimeout("engine unreachable")
+
+    monkeypatch.setattr(tc_mod, "cancel_run", _boom, raising=False)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        r = TestClient(app).post(
+            f"/intakes/{intake_id}/research/cancel",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert r.status_code == 502, (
+            f"a transport failure must map to 502, got {r.status_code} "
+            f"(body={r.text!r})."
+        )
+        assert (
+            _read_run_row(engine, set_space, space, run_id)["status"] == "running"
+        ), "a failed seam call must leave NO half-transitioned row."
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)

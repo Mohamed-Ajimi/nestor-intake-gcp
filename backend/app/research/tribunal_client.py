@@ -225,6 +225,61 @@ def resume_run(
     return resp.json()
 
 
+def cancel_run(
+    *,
+    service_url: str,
+    space_id: str,
+    acting_user_id: str,
+    acting_email: str,
+    run_id: str,
+) -> dict:
+    """Stop a live Tribunal run; return the RunResponse dict (D-D, plan 15.2-25).
+
+    POSTs an EMPTY body to ``{service_url}/api/runs/{run_id}/cancel`` — the engine verb
+    takes no payload. It sets ``status='cancelled'`` and stamps ``completed_at`` when the
+    run is ``queued`` / ``running`` / ``needs_input``. Every terminal write in the engine's
+    ``runs/worker.py`` is guarded with ``AND status='running'`` precisely so a cancel wins
+    the race against an in-flight worker.
+
+    This is the ONLY operator stop path. Pausing the worker service is NOT cancelling: on
+    2026-07-27 pausing ``tribunal-worker`` left the in-flight process running for another 16
+    minutes, and the fresh worker that replaced it was about to RE-CLAIM the run at full paid
+    cost (D-E). The row is what must be resolved, not the process.
+
+    Tenant discipline (TENANT-02 / the Pitfall 1-2 GUC firewall): the tenant comes SOLELY
+    from the verified ``X-Nestor-Tenant-Id`` header that :func:`_headers` sets from the
+    caller's resolved ``space_id``. It is never a request input and never caller-chosen.
+    That is also why this seam is, by construction, callable only by the intake backend
+    that already knows the tenant — an impersonated ``gcloud`` identity-token call cannot
+    supply it (the Phase-14 lockdown working as designed).
+
+    Engine responses:
+
+    * **200** — the ``RunResponse`` JSON (``{id, status, started_at, completed_at, ...}``).
+      ``status`` flips to ``"cancelled"`` when it was ``queued`` / ``running`` /
+      ``needs_input``; otherwise the run is returned **AS-IS**.
+    * **404** — a missing OR cross-tenant ``run_id``, DELIBERATELY indistinguishable. The
+      caller maps this to its own existence-hidden 404.
+
+    **There is NO 409 arm** — the one difference from :func:`resume_run`. The engine treats
+    cancelling an already-terminal run as an idempotent NO-OP, not a conflict, so the caller
+    must not invent a conflict the engine does not report: it echoes back whatever status
+    the engine returned.
+
+    ``httpx.HTTPStatusError`` is raised on any non-2xx and the CALLER decides the mapping:
+    :func:`app.api.research_routes.cancel_research` maps 404 -> 404 and everything else
+    (including every transport failure) -> 502, so a seam error is never an unhandled 500.
+    """
+    resp = httpx.post(
+        f"{service_url}/api/runs/{run_id}/cancel",
+        headers=_headers(service_url, space_id, acting_user_id, acting_email),
+        json={},
+        timeout=_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def get_metrics(
     *,
     service_url: str,
