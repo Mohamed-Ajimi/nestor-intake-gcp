@@ -217,3 +217,100 @@ changes + the superadmin-only post-run verification report.
 Next step when ready: take this file + the STAKEHOLDER-NOTES entries into
 /gsd-discuss-phase 15 (sequencing note: operator hold — engine work after
 phases 18/19; no live runs before 2026-08-01 cap reset).
+
+---
+
+# Round 2 — OPEN QUESTIONS, raised 2026-07-27. NOT decided. For the next brainstorm.
+
+Raised by the operator after reading the first live run (`d6bb3aae`, aborted) and the
+workshop forensics. Nothing here is agreed; these are the four things to sit down with.
+Each records what the code does TODAY, what the tension is, and what would settle it.
+
+## Q1 — What is the tournament actually for?
+
+**Today.** Three separate locks stop anything new entering the question pool:
+the stage-A prompt ("deepening ONE client-validated question… never to change what is
+being asked"), the evolve prompt ("Keep the SAME subject and the SAME scope… do NOT
+broaden"), and the D4 scope guard (winners must be a superset of the client's question
+labels). So every candidate is a narrower rewording of something the client already wrote.
+
+**The tension.** D2 took the tournament from Google's Co-Scientist, where it applies
+selection pressure across a large space of *novel generated hypotheses*. Ours ranks ~60
+rewordings of ~11 things the client already said — and D4 then forces ~11 of the ~15
+winners anyway. **At the operator's real question count the tournament only decides about
+4 slots.** It has also never once run on valid input.
+
+**What would settle it.** One clean run with real questions. Look at the ~4 discretionary
+winners and ask: did the tournament choose better than "take them in order"? There is an
+A/B switch already built for exactly this — `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false`
+ranks by index with zero calls. That is the baseline to measure against.
+
+## Q2 — The "angles the client didn't think of" already exists, and has never worked
+
+**Today.** The orientation step produces `brief_conflicts` — "the brief assumes X, the
+world says Y", web-grounded, source-quoted, per question, with an explicit instruction not
+to invent one. That IS the Foundational-Context-Agent behaviour the original design wanted.
+It is NOT the tournament.
+
+**The tension.** It has never reached a report. It was one of the two silent hand-off
+losses plan 15.2-17 found and fixed on 2026-07-27 (`9c15c6e`) — the flags rendered as empty
+strings and vanished. Fixed, but unproven.
+
+**What would settle it.** Read the `brief_conflicts` on the next clean run. If they surface
+things the operator would have missed, the novelty requirement is already met and Q1 becomes
+purely a ranking question. If they are thin, then consider a second candidate population
+(engine-proposed angles with NO client parent, capped at ~3 of 15, competing only for their
+own quota). That path needs an operator gate before dispatch — D4's comment says why:
+"A model asked nicely to respect scope is not a control: the candidate text it reads was
+written by a model that had just read the open web."
+
+## Q3 — Why cap questions at all?
+
+**Today.** `_D6_MAX_WINNERS = 15`, `_MAX_ANGLES = 28`. The code is blunt about the reason:
+"Every angle is a paid deep-research call and the budget governor is inert by decision
+(`NESTOR_TRIBUNAL_UNCAPPED=1`), so the angle count is the only real spend control this
+engine has left."
+
+**The tension.** The caps are a proxy for a budget control that was deliberately switched
+off. Tuning them is tuning spend, not research quality — and that is not obvious from
+their names.
+
+**What would settle it.** Decide whether to re-enable the budget governor (it was deferred
+in 16-CONTEXT D-02, "uncapped for now", and Phase 20 is the latest it can slip). If it comes
+back on, the winner/angle caps can be set for quality instead of doubling as the wallet.
+
+## Q4 — Group questions per assignment instead of one-per-call
+
+**Today.** One sub-question per deep-research call, explicitly: "research ONLY this
+sub-question; the sibling sub-questions are handled separately." At defaults, 15 winners
+become ~24 angles — the top 3 go to all four streams, the rest to one each. The duplication
+is the corroboration signal (`_D6_MIN_CORROBORATION = 2`): below two independent streams
+`group_claims` has nothing to agree or disagree with, and the whole contradiction/skeptic
+half of the engine goes quiet.
+
+**The tension.** Fifteen angles about the same client each independently research the same
+groundwork. That waste is invisible because it is spread across 15 paid calls.
+
+**The strongest version of the proposal.** Group by CLIENT QUESTION, not arbitrary
+clustering: one assignment carrying that question's 3–6 sub-questions. ~11 assignments
+instead of ~24 angles. Attribution survives, because the report is organised by client
+question anyway. Corroboration survives, because the same GROUP goes to 2+ streams.
+Shared groundwork is searched once.
+
+**The real risk, which nobody can predict from the code.** A provider given six
+sub-questions may write one good report or six thin paragraphs. The current design's
+"siblings handled separately" line exists to guard exactly that.
+
+**What would settle it.** Two numbers off the next clean run: (a) how much of each angle's
+searching duplicated a sibling angle's, and (b) how deep each answer actually was. If
+duplication is high and depth is uniform, grouping is a clear win on both cost and quality.
+
+**Naming trap for whoever implements it:** `grouping.py` already exists and groups CLAIMS
+after research. This would be a different thing — grouping QUESTIONS before dispatch. Do
+not overload the name.
+
+---
+
+**Sequencing agreed 2026-07-27:** none of Q1–Q4 blocks the gap phase. Ship plans 15.2-20..26,
+get ONE clean run on real questions, then brainstorm these with that run's evidence in hand.
+Redesigning now means designing against a run where 21 of 32 inputs were garbage.
