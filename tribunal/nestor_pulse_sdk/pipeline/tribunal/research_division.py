@@ -78,6 +78,11 @@ from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
 # R7 (plan 15.2-16): the ONE job-id guard. A recorded id read back out of an
 # `output` row passes through this before it can reach a provider URL.
 from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
+# D-I (plan 15.2-23): the ONE outbound personal-identifier scrub. Applied at the
+# dispatch choke point below, because that is where every provider call funnels
+# through a single line. `pii` is a pure, stdlib-only module, so importing it at
+# module scope adds no dependency to this module's import surface.
+from nestor_pulse_sdk.pipeline.tribunal.pii import scrub_pii
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -1187,6 +1192,37 @@ async def run_angles(
         runner = _PROVIDER_RUNNERS[provider]
         timeout = _PROVIDER_TIMEOUTS.get(provider, _DEFAULT_TIMEOUT_S)
         base_query = angle.get("query", "")
+        # D-I (15.2-23): THE EGRESS CONTROL. This is the single line every one of
+        # the four streams passes through on its way to a third-party processor,
+        # which is exactly why the scrub lives here and not at any of the many
+        # places text ENTERS the engine.
+        #
+        # THE ORDERING `scrub -> attach D8 block -> dispatch` IS DELIBERATE. The
+        # D8 block is engine-authored, constant and identical on every angle, so
+        # re-scanning it once per angle is pure waste — and, worse, its example
+        # strings would be counted as though a client had written them, turning
+        # the operator-facing count into a number that means nothing.
+        base_query, n_pii = scrub_pii(base_query)
+        if n_pii:
+            # THE COUNT AND THE ANGLE, NEVER THE VALUE (T-15.2-232). Formatting
+            # the removed identifier into this line would write it straight back
+            # into the log and into the audit blob — the two places the whole
+            # point of this control is to keep it out of.
+            log.warning(
+                "research_division.run_angles: angle %d (%s) carried %d personal "
+                "identifier(s) — they were removed before the query left the "
+                "platform. The removed value is deliberately not logged. This "
+                "means personal data reached the research dispatcher, which is a "
+                "defect upstream of here, not a clean outcome (D-I).",
+                i + 1, provider, n_pii,
+            )
+            # Recorded ADDITIVELY on the angle, for the operator-facing layer.
+            # `angle["query"]` is NOT rewritten: `checkpoints.angles_digest` is
+            # derived from exactly that field, so mutating it would change the
+            # live digest, discard the research checkpoint and re-buy every
+            # already-paid angle on a resumed run (T-15.2-123). A NEW key costs
+            # the digest nothing.
+            angle["pii_removed"] = n_pii
         # D8 (15.2-14): the fact-list block is attached AFTER the provider has been
         # resolved. That ordering is load-bearing, not stylistic — it is what makes
         # the coverage retry below (`force_provider=alt`) attach the block for the
