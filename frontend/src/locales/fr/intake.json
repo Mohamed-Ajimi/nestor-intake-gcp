@@ -560,7 +560,11 @@
         "actionsCount": "{{count}} actions",
         "itemsCount": "{{count}} éléments",
         "liveBadge": "en direct",
-        "showMore": "Afficher plus"
+        "showMore": "Afficher plus",
+        "emptyQueued": "Cette exécution est en file d'attente — le moteur ne l'a pas encore démarrée, il n'y a donc aucune activité à afficher.",
+        "emptyActive": "En attente du premier événement. Ce silence peut aussi signifier qu'un appel long est en cours chez le fournisseur.",
+        "emptyTerminal": "Cette exécution n'a produit aucun historique d'événements.",
+        "truncated": "Affichage des {{count}} premiers événements — le reste de l'historique de cette exécution n'a pas été chargé."
       }
     },
     "feed": {

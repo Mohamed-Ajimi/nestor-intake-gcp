@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getIntake } from "@/lib/api/intakes";
 import { locateResearchRun } from "@/lib/api/research";
 import { fmtCost, useElapsed } from "@/lib/research/runClock";
 import { useRunEvents } from "@/lib/research/useRunEvents";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
+import { RunFeed } from "@/components/research/RunFeed";
 
 // frontend/src/routes/admin.pulse.runs.$runId.tsx — the dedicated research-run page (D-01).
 //
@@ -106,13 +107,28 @@ function ResearchRunPage() {
   const elapsed = useElapsed(run?.started_at ?? null, !isTerminal);
 
   // ── The feed: backfill the full history, then only the delta past the SSE cursor. ──────
-  const { events, loading: eventsLoading } = useRunEvents(
+  const { events, loading: eventsLoading, truncated } = useRunEvents(
     intakeId,
     intakeId ? runId : null,
     run?.event_seq ?? null,
   );
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollToLatest = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
+  // The footer's phase label. The feed's own divider text is PREFERRED over
+  // `run.current_stage` because the divider already carries the HUMAN LABEL the engine
+  // emitted (15.3-03), while `current_stage` is the raw stage key. Falling back to the key is
+  // better than showing nothing when the feed holds no divider yet.
+  const latestDividerText = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].kind === "divider" && events[i].text) return events[i].text;
+    }
+    return null;
+  }, [events]);
 
   if (locating) {
     return (
@@ -221,22 +237,24 @@ function ResearchRunPage() {
       {/* ── The single scrolling region ─────────────────────────────────────────────── */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-4">
         <div className="mx-auto max-w-3xl">
-          {/* ⚠ PLACEHOLDER — replace me. Task 5 of plan 15.3-08 swaps this block for the
-              real <RunFeed/> renderer (grouping, collapse, the live badge, one cursor).
-              It exists ONLY so this route is verifiable on its own; it is not a design and
-              must NOT survive into the next plan. Delete the whole block, not parts of it. */}
-          {eventsLoading && events.length === 0 && (
+          {/* The backfill hit its page cap. Say so in words and say how many rows are held —
+              a partial feed presented as if it were whole is worse than a short one. */}
+          {truncated && (
+            <div className="mb-3 border-l-2 border-amber-500 bg-paper px-3 py-2 font-mono text-[11.5px] text-ink/70">
+              {t("research.runPage.feed.truncated", { count: events.length })}
+            </div>
+          )}
+
+          {eventsLoading && events.length === 0 ? (
             <div className="flex items-center gap-2 font-mono text-[12px] text-ink/50">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               {t("research.runPage.loadingEvents")}
             </div>
+          ) : events.length === 0 ? (
+            <EmptyFeed status={status} isTerminal={isTerminal} />
+          ) : (
+            <RunFeed events={events} isActive={!isTerminal} />
           )}
-          {events.map((ev) => (
-            <div key={ev.seq} className="py-0.5 font-mono text-[13px] text-ink/80">
-              {ev.text}
-            </div>
-          ))}
-          {/* ⚠ END PLACEHOLDER */}
         </div>
       </div>
 
@@ -245,11 +263,46 @@ function ResearchRunPage() {
         <div className="flex shrink-0 items-center gap-2 border-t border-ink/10 pt-2 font-mono text-[11px] text-ink/50">
           <Loader2 className="h-3 w-3 animate-spin" style={{ color: "#FF2D87" }} />
           <span style={{ color: "#FF2D87" }}>
-            {run?.current_stage ?? t("research.runPage.status.queued")}
+            {latestDividerText ?? run?.current_stage ?? t("research.runPage.status.queued")}
           </span>
+          <span>·</span>
+          <button
+            type="button"
+            onClick={scrollToLatest}
+            className="inline-flex items-center gap-1 hover:text-ink"
+          >
+            <ArrowDownToLine className="h-3 w-3" />
+            {t("research.feed.scrollToLatest")}
+          </button>
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The three honest readings of an empty feed. One generic "no events" message would collapse
+ * three genuinely different situations into a shrug:
+ *
+ *  - QUEUED: the run has been accepted but the engine has not picked it up yet, so it has no
+ *    engine id and no events could exist. This is the COLD-OPEN window an operator lands in
+ *    the instant they click through from the trigger — the page must read as "not started",
+ *    not as "broken" and not as an error.
+ *  - ACTIVE: the engine is working and the first event has not arrived (or a long poll is in
+ *    flight, which is silence that is NOT a stall — the withdrawn-D-C lesson: on 2026-07-27
+ *    exactly this silence was misread as a hang on a run that was fine).
+ *  - TERMINAL: the run finished and left no history. For a run that predates 15.3 that is
+ *    simply the truth, and saying so beats an empty page that looks like a failed load.
+ */
+function EmptyFeed({ status, isTerminal }: { status: string; isTerminal: boolean }) {
+  const { t } = useTranslation("intake");
+  const message = isTerminal
+    ? t("research.runPage.feed.emptyTerminal")
+    : status === "queued"
+      ? t("research.runPage.feed.emptyQueued")
+      : t("research.runPage.feed.emptyActive");
+  return (
+    <div className="py-10 text-center font-mono text-[12px] text-ink/50">{message}</div>
   );
 }
 

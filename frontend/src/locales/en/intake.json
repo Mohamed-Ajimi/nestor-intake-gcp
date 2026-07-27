@@ -560,7 +560,11 @@
         "actionsCount": "{{count}} actions",
         "itemsCount": "{{count}} items",
         "liveBadge": "live",
-        "showMore": "Show more"
+        "showMore": "Show more",
+        "emptyQueued": "This run is queued — the engine has not started it yet, so there is no activity to show.",
+        "emptyActive": "Waiting for the first event. Silence here can also mean a long provider call is in flight.",
+        "emptyTerminal": "This run produced no event history.",
+        "truncated": "Showing the first {{count}} events — the rest of this run's history was not loaded."
       }
     },
     "feed": {

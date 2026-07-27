@@ -560,7 +560,11 @@
         "actionsCount": "{{count}} acties",
         "itemsCount": "{{count}} items",
         "liveBadge": "live",
-        "showMore": "Meer tonen"
+        "showMore": "Meer tonen",
+        "emptyQueued": "Deze run staat in de wachtrij — de engine is er nog niet aan begonnen, dus er is nog geen activiteit.",
+        "emptyActive": "Wachten op de eerste gebeurtenis. Stilte kan hier ook betekenen dat een lange provider-oproep loopt.",
+        "emptyTerminal": "Deze run heeft geen gebeurtenishistoriek opgeleverd.",
+        "truncated": "De eerste {{count}} gebeurtenissen worden getoond — de rest van de historiek van deze run is niet geladen."
       }
     },
     "feed": {
