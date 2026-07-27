@@ -205,8 +205,8 @@ def locate_research_run(
     in the same order as :func:`get_research_audit_body`:
 
     * ``_superadmin_gate`` declared BEFORE ``get_tenant_repo`` (so a null-space user
-      is 404 here rather than 403 there) plus the defense-in-depth in-body role
-      re-check → 404;
+      is 404 here rather than the null-space default-deny FORBIDDEN there) plus the
+      defense-in-depth in-body role re-check → 404;
     * the space-scoped ``ResearchRunRepository.get`` → 404 when the run is not
       visible;
     * a SECOND, space-scoped resolve of the run's OWN intake → 404 when THAT misses.
@@ -223,7 +223,11 @@ def locate_research_run(
     """
     # Defense-in-depth role re-check (the same double gate get_bundle_url uses): the
     # _superadmin_gate dependency is declared BEFORE get_tenant_repo so it resolves
-    # first and a null-space user is 404 here rather than 403 there.
+    # first and a null-space user is 404 here rather than reaching get_tenant_repo's
+    # null-space default-deny. (The denied status is named in WORDS throughout this
+    # handler on purpose: a source gate in tests/test_research_events_proxy.py asserts
+    # that number appears NOWHERE in it, and prose quoting it defeats its own gate —
+    # the 15.3-02 convention, and the first thing that build caught here.)
     if identity.role != "superadmin":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
 
