@@ -37,7 +37,7 @@
 #     permits into a RED build.
 # Drop the `|| true` and a single missing file kills the script before pytest
 # runs. Drop the assertion and a single mistyped path makes this gate go green
-# having run 27 of 28 files while reporting nothing about the 28th.
+# having run 28 of 29 files while reporting nothing about the 29th.
 #
 # OWNERSHIP: this file was owned EXCLUSIVELY by plan 15.2-02 for the main phase.
 # Ownership passed to plan 15.2-20 for the GAP PHASE (plans 15.2-20…26), which
@@ -50,7 +50,10 @@
 # wave-1 plan 15.3-01 owns the file for that phase and adds BOTH the path and
 # the EXPECTED_FILES bump (27 -> 28) in ONE edit, for the reason stated above:
 # the list and the number are one change, and splitting them is how a gate goes
-# green having run less than it claims.
+# green having run less than it claims. Plan 15.3-02 follows the same rule for
+# its own file (28 -> 29). Unlike 15.2, no 15.3 name is added AHEAD of its file:
+# each plan registers its test file in the same commit that creates it, so the
+# `ls ... || true` silent-skip window never opens for this phase.
 # Any file listed here must be pure (no Postgres, no provider key, no network)
 # OR must pytest.skip() cleanly when DATABASE_URL is unset (the
 # test_rls_isolation.py::_require_database_url() pattern) — it must never error
@@ -74,12 +77,12 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
-            # 28 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
+            # 29 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
             # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
             # does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
-            # added by plan 15.2-20, plus the 1 PHASE-15.3 file added by plan
-            # 15.3-01. ALL 28 NOW EXIST — the count is asserted below, so this
-            # number and the list must be changed together.
+            # added by plan 15.2-20, plus the 2 PHASE-15.3 files added by plans
+            # 15.3-01 and 15.3-02. ALL 29 NOW EXIST — the count is asserted
+            # below, so this number and the list must be changed together.
             #
             # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
             #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
@@ -124,11 +127,21 @@ steps:
             #     15.2-23 -> test_dispatch_pii.py
             #     15.2-24 -> test_stage_logging.py
             #     15.3-01 -> test_run_events.py    (run_event emitter, D-06/D-07)
+            #     15.3-02 -> test_run_events_api.py (run_event READ surface)
             #
             # test_run_events.py is PURE: no Postgres, no provider key, no
             # network. The two operations in runs/run_events.py that touch the
             # database are module-level test seams the suite replaces with a
             # recorder, so this gate RUNS that file rather than skipping it.
+            #
+            # test_run_events_api.py is PURE for a different reason: it drives
+            # GET /{run_id}/events through a hand-written duck-typed session that
+            # behaves like a tiny in-memory run_event table, so no Postgres is
+            # involved. It needs fastapi + httpx, and BOTH ARE PINNED in
+            # requirements.txt (0.136.3 / 0.28.1) which pip installs above -- so
+            # its importorskip guards cannot make it skip silently here. If that
+            # file ever reports as skipped in the -rs summary, the dependency
+            # pin moved and the isolation proofs are NOT running.
             #
             # test_stale_reclaim.py is DB-BOUND and therefore SKIPS in THIS gate,
             # which provisions no Postgres. That is contract-compliant (see the
@@ -168,13 +181,14 @@ steps:
                     nestor_pulse_sdk/tests/test_web_fetch_replay.py \
                     nestor_pulse_sdk/tests/test_dispatch_pii.py \
                     nestor_pulse_sdk/tests/test_stage_logging.py \
-                    nestor_pulse_sdk/tests/test_run_events.py"
+                    nestor_pulse_sdk/tests/test_run_events.py \
+                    nestor_pulse_sdk/tests/test_run_events_api.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=28
+            EXPECTED_FILES=29
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
