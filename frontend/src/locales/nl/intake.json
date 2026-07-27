@@ -531,6 +531,42 @@
     "unverifiedTitle": "Audit-keten nog niet geverifieerd",
     "unverifiedBody": "Deze run is voltooid maar de audit-hashketen is nog niet gecontroleerd. Verifieer de keten om de ruwe output te ontgrendelen.",
     "verifyChain": "Keten verifiëren",
+    "openRun": "Run openen",
+    "runPage": {
+      "notFound": "Deze run is niet beschikbaar.",
+      "backToIntakes": "Terug naar intakes",
+      "breadcrumbProduct": "Pulse",
+      "breadcrumbIntakes": "Intakes",
+      "breadcrumbRun": "Run",
+      "title": "{{client}} — deep research run",
+      "titleFallback": "Deep research run",
+      "metaRun": "run {{id}}",
+      "metaEngine": "engine {{engine}}",
+      "metaEvents": "{{count}} gebeurtenissen",
+      "loadingEvents": "Runhistoriek wordt geladen…",
+      "status": {
+        "queued": "In wachtrij",
+        "running": "Loopt",
+        "completed": "Voltooid",
+        "completedDegraded": "Voltooid — beperkt",
+        "failed": "Mislukt",
+        "cancelled": "Geannuleerd",
+        "parked": "Gepauzeerd",
+        "needsInput": "Wacht op invoer",
+        "unknown": "Onbekende status"
+      },
+      "feed": {
+        "workedFor": "Gewerkt gedurende {{duration}}",
+        "actionsCount": "{{count}} acties",
+        "itemsCount": "{{count}} items",
+        "liveBadge": "live",
+        "showMore": "Meer tonen",
+        "emptyQueued": "Deze run staat in de wachtrij — de engine is er nog niet aan begonnen, dus er is nog geen activiteit.",
+        "emptyActive": "Wachten op de eerste gebeurtenis. Stilte kan hier ook betekenen dat een lange provider-oproep loopt.",
+        "emptyTerminal": "Deze run heeft geen gebeurtenishistoriek opgeleverd.",
+        "truncated": "De eerste {{count}} gebeurtenissen worden getoond — de rest van de historiek van deze run is niet geladen."
+      }
+    },
     "feed": {
       "title": "Activiteit",
       "scrollToLatest": "Naar nieuwste",

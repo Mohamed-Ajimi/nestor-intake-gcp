@@ -531,6 +531,42 @@
     "unverifiedTitle": "Audit chain not yet verified",
     "unverifiedBody": "This run has completed but the audit hash chain has not yet been checked. Verify the chain to unlock the raw output.",
     "verifyChain": "Verify chain",
+    "openRun": "Open run",
+    "runPage": {
+      "notFound": "This run is not available.",
+      "backToIntakes": "Back to intakes",
+      "breadcrumbProduct": "Pulse",
+      "breadcrumbIntakes": "Intakes",
+      "breadcrumbRun": "Run",
+      "title": "{{client}} — deep research run",
+      "titleFallback": "Deep research run",
+      "metaRun": "run {{id}}",
+      "metaEngine": "engine {{engine}}",
+      "metaEvents": "{{count}} events",
+      "loadingEvents": "Loading run history…",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "completed": "Completed",
+        "completedDegraded": "Completed — degraded",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "parked": "Paused",
+        "needsInput": "Waiting for input",
+        "unknown": "Unknown status"
+      },
+      "feed": {
+        "workedFor": "Worked for {{duration}}",
+        "actionsCount": "{{count}} actions",
+        "itemsCount": "{{count}} items",
+        "liveBadge": "live",
+        "showMore": "Show more",
+        "emptyQueued": "This run is queued — the engine has not started it yet, so there is no activity to show.",
+        "emptyActive": "Waiting for the first event. Silence here can also mean a long provider call is in flight.",
+        "emptyTerminal": "This run produced no event history.",
+        "truncated": "Showing the first {{count}} events — the rest of this run's history was not loaded."
+      }
+    },
     "feed": {
       "title": "Activity",
       "scrollToLatest": "Scroll to latest",

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   ArrowDownToLine,
@@ -7,6 +8,7 @@ import {
   ChevronDown,
   Circle,
   Download,
+  ExternalLink,
   FileSearch,
   Loader2,
   Lock,
@@ -14,10 +16,11 @@ import {
   StopCircle,
   XCircle,
 } from "lucide-react";
-import { format } from "date-fns";
 import { toast } from "sonner";
-import i18n from "@/lib/i18n";
-import { getDateLocale } from "@/lib/i18n/date-locale";
+// The clock and formatters now live in ONE place, shared with the dedicated run page
+// (15.3-08). The bodies are unchanged by the move — in particular `useElapsed` still
+// derives from the run's own `started_at`, which is the whole reason it is worth sharing.
+import { fmtCost, fmtDate, fmtDuration, useElapsed } from "@/lib/research/runClock";
 import {
   getBundleUrl,
   openResearchStream,
@@ -138,8 +141,13 @@ function toStageRows(run: ResearchRun | null): StageRow[] {
  * terminal → `stream.close()`, `onFallback` → poll). There is no dedicated poll read for
  * research yet, so the fallback re-opens the stream once after backoff; the terminal event
  * closes the connection deterministically (WR-02 discipline).
+ *
+ * EXPORTED for the dedicated run page (`routes/admin.pulse.runs.$runId.tsx`, 15.3-08), which
+ * needs exactly this — one connection that is the single authority on status, stage, cost,
+ * `started_at` and the feed cursor. A second copy of these mechanics on the run page would be
+ * a second opinion about when a run ended; there must be only one.
  */
-function useActiveResearchRun(intakeId: string | undefined): {
+export function useActiveResearchRun(intakeId: string | undefined): {
   run: ResearchRun | null;
 } {
   const [run, setRun] = useState<ResearchRun | null>(null);
@@ -180,49 +188,30 @@ function useActiveResearchRun(intakeId: string | undefined): {
   return { run };
 }
 
-function fmtDate(d: string | null, fallback: string): string {
-  if (!d) return fallback;
-  try {
-    return format(new Date(d), "d MMM yyyy HH:mm", {
-      locale: getDateLocale(i18n.language),
-    });
-  } catch {
-    return d;
-  }
-}
-
-function fmtCost(cost: string | null, fallback: string): string {
-  if (cost == null || cost === "") return fallback;
-  const n = Number(cost);
-  if (Number.isNaN(n)) return `$${cost}`;
-  return `$${n.toFixed(2)}`;
-}
-
-/** Elapsed clock (mm:ss) counting up from `startedAt`; falls back to now if unset. */
-function useElapsed(startedAt: string | null, active: boolean): string {
-  const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    const start = startedAt ? new Date(startedAt).getTime() : Date.now();
-    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
-    tick();
-    if (!active) return;
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [startedAt, active]);
-  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
-  const ss = String(elapsed % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
-}
-
-/** Fixed duration between two timestamps (mm:ss), for the summary card. */
-function fmtDuration(startedAt: string | null, completedAt: string | null): string {
-  if (!startedAt || !completedAt) return "—";
-  const s = new Date(startedAt).getTime();
-  const e = new Date(completedAt).getTime();
-  const secs = Math.max(0, Math.floor((e - s) / 1000));
-  const mm = String(Math.floor(secs / 60)).padStart(2, "0");
-  const ss = String(secs % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
+/**
+ * The way into the dedicated run page (15.3-08 / D-01). ONE definition rendered in ALL FOUR
+ * card branches — active, completed/degraded, parked, and failed/cancelled.
+ *
+ * It is present on the failure branches DELIBERATELY. A failed or cancelled run is exactly
+ * the run whose detail an operator needs, and those two cards are the ones that drop the feed
+ * entirely today; sending them to a page that keeps the full event history is the point.
+ *
+ * Styled as the card's existing SECONDARY action (bordered, mono, uppercase, tracking-wider),
+ * not as a new primary button — it must not compete with Resume, Retry or Stop, which are the
+ * actions that change something.
+ */
+function OpenRunLink({ runId }: { runId: string }) {
+  const { t } = useTranslation("intake");
+  return (
+    <Link
+      to="/admin/pulse/runs/$runId"
+      params={{ runId }}
+      className="mt-4 inline-flex items-center gap-2 border border-ink/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+      {t("research.openRun")}
+    </Link>
+  );
 }
 
 function StageIcon({ status }: { status: string }) {
@@ -699,6 +688,9 @@ export function ResearchRunProgress({
             </div>
           )}
 
+          {/* Branch 1 of 4: the way into the dedicated run page. */}
+          {runId && <OpenRunLink runId={runId} />}
+
           {/* D15: after the run the feed stays frozen + clickable — a replay of what
               happened, with the audit-body drill-down still reachable (superadmin-only). */}
           {stageRows.length > 0 && (
@@ -769,6 +761,9 @@ export function ResearchRunProgress({
               {t("research.resume")}
             </button>
           )}
+          {/* Branch 2 of 4. A parked run is mid-flight — its feed is the evidence of where
+              the wall is, so the deeper page matters here as much as the Resume button. */}
+          {runId && <OpenRunLink runId={runId} />}
           {/* The frozen feed: exactly where the run stopped, still clickable. */}
           {stageRows.length > 0 && (
             <div className="mt-5 border-t border-ink/10 pt-4">
@@ -823,6 +818,10 @@ export function ResearchRunProgress({
             {t("research.retry")}
           </button>
         )}
+        {/* Branch 3 of 4 — failed | cancelled. THIS is the branch the link exists for: these
+            two cards drop the feed entirely, so today they show the word "failed" and nothing
+            else. The run page keeps the whole event history for exactly these states. */}
+        {runId && <OpenRunLink runId={runId} />}
       </div>
     );
   }
@@ -913,6 +912,10 @@ export function ResearchRunProgress({
           {t("research.currentStage", { stage: run.current_stage })}
         </div>
       )}
+
+      {/* Branch 4 of 4 — the ACTIVE card. The card stays the intake-page summary; the page
+          is the depth behind it. Neither replaces the other (15.3 CONTEXT, out of scope). */}
+      {runId && <OpenRunLink runId={runId} />}
 
       <AgentFeed rows={stageRows} intakeId={intakeId} runId={runId} />
     </div>
