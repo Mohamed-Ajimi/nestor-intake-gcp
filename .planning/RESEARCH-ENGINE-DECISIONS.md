@@ -228,6 +228,17 @@ Each records what the code does TODAY, what the tension is, and what would settl
 
 ## Q1 — What is the tournament actually for?
 
+**The operator's original intent, in their words (2026-07-27), because the rest of this
+section is analysis and this is the actual goal:**
+
+> "when we designed it the idea came from [Google Co-Scientist] and Foundational Context
+> Agent to enrich these questions into ideas and angles the client didn't think of while
+> also having their questions answered"
+
+So the design target is **two things at once**: (a) answer what the client asked, and
+(b) enrich those questions into ideas and angles they did not think of. Today's engine does
+(a) only — see below. Q2 is where (b) actually lives.
+
 **Today.** Three separate locks stop anything new entering the question pool:
 the stage-A prompt ("deepening ONE client-validated question… never to change what is
 being asked"), the evolve prompt ("Keep the SAME subject and the SAME scope… do NOT
@@ -279,7 +290,30 @@ their names.
 in 16-CONTEXT D-02, "uncapped for now", and Phase 20 is the latest it can slip). If it comes
 back on, the winner/angle caps can be set for quality instead of doubling as the wallet.
 
-## Q4 — Group questions per assignment instead of one-per-call
+## Q4 — Group questions per assignment instead of one-per-call, and "grouping needs to be smart"
+
+**The operator's question, in their words (2026-07-27):**
+
+> "why cap the questions and why run a deepresearch on one question, when we can group
+> questions together, and grouping need to be smart"
+
+**"Smart" is deliberately left OPEN here.** The grouping *criterion* is the actual open
+question and must not be pre-decided — the assistant's first draft of this section collapsed
+it to "group by client question" and presented that as the proposal, which is only one
+candidate. Options worth weighing at the brainstorm, none chosen:
+
+- **by client question** — one assignment per client question carrying its 3–6 sub-questions.
+  Natural boundary, matches how the report is organised, attribution is trivially preserved.
+- **by shared entity / subject** — e.g. every sub-question about coffee together, regardless
+  of which client question spawned it. Maximises shared groundwork; attribution gets harder.
+- **by shared source surface** — group questions likely to hit the same sources, which is
+  where the duplicated searching actually lives.
+- **by geography or time frame** — the D7 language tags already hint at this axis.
+- **hybrid / model-decided** — let a cheap judge propose the grouping, with a cap and a
+  scope assertion, the way the workshop already does for clustering.
+
+Note the criteria pull in different directions: the cheapest grouping (shared sources) is not
+the one with the cleanest attribution (client question). That trade-off is the decision.
 
 **Today.** One sub-question per deep-research call, explicitly: "research ONLY this
 sub-question; the sibling sub-questions are handled separately." At defaults, 15 winners
@@ -291,11 +325,12 @@ half of the engine goes quiet.
 **The tension.** Fifteen angles about the same client each independently research the same
 groundwork. That waste is invisible because it is spread across 15 paid calls.
 
-**The strongest version of the proposal.** Group by CLIENT QUESTION, not arbitrary
-clustering: one assignment carrying that question's 3–6 sub-questions. ~11 assignments
-instead of ~24 angles. Attribution survives, because the report is organised by client
-question anyway. Corroboration survives, because the same GROUP goes to 2+ streams.
-Shared groundwork is searched once.
+**One worked example, to show the shape — NOT the chosen criterion.** Taking "by client
+question": one assignment carrying that question's 3–6 sub-questions gives ~11 assignments
+instead of ~24 angles. Attribution survives because the report is organised by client
+question anyway; corroboration survives because the same GROUP goes to 2+ streams; shared
+groundwork is searched once. Any of the other criteria above needs the same three things
+checked — call count, attribution, corroboration — before it can be compared.
 
 **The real risk, which nobody can predict from the code.** A provider given six
 sub-questions may write one good report or six thin paragraphs. The current design's
