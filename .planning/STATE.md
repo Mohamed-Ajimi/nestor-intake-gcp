@@ -4,12 +4,12 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-27T18:08:34.422Z"
-last_activity: 2026-07-27 -- Phase 15.2 execution started
+last_updated: "2026-07-27T19:28:59.167Z"
+last_activity: 2026-07-27 -- Phase 15.3 execution started
 progress:
   total_phases: 11
   completed_phases: 7
-  total_plans: 70
+  total_plans: 79
   completed_plans: 69
   percent: 64
 ---
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.2 — research-engine-redesign-engine-core-inserted-2026-07-24
+**Current focus:** Phase 15.3 — research-run-page-engine-run-events-dedicated-run-route
 
 ## Current Position
 
-Phase: 15.2 (research-engine-redesign-engine-core-inserted-2026-07-24) — EXECUTING
-Plan: 1 of 26
-Status: Executing Phase 15.2
+Phase: 15.3 (research-run-page-engine-run-events-dedicated-run-route) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 15.3
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
@@ -72,7 +72,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: park until 2026-08-01, then plan 18 Tasks 4-6; remaining order 15.2 -> 19 -> 20.
-Last activity: 2026-07-27 -- Phase 15.2 execution started
+Last activity: 2026-07-27 -- Phase 15.3 execution started
 
 Progress: [██████████] 100%
 
