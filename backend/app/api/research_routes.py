@@ -18,6 +18,14 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
   ``_MAX_ATTEMPTS`` (F-02). It re-queues the SAME engine run through the seam, so the
   R3 checkpoints are reused instead of re-charged.
 
+* ``POST /intakes/{intake_id}/research/cancel`` (:func:`cancel_research`, D-D/ENGINE-11) —
+  the operator's ONLY stop path. Superadmin-only and space-scoped (existence-hidden 404),
+  with NO 409 arm and NO attempt cap: the engine treats cancelling a terminal run as an
+  idempotent no-op, and stopping a run is not an attempt. It resolves the mirror row to the
+  status the engine reports and audits ``{from,to}`` in the SAME tx. Because ``cancelled``
+  IS in ``_RETRYABLE_RUN_STATUSES`` (and ``running`` is not), resolving the row is exactly
+  what makes a stuck intake re-triggerable again.
+
 * ``GET /intakes/{intake_id}/research/stream`` (:func:`stream_research_run`, RUN-01) — the
   ONE deliberate ``async def`` handler, cloned from ``intake_routes.stream_skill_runs`` with
   the RESEARCH terminal set ``{completed, completed_degraded, failed, cancelled, parked}``
@@ -55,6 +63,13 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
+
+# NOT a raw DB symbol: `func` is a SQL-expression helper, not an engine/session factory,
+# so ci_no_raw_db_access.sh (D-03) stays green. It is used ONLY for the server-side
+# `completed_at=func.now()` stamp on the cancel path — the same shape run_task.py's
+# finalize writers use, so the resolved-run timestamp comes from the DB clock, never
+# from a Python clock that may be skewed against it.
+from sqlalchemy import func
 
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
@@ -422,6 +437,141 @@ def resume_research(
         run_id, run.attempt,
     )
     return {"research_run_id": str(run_id), "status": "queued"}
+
+
+@research_router.post(
+    "/{intake_id}/research/cancel", status_code=status.HTTP_202_ACCEPTED
+)
+def cancel_research(
+    intake_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Stop a live research run — the operator's ONLY stop path (D-D, plan 15.2-25).
+
+    Before this verb existed, the only way to stop a run the operator was paying for was
+    to pause the whole ``tribunal-worker`` Cloud Run service. That does not work: pausing
+    is not cancelling. On 2026-07-27 the in-flight process kept going for 16 more minutes,
+    terminating it required deploying a new revision, and the fresh worker that came up was
+    seconds from RE-CLAIMING the run at full cost (D-E). Only resolving the ROW stops a run.
+
+    Status map, each arm pinned by a test:
+
+    * ``202`` — body ``{research_run_id, status: <the status the engine reported>}``.
+      For a live run that is ``"cancelled"``; for an ALREADY-TERMINAL run it is that run's
+      unchanged status (an idempotent no-op that reports itself — see below).
+    * ``404`` — non-superadmin caller (including a null-space user), cross-tenant or
+      missing intake, no run, or a run carrying no ``tribunal_run_id`` (WR-03: a run with
+      no engine id can never resolve at the seam, so it is existence-hidden rather than a
+      seam 500). Existence is ALWAYS hidden — never 403, never 200.
+    * ``502`` — any seam or transport failure other than the engine's 404. Never an
+      unhandled 500.
+
+    **There is no 409 arm and no attempt cap.** The engine treats cancelling a terminal run
+    as an idempotent no-op rather than a conflict, so this route does not invent one; and
+    ``_MAX_ATTEMPTS`` is deliberately NOT consulted, because stopping a run is not an
+    attempt at anything.
+
+    **Why the intake row is not touched.** The intake stays ``in_research``.
+    ``_RETRYABLE_RUN_STATUSES`` already contains ``cancelled`` (``running`` does NOT — which
+    is exactly why a run stuck at ``running`` blocks its intake), so resolving the run row to
+    ``cancelled`` is by itself what makes the existing retry path in :func:`trigger_research`
+    reachable again. A future reader will otherwise wonder why cancel does not flip a status:
+    it does not need to.
+    """
+    # Defense-in-depth role re-check (the same double gate get_bundle_url uses): the
+    # _superadmin_gate dependency is declared BEFORE get_tenant_repo so it resolves
+    # first and a null-space user is 404 here rather than 403 there.
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).latest_for_intake(intake_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    if not run.tribunal_run_id:
+        # WR-03: no engine id -> the seam could never resolve it (the URL would be
+        # /api/runs/None/cancel). Existence-hidden 404 rather than letting the seam
+        # 404/500 leak out unshaped.
+        _log.warning(
+            "cancel refused: research_run_id=%s carries no tribunal_run_id "
+            "(existence-hidden 404)", run.id,
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    prior_status = run.status
+    run_id = run.id
+
+    settings = get_settings()
+    # The seam call happens OUTSIDE any held DB session and BEFORE the mirror patch: a
+    # seam failure must leave no half-transitioned row (we must never report a run as
+    # stopped when the engine never heard the request).
+    try:
+        engine_run = tribunal_client.cancel_run(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            run_id=str(run.tribunal_run_id),
+        )
+    except httpx.HTTPStatusError as exc:
+        seam_status = exc.response.status_code if exc.response is not None else 0
+        _log.warning(
+            "cancel seam error: research_run_id=%s seam_status=%s", run_id, seam_status
+        )
+        if seam_status == 404:
+            # Missing OR cross-tenant at the engine — indistinguishable by design.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Research engine unavailable")
+    except httpx.HTTPError as exc:
+        # Transport failure (timeout / connect error) — never an unhandled 500.
+        _log.warning("cancel seam transport failure: research_run_id=%s err=%s", run_id, exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Research engine unavailable")
+
+    # ECHO the engine, never assume "cancelled": an already-terminal run comes back AS-IS,
+    # and reporting that honestly is what makes this verb a no-op-that-reports-itself
+    # rather than a lie. `status` is the only field consulted (the engine's own
+    # completed_at stamp is engine-side state, mirrored by the poll driver).
+    new_status = (engine_run or {}).get("status") or prior_status
+
+    if new_status != prior_status:
+        # WRITE: the mirror patch + the audit row in ONE short tenant_session that COMMITS
+        # on block exit, so the record cannot exist without the state change or vice versa
+        # (T-15.2-254 repudiation). `completed_at` is stamped here — this run is resolved,
+        # and the poll driver that would normally finalize it may itself be long dead (the
+        # exact condition that makes an operator reach for this button).
+        with tenant_session(identity) as txs:
+            ResearchRunRepository(txs, identity).patch(
+                run_id, status=new_status, completed_at=func.now()
+            )
+            audit.log(
+                txs,
+                actor_uid=identity.uid,
+                event_type="research.cancelled",
+                target=str(run_id),
+                space_id=intake.space_id,
+                # Structured {from,to} only — never a link or token (T-16-11).
+                metadata={"from": prior_status, "to": new_status},
+            )
+        _log.warning(
+            "research run cancelled by %s: research_run_id=%s %s -> %s",
+            identity.email, run_id, prior_status, new_status,
+        )
+    else:
+        # Idempotent no-op: the engine returned the run unchanged (already terminal).
+        # NO patch and NO audit — there was no state change to record, and stamping
+        # completed_at here would clobber the real completion time of a finished run.
+        _log.warning(
+            "cancel was a no-op: research_run_id=%s already %s", run_id, prior_status
+        )
+
+    # There is NO driver to schedule and no BackgroundTasks parameter: `cancelled` is
+    # already a member of RESEARCH_TERMINAL, so any poll driver still running exits by
+    # itself on its next tick, and the SSE stream closes on the same terminal frame.
+    return {"research_run_id": str(run_id), "status": new_status}
 
 
 # ---------------------------------------------------------------------------
