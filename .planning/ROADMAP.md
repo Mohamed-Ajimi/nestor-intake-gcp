@@ -126,14 +126,14 @@ trail intact.
 **Goal:** A deep-research run has its own page — openable, closeable, bookmarkable and reopenable at `/admin/pulse/runs/:runId` — showing an ordered, durable feed of what the engine actually did at every step, with an elapsed clock that does not restart and every one of the eight run statuses handled honestly. The engine emits the events that page needs (dispatch, tool, search, reasoning, stream config, agent start/finish/retry/fail, per-stage summaries) into a new append-only `run_event` table, best-effort and PII-scrubbed, without changing anything the pipeline decides, dispatches or produces.
 **Requirements**: none assigned — this phase carries no REQUIREMENTS.md id. Its source of record is `15.3-CONTEXT.md` (D-01…D-12) and the operator's design of record `docs/design/prototypes/ResearchRunImproved.tsx`.
 **Depends on:** Phase 15 (feed contract), Phase 15.2 gap closure (`started_at` across the seam, `scrub_pii`, the stage-log choke point). Ships in the SAME deploy batch as the 15.2 gap fixes (D-03).
-**Plans:** 5/9 plans executed
+**Plans:** 7/9 plans executed
 
 Plans:
 - [x] 15.3-01-PLAN.md (W1) — `run_event` table (tribunal alembic `0015`) + `RunEvent` model + the never-raising, PII-scrubbing, batched `runs/run_events.py` emitter; engine gate 27 → 28
 - [x] 15.3-02-PLAN.md (W2) — `GET /api/runs/{run_id}/events` (paginated, seq-ordered, gate-free, 404-on-deny) + additive `RunMetrics.event_seq` cursor; engine gate 28 → 29
 - [x] 15.3-03-PLAN.md (W3) — run lifecycle + labelled stage dividers and per-stage summaries at the `set_stage` choke point, dispatch headers + reasoned agent children in the angle fan-out; engine gate 29 → 30
-- [ ] 15.3-04-PLAN.md (W4) — search/tool/thinking events in the own-researcher stream + long-poll progress events (a wait that says it is a wait — the withdrawn-D-C lesson)
-- [ ] 15.3-05-PLAN.md (W4) — brief-parse events + orientation, candidate generation and tournament rounds at round granularity
+- [x] 15.3-04-PLAN.md (W4) — search/tool/thinking events in the own-researcher stream + long-poll progress events (a wait that says it is a wait — the withdrawn-D-C lesson)
+- [x] 15.3-05-PLAN.md (W4) — brief-parse events + orientation, candidate generation and tournament rounds at round granularity
 - [x] 15.3-06-PLAN.md (W3) — intake alembic `0013` (`research_runs.event_seq`) + the cursor mirrored onto the existing SSE frame (D-05: one connection, one terminal authority)
 - [x] 15.3-07-PLAN.md (W3) — `get_run_events` seam verb + the superadmin events proxy + the run→intake `locate` verb, all existence-hidden 404
 - [ ] 15.3-08-PLAN.md (W5) — THE PAGE: frontend transport (`getRunEvents`/`locateResearchRun`, backfill-then-delta `useRunEvents`), the shared `runClock` (D-09), the flat route `admin.pulse.runs.$runId.tsx` (D-08), the "Open run" entry point, and `RunFeed` — the twelve-kind renderer with derived grouping, auto-collapse, the live badge and one shared cursor, memoised for thousand-event runs
