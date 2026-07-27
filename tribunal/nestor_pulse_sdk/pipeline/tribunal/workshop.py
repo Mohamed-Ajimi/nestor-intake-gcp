@@ -97,6 +97,7 @@ from nestor_pulse_sdk.pipeline.tribunal.tools import (
     build_web_search,
     force_emit_orientation,
 )
+from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stage_feed import truncate_task_prompt
 
 if TYPE_CHECKING:
@@ -331,6 +332,184 @@ def _add_cost(total: Decimal, raw: Any) -> Decimal:
     except (ArithmeticError, TypeError, ValueError) as exc:
         log.warning("workshop: unusable cost_usd %r — not counted (%r)", raw, exc)
         return total
+
+
+# ---------------------------------------------------------------------------
+# RUN-FEED EVENTS (plan 15.3-05). The NARRATIVE beside the stage-feed rows above,
+# never a replacement for them: not one of the stage-feed writes in this module is
+# removed, moved or changed. (Deliberately worded without naming that class or its
+# method calls: the acceptance gate for "no row was replaced by an event" is a
+# GREP over this file, and a grep cannot tell a comment from a call — plan 15.3-03
+# had to reword two comments for exactly this reason.)
+#
+# The two are different instruments. The stage feed answers "which rows exist and
+# what state are they in" by MERGING into one JSONB blob keyed by stage, so it is
+# always a snapshot of where a run got to. These rows are append-only and ordered,
+# which is what lets an operator watch the workshop HAPPEN.
+#
+# WHY THE WORKSHOP AT ALL. It is the stage that decides what the entire run
+# researches, and in production it is a silent gap between two dividers — the
+# operator watching run d6bb3aae could not see 11 client questions become 32
+# workshop parents. Plan 15.2-21 fixed the parsing; these lines are what let the
+# next run be watched being right rather than reconstructed afterwards.
+#
+# GRANULARITY IS DELIBERATE AND BOUNDED (T-15.3-42): one row per STEP, never one
+# per question. Orientation fans out over every client question and candidate
+# generation over all of them again; a row apiece would bury the run in its own
+# telemetry, and the per-question detail already exists in the stage-feed rows.
+#
+# EVERY SITE BELOW USES THE THUNK-TAKING ENTRY POINT. A caller's arguments are
+# evaluated before the callee is entered, so composing an event's text in the
+# argument list would put the failure at the call site where nothing inside the
+# emitter can catch it (D-06). `build=lambda: (text, meta)` moves that composition
+# inside the emitter's own try.
+# ---------------------------------------------------------------------------
+
+#: The feed stage every event in this module belongs to. A real
+#: `ENGINE_STAGES["tribunal"]` key (label "Question workshop"), declared by plan
+#: 15.2-03 — not invented here.
+_EVENT_STAGE = "workshop"
+
+#: Conflicts named in the orientation DONE line, and characters kept of each. The
+#: line is an orientation, not the report: `brief_conflicts` reaches plan 15.2-06's
+#: "Disputed & changed" section in full as pipeline DATA.
+_EVENT_CONFLICTS_LISTED = 3
+_EVENT_CONFLICT_CHARS = 90
+
+
+def _emit_orientation_dispatch(run_id: Any, *, oriented: int, total: int) -> None:
+    """The workshop block's opening header."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="dispatch",
+        build=lambda: (
+            f"Dispatching orientation agent — {oriented} of {total} client "
+            f"question(s) get a web-orientation session",
+            None,
+        ),
+    )
+
+
+def _emit_orientation_run(run_id: Any, *, oriented: int) -> None:
+    """Orientation is in flight. The design's "Checking web sources" line."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="agent_run",
+        build=lambda: (
+            f"Checking web sources for brief conflicts — {oriented} question(s) "
+            f"in flight",
+            None,
+        ),
+    )
+
+
+def _orientation_done_event(results: Any) -> tuple[str, dict[str, Any]]:
+    """Compose the orientation DONE line. CALLED ONLY FROM INSIDE A build() THUNK.
+
+    Never call this directly at a call site — everything it does is exactly the
+    argument construction that must stay inside the emitter's try.
+    """
+    conflicts = _collect_conflicts(results)
+    if not conflicts:
+        return (
+            "Orientation done — the world agrees with the brief on every question "
+            "it checked",
+            {"items": 0},
+        )
+    listed = "; ".join(
+        # `conflict["assumption"]` IS A SUBSCRIPT ON PURPOSE — see the docstring of
+        # the caller below.
+        str(truncate_task_prompt(conflict["assumption"], _EVENT_CONFLICT_CHARS) or "")
+        for conflict in conflicts[:_EVENT_CONFLICTS_LISTED]
+    )
+    return f"{len(conflicts)} conflict(s) found — {listed}", {"items": len(conflicts)}
+
+
+def _emit_orientation_done(run_id: Any, results: Any) -> None:
+    """Orientation returned, and WHAT IT FOUND.
+
+    THE CONFLICTS ARE THE POINT. D4's `brief_conflicts` ("the brief assumes X, the
+    world says Y") are the one channel this engine has for an angle the client did
+    not think of, and they have never once reached a human: they are carried as
+    pipeline data into a report section that no completed run has ever rendered.
+    This line is the cheapest place they become visible.
+
+    `conflict["assumption"]` IS A SUBSCRIPT ON PURPOSE, and is the same judgement
+    plan 15.3-03 recorded for its own fact count. `_collect_conflicts` copies the
+    entries VERBATIM out of whatever the orientation results carried, so a restored
+    or degraded shape can be missing the key. Substituting a placeholder would print
+    a conflict the run never actually established; losing the line is the honest
+    degradation, and the count and the rest of the run are unaffected either way.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="agent_done",
+        build=lambda: _orientation_done_event(results),
+    )
+
+
+def _emit_candidates_dispatch(run_id: Any, *, questions: int, per_question: int) -> None:
+    """Candidate generation is starting, and on how many parents."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="dispatch",
+        build=lambda: (
+            f"Dispatching candidate generation — deepening {questions} "
+            f"client question(s) into up to {per_question} sub-question(s) each",
+            None,
+        ),
+    )
+
+
+def _candidates_done_event(candidates: Any) -> tuple[str, dict[str, Any]]:
+    """Compose the candidate-generation DONE line. ONLY FROM INSIDE A build() THUNK.
+
+    The parent tally is computed HERE rather than passed in, so that walking the
+    candidate list happens inside the emitter's try. Handing this function a
+    finished number would move that walk back to the call site, where a malformed
+    entry would raise in the middle of the workshop instead of costing a feed row —
+    which is the entire failure D-06 exists to prevent, reintroduced by an argument.
+    """
+    generated = len(candidates)
+    parents = len({str(entry.get("parent") or "") for entry in candidates})
+    return (
+        f"{generated} candidate sub-question(s) generated across "
+        f"{parents} client question(s)",
+        {"items": generated},
+    )
+
+
+def _emit_candidates_done(run_id: Any, candidates: Any) -> None:
+    """What candidate generation actually produced, before clustering."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="agent_done",
+        build=lambda: _candidates_done_event(candidates),
+    )
+
+
+def _emit_cluster_thinking(run_id: Any, *, before: int, after: int, calls: int) -> None:
+    """The near-duplicate collapse, in the numbers that matter: how many into how many."""
+    run_events.emit_safe(
+        run_id,
+        stage=_EVENT_STAGE,
+        kind="thinking",
+        build=lambda: (
+            (
+                f"{before} candidate(s) collapsed to {after} after near-duplicate "
+                f"clustering ({calls} call(s))"
+                if after < before
+                else f"No near-duplicates found — all {before} candidate(s) stay "
+                f"their own sub-question"
+            ),
+            {"actions": calls, "items": after},
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -814,6 +993,9 @@ async def run_orientation(
         [truncate_task_prompt(q.get("text")) for q in oriented],
     )
 
+    _emit_orientation_dispatch(run_id, oriented=len(oriented), total=len(qs))
+    _emit_orientation_run(run_id, oriented=len(oriented))
+
     sem = asyncio.Semaphore(max(1, _WORKSHOP_CONCURRENCY))
 
     async def _run(i: int, q: dict[str, Any]) -> dict[str, Any]:
@@ -832,10 +1014,10 @@ async def run_orientation(
 
     try:
         results = await asyncio.gather(*(_run(i, q) for i, q in enumerate(oriented)))
-        return list(results)
+        out = list(results)
     except Exception as exc:  # noqa: BLE001 — the fan-out never propagates
         log.error("workshop: the orientation fan-out failed: %r", exc)
-        return [
+        out = [
             _orientation_failed(
                 str(q.get("label") or "question"),
                 [],
@@ -845,6 +1027,10 @@ async def run_orientation(
             )
             for q in oriented
         ]
+    # BOTH paths, so a collapsed fan-out closes its own dispatch header instead of
+    # leaving an `agent_run` row spinning forever with nothing to resolve it.
+    _emit_orientation_done(run_id, out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1121,6 +1307,10 @@ async def generate_candidates(
         [truncate_task_prompt(q.get("text")) for q in qs],
     )
 
+    _emit_candidates_dispatch(
+        run_id, questions=len(qs), per_question=_CANDIDATES_PER_QUESTION
+    )
+
     sem = asyncio.Semaphore(max(1, _WORKSHOP_CONCURRENCY))
 
     async def _one(i: int, q: dict[str, Any]) -> dict[str, Any]:
@@ -1263,6 +1453,8 @@ async def generate_candidates(
         stats["calls"] = total_calls
         stats["cost_usd"] = str(total_cost)
 
+    _emit_candidates_done(run_id, candidates)
+
     return candidates, reasons
 
 
@@ -1323,6 +1515,9 @@ async def cluster_candidates(
                 "candidates stays its own sub-question and no clustering call is made",
                 len(items),
             )
+        _emit_cluster_thinking(
+            run_id, before=len(items), after=len(items), calls=0
+        )
         return [_as_singleton(c) for c in items], reasons
 
     try:
@@ -1395,6 +1590,9 @@ async def cluster_candidates(
         if isinstance(stats, dict):
             stats["calls"] = calls
 
+        _emit_cluster_thinking(
+            run_id, before=len(items), after=len(representatives), calls=calls
+        )
         return representatives, reasons
     except Exception as exc:  # noqa: BLE001 — clustering never loses a candidate
         log.error(
@@ -1409,6 +1607,9 @@ async def cluster_candidates(
         )
         if isinstance(stats, dict):
             stats["calls"] = 0
+        _emit_cluster_thinking(
+            run_id, before=len(items), after=len(items), calls=0
+        )
         return [_as_singleton(c) for c in items], reasons
 
 

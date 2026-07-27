@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from typing import Any, Callable, Optional
@@ -46,6 +47,7 @@ import pytest
 
 from nestor_pulse_sdk.pipeline.tribunal import workshop_rank
 from nestor_pulse_sdk.pipeline.tribunal.reliability import CircuitBreaker
+from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stage_feed import StageFeed
 from nestor_pulse_sdk.tests.workshop_fakes import (
     FakeTextResponse,
@@ -513,3 +515,169 @@ async def test_tournament_writes_one_feed_row_per_round():
     await feed.flush()
     assert handle >= 0, "the feed went inert — the evolve rows would be no-ops"
     assert "evolve" in [i["name"] for i in recorder.last_items]
+
+
+# ===========================================================================
+# SECTION 3 (plan 15.3-05) — THE TOURNAMENT IN THE RUN FEED.
+#
+# The design of record shows this stage as five lines, not five hundred:
+# "Dispatching tournament — 62 angle candidates to rank", four round rows, and
+# "15 winners selected · 62 candidates → 4 rounds → 15". The counts below are
+# asserted EXACTLY, because the bound is the whole point: 24 candidates over 4
+# rounds is 48 pairwise judgements, and a row apiece would push the run's earlier
+# lines past the emitter's queue ceiling — making the page least readable exactly
+# when the run is most expensive.
+#
+# Test (f) is the no-behaviour-change proof of this plan and it asserts WINNER-LIST
+# EQUALITY, not "no exception". Test (f2) is the only one that says anything about
+# BUILDING an event's arguments, and it patches nothing on `run_events`.
+# ===========================================================================
+
+#: The emitter's own logger, so a caplog assertion names the exact source.
+_EMITTER_LOG = "nestor_pulse_sdk.runs.run_events"
+
+
+class _EventRecorder:
+    """Duck-typed to `run_events.emit`. Records the rows; optionally raises."""
+
+    def __init__(self, raises: Optional[BaseException] = None) -> None:
+        self.events: list[dict[str, Any]] = []
+        self._raises = raises
+
+    def __call__(self, run_id, *, stage, kind, text, meta=None):
+        self.events.append(
+            {"run_id": run_id, "stage": stage, "kind": kind, "text": text, "meta": meta}
+        )
+        if self._raises is not None:
+            raise self._raises
+
+    def of_kind(self, kind: str) -> list[dict[str, Any]]:
+        return [event for event in self.events if event["kind"] == kind]
+
+
+async def test_the_tournament_emits_one_dispatch_and_exactly_one_row_per_round(
+    monkeypatch,
+):
+    """(d) EXACT counts. One header, R round rows, one close, one summary."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+    rounds = workshop_rank._TOURNAMENT_ROUNDS
+
+    await tournament(JudgeAudited(flash_responder()), population(24, parents=6))
+
+    assert len(recorder.of_kind("dispatch")) == 1, "one header, not one per round"
+    assert len(recorder.of_kind("agent_run")) == rounds
+    assert len(recorder.of_kind("agent_done")) == 1
+    assert len(recorder.of_kind("summary")) == 1
+    # 24 candidates x 4 rounds = 48 pairwise judgements. Six rows.
+    assert len(recorder.events) == rounds + 3
+    assert all(event["stage"] == "workshop" for event in recorder.events)
+
+
+async def test_the_round_row_count_follows_the_round_knob(monkeypatch):
+    """(d) …and it is R, not a hardcoded four."""
+    monkeypatch.setattr(workshop_rank, "_TOURNAMENT_ROUNDS", 2)
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    await tournament(JudgeAudited(flash_responder()), population(12, parents=4))
+
+    assert len(recorder.of_kind("agent_run")) == 2
+    assert len(recorder.of_kind("dispatch")) == 1
+    texts = [event["text"] for event in recorder.of_kind("agent_run")]
+    assert texts == ["Ranking round 1 of 2 — 6 match-up(s)",
+                     "Ranking round 2 of 2 — 6 match-up(s)"]
+
+
+async def test_a_tournament_that_never_runs_announces_nothing(monkeypatch):
+    """A disabled tournament must not claim to have dispatched one (T-15.3-23)."""
+    monkeypatch.setattr(workshop_rank, "_TOURNAMENT_ENABLED", False)
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+
+    await tournament(JudgeAudited(flash_responder()), population(5, parents=5))
+
+    assert recorder.events == []
+
+
+async def test_the_closing_line_names_candidates_rounds_and_winners(monkeypatch):
+    """(e) The design of record's own shape, asserted verbatim."""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", recorder)
+    rounds = workshop_rank._TOURNAMENT_ROUNDS
+    winners = workshop_rank.winner_count(24)
+
+    await tournament(JudgeAudited(flash_responder()), population(24, parents=6))
+
+    assert recorder.of_kind("agent_done")[0]["text"] == (
+        f"{winners} winner(s) selected · 24 candidates → {rounds} rounds → {winners}"
+    )
+
+    summary = recorder.of_kind("summary")[0]
+    assert summary["text"] == "", "a summary row is composed from its meta"
+    assert summary["meta"]["items"] == winners
+    assert summary["meta"]["actions"] == 48, "4 rounds x 12 match-ups"
+    assert isinstance(summary["meta"]["cost"], str)
+
+
+async def test_a_raising_recorder_leaves_the_winner_list_identical(monkeypatch):
+    """(f) THE NO-BEHAVIOUR-CHANGE PROOF OF THIS PLAN.
+
+    Not "the tournament did not crash" — the tournament selected THE SAME WINNERS,
+    in the same order, with the same ranks, wins and Elo. The engine's ranking
+    decisions are under active design review, and a phase that quietly altered
+    which questions win would corrupt the evidence the next clean run exists to
+    provide.
+    """
+    candidates = population(24, parents=6)
+
+    async def _run() -> list[dict[str, Any]]:
+        ranked, _ = await tournament(JudgeAudited(flash_responder()), candidates)
+        return ranked
+
+    quiet = _EventRecorder()
+    monkeypatch.setattr(run_events, "emit", quiet)
+    baseline = await _run()
+
+    boom = _EventRecorder(raises=RuntimeError("the feed writer refused this row"))
+    monkeypatch.setattr(run_events, "emit", boom)
+    under_a_raising_emitter = await _run()
+
+    assert boom.events, "the raising recorder was never called — this proves nothing"
+    assert under_a_raising_emitter == baseline
+    assert [w["index"] for w in under_a_raising_emitter] == [
+        w["index"] for w in baseline
+    ]
+    assert [w["rank"] for w in under_a_raising_emitter] == [w["rank"] for w in baseline]
+    assert [w["elo"] for w in under_a_raising_emitter] == [w["elo"] for w in baseline]
+
+
+async def test_a_tournament_whose_counts_cannot_be_built_selects_the_same_winners(
+    monkeypatch, caplog
+):
+    """(f2) THE ARGUMENT-CONSTRUCTION PROOF. Nothing on `run_events` is patched.
+
+    A raising recorder is structurally incapable of saying anything about this: by
+    the time any recorder runs, the arguments already exist. What can still fail is
+    COMPOSING them, and the only way to prove that failure is survivable is to make
+    the composition genuinely fail at the real call site.
+    """
+    candidates = population(24, parents=6)
+    baseline, _ = await tournament(JudgeAudited(flash_responder()), candidates)
+
+    def _no_count(_total):
+        raise KeyError("the winner count is unavailable")
+
+    monkeypatch.setattr(workshop_rank, "winner_count", _no_count)
+
+    # NEGATIVE CONTROL: the composition genuinely raises OUTSIDE the emitter.
+    with pytest.raises(KeyError):
+        workshop_rank._tournament_done_event(24, 4)
+
+    with caplog.at_level(logging.WARNING, logger=_EMITTER_LOG):
+        degraded, _ = await tournament(JudgeAudited(flash_responder()), candidates)
+
+    assert "KeyError" in caplog.text, (
+        "the fragile composition was never reached, so this test proves nothing"
+    )
+    assert degraded == baseline

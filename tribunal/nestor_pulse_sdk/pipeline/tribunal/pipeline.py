@@ -1490,7 +1490,11 @@ class TribunalPipeline:
         # whole paid workshop, but `parsed` is defined on both paths because the
         # decision resolution, the degradation sentence and the operator's division
         # header all read it after the workshop returns.
-        parsed = parse_brief(brief)
+        # 15.3-05: the run id is passed so the same parse ALSO writes the feed's
+        # opening lines. It is optional and keyword-only, the parser still never
+        # raises and still touches nothing, so this line does not move `parse_brief`
+        # out of the safe position the paragraph above puts it in.
+        parsed = parse_brief(brief, run_id=run_id)
 
         # The tournament judge is asked "which of these two matters more for THIS
         # client's decision". Precedence at CALL time is step 1 of the resolution in
