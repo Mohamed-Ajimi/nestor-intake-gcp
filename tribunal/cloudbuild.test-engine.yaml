@@ -18,16 +18,26 @@
 # in this phase carries @pytest.mark.live precisely because this filter exists.
 #
 # The file list is built with `ls ... 2>/dev/null || true` because this config
-# lands in wave 1 while its target test files arrive across waves 1-10: a file
-# that does not exist yet must be a SKIP, not a pytest collection error. The
+# landed in wave 1 while its target test files arrived across waves 1-10: a file
+# that did not exist yet had to be a SKIP, not a pytest collection error. The
 # `|| true` is required — under `set -e` a bare `FILES=$(ls missing-file)`
 # aborts the script. Do not tidy that guard away, and do not replace the
 # explicit list with a glob: the explicit list is what keeps unrelated suite
 # files (and every DB-bound file) out of this fast gate.
 #
-# READ THE `collecting:` BLOCK, NOT JUST THE EXIT STATUS. The same `|| true`
-# guard that tolerates a not-yet-written file also silently drops a MISNAMED
-# one — a typo'd path makes this gate go green having run nothing.
+# THAT ARRANGEMENT IS NOW CLOSED (plan 15.2-26, 2026-07-27). Every named file
+# exists, so the config ASSERTS ITS OWN COMPLETENESS: `EXPECTED_FILES` pins how
+# many paths the list names, the script counts what `ls` actually collected, and
+# a mismatch FAILS THE BUILD naming the absent or mistyped path.
+#
+# BOTH HALVES ARE LOAD-BEARING AND REMOVING EITHER ONE LOOKS REASONABLE:
+#   * the `|| true` prevents a COLLECTION ERROR (an aborted script tells you
+#     nothing about the other 26 files);
+#   * the count assertion is what converts the silent SKIP that `|| true`
+#     permits into a RED build.
+# Drop the `|| true` and a single missing file kills the script before pytest
+# runs. Drop the assertion and a single mistyped path makes this gate go green
+# having run 26 of 27 files while reporting nothing about the 27th.
 #
 # OWNERSHIP: this file was owned EXCLUSIVELY by plan 15.2-02 for the main phase.
 # Ownership passed to plan 15.2-20 for the GAP PHASE (plans 15.2-20…26), which
@@ -61,8 +71,8 @@ steps:
             # 27 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
             # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
             # does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
-            # added by plan 15.2-20 — four of which do not exist yet; see the
-            # block below, which says out loud what that costs.
+            # added by plan 15.2-20. ALL 27 NOW EXIST — the count is asserted
+            # below, so this number and the list must be changed together.
             #
             # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
             #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
@@ -76,19 +86,23 @@ steps:
             #      rate runs alongside this gate at every wave merge — listing
             #      them twice would only slow the gate down.
             #
-            # THE FIVE GAP-PHASE FILES (the last five entries below) ARE ADDED
-            # ALL AT ONCE BY PLAN 15.2-20, AND FOUR OF THEM DO NOT EXIST YET.
-            # Say the trap out loud, because this repository has a documented
-            # history of gates that were green because they ran nothing: the
-            # `ls … || true` idiom above SILENTLY SKIPS a name whose file is
-            # absent, so between waves those four names collect as nothing and
-            # this gate stays green having proven nothing about them. The
-            # arrangement is deliberate — one owner for this config, no plan left
-            # with an ungated test — and it is only honest if each part is done:
-            #   * each owning plan proves ITS OWN file is BOTH collected (read
+            # THE FIVE GAP-PHASE FILES (the last five entries below) WERE ADDED
+            # ALL AT ONCE BY PLAN 15.2-20, four of them before their files
+            # existed. Say the trap out loud, because this repository has a
+            # documented history of gates that were green because they ran
+            # nothing: the `ls … || true` idiom SILENTLY SKIPS a name whose file
+            # is absent, so between waves those four names collected as nothing
+            # and this gate stayed green having proven nothing about them. The
+            # arrangement was deliberate — one owner for this config, no plan
+            # left with an ungated test — and it was only honest if each part
+            # was done:
+            #   * each owning plan proved ITS OWN file was BOTH collected (read
             #     the `collecting:` block) AND green;
-            #   * plan 15.2-26 RECONCILES the final collected count before the
-            #     phase closes, so a MISTYPED name cannot survive.
+            #   * plan 15.2-26 RECONCILED the final collected count before the
+            #     phase closed, so a MISTYPED name cannot survive.
+            # THAT SECOND PART IS THE `EXPECTED_FILES` ASSERTION BELOW, and the
+            # arrangement is now closed. From here on a name in this list whose
+            # file is absent or mistyped is a RED BUILD, not a quiet skip.
             #
             # NEVER put an apostrophe anywhere in this block — not even inside a
             # comment, and not to quote this rule. The whole script below is
@@ -110,38 +124,71 @@ steps:
             # imports, collects and does not error; the harness that RUNS it is
             # cloudbuild.test-critical.yaml, whose DSN is a superuser on a
             # disposable schema. Read the `-rs` skip summary, not the exit status.
-            FILES=$$(ls nestor_pulse_sdk/tests/test_reliability_retry.py \
-                        nestor_pulse_sdk/tests/test_reliability_breaker.py \
-                        nestor_pulse_sdk/tests/test_terminal_states.py \
-                        nestor_pulse_sdk/tests/test_feed_enrichment.py \
-                        nestor_pulse_sdk/tests/test_fact_list_parser.py \
-                        nestor_pulse_sdk/tests/test_citation_anchors.py \
-                        nestor_pulse_sdk/tests/test_report_sections.py \
-                        nestor_pulse_sdk/tests/test_status_gates.py \
-                        nestor_pulse_sdk/tests/test_coverage_reentry.py \
-                        nestor_pulse_sdk/tests/test_workshop_critique.py \
-                        nestor_pulse_sdk/tests/test_workshop_scope_guard.py \
-                        nestor_pulse_sdk/tests/test_workshop_tournament.py \
-                        nestor_pulse_sdk/tests/test_workshop_languages.py \
-                        nestor_pulse_sdk/tests/test_own_researcher.py \
-                        nestor_pulse_sdk/tests/test_cost_serpapi.py \
-                        nestor_pulse_sdk/tests/test_factlist_fallback.py \
-                        nestor_pulse_sdk/tests/test_checkpoint_resume.py \
-                        nestor_pulse_sdk/tests/test_provider_resume.py \
-                        nestor_pulse_sdk/tests/test_engine_e2e_stubbed.py \
-                        nestor_pulse_sdk/tests/test_research_division_assignment.py \
-                        nestor_pulse_sdk/tests/test_distiller_coverage.py \
-                        nestor_pulse_sdk/tests/test_hash_chain_replay.py \
-                        nestor_pulse_sdk/tests/test_stale_reclaim.py \
-                        nestor_pulse_sdk/tests/test_brief_input.py \
-                        nestor_pulse_sdk/tests/test_web_fetch_replay.py \
-                        nestor_pulse_sdk/tests/test_dispatch_pii.py \
-                        nestor_pulse_sdk/tests/test_stage_logging.py 2>/dev/null || true)
-            if [ -z "$$FILES" ]; then
-              echo "no 15.2 engine test files present yet — nothing to run"
-              exit 0
+            # ONE list, read TWICE: `ls` collects from it and the assertion below
+            # reconciles against it. The names live in a variable rather than
+            # inline in the `ls` so the failure can NAME the path that went
+            # missing instead of printing a bare number at a tired operator.
+            WANTED="nestor_pulse_sdk/tests/test_reliability_retry.py \
+                    nestor_pulse_sdk/tests/test_reliability_breaker.py \
+                    nestor_pulse_sdk/tests/test_terminal_states.py \
+                    nestor_pulse_sdk/tests/test_feed_enrichment.py \
+                    nestor_pulse_sdk/tests/test_fact_list_parser.py \
+                    nestor_pulse_sdk/tests/test_citation_anchors.py \
+                    nestor_pulse_sdk/tests/test_report_sections.py \
+                    nestor_pulse_sdk/tests/test_status_gates.py \
+                    nestor_pulse_sdk/tests/test_coverage_reentry.py \
+                    nestor_pulse_sdk/tests/test_workshop_critique.py \
+                    nestor_pulse_sdk/tests/test_workshop_scope_guard.py \
+                    nestor_pulse_sdk/tests/test_workshop_tournament.py \
+                    nestor_pulse_sdk/tests/test_workshop_languages.py \
+                    nestor_pulse_sdk/tests/test_own_researcher.py \
+                    nestor_pulse_sdk/tests/test_cost_serpapi.py \
+                    nestor_pulse_sdk/tests/test_factlist_fallback.py \
+                    nestor_pulse_sdk/tests/test_checkpoint_resume.py \
+                    nestor_pulse_sdk/tests/test_provider_resume.py \
+                    nestor_pulse_sdk/tests/test_engine_e2e_stubbed.py \
+                    nestor_pulse_sdk/tests/test_research_division_assignment.py \
+                    nestor_pulse_sdk/tests/test_distiller_coverage.py \
+                    nestor_pulse_sdk/tests/test_hash_chain_replay.py \
+                    nestor_pulse_sdk/tests/test_stale_reclaim.py \
+                    nestor_pulse_sdk/tests/test_brief_input.py \
+                    nestor_pulse_sdk/tests/test_web_fetch_replay.py \
+                    nestor_pulse_sdk/tests/test_dispatch_pii.py \
+                    nestor_pulse_sdk/tests/test_stage_logging.py"
+            # Change this number and the list above TOGETHER. It is not a
+            # decoration: it is the whole difference between a gate and a green
+            # tick. There is deliberately NO early `exit 0` for an empty
+            # collection any more — an empty collection is the WORST case of the
+            # false green, and it now fails here like every other shortfall.
+            EXPECTED_FILES=27
+            FILES=$$(ls $$WANTED 2>/dev/null || true)
+            COLLECTED=$$(echo $$FILES | wc -w)
+            if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
+              echo "############################################################"
+              echo "ENGINE GATE ASSERTION FAILED"
+              echo "collected $$COLLECTED file(s); this config NAMES $$EXPECTED_FILES."
+              echo ""
+              echo "This is NOT a test failure and it is NOT a pass. It means the"
+              echo "gate would have run LESS than it claims. A pytest summary"
+              echo "printed after this point would describe only the files that"
+              echo "happened to exist, and would say NOTHING about the ones below."
+              echo ""
+              echo "ABSENT OR MISTYPED:"
+              for f in $$WANTED; do
+                [ -f "$$f" ] || echo "    $$f"
+              done
+              echo ""
+              echo "THE FULL EXPECTED LIST ($$EXPECTED_FILES paths):"
+              for f in $$WANTED; do
+                echo "    $$f"
+              done
+              echo ""
+              echo "Fix the path, or add the file, or change BOTH the list and"
+              echo "EXPECTED_FILES deliberately. Do not delete this check."
+              echo "############################################################"
+              exit 1
             fi
-            echo "collecting:"
+            echo "collecting: $$COLLECTED of $$EXPECTED_FILES expected files"
             echo "$$FILES"
             python -m pytest $$FILES -v -rs --tb=short -m "not live"
           '
