@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -142,6 +143,11 @@ from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     HARD_WALL,
     classify,
     error_signature,
+    # D-F (plan 15.2-24): the ONE credential/secret redactor in this engine. The
+    # stage log's own failure path is the only thing here that touches an
+    # exception, and phase rule 8 says anything derived from one is redacted
+    # before it is written.
+    redact,
 )
 # R3 (plan 15.2-16): the checkpoint store and its guards. `checkpoints.py` holds
 # no database code at all — it is bound to the `_read_output` / `_write_output`
@@ -204,6 +210,230 @@ _GROUP_DEPTH: dict[str, tuple[int, int, int]] = {
     # against. A shallow tier checks it honestly and cheaply instead.
     "low": (2, 3, 2),
 }
+
+
+# ===========================================================================
+# D-F (plan 15.2-24) — THE STAGE LOG.
+#
+# WHY THIS EXISTS, in one paragraph, because the next person to read it will be
+# reading it during an incident. All 72 log lines run d6bb3aae produced between
+# 08:09 and 08:53 were either the workshop's own output or angle-failure
+# warnings. Not one success marker, not one stage transition. So when the run
+# went quiet at 08:41 there was nothing to read, diagnosis fell back to Cloud Run
+# CPU metrics, and that produced the confident and WRONG conclusion that the
+# pipeline had stalled — it was blocked on long-poll I/O the whole time and
+# resumed on its own at 09:07. The lesson, recorded in the withdrawn D-C section
+# of 15.2-V01-ABORTED-FINDINGS.md, is that on this engine NEITHER LOG SILENCE NOR
+# IDLE CPU IS EVIDENCE OF A STALL. These lines are what make the difference
+# readable: the last `stage_enter` line names the stage the run is sitting
+# inside, so a long poll is distinguishable from a stall in the log itself.
+#
+# WHAT MAY APPEAR IN THESE LINES (T-15.2-240): stage keys, run ids, integer
+# counts and durations. NOTHING ELSE — no prompt body, no claim text, no
+# question, no URL, no provider response, no environment value. That is enforced
+# structurally in `_stage_log_line` (every value is rendered through `int()` or a
+# key sanitiser), not by reviewer discipline. `pipeline/tribunal/pii.py::scrub_pii`
+# — this engine's ONE personal-data redactor, shipped by plan 15.2-23 — is
+# deliberately NOT called here, and that is not an omission: no client-derived or
+# provider-derived STRING ever reaches these lines, so there is nothing to scrub,
+# and calling a redactor on a line built from integers would imply free text was
+# expected. If a future edit ever formats a caller-supplied string into a stage
+# line, `scrub_pii` is the function to use — do not write a second redactor.
+#
+# WHY THE STATE IS MODULE-LEVEL. `_write_final_report` is a MODULE-LEVEL function
+# and it writes the last two stages of EVERY run (`synthesize`, `done`), so a
+# closure living inside `_run_staged` cannot see them. Handing it the closure
+# would mean a new parameter threaded through a paid path for the sake of a log
+# line. A small run-scoped registry keeps that call graph byte-identical. It is
+# bounded (`_STAGE_LOG_MAX_RUNS`) and popped by `_stage_log_close`, which BOTH the
+# `done` write and `run()`'s own `finally` call — so a parked, failed or cancelled
+# run leaves nothing behind either.
+#
+# EXCEPTION SAFETY (T-15.2-241). Every public entry point below swallows its own
+# failures, inheriting the contract `runs/stages.py::set_stage` already states: a
+# progress write must never break the pipeline that is reporting it. A broken
+# logger cannot cost a paid run.
+# ===========================================================================
+
+#: Hard bound on the registry so an un-closed run can never grow it without limit.
+_STAGE_LOG_MAX_RUNS = 64
+
+#: run-id (str) -> the bookkeeping for that run's stage log. See the block above.
+_STAGE_LOGS: dict[str, dict[str, Any]] = {}
+
+
+def _stage_log_key(value: Any) -> str:
+    """A stage key reduced to `[a-z0-9_]`, bounded. Never raises, never empty."""
+    cleaned = "".join(
+        ch for ch in str(value or "").lower() if ch.isalnum() or ch == "_"
+    )[:40]
+    return cleaned or "unknown"
+
+
+def _stage_log_items(detail: Any) -> Optional[int]:
+    """How many sub-progress rows a `set_stage` detail carried, or None.
+
+    The COUNT only — the rows themselves carry client text and provider prompts
+    and must never be logged.
+    """
+    if isinstance(detail, dict):
+        items = detail.get("items")
+        if isinstance(items, (list, tuple)):
+            return len(items)
+    return None
+
+
+def _stage_log_swallow(exc: BaseException) -> None:
+    """Absorb a stage-logging failure. Phase rule 8: redact anything from an exception."""
+    try:
+        log.debug("tribunal_pipeline: stage log failed — %s", redact(str(exc)))
+    except Exception:  # noqa: BLE001 — a logger that cannot log is the end of it
+        pass
+
+
+def _stage_log_state(run_id: Any) -> dict[str, Any]:
+    """The registry entry for this run, created on first use."""
+    key = str(run_id)
+    state = _STAGE_LOGS.get(key)
+    if state is None:
+        if len(_STAGE_LOGS) >= _STAGE_LOG_MAX_RUNS:
+            # Insertion-ordered: drop the oldest entry rather than grow forever.
+            _STAGE_LOGS.pop(next(iter(_STAGE_LOGS)), None)
+        now = time.monotonic()
+        state = {
+            "current": None,       # the stage key currently open, or None
+            "opened_at": now,      # monotonic() when it was entered
+            "items": 0,            # rows on the last detail written to it
+            "entered": 0,          # how many stage_enter lines this run emitted
+            "counts": {},          # stage key -> {name: int} for its exit line
+            "started_at": now,     # monotonic() at the run's first stage write
+        }
+        _STAGE_LOGS[key] = state
+    return state
+
+
+def _stage_log_line(
+    event: str,
+    run_id: Any,
+    stage_key: Any = None,
+    *,
+    seconds: Any = None,
+    items: Any = None,
+    **counts: Any,
+) -> None:
+    """Emit ONE stage line, in the ONE shape every stage line in this module uses.
+
+    COUNTS, KEYS, IDS AND DURATIONS ONLY (T-15.2-240). Every count is rendered
+    through `int()` and every name through `_stage_log_key`, so a value that is
+    not an integer is DROPPED rather than stringified into the log. `time.monotonic`
+    is the clock everywhere, never the wall clock, so a clock step cannot produce
+    a negative duration.
+
+    Also the ONE place `entered` is incremented, so the closing summary counts
+    both the closure-driven transitions and the two explicit spans below.
+    """
+    try:
+        parts: list[str] = []
+        if stage_key is not None:
+            parts.append(f"stage={_stage_log_key(stage_key)}")
+        if seconds is not None:
+            parts.append(f"seconds={max(0.0, float(seconds)):.1f}")
+        if items is not None:
+            parts.append(f"items={int(items)}")
+        for name in sorted(counts):
+            value = counts[name]
+            if isinstance(value, bool) or not isinstance(value, int):
+                continue
+            parts.append(f"{_stage_log_key(name)}={int(value)}")
+        if event == "stage_enter":
+            _stage_log_state(run_id)["entered"] += 1
+        log.info(
+            "tribunal_pipeline %s: %s",
+            _stage_log_key(event), " ".join(parts),
+            extra={"run_id": str(run_id)},
+        )
+    except Exception as exc:  # noqa: BLE001 — T-15.2-241
+        _stage_log_swallow(exc)
+
+
+def _stage_log_counts(run_id: Any, stage_key: str, **counts: int) -> None:
+    """Record integer counts to be reported on `stage_key`'s exit line.
+
+    Called at the four places the pipeline already HAS the numbers an operator
+    asks of a silent run — how many angles went out and came back, how many
+    claims the gates selected, how many verification sessions ran. Nothing is
+    computed here that the pipeline did not already compute for itself.
+    """
+    try:
+        _stage_log_state(run_id)["counts"].setdefault(stage_key, {}).update(counts)
+    except Exception as exc:  # noqa: BLE001 — T-15.2-241
+        _stage_log_swallow(exc)
+
+
+def _stage_log_exit(run_id: Any, state: dict[str, Any]) -> None:
+    """Close the currently-open stage: one `stage_exit` line with its counts."""
+    stage_key = state.get("current")
+    if stage_key is None:
+        return
+    state["current"] = None
+    _stage_log_line(
+        "stage_exit",
+        run_id,
+        stage_key,
+        seconds=time.monotonic() - float(state.get("opened_at") or time.monotonic()),
+        items=state.get("items") or 0,
+        **(state.get("counts") or {}).pop(stage_key, {}),
+    )
+
+
+def _stage_log_transition(run_id: Any, stage_key: str, detail: Any = None) -> None:
+    """Record a stage write; emit exit+entry lines only on a real TRANSITION.
+
+    ENTRY IS PER TRANSITION, NOT PER WRITE. The pipeline re-reports the same
+    stage key repeatedly — `intake` is written twice (once bare, once with the
+    resolved research plan) and `deep_research` is re-written on every angle
+    callback — so an entry line per write would emit dozens of them per run and
+    drown exactly the signal this exists to give. A re-report only refreshes the
+    row count carried on the eventual exit line.
+    """
+    try:
+        state = _stage_log_state(run_id)
+        n_items = _stage_log_items(detail)
+        if state.get("current") == stage_key:
+            if n_items is not None:
+                state["items"] = n_items
+            return
+        _stage_log_exit(run_id, state)
+        state["current"] = stage_key
+        state["opened_at"] = time.monotonic()
+        state["items"] = n_items or 0
+        _stage_log_line("stage_enter", run_id, stage_key, items=state["items"])
+    except Exception as exc:  # noqa: BLE001 — T-15.2-241
+        _stage_log_swallow(exc)
+
+
+def _stage_log_close(run_id: Any) -> None:
+    """Close the run's stage log: the last exit line, then ONE summary line.
+
+    `run_stages_complete` is the line an operator greps to answer "did this run
+    get anywhere at all" — it names how many stages were entered and how long the
+    whole staged body took. Idempotent: the registry entry is POPPED, so the
+    `done` write and `run()`'s `finally` can both call this and only the first
+    one speaks.
+    """
+    try:
+        state = _STAGE_LOGS.pop(str(run_id), None)
+        if state is None:
+            return
+        _stage_log_exit(run_id, state)
+        _stage_log_line(
+            "run_stages_complete",
+            run_id,
+            seconds=time.monotonic() - float(state.get("started_at") or time.monotonic()),
+            stages=int(state.get("entered") or 0),
+        )
+    except Exception as exc:  # noqa: BLE001 — T-15.2-241
+        _stage_log_swallow(exc)
 
 
 def _group_passes(stakes: str) -> int:
@@ -987,6 +1217,16 @@ class TribunalPipeline:
                 extra={"run_id": str(run_id)},
             )
             return parked
+        finally:
+            # D-F (15.2-24). EVERY OTHER WAY OUT OF THE STAGED BODY ENDS HERE:
+            # a park, a cancel, an ordinary failure, the zero-claim early return
+            # and the interactive report_spec pause. The normal path already
+            # closed at the `done` write and `_stage_log_close` is idempotent, so
+            # this costs that path nothing — what it buys is that a run which
+            # stopped early still emits its last `stage_exit` and its
+            # `run_stages_complete` line (the operator's answer to "how far did it
+            # get"), and that no run leaves an entry behind in the registry.
+            _stage_log_close(run_id)
 
     async def _run_staged(
         self,
@@ -1050,6 +1290,12 @@ class TribunalPipeline:
 
         async def set_stage(_run_id, _tenant_id, stage_key, **kwargs):  # noqa: A001
             stage_tracker[0] = stage_key
+            # D-F (plan 15.2-24). THE STAGE LOG RIDES THE SAME CHOKE POINT the
+            # park tracker already uses, for the same reason: every in-run stage
+            # write passes through here, so one line here is one line at every
+            # stage boundary — instead of thirty edits, each of which is a chance
+            # to miss one. It cannot raise (see `_stage_log_transition`).
+            _stage_log_transition(_run_id, stage_key, kwargs.get("detail"))
             return await _outer_set_stage(_run_id, _tenant_id, stage_key, **kwargs)
 
         # ------------------------------------------------------------------
@@ -1117,6 +1363,20 @@ class TribunalPipeline:
             # stage the operator has already watched finish. This pipeline is the
             # last writer of that stage, so `async with` closes it on both the normal
             # and the exception path.
+            # D-F (15.2-24), THE ONE STAGE THE CLOSURE CANNOT SEE. The `workshop`
+            # stage key is written by `StageFeed`, not by this method's shadowed
+            # writer, so no transition reaches the stage log for it — and the
+            # workshop is the LONGEST silent stretch of a run (orientation,
+            # candidates, clustering, critique, a tournament and an evolve pass).
+            # Leaving it unlogged would leave the exact gap this plan closes.
+            #
+            # It is an EXPLICIT SPAN rather than a synthetic transition, on
+            # purpose: pushing `workshop` through `_stage_log_transition` would
+            # split the pipeline's two `intake` writes into two separate entries
+            # and re-introduce the entry-per-write noise the transition rule
+            # exists to prevent.
+            _workshop_log_t0 = time.monotonic()
+            _stage_log_line("stage_enter", run_id, "workshop")
             async with StageFeed(
                 run_id=run_id, tenant_id=tenant_id, stage_key="workshop"
             ) as workshop_feed:
@@ -1167,6 +1427,19 @@ class TribunalPipeline:
                 )
             # CHECKPOINT AFTER THE EXPENSIVE THING, never before it.
             await ckpt.put("workshop", {"workshop_result": workshop_result})
+            # (e) THE TWO NUMBERS AN OPERATOR ASKS OF THE WORKSHOP: how many of
+            # the client's own questions went in, and how many sharpened
+            # sub-questions came out. Both are read off values that already
+            # exist — nothing is computed for the log.
+            _stage_log_line(
+                "stage_exit", run_id, "workshop",
+                seconds=time.monotonic() - _workshop_log_t0,
+                questions_in=len(list(parsed.questions or [])),
+                winners_out=len(
+                    list((workshop_result or {}).get("winners") or [])
+                    if isinstance(workshop_result, dict) else []
+                ),
+            )
 
         # Read the result TOLERANTLY (phase rule 4): every key below is optional
         # as far as this reader is concerned, even though 15.2-11 guarantees them.
@@ -1416,6 +1689,15 @@ class TribunalPipeline:
             }
             for a in angles
         ]
+        # D-F (e): the division, in numbers, on the stage's own exit line. Every
+        # value is the length of a list this method already built.
+        _stage_log_counts(
+            run_id, "research_division",
+            client_questions=len(client_questions),
+            workshop_questions=len(winners),
+            angles=len(angles),
+            corroborated=int(_corroborated),
+        )
         await set_stage(
             run_id, tenant_id, "research_division",
             detail={"items": _division_items},
@@ -1598,6 +1880,20 @@ class TribunalPipeline:
         # therefore demoted, never deleted (D-15).
         n_ok_angles = sum(1 for _, r in provider_results if r and r.get("status") == "success")
         n_streams = len({str(name or "") for name, _ in provider_results})
+        # D-F (e) — THE MONEY STAGE'S THREE NUMBERS, recorded before the next
+        # transition closes `deep_research`. These are the counts that would have
+        # answered "did anything come back" during run d6bb3aae's silent stretch.
+        # They are read from `provider_results` rather than from the `_angle_status`
+        # feed list, because a resumed run restores results without ever firing the
+        # per-angle callback — the feed list would say "pending" for work that was
+        # already paid for and delivered.
+        _stage_log_counts(
+            run_id, "deep_research",
+            angles_dispatched=len(angles),
+            angles_ok=int(n_ok_angles),
+            angles_failed=max(0, len(provider_results) - int(n_ok_angles)),
+            streams=int(n_streams),
+        )
         await set_stage(
             run_id, tenant_id, "distill",
             detail={"items": [{
@@ -1923,6 +2219,15 @@ class TribunalPipeline:
             decision_context=_gate_decision_context(mission_brief),
         )
         gate_funnel: dict[str, Any] = gate_result["funnel"]
+        # D-F (e): claims in, claims selected for checking. Taken straight off the
+        # funnel the gates just returned — the same numbers the feed row renders.
+        _stage_log_counts(
+            run_id, "gate",
+            claims_in=int(gate_funnel.get("distilled") or 0),
+            selected_for_checking=int(gate_funnel.get("selected_verify") or 0),
+            not_checkable=int(gate_funnel.get("dropped") or 0),
+            gate_errors=int(gate_funnel.get("gate_errors") or 0),
+        )
         await set_stage(
             run_id, tenant_id, "gate",
             detail={"items": [{
@@ -2463,6 +2768,15 @@ class TribunalPipeline:
             # it to a fresh empty list and discard every reason appended upstream.
             degradation_reasons=degradation_reasons,
         )
+        # D-F (e): sessions run, verdicts written. `total_skeptics` is the
+        # session counter the funnel is built from; the verdict count is the
+        # length of the per-claim verdict lists this stage filled.
+        _stage_log_counts(
+            run_id, "verify",
+            sessions=int(total_skeptics),
+            verdicts=sum(len(v or []) for v in verdicts_by_claim.values()),
+            claims_with_a_verdict=sum(1 for v in verdicts_by_claim.values() if v),
+        )
         # G-10: the closing summary states degradation in words, not with an icon.
         await set_stage(
             run_id, tenant_id, "verify",
@@ -3002,8 +3316,18 @@ async def _write_final_report(
     report_sections = bundle.get("report_sections") or {}
     v = bundle.get("verification") or {}
 
-    await set_stage(run_id, tenant_id, "synthesize", detail={"items": [
-        {"name": "writing final report", "status": "running"}]})
+    # D-F (d) — ONE OF THE TWO STAGE WRITES THAT SIT OUTSIDE `_run_staged`'s
+    # `set_stage` closure. This function is module-level and is ALSO the resume
+    # path's entry point (`run()` calls it directly from the synthesis cache), so
+    # it is deliberately NOT re-plumbed through the closure: threading a logging
+    # object through a paid path would change that path's call graph for the sake
+    # of a log line, which is not a trade worth making. It calls the SAME
+    # module-level recorder instead, which is why the shape of the line here is
+    # identical to every other stage line in this module — and why the resume
+    # path, where no closure ever ran, still reports its stages.
+    _synthesize_detail = {"items": [{"name": "writing final report", "status": "running"}]}
+    _stage_log_transition(run_id, "synthesize", _synthesize_detail)
+    await set_stage(run_id, tenant_id, "synthesize", detail=_synthesize_detail)
 
     anchor_ledger, numbered, prefix_to_n = await _load_citation_context(run_id, tenant_id)
     log.info(
@@ -3193,10 +3517,17 @@ async def _write_final_report(
             f" · {_n_unresolved_anchors} citation anchor(s) could not be resolved "
             f"and were removed (the sentences remain)"
         )
-    await set_stage(run_id, tenant_id, "done", detail={"items": [{
-        "name": _done_name,
-        "status": "done",
-    }]})
+    # D-F (c)/(d) — THE LAST STAGE, AND THE RUN'S CLOSING LINE. The `done` write
+    # closes the run, so its own exit line has no successor transition to trigger
+    # it: `_stage_log_close` emits it explicitly and then the ONE
+    # `run_stages_complete` summary — stages entered and total wall seconds — that
+    # an operator greps to answer "did this run get anywhere". Popping the
+    # registry entry here is also what keeps the normal path from leaving state
+    # behind; `run()`'s `finally` catches every other terminal.
+    _done_detail = {"items": [{"name": _done_name, "status": "done"}]}
+    _stage_log_transition(run_id, "done", _done_detail)
+    await set_stage(run_id, tenant_id, "done", detail=_done_detail)
+    _stage_log_close(run_id)
     log.info(
         "tribunal_pipeline_complete: %d survivors / %d dropped / budget_marker=%r",
         v.get("survivor_count", 0), v.get("dropped_count", 0), bmarker,
