@@ -29,9 +29,12 @@
 # guard that tolerates a not-yet-written file also silently drops a MISNAMED
 # one — a typo'd path makes this gate go green having run nothing.
 #
-# OWNERSHIP: this file is owned EXCLUSIVELY by plan 15.2-02 and NO LATER 15.2
-# PLAN EDITS IT. Every planned 15.2 test file is already listed, so a later wave
-# adds its file to the repo and this gate picks it up with no config change.
+# OWNERSHIP: this file was owned EXCLUSIVELY by plan 15.2-02 for the main phase.
+# Ownership passed to plan 15.2-20 for the GAP PHASE (plans 15.2-20…26), which
+# is the wave-1 plan and therefore adds all five gap-phase filenames in one edit;
+# NO OTHER GAP PLAN EDITS THIS FILE. Every planned 15.2 test file is listed, so a
+# later wave adds its file to the repo and this gate picks it up with no config
+# change.
 # Any file listed here must be pure (no Postgres, no provider key, no network)
 # OR must pytest.skip() cleanly when DATABASE_URL is unset (the
 # test_rls_isolation.py::_require_database_url() pattern) — it must never error
@@ -55,9 +58,11 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
-            # 22 paths: the 19 NEW 15.2 files (waves 1-11) plus the 3 EXISTING
+            # 27 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
             # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
-            # does not already run.
+            # does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
+            # added by plan 15.2-20 — four of which do not exist yet; see the
+            # block below, which says out loud what that costs.
             #
             # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
             #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
@@ -70,6 +75,33 @@ steps:
             #      run by cloudbuild.test-gates.yaml, which the 15.2 sampling
             #      rate runs alongside this gate at every wave merge — listing
             #      them twice would only slow the gate down.
+            #
+            # THE FIVE GAP-PHASE FILES (the last five entries below) ARE ADDED
+            # ALL AT ONCE BY PLAN 15.2-20, AND FOUR OF THEM DO NOT EXIST YET.
+            # Say the trap out loud, because this repository has a documented
+            # history of gates that were green because they ran nothing: the
+            # `ls … || true` idiom above SILENTLY SKIPS a name whose file is
+            # absent, so between waves those four names collect as nothing and
+            # this gate stays green having proven nothing about them. The
+            # arrangement is deliberate — one owner for this config, no plan left
+            # with an ungated test — and it is only honest if each part is done:
+            #   * each owning plan proves ITS OWN file is BOTH collected (read
+            #     the `collecting:` block) AND green;
+            #   * plan 15.2-26 RECONCILES the final collected count before the
+            #     phase closes, so a name that was typo'd cannot survive.
+            #     15.2-20 -> test_stale_reclaim.py   (D-E stale reclaim)
+            #     15.2-21 -> test_brief_input.py
+            #     15.2-22 -> test_web_fetch_replay.py
+            #     15.2-23 -> test_dispatch_pii.py
+            #     15.2-24 -> test_stage_logging.py
+            #
+            # test_stale_reclaim.py is DB-BOUND and therefore SKIPS in THIS gate,
+            # which provisions no Postgres. That is contract-compliant (see the
+            # header: a listed file may skip cleanly when DATABASE_URL is unset)
+            # and it is NOT a pass. What this gate proves for that file is that it
+            # imports, collects and does not error; the harness that RUNS it is
+            # cloudbuild.test-critical.yaml, whose DSN is a superuser on a
+            # disposable schema. Read the `-rs` skip summary, not the exit status.
             FILES=$$(ls nestor_pulse_sdk/tests/test_reliability_retry.py \
                         nestor_pulse_sdk/tests/test_reliability_breaker.py \
                         nestor_pulse_sdk/tests/test_terminal_states.py \
@@ -91,7 +123,12 @@ steps:
                         nestor_pulse_sdk/tests/test_engine_e2e_stubbed.py \
                         nestor_pulse_sdk/tests/test_research_division_assignment.py \
                         nestor_pulse_sdk/tests/test_distiller_coverage.py \
-                        nestor_pulse_sdk/tests/test_hash_chain_replay.py 2>/dev/null || true)
+                        nestor_pulse_sdk/tests/test_hash_chain_replay.py \
+                        nestor_pulse_sdk/tests/test_stale_reclaim.py \
+                        nestor_pulse_sdk/tests/test_brief_input.py \
+                        nestor_pulse_sdk/tests/test_web_fetch_replay.py \
+                        nestor_pulse_sdk/tests/test_dispatch_pii.py \
+                        nestor_pulse_sdk/tests/test_stage_logging.py 2>/dev/null || true)
             if [ -z "$$FILES" ]; then
               echo "no 15.2 engine test files present yet — nothing to run"
               exit 0
