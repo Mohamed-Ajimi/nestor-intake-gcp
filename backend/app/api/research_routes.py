@@ -60,7 +60,15 @@ import logging
 
 import anyio
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
@@ -158,6 +166,79 @@ def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Iden
     if identity.role != "superadmin":
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
     return identity
+
+
+# ---------------------------------------------------------------------------
+# Run -> intake resolution for the standalone run page (D-01, plan 15.3-07)
+# ---------------------------------------------------------------------------
+#
+# DECLARED FIRST, DELIBERATELY. FastAPI matches routes in DECLARATION order, and
+# this path's SECOND segment is the literal ``research`` while every other route in
+# this module has the parameterised ``{intake_id}`` there. Declaring it after them
+# is the class of bug that is invisible in review and indistinguishable from a
+# working denial in production: a perfectly authorized caller would get a 404 that
+# looks exactly like the existence-hidden one. It sits directly beneath
+# :func:`_superadmin_gate` because a ``Depends`` default is evaluated at def time —
+# any earlier and the gate would be a NameError at import.
+#
+# (The route segments differ at the literal, so today's declaration order is not
+# what makes this correct — but the ordering is asserted by a test rather than left
+# to a future reader's inspection, because "it happens not to shadow" is not a
+# property anyone should have to re-derive.)
+
+
+@research_router.get("/research/runs/{run_id}/locate")
+def locate_research_run(
+    run_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Resolve a research run to its intake — the cold-open half of D-01.
+
+    ``/admin/pulse/runs/{runId}`` is a genuinely standalone, bookmarkable URL, which
+    means it carries NO intake id. Every other research verb is
+    ``/intakes/{intake_id}/research/...``, so something has to answer "which intake
+    is this run?" before the page can fetch anything at all. This is that something,
+    and NOTHING else.
+
+    It invents NO isolation logic — it COMPOSES the walls this module already proves,
+    in the same order as :func:`get_research_audit_body`:
+
+    * ``_superadmin_gate`` declared BEFORE ``get_tenant_repo`` (so a null-space user
+      is 404 here rather than 403 there) plus the defense-in-depth in-body role
+      re-check → 404;
+    * the space-scoped ``ResearchRunRepository.get`` → 404 when the run is not
+      visible;
+    * a SECOND, space-scoped resolve of the run's OWN intake → 404 when THAT misses.
+
+    The second resolve is the tenant wall rather than a formality: ``_scope`` is a
+    no-op for a superadmin (who has no own space and reaches across spaces by
+    design — D-05), so the intake resolve is what every other handler here already
+    relies on to prove scope, and this verb must not be the one place that skips it.
+
+    Returns ``{"intake_id", "research_run_id"}`` and NOTHING else. It is deliberately
+    NOT a second run-state read: a status or stage returned here would be a second
+    source of truth for "is it over" that can disagree with the SSE frame the page is
+    already subscribed to (D-05), and two disagreeing answers are worse than one.
+    """
+    # Defense-in-depth role re-check (the same double gate get_bundle_url uses): the
+    # _superadmin_gate dependency is declared BEFORE get_tenant_repo so it resolves
+    # first and a null-space user is 404 here rather than 403 there.
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # The tenant wall: re-resolve the run's OWN intake through the SPACE-SCOPED
+    # intake repo. A run whose intake is not visible to this caller is a run this
+    # caller may not learn the existence of — same 404, same body.
+    intake = repo.get(run.intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    return {"intake_id": str(run.intake_id), "research_run_id": str(run.id)}
 
 
 @research_router.post("/{intake_id}/research", status_code=status.HTTP_202_ACCEPTED)
@@ -775,8 +856,9 @@ def reverify_chain(
 # Phase 15 operator read proxies (SEAM-01, superadmin-only, space-scoped)
 # ---------------------------------------------------------------------------
 #
-# Three sync-``def`` proxies over the Plan 15-03 tribunal read endpoints
-# (verification report / citation source / audit-body drill-down). Same
+# FOUR sync-``def`` proxies over the tribunal read endpoints: verification report /
+# citation source / audit-body drill-down (Plan 15-03), plus the run-event feed
+# (:func:`get_research_events`, plan 15.3-02's endpoint, added by 15.3-07). Same
 # superadmin-only + space-scoped + existence-hidden discipline as
 # :func:`get_bundle_url`: the ``_superadmin_gate`` dependency + a defense-in-depth
 # in-body 404 (Pitfall 5 — a client / cross-tenant caller can NEVER distinguish
@@ -934,6 +1016,101 @@ def get_research_audit_body(
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found") from exc
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
+        ) from exc
+
+
+@research_router.get("/{intake_id}/research/{run_id}/events")
+def get_research_events(
+    intake_id: str,
+    run_id: str,
+    after_seq: int = Query(
+        0, description="Return events with seq STRICTLY GREATER than this. 0 = from the start."
+    ),
+    limit: int = Query(500, description="Max events in this page; the engine clamps to 1..1000."),
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Proxy a run's persisted activity feed to the superadmin surface (D-01/D-05).
+
+    THE BACKFILL READ behind the standalone run page. The SSE stream only carries
+    what happens while somebody is watching; this is what makes closing the page and
+    reopening it show TRUE history. It exists as an intake-side proxy rather than a
+    direct engine call because the intake backend is the SOLE caller of Tribunal —
+    the frontend never calls it directly (D-08).
+
+    Authorization is :func:`get_research_audit_body`'s, arm for arm, because this is
+    a brand-new READ surface and a new surface is a fresh chance to reintroduce the
+    broken-RLS class of bug:
+
+    * ``identity.role != "superadmin"`` → 404 (the gate dependency, plus this
+      defense-in-depth in-body re-check). A client is user-role and D-08 says it can
+      NEVER reach this — existence-hidden, never the forbidden status;
+    * a cross-tenant / missing intake → 404;
+    * a run that is not visible, or whose ``intake_id`` is not the path's → 404, so a
+      caller cannot borrow one intake's authorization to read another's run;
+    * WR-03 — a run with no ``tribunal_run_id`` could never resolve at the seam
+      (the URL would be ``/api/runs/None/events``) → 404, not a seam 500.
+
+    Every one of those is the SAME status with the SAME body: distinguishing them
+    would confirm which of the two ids the caller got right, which is the whole
+    property (T-15.3-60/T-15.3-61).
+
+    The role and null-space arms live HERE and nowhere else. Plan 15.3-02 built the
+    engine endpoint and could not prove them: the tribunal engine has no
+    ``Identity`` — no role, no ``space_id`` — so its only isolation dimension is the
+    JWT tenant plus the FORCE-RLS GUC. It recorded the handover rather than dropping
+    it; ``tests/test_research_events_proxy.py`` is where the handover is discharged.
+
+    ``after_seq`` / ``limit`` are forwarded as typed query parameters (a non-integer
+    is a 422 before this body runs) and the engine's page JSON is returned VERBATIM —
+    this proxy reshapes NOTHING, so a future field the engine adds reaches the page
+    without a change here. The seam call runs OUTSIDE any held DB session (mirrors
+    :func:`get_bundle_url`'s connection-free window, T-15.3-65).
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    run = ResearchRunRepository(repo.session, identity).get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    # WR-03: a run without a tribunal id can never resolve at the seam (the URL
+    # would be /api/runs/None/events) -- existence-hidden 404, not a seam 500.
+    if not run.tribunal_run_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    # Seam call OUTSIDE the held DB session; tribunal RLS 404s a cross-tenant/unknown
+    # run. Map the seam 404 to the pinned existence-hidden 404, any other seam or
+    # transport failure to 502 -- never an unhandled 500.
+    settings = get_settings()
+    try:
+        return tribunal_client.get_run_events(
+            service_url=settings.tribunal_service_url,
+            space_id=str(intake.space_id),
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+            run_id=run.tribunal_run_id,
+            after_seq=after_seq,
+            limit=limit,
+        )
+    except httpx.HTTPStatusError as exc:
+        seam_status = exc.response.status_code if exc.response is not None else 0
+        if seam_status == 404:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found") from exc
+        _log.warning(
+            "events seam error: research_run_id=%s seam_status=%s", run_id, seam_status
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
+        ) from exc
+    except httpx.HTTPError as exc:
+        # Transport failure (timeout / connect error) — never an unhandled 500.
+        _log.warning("events seam transport failure: research_run_id=%s err=%s", run_id, exc)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Research engine unavailable"
         ) from exc
