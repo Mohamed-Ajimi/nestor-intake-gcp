@@ -52,6 +52,14 @@ personal-identifier scrub (`pii.scrub_pii`, applied at `_clamp_search_input`)
 and no second content serialiser (`skeptic.py`). If you are about to write one
 of those here, stop.
 
+OBSERVABILITY (15.3-04). This stream narrates itself onto the run feed through
+the ONE event emitter (`runs/run_events`) and no other: what it loaded, each
+search it dispatched, each page it read (BY HOST — the full URL stays in the
+audit body), the reasoning between its tool rounds, what the query established,
+and — the part that was missing — a NAMED line when the stream is refused before
+it starts or loses its provider halfway through. It writes no `set_stage` call
+and opens no run; the stage key it reports under is `own_research`.
+
 HAND-OFF. Plan 15.2-13 registers `deep_research_audited` in
 `research_division._PROVIDER_RUNNERS` under the key "own" and is the plan that
 widens `degraded_parallel`'s hardcoded three-provider arithmetic to four. This
@@ -95,6 +103,16 @@ from nestor_pulse_sdk.pipeline.tribunal.tools import (
     build_web_fetch,
     force_emit_fact_list,
 )
+# 15.3-04 — THE MODULE-IMPORT FORM IS MANDATORY. Binding the emitter's names
+# directly into this namespace would let a bare call slip past the call-site
+# grep gate while the gate stayed green, so the module object is what is
+# imported and every site below goes through the thunk-taking entry point,
+# whose `build` callable runs the f-strings and subscripts INSIDE the emitter's
+# try (D-06). This wording is deliberately roundabout, and so is the phrasing
+# of the comments at the sites: a grep cannot tell a comment from a call, and
+# both of this phase's gates are greps — one over the forbidden call form, one
+# a COUNT of the permitted one, which a prose mention would silently inflate.
+from nestor_pulse_sdk.runs import run_events
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -130,6 +148,11 @@ _MODEL = os.environ.get("NESTOR_TRIBUNAL_OWN_MODEL", "claude-sonnet-4-6")
 #: use, and for the same reason: it is a PROMPT-INJECTION CONTROL, not
 #: formatting (T-15.2-32).
 _SNIPPET_PROMPT_CHARS = 240
+
+#: Characters of a reasoning line put on the run feed. The emitter clamps at 400
+#: anyway; this is the tighter per-line bound that keeps one chatty turn from
+#: filling the operator's screen (T-15.3-33).
+_THINKING_FEED_CHARS = 240
 
 #: Bounds on what this module accepts back from the model.
 _QUERY_MAX_CHARS = 300
@@ -293,6 +316,48 @@ def _render_results(results: list[dict]) -> str:
         "index, and fetch a page before asserting anything from it."
     )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Feed-line construction (15.3-04). BOTH helpers below RAISE ON PURPOSE, and
+# both are called ONLY from inside an `emit_safe` build thunk, so the raise
+# costs the line and never the paid session (D-06).
+#
+# The alternative — a `.get` chain with a default — is worse than a missing
+# line: it would put a number on the operator's screen that this run never
+# established (T-15.3-23), which is the same class of defect as a silent green.
+# ---------------------------------------------------------------------------
+
+
+def _host_of(url: Any) -> str:
+    """The HOST of an http(s) URL. Raises when there is no usable URL.
+
+    THE HOST, NOT THE URL (T-15.3-30). A fetched-page row is the feed row most
+    likely to carry a query string with an identifier in it, and the full URL is
+    already kept in the audit body the drill-down reaches. Any credentials in
+    the authority are dropped with it.
+    """
+    if not isinstance(url, str):
+        raise TypeError("a web_fetch block carried no URL string")
+    authority = url.split("//", 1)[1].split("/", 1)[0]
+    host = authority.rsplit("@", 1)[-1]
+    if not host:
+        raise ValueError("a web_fetch block carried a URL with no host")
+    return host
+
+
+def _raw_fact_count(block: Any) -> int:
+    """How many fact entries the MODEL emitted, before this module dropped any.
+
+    Raises when the tool input is not a dict, has no `facts` key, or carries
+    something that is not a list under it — every one of which is a shape a
+    degrading model really does return. The skipped count on the done line is
+    the difference between this and what survived parsing, and a skipped count
+    that cannot be computed must not be printed as zero.
+    """
+    inp = _coerce_json(_block_get(block, "input"), dict)
+    entries = _coerce_json(inp["facts"], list)
+    return len(entries)
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +563,20 @@ async def run_own_research(
             "continues as a degraded 3-stream run rather than failing.",
             reason,
         )
+        # A LOST STREAM MUST SAY SO. Until now this path degraded cleanly and
+        # SILENTLY, and silence reads to an operator as absence: a run whose
+        # fourth stream never ran looked exactly like a run that had no fourth
+        # stream. The reason is named on the feed, not only in Cloud Logging.
+        run_events.emit_safe(
+            run_id,
+            stage="own_research",
+            kind="agent_fail",
+            build=lambda: (
+                f"Own research did not run — {reason}. This run continues on its "
+                "other research streams.",
+                {"provider": PROVIDER},
+            ),
+        )
         return _result(reasons=[reason])
 
     reasons: list[str] = []
@@ -550,6 +629,19 @@ async def run_own_research(
         build_web_fetch(max_uses=max_fetch_uses, max_content_tokens=4000),
         EMIT_FACT_LIST_TOOL,
     ]
+    # The design's "Loaded X — Y" line: which tools this stream is holding and
+    # the two ceilings that bound what it can spend with them.
+    run_events.emit_safe(
+        run_id,
+        stage="own_research",
+        kind="tool",
+        build=lambda: (
+            "Loaded own research tools — serpapi_search · web_fetch · "
+            f"emit_fact_list · up to {max_searches} searches and "
+            f"{max_fetch_uses} page reads",
+            {"provider": PROVIDER},
+        ),
+    )
 
     session_label = f"own_researcher[{str(question or '')[:40]}]"
     # PER SESSION, never module level (T-15.2-04): the budget bounds ONE loop.
@@ -606,11 +698,45 @@ async def run_own_research(
             for url in _collect_citation_urls(content):
                 if url not in citations:
                     citations.append(url)
+            # ONE feed line per page this turn actually read. The block type is
+            # the SERVER tool's own result marker, so this counts pages the API
+            # fetched inside the turn — this module still issues no request of
+            # its own, and reads nothing new to say so.
+            for block in content:
+                if _block_get(block, "type") != "web_fetch_tool_result":
+                    continue
+                run_events.emit_safe(
+                    run_id,
+                    stage="own_research",
+                    kind="search",
+                    build=lambda _b=block: (
+                        f"Fetching {_host_of(_block_get(_block_get(_b, 'content'), 'url'))}",
+                        {"provider": PROVIDER},
+                    ),
+                )
+            _prose_before = len(prose_parts)
             for block in content:
                 if _block_get(block, "type") == "text":
                     text = _block_get(block, "text")
                     if isinstance(text, str) and text.strip():
                         prose_parts.append(text)
+            # AT MOST ONE `thinking` LINE PER TOOL ROUND, by construction: this
+            # is one statement in a loop whose iteration count is already bounded
+            # by `max_turns` + the pause budget, so a chatty model cannot flood
+            # the stage (T-15.3-33). `_prose_before` is a length, not a copy —
+            # the joining and slicing happen inside the thunk.
+            if len(prose_parts) > _prose_before:
+                run_events.emit_safe(
+                    run_id,
+                    stage="own_research",
+                    kind="thinking",
+                    build=lambda _from=_prose_before: (
+                        " ".join(
+                            part.strip() for part in prose_parts[_from:]
+                        ).strip()[:_THINKING_FEED_CHARS],
+                        {"provider": PROVIDER},
+                    ),
+                )
 
             # F8 — the pause_turn branch, ahead of the stop_reason dispatch. A
             # provider may end a turn with stop_reason "pause_turn" simply
@@ -639,6 +765,22 @@ async def run_own_research(
             if fact_block is not None:
                 facts, not_found = _parse_fact_list(fact_block, facet=facet)
                 emitted = True
+                # The design's own-query result line: what was established, how
+                # many pages it came from, and how many of the model's own
+                # entries this module refused (no usable source URL, too short,
+                # not a dict). `_raw_fact_count` RAISES rather than guess that
+                # last number — see its docstring.
+                run_events.emit_safe(
+                    run_id,
+                    stage="own_research",
+                    kind="agent_done",
+                    build=lambda: (
+                        f"Own query done — {len(facts)} facts from "
+                        f"{len(citations)} pages · "
+                        f"{_raw_fact_count(fact_block) - len(facts)} skipped",
+                        {"items": len(facts), "provider": PROVIDER},
+                    ),
+                )
                 break
 
             # Append the assistant turn ONCE, for every tool_use block in it.
@@ -673,6 +815,40 @@ async def run_own_research(
                     searching = False
                     if answer.get("reason") and answer["reason"] not in reasons:
                         reasons.append(answer["reason"])
+                # THE SEARCH LINE IS EMITTED FOR A SEARCH THAT RAN. The text is
+                # the CLAMPED, ALREADY-SCRUBBED value handed to the provider, so
+                # the feed row and the egress are the same string; a row
+                # describing a different string would be a false record. It is
+                # read from the answer rather than from the clamp, because a
+                # refused search (budget spent, provider unavailable) has left
+                # nothing and must not be reported as a search — the same
+                # honesty rule the `agent_done` fact count follows.
+                if answer.get("called"):
+                    run_events.emit_safe(
+                        run_id,
+                        stage="own_research",
+                        kind="search",
+                        build=lambda: (
+                            f"Searching — {args['q']}",
+                            {"provider": PROVIDER},
+                        ),
+                    )
+                # A stream that STOPS mid-session says so too, for the same
+                # reason the pre-flight gate does. This is a separate statement
+                # rather than a line inside the branch above, so nothing about
+                # whether searching continues can depend on an event.
+                if answer.get("stop_searching"):
+                    run_events.emit_safe(
+                        run_id,
+                        stage="own_research",
+                        kind="agent_fail",
+                        build=lambda: (
+                            "Own research lost its search provider mid-session — "
+                            f"{answer.get('reason') or 'no reason reported'}. It "
+                            "will finish with what it has already established.",
+                            {"provider": PROVIDER},
+                        ),
+                    )
                 tool_results.append(
                     {
                         "type": "tool_result",
