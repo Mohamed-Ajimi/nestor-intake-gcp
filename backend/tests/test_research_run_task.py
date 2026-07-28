@@ -36,6 +36,7 @@ import pytest
 
 run_task = pytest.importorskip("app.research.run_task")
 identity_mod = pytest.importorskip("app.auth.identity")
+httpx = pytest.importorskip("httpx")
 
 Identity = identity_mod.Identity
 
@@ -1013,3 +1014,265 @@ def test_a_malformed_completed_at_falls_back_to_the_mirror_clock(monkeypatch):
         f"be coerced into a datetime: {values['completed_at']!r}"
     )
     assert "started_at" not in values, "a None started_at must not NULL the column"
+
+
+# ===========================================================================
+# Seam status classification (quick task 260728-ftv) — a transient 401/403 from
+# get_metrics must NOT finalize a live run as failed.
+# ===========================================================================
+#
+# LIVE INCIDENT 2026-07-28. tribunal-worker claimed run d6bb3aae at 08:22:57 and the
+# engine started executing. tribunal-api rolled out a new revision at 08:23-08:24.
+# At 08:25:08 nestor-api got a 401 on GET /api/runs/{id}/metrics and finalized the
+# run `failed`; at 08:33:14 the SAME seam answered 200 OK, and the engine wrote its
+# last heartbeat at 08:37:40 — it had been working the whole time. ZERO 401s ever
+# reached tribunal-api (checked in its logs): Cloud Run rejected them at the EDGE
+# while traffic shifted between revisions. So the 401 was transient infrastructure,
+# not a client error, and the driver's `4xx -> raise` arm turned it into a false
+# terminal state while the run kept spending money.
+#
+# Generalised, the defect was: ANY deploy of tribunal-api during a live run marked
+# that run failed in the operator's UI. These tests pin the narrow fix — 401/403
+# retried within a bounded budget, EVERY other 4xx still fatal on first sight.
+
+
+def _seam_status_error(status_code: int) -> "httpx.HTTPStatusError":
+    """An ``httpx.HTTPStatusError`` shaped exactly like the one the seam raises.
+
+    ``tribunal_client`` calls ``raise_for_status()``, so the driver only ever sees
+    this type, and it reads ``exc.response.status_code`` to classify.
+    """
+    request = httpx.Request("GET", "https://tribunal.example/api/runs/x/metrics")
+    return httpx.HTTPStatusError(
+        f"{status_code}", request=request, response=httpx.Response(status_code)
+    )
+
+
+def _script_metrics(monkeypatch, script: list) -> dict:
+    """Drive ``get_metrics`` through a script that may contain FAILURES.
+
+    An ``int`` entry raises ``HTTPStatusError`` with that status code; a ``dict``
+    entry is returned as a metrics payload. The last entry sticks once the script is
+    exhausted (same convention as the ``fake_tribunal_client`` fixture), so a
+    sustained-outage test is written as a single trailing status code.
+
+    Returns a counter dict whose ``n`` is the number of ``get_metrics`` calls served
+    — that count is what proves a status was retried or NOT retried.
+    """
+    served = {"n": 0}
+
+    def _fake_get_metrics(*args, **kwargs):
+        idx = min(served["n"], len(script) - 1)
+        served["n"] += 1
+        entry = script[idx]
+        if isinstance(entry, int):
+            raise _seam_status_error(entry)
+        return dict(entry)
+
+    monkeypatch.setattr(
+        run_task.tribunal_client, "get_metrics", _fake_get_metrics, raising=False
+    )
+    return served
+
+
+def _spy_sleep(monkeypatch) -> list:
+    """Record every ``time.sleep`` the driver performs, without sleeping.
+
+    The `_fast_poll` fixture already collapses POLL_SECONDS to 0.0, so elapsed time
+    cannot distinguish "retried instantly" from "did not retry at all". This spy can:
+    it counts the CALLS. Replaces the module's `time` reference with a namespace
+    rather than patching the real `time` module, so nothing else in the process is
+    affected. `time.sleep` is this module's only use of `time`.
+    """
+    slept: list = []
+    monkeypatch.setattr(
+        run_task, "time", types.SimpleNamespace(sleep=lambda s: slept.append(s))
+    )
+    return slept
+
+
+def test_a_transient_401_is_retried_and_the_run_reaches_its_real_terminal(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend, warning_sink
+):
+    """THE REGRESSION TEST FOR THE 2026-07-28 INCIDENT.
+
+    A 401 that clears on the next tick must NOT be terminal: the driver keeps
+    polling and the run finalizes on the state the ENGINE actually reached.
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+    _spy_sleep(monkeypatch)
+
+    served = _script_metrics(
+        monkeypatch,
+        [
+            401,  # Cloud Run edge rejects mid-rollout...
+            {"status": "running", "current_stage": "delegation"},  # ...then recovers.
+            {"status": "completed", "current_stage": "report"},
+        ],
+    )
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert sink["final"] == [("completed", "fake report")], (
+        "a 401 that CLEARED must not finalize the run — the engine reached "
+        f"completed, so the row must say completed. Got: {sink['final']}"
+    )
+    assert served["n"] == 3, (
+        f"the driver must have polled past the 401, not stopped at it: {served['n']}"
+    )
+    assert any("auth 401" in line for line in warning_sink), (
+        "a tolerated 401 must be VISIBLE at WARNING — this driver runs headless, and "
+        "an invisible retry is how a rollout-shaped outage gets misdiagnosed as a "
+        f"hang. Seen: {warning_sink}"
+    )
+
+
+def test_a_transient_403_behaves_exactly_like_the_401(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """403 is the same edge-rejection shape as 401 and gets the same tolerance."""
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+    _spy_sleep(monkeypatch)
+
+    served = _script_metrics(
+        monkeypatch,
+        [
+            403,
+            {"status": "running", "current_stage": "delegation"},
+            {"status": "completed", "current_stage": "report"},
+        ],
+    )
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert sink["final"] == [("completed", "fake report")]
+    assert served["n"] == 3
+
+
+def test_a_sustained_401_finalizes_failed_with_an_auth_specific_message(
+    monkeypatch, fake_tribunal_client, fake_resend
+):
+    """The tolerance is BOUNDED, and its exhaustion is worded as an AUTH failure.
+
+    Runs the REAL shipped budget (not a shrunken one) so this also proves the loop
+    terminates rather than polling forever. The wording is asserted because a
+    post-mortem has to tell this apart from the 5xx exhaustion at a glance.
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+    slept = _spy_sleep(monkeypatch)
+
+    served = _script_metrics(monkeypatch, [401])  # never recovers
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    status, message = sink["final"][-1]
+    assert status == "failed"
+    assert "auth" in message and "401" in message, (
+        f"the exhaustion message must name the AUTH cause, not just 'an error': {message!r}"
+    )
+    assert "5xx" not in message, (
+        "the auth message must be DISTINCT from the 5xx one, or the two failure "
+        f"modes are indistinguishable in a post-mortem: {message!r}"
+    )
+    assert "600s" in message, (
+        "the message must state the tolerated outage in wall-clock seconds so an "
+        f"operator can tell whether it covered a Cloud Run rollout: {message!r}"
+    )
+    # Budget arithmetic: 200 retries x POLL_SECONDS(3.0s) = 600s = 10 minutes,
+    # sized to cover the incident's observed >=8m06s edge outage.
+    assert served["n"] == run_task._MAX_METRICS_AUTH_RETRIES + 1
+    assert len(slept) == run_task._MAX_METRICS_AUTH_RETRIES
+    assert run_task._MAX_METRICS_AUTH_RETRIES == 200
+    # Bound at IMPORT time from the real POLL_SECONDS (3.0), which is why this still
+    # reads 600.0 even though `_fast_poll` collapses the cadence to 0.0 for tests.
+    assert run_task._MAX_METRICS_AUTH_OUTAGE_SECONDS == 600.0, (
+        "the maximum tolerated outage is 200 x 3.0s = 600s = 10 minutes, sized to "
+        "cover the incident's observed >=8m06s edge outage; changing it must be a "
+        "deliberate, re-argued decision"
+    )
+
+
+def test_a_404_is_fatal_on_the_first_occurrence(
+    monkeypatch, fake_tribunal_client, fake_resend
+):
+    """THE GUARD AGAINST WIDENING THE RETRY ARM TO ALL 4xx.
+
+    400/404/409 are GENUINE client errors — a 404 means the run id does not exist.
+    Retrying those for ten minutes would hide real bugs behind a delay. So: fatal on
+    the FIRST occurrence, exactly one seam call, and NO sleep.
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+    slept = _spy_sleep(monkeypatch)
+
+    # A recovery entry follows on purpose: if the driver ever retried, it would
+    # reach `completed` and this test would fail loudly rather than pass by luck.
+    served = _script_metrics(
+        monkeypatch, [404, {"status": "completed", "current_stage": "report"}]
+    )
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert sink["final"][-1][0] == "failed", (
+        "a 404 is a real client error and must stay fatal — do NOT widen the "
+        f"transient-auth arm to all 4xx. Got: {sink['final']}"
+    )
+    assert served["n"] == 1, (
+        f"a 404 must not be retried even once: {served['n']} get_metrics calls"
+    )
+    assert slept == [], f"a 404 must not sleep before failing: {slept}"
+
+
+def test_the_5xx_budget_is_unchanged_by_the_auth_arm(
+    monkeypatch, fake_tribunal_client, fake_resend
+):
+    """5xx tolerance keeps its OWN (short) budget and its OWN message.
+
+    The two arms are deliberately separate: a 5xx is a blip (3 x 3s = 9s), a 401 is
+    a revision rollout (200 x 3s = 600s). This pins that adding the auth arm did not
+    silently lengthen — or shorten — the 5xx one.
+
+    NOTE: no such test existed before this quick task; the 5xx retry path shipped
+    unpinned. So this is written new rather than left "untouched".
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+    slept = _spy_sleep(monkeypatch)
+
+    served = _script_metrics(monkeypatch, [503])  # never recovers
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    status, message = sink["final"][-1]
+    assert status == "failed"
+    assert message == f"metrics 5xx after {run_task._MAX_METRICS_5XX_RETRIES} retries", (
+        f"the 5xx message must be unchanged: {message!r}"
+    )
+    assert served["n"] == run_task._MAX_METRICS_5XX_RETRIES + 1 == 4
+    assert len(slept) == run_task._MAX_METRICS_5XX_RETRIES == 3
+    assert run_task._MAX_METRICS_5XX_RETRIES == 3, (
+        "the 5xx budget must stay 3; the long budget belongs to the auth arm only"
+    )
