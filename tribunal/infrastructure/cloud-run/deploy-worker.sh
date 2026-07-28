@@ -38,6 +38,27 @@ set -euo pipefail
 PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
 REGION="${REGION:-europe-west1}"
 INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
+# MIN_INSTANCES — defaults to 1 (the D-04 always-on poll loop). Override to 0 to ship a
+# revision that does NOT start polling.
+#
+# WHY THIS OVERRIDE EXISTS (2026-07-28). This script's `gcloud run deploy` sets
+# --min-instances=1 AND --set-env-vars=...NESTOR_WORKER_STALE_MINUTES=60 in ONE atomic
+# command. So a plain re-run both UNPAUSES the worker and reverts the staleness window at
+# the same instant. When an unresolved run is still sitting in status='running' with a NULL
+# heartbeat_at (any run predating migration 0014), CLAIM_SQL's
+# COALESCE(heartbeat_at, started_at) falls back to a stale started_at, the row is older than
+# 60 minutes, reclaim_count is below the ceiling — and the fresh worker CLAIMS AND
+# RE-EXECUTES IT AT FULL COST, unattended.
+#
+# That is the D-E money defect the 15.2 gap phase was built to close, and the
+# DEPLOY-RUNBOOK's ordering (cancel the stuck run at step 6, unpause deliberately at step 7)
+# is defeated if step 4's script unpauses on its own. Ship paused, resolve the run, then
+# unpause explicitly:
+#   MIN_INSTANCES=0 IMAGE_TAG="$SHA" TRIBUNAL_ANTHROPIC_SECRET=... ./deploy-worker.sh
+#   ... cancel the stuck run through the UI ...
+#   gcloud run services update tribunal-worker --min-instances=1 --region=... --project=...
+# The default stays 1 so an ordinary deploy is unchanged.
+MIN_INSTANCES="${MIN_INSTANCES:-1}"
 # Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal runtime SA — NOT the
 # intake nestor-run SA. A compromised worker reaches only the Tribunal secrets + audit
 # bucket (no identitytoolkit.admin, no intake superadmin secret, no intake uploads bucket).
@@ -155,7 +176,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --memory=2Gi \
   --cpu=1 \
   --no-cpu-throttling \
-  --min-instances=1 \
+  --min-instances="${MIN_INSTANCES}" \
   --max-instances=5 \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
@@ -168,7 +189,12 @@ echo "Deployed: ${SERVICE_NAME}"
 echo "  Project:   ${PROJECT}"
 echo "  SA:        ${SA}"
 echo "  Cloud SQL: ${INSTANCE}"
-echo "  min-instances=1 (always-on poll loop, D-04)"
+echo "  min-instances=${MIN_INSTANCES} (D-04 always-on poll loop when 1; 0 = shipped PAUSED)"
+if [ "${MIN_INSTANCES}" = "0" ]; then
+  echo "  ** SHIPPED PAUSED — this revision will NOT claim runs until you unpause it: **"
+  echo "     gcloud run services update ${SERVICE_NAME} --min-instances=1 --region=${REGION} --project=${PROJECT}"
+  echo "     Resolve any run still in status='running' BEFORE that command."
+fi
 echo "  max-instances=5 (D-08 concurrency — advisory lock makes >1 poller safe)"
 echo "  Revision suffix: ${REVISION_SUFFIX}"
 echo ""
