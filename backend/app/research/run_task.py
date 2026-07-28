@@ -92,6 +92,42 @@ POLL_SECONDS = 3.0
 #: (16-RESEARCH Pitfall 1 — the poll driver must never crash the BackgroundTask).
 _MAX_METRICS_5XX_RETRIES = 3
 
+#: Seam statuses treated as TRANSIENT INFRASTRUCTURE rather than client errors.
+#:
+#: EXACTLY 401 and 403 — nothing else. Cloud Run rejects requests at its EDGE with
+#: these two while traffic shifts between revisions, so they arrive shaped like a
+#: client error while meaning "the front door moved". Every other 4xx (400, 404,
+#: 409, ...) stays FATAL ON FIRST SIGHT: those are genuine client errors and
+#: retrying them would hide real bugs behind a ten-minute delay. Do not widen this
+#: set — ``test_a_404_is_fatal_on_the_first_occurrence`` exists to stop exactly that.
+_METRICS_AUTH_RETRY_STATUS = frozenset({401, 403})
+
+#: Bounded retries on a 401/403 from ``get_metrics`` before finalizing as failed.
+#:
+#: A SEPARATE budget from ``_MAX_METRICS_5XX_RETRIES``, deliberately, because the two
+#: failures have different SHAPES. A 5xx is a blip — 3 retries x 3s = 9s of tolerance
+#: is right for it. A 401 here is a Cloud Run REVISION ROLLOUT, which is a slow
+#: planned event, and 9s of tolerance would not survive one.
+#:
+#: MAXIMUM TOLERATED OUTAGE: 200 x POLL_SECONDS(3.0s) = 600s = 10 MINUTES.
+#:
+#: Sized from the live 2026-07-28 incident, not from taste: nestor-api saw the 401 at
+#: 08:25:08 and the same seam answered 200 OK at 08:33:14 — an outage window of at
+#: least 8m06s (its true length is unknown, because the driver gave up on the first
+#: 401 and stopped sampling). 10 minutes covers that observed window with margin.
+#:
+#: The cost of being generous is bounded and cheap: if auth is GENUINELY broken, this
+#: spends 10 minutes issuing harmless GETs before finalizing failed. The cost of being
+#: stingy is the incident itself — a run marked ``failed`` in the operator's UI while
+#: the engine keeps executing and spending money. Those are not symmetric.
+_MAX_METRICS_AUTH_RETRIES = 200
+
+#: The above budget expressed in wall-clock seconds, so a reader (and the failure
+#: message) never has to re-derive ``POLL_SECONDS x N``. Bound at import time on
+#: purpose: tests collapse ``POLL_SECONDS`` to 0.0, and the message must keep
+#: reporting the REAL tolerated outage rather than 0s.
+_MAX_METRICS_AUTH_OUTAGE_SECONDS = _MAX_METRICS_AUTH_RETRIES * POLL_SECONDS
+
 
 def _seam_datetime(value: Any, field: str) -> Any:
     """Parse an ISO-8601 timestamp from the seam, or return ``None``. NEVER raises.
@@ -623,7 +659,10 @@ def run_poll_driver(
     * **CALL** holds NO connection: ``ensure_org`` → ``ensure_project`` →
       ``create_run`` (deterministic ``uuid5`` idempotency key, D-04) → poll loop
       (``get_metrics`` → :func:`mirror_tick` per tick → break on the RESEARCH terminal
-      set) with bounded 5xx retries on ``get_metrics`` (Pitfall 1);
+      set) with bounded 5xx retries on ``get_metrics`` (Pitfall 1) and a SEPARATE,
+      longer bounded retry on a transient 401/403 (a Cloud Run revision rollout
+      rejects at the edge — live incident 2026-07-28); every other 4xx stays fatal
+      on first sight;
     * **CALL tail (completed)** — :func:`build_completion` runs the D-06 audit-chain
       gate + the D-01-scrubbed bundle fetch + zip build + GCS upload, ALL in the
       connection-free window (T-17-07); it returns the report + chain verdict +
@@ -684,10 +723,12 @@ def run_poll_driver(
 
         metrics: dict[str, Any] = {"status": run.get("status", "queued")}
         consecutive_5xx = 0
+        consecutive_auth = 0
         while True:  # NO db connection held across this loop (T-16-06).
             try:
                 metrics = tribunal_client.get_metrics(run_id=rid, **seam_kwargs)
                 consecutive_5xx = 0
+                consecutive_auth = 0
             except httpx.HTTPStatusError as exc:
                 # 5xx tolerance (Pitfall 1): retry bounded, then finalize failed.
                 status_code = exc.response.status_code if exc.response else 0
@@ -707,7 +748,42 @@ def run_poll_driver(
                         )
                     time.sleep(POLL_SECONDS)
                     continue
-                raise  # a 4xx is a real error → on_error finalizes failed.
+                if status_code in _METRICS_AUTH_RETRY_STATUS:
+                    # Transient-auth tolerance (live incident 2026-07-28). Cloud Run
+                    # rejected get_metrics at the EDGE with a 401 while tribunal-api
+                    # shifted traffic between revisions — zero 401s ever reached the
+                    # service. Treating that as fatal marked a HEALTHY run ``failed``
+                    # while the engine kept executing for another 12 minutes: the
+                    # dishonest-terminal-state class D-12 exists to prevent. Any
+                    # deploy of tribunal-api during a live run reproduced it.
+                    consecutive_auth += 1
+                    if consecutive_auth > _MAX_METRICS_AUTH_RETRIES:
+                        return (
+                            rid,
+                            {
+                                "status": "failed",
+                                "error_message": (
+                                    f"metrics auth {status_code} persisted for "
+                                    f"{_MAX_METRICS_AUTH_OUTAGE_SECONDS:.0f}s "
+                                    f"({_MAX_METRICS_AUTH_RETRIES} retries) — the "
+                                    "seam never recovered"
+                                ),
+                            },
+                            None,  # failed terminal → no completion bundle.
+                        )
+                    # WARNING on purpose: this is the line that tells the next
+                    # on-call that a run PAUSED on auth rather than died of it.
+                    log.warning(
+                        "run_poll_driver metrics auth %s (transient, retry %s/%s "
+                        "within %.0fs): research_run_id=%s tribunal_run_id=%s",
+                        status_code, consecutive_auth, _MAX_METRICS_AUTH_RETRIES,
+                        _MAX_METRICS_AUTH_OUTAGE_SECONDS, research_run_id, rid,
+                    )
+                    time.sleep(POLL_SECONDS)
+                    continue
+                # Every OTHER 4xx (400/404/409/...) is a real client error → fatal on
+                # the FIRST occurrence, no retry and no sleep; on_error finalizes failed.
+                raise
 
             mirror_tick(identity, research_run_id, rid, metrics)
             if metrics.get("status") in RESEARCH_TERMINAL:
