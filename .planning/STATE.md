@@ -72,7 +72,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: park until 2026-08-01, then plan 18 Tasks 4-6; remaining order 15.2 -> 19 -> 20.
-Last activity: 2026-07-27 -- Phase 15.3 execution started
+Last activity: 2026-07-28 -- Combined 15.2+15.3 deploy COMPLETED (nestor-api 00044-8bz at SHA 20260728-132637 carries the 401 fix; tribunal-worker RECREATED and unpaused as 00002-ztp, claimed nothing) + quick task 260728-kdw fixed the runbook ordering that caused the incident
 
 Progress: [██████████] 100%
 
@@ -191,6 +191,8 @@ Recent decisions affecting current work (v1.1):
 | fast | Context-pack runs merged into History sheet (real skill names) + NextStepBanner/AISkillsPanel/search in sticky right rail, stepper stays center | 2026-07-23 | 1aafe77 | — |
 | 260723-kjj | Exhaustive i18n sweep (validated): AI-skills descs, History labels, TopBar bell, SKILL_LABELS→i18n, 37-key research ns backfilled en/fr, i18n-audit.mjs hard-gate script; context-pack accordion removed from center (verifier: passed, 1 browser check open) | 2026-07-23 | cd7e63a | [260723-kjj-exhaustive-i18n-hardcoded-string-sweep-h](./quick/260723-kjj-exhaustive-i18n-hardcoded-string-sweep-h/) |
 | 260724-vyf | Broaden ResearchRunProgress mount gate to show Phase-15 research surfaces (D15 feed, verification report button, cost, citations) on delivered/archived intakes, not just in_research (Phase-15 UAT gap; surfacing only, not backfill; not yet deployed) | 2026-07-24 | 4398edb | [260724-vyf-broaden-researchrunprogress-mount-gate-t](./quick/260724-vyf-broaden-researchrunprogress-mount-gate-t/) |
+| 260728-ftv | A transient seam 401/403 must not finalize a run as failed — retry 401/403 on a separate 10-min budget (200 x 3.0s), every other 4xx stays fatal on first occurrence; also pinned the 5xx arm, which had shipped completely UNPINNED (row added retroactively 2026-07-28 — the task completed but was never recorded here) | 2026-07-28 | 31a7f71 | [20260728-seam-401-retry](./quick/20260728-seam-401-retry/) |
+| 260728-kdw | Fix DEPLOY-RUNBOOK § 15.2.k ordering that caused the 2026-07-28 incident (worker deploys LAST, after the run is resolved) + record the claims-first/sleeps-last boot mechanism + the credential-free queue-read recipe + fill the combined deploy record (TWO SHAs, not one) | 2026-07-28 | 30ea1b7 | [260728-kdw-runbook-15-2-k-ordering-and-deploy-record](./quick/260728-kdw-runbook-15-2-k-ordering-and-deploy-record/) |
 
 ## Deferred Items
 
