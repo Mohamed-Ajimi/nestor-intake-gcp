@@ -63,7 +63,13 @@ Two observations worth keeping:
 Two conflicts were recorded, both challenging Q1's premise that dynamic pricing is widely deployed
 (OPIS: "very few do dynamic pricing where they change their prices more than once a day"; CGI:
 "'dynamic' here means a smarter cadence … not frequent visible volatility"). This channel had never
-reached an output before. **It still does not reach the client report** — it stops at the checkpoint.
+reached an output before.
+
+> ✅ **CORRECTION — it DOES reach the client report.** An earlier revision of this document said it
+> "stops at the checkpoint". That is false. The report carries a
+> `### Where the brief did not match what the research found` section rendering **both** conflicts in
+> full, each with its quote and a live publisher URL (`opis.com`, `cgi.com`). The channel works
+> end-to-end. Q2 of the engine-design open questions is therefore **answered: yes, it delivers.**
 
 ---
 
@@ -148,7 +154,39 @@ despite the angle prompt instructing "Report all findings in the language of the
 17 claims cannot lexically match anything under any matcher. Cheap to fix and it removes one
 guaranteed-zero-overlap stream.
 
-## D-V01-4 — a contradiction shipped unflagged (high)
+## D-V01-4 — ~~a contradiction shipped unflagged~~ **WITHDRAWN. The engine caught it, and settled it better than this analysis did.**
+
+> ⛔ **THIS DEFECT IS WITHDRAWN IN FULL. It was wrong twice over, and the error was mine.**
+>
+> The report contains a `## Disputed & changed` section carrying **34 settled contradiction entries**
+> (11 `DISPUTED`, 23 `scope-dependent`), each with reasoning and an explicit **"Settled reading"**.
+> The De Haan case is entry 34:
+>
+> > *"**De Haan — number_of_transformed_locations** — scope-dependent: All three claims describe the
+> > same rollout trajectory at different points in time: claim [2] refers to a very early stage
+> > (~2021, roughly 6–7 Tony's Street Food only), claim [1] describes a mid-rollout snapshot (October
+> > 2024, ~90 shops on ~120 manned stations), and claim [0] is a general/undated figure (~90) that
+> > has since been superseded. **Settled reading:** As of early-to-mid 2026, De Haan operates 117
+> > Tony's shops across approximately 200 stations in the Netherlands (source: tankstation.nl, last
+> > modified January 2026)."*
+>
+> So it was **detected, classified, re-sourced against the live web, dated, and resolved to a current
+> canonical figure**. My "13× contradiction shipped unflagged" was (a) not a contradiction and (b) not
+> unflagged. The engine's own answer is better than the one this document reached two revisions later.
+>
+> **What this reveals that the rest of the document understated:** the verification stage is doing
+> real, source-fetching, date-aware work. Besides the 34 settled contradictions it maintains a
+> `### Findings overtaken by newer information` channel that re-fetches cited pages and flags claims
+> that have gone stale (De Haan ~190→200 stations, PriceCast 10,000→12,500 sites, Jitha's Deli four→
+> five locations). None of that was visible from the claim table or the logs.
+>
+> **The one real gap, and it is a consequence of D-V01-9/10, not of the detector:** all 34 settled
+> entries come from the dynamic-pricing and convenience domains. **Not one concerns coffee** — no
+> MPK, Maxol, ROSA or Landi Sursee. There was nothing to cross-check, because only one provider
+> produced coffee claims at all. **A single-provider topic gets no contradiction coverage by
+> construction** — which is the strongest argument yet for fixing extraction.
+
+The original text of this defect follows, retained for the record:
 
 > **gemini** — "De Haan heeft omstreeks **90 locaties** getransformeerd naar het Tony's concept."
 >
@@ -350,9 +388,12 @@ Three smaller defects in the same section:
   "traffic en merkperceptie" and the entire final clause about under what conditions an own premium
   brand can be accepted. Part of Q2 is never posed, let alone answered.
 - A raw internal marker leaked into client-facing prose: `[[c:4107f070, c:570b440d]]` (1 occurrence).
-- The one place contradiction-detection fired, it **false-positived**: the MPK +60% (Smokin' Bean
-  switch) and +18% (Lavazza) figures describe two different events and were reported as
-  *"tegenstrijdige informatie"* — while the real 13× De Haan contradiction (D-V01-4) went unflagged.
+- The body prose calls the MPK +60% (Smokin' Bean switch) and +18% (Lavazza) figures
+  *"tegenstrijdige informatie"* when they describe two different events. **Softened from an earlier
+  revision that called this a detector false-positive** — it is not: MPK never entered the
+  contradiction pipeline at all (it appears nowhere in the 34 settled entries), and the surrounding
+  prose does present both figures correctly and concludes that both show a partner switch lifting
+  volume. This is loose wording in the writer, not a verification failure.
 
 ## D-V01-11 — gemini's sources ARE real and resolvable; the engine never follows them (high, cheap fix)
 
