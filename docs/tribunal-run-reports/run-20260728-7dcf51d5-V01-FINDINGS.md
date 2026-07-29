@@ -199,7 +199,7 @@ missing its agent-completion lines for this run.
 carry NULL cost and `run.cost_pending` is still `true`. **$53.48 is a floor, not the final figure.**
 The D-A model swap updated the dispatch path but not the cost table.
 
-## D-V01-9 — gemini cites via grounding redirects, not publisher URLs, so extraction fails unpredictably (BLOCKING, highest value)
+## D-V01-9 — gemini omits the FACTS block and the distiller fallback then yields nothing (BLOCKING, highest value)
 
 **This outranks D-V01-1/2.** Corroboration failing costs you cross-checking. This costs you whole
 client questions, and then misreports the loss as an evidence gap.
@@ -231,10 +231,32 @@ per competitor:
 | **Resolvable publisher URLs** | **0** | **0** | **10** |
 | Claims produced | **0** | **0** | **8** |
 
-Gemini cites via `[cite: 53]` markers pointing at a numbered bibliography whose entries are opaque
-`vertexaisearch.cloud.google.com/grounding-api-redirect/…` links. So the distiller fallback had
-nothing verifiable to attach a claim to — which is why it logged `produced ZERO claims —
-unverified topic` rather than merely producing unsourced ones.
+> ⚠️ **CORRECTION — the redirects are NOT the root cause.** An earlier draft of this section blamed
+> gemini's `vertexaisearch` redirect URLs. That is wrong, and the code says so:
+> `citations/extractor.py:761` documents that *"for the Gemini streams EVERY url is a
+> `grounding-api-redirect` … so the domain fallback would label every single Gemini source
+> `vertexaisearch.cloud.google.com` — actively misleading"*, and plans 15.2-04/05 already solved it
+> by resolving `source_domain` from gemini's own markdown link label. **Redirects are expected,
+> known and handled.** They are Google's documented grounded-generation behaviour, not a gemini
+> malfunction. The real chain is below.
+
+**The actual failure chain, in two steps:**
+
+1. **gemini omitted the `FACTS_START/FACTS_END` block on 2 of its 5 reports** (r4, r8 — both coffee),
+   despite `_d8_prompted: true`. That alone routes the report to the D-14 distiller fallback.
+2. **The distiller fallback then produced ZERO claims for the coffee focus area.** It is itself an
+   LLM call (`claim_distiller`, `gemini_generate`) that must re-read the prose and tag each extracted
+   claim with a focus-area label. For coffee it tagged none, and `synthesis/steps.py:1580` logged
+   `focus area … produced ZERO claims — unverified topic`.
+
+So **98,148 characters died at step 2, not for want of a URL.** Two further facts make step 2 the
+place to look: distiller claims carry **no `source_urls`, no `provider_quality` and no `certainty`
+by design**, and facet tagging is evidently fuzzy — a one-character difference (`en/of` vs `en/or`)
+produced a *fourth* facet holding a single claim (D-V01-5). A distiller that must re-derive the facet
+label as free text is a weak link for exactly this failure.
+
+Separately, the `[cite: N]`-as-`SOURCE_URL` rejection is a **third, distinct** issue affecting r2,
+where a FACTS block *was* present but *"not one line in it parsed as a fact (4 line(s) ignored)"*.
 
 **IT IS NOT TRUE THAT GEMINI NEVER EMITS SOURCES — and the variability IS the defect.** Measured
 across all sixteen reports:
