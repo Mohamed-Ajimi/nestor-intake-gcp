@@ -130,6 +130,16 @@ _DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}\.[a-z]{2,24}$", re.IGNORECA
 #: Upper bound on the url -> label map built from one report (DoS guard).
 _MAX_LABEL_INDEX = 2000
 
+#: Column NAMES a model may echo into the front of every fact line, pushing every
+#: real field one place to the right. Observed on run 7dcf51d5 (V-01 idx 8), where
+#: gemini wrote `STATEMENT<TAB>Tamoil Nederland uses PriceCast Fuel…` on all four
+#: lines of its block: the claim text landed in the SOURCE_URL slot, every line
+#: looked like an echoed header, and the whole report was handed to the distiller.
+#: These three words are the only ones treated this way, and only when EVERY line
+#: carries the same one — see `_strip_uniform_leading_column` for why that
+#: uniformity requirement is the entire safety argument.
+_LEADING_COLUMN_TOKENS: frozenset[str] = frozenset({"STATEMENT", "FACT", "CLAIM"})
+
 #: SOURCE_URL spellings that mean "I have no source", REJECTED BY NAME (D-M).
 #:
 #: `facts: rejecting non-http(s) SOURCE_URL 'N/A'` was observed live on run
@@ -363,6 +373,9 @@ class FactListResult:
     parse_errors:
         Lines inside the block that were ignored: no TAB, an echoed header row, or a
         statement below the minimum length. Also counts a second, ignored fact block.
+        A block whose lines ALL carried the same non-claim leading column is NOT
+        counted here — `_strip_uniform_leading_column` normalises it away first and
+        those lines then parse (V-01 idx 8).
     rejected_urls:
         SOURCE_URL cells dropped for a non-http(s) scheme, excess length, or a
         named placeholder. For the first two the statement SURVIVES — losing the
@@ -570,6 +583,55 @@ def _extract_region(
     return region, had_block, extra_blocks
 
 
+def _strip_uniform_leading_column(region: list[str]) -> tuple[list[str], str | None]:
+    """Remove a leading column that EVERY line of the block repeats (V-01 idx 8).
+
+    Returns ``(lines, token)``: the region with that first column and its separator
+    removed and the token that was stripped, or the region UNCHANGED and ``None``.
+
+    THE UNIFORMITY REQUIREMENT IS THE WHOLE SAFETY ARGUMENT, and it is deliberately
+    not relaxable to "most lines". A single line reading
+    ``STATEMENT<TAB>SOURCE_URL<TAB>…`` is a model echoing the column headings back at
+    us — it is a HEADER, it carries no fact, and it must keep being counted as a parse
+    error. A block in which EVERY line begins with the same non-claim column name is a
+    different event: nothing there is a header, the whole block is shifted one place,
+    and today every line of it is discarded. Firing on a partial match would corrupt a
+    well-formed fact list — turning good facts into garbage — which is a far worse
+    outcome than the defect this exists to fix.
+
+    So all of the following must hold before anything is stripped:
+
+      * there are at least TWO non-empty lines (one line cannot be uniform with
+        anything, and a lone header row must stay a header row);
+      * every non-empty line contains a TAB (no first column, nothing to compare);
+      * the first tab-column of every non-empty line, stripped and uppercased, is the
+        SAME token, and that token is in ``_LEADING_COLUMN_TOKENS``.
+
+    Blank lines pass through untouched. Pure, and never raises.
+    """
+    non_empty = [line for line in region if line.strip()]
+    if len(non_empty) < 2:
+        return region, None
+
+    token: str | None = None
+    for line in non_empty:
+        head, separator, _rest = line.partition("\t")
+        if not separator:
+            return region, None
+        candidate = head.strip().upper()
+        if candidate not in _LEADING_COLUMN_TOKENS:
+            return region, None
+        if token is None:
+            token = candidate
+        elif candidate != token:
+            return region, None
+    if token is None:  # pragma: no cover — unreachable, len(non_empty) >= 2 above
+        return region, None
+
+    stripped = [line if not line.strip() else line.partition("\t")[2] for line in region]
+    return stripped, token
+
+
 def parse_fact_list(
     text: str | None,
     *,
@@ -596,6 +658,10 @@ def parse_fact_list(
 
     Tolerates 2, 3, 4 or 5 columns; missing cells take their defaults. Blank lines and
     lines without a TAB are ignored and counted. Nothing raises, for any input.
+
+    Two observed provider format deviations are repaired before the loss is accepted,
+    both recorded on run 7dcf51d5: a block whose every line repeats the same non-claim
+    leading column is un-shifted by `_strip_uniform_leading_column` (idx 8).
     """
     facts: list[dict] = []
     not_found: list[str] = []
@@ -614,6 +680,20 @@ def parse_fact_list(
 
     region, had_block, extra_blocks = _extract_region(lines, FACTS_START, FACTS_END)
     parse_errors += extra_blocks
+
+    # A uniformly shifted block is rescued BEFORE field assignment, and nothing in it
+    # is counted as a parse error: those lines parsed. The WARNING is the point as
+    # much as the fix — this deviation cost a whole report on run 7dcf51d5 and left
+    # no trace beyond "not one line in it parsed as a fact".
+    region, stripped_column = _strip_uniform_leading_column(region)
+    if stripped_column:
+        log.warning(
+            "facts: %s prefixed every line of its fact block with a literal %r "
+            "column, shifting every field one place — the column was stripped and "
+            "the block parsed. This is a provider format deviation, not a parse "
+            "error; a report was lost to it on run 7dcf51d5.",
+            provider or "provider", stripped_column,
+        )
 
     for raw_line in region:
         line = raw_line.strip()
