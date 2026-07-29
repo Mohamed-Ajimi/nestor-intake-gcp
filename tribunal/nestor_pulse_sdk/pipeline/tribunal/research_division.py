@@ -3,15 +3,30 @@
 Turns a stakes-tagged mission_brief into per-angle research queries and drives
 the per-angle provider calls.
 
-D6 DISTRIBUTION (plan 15.2-13). `divide()` now has two paths:
+D6 DISTRIBUTION (plan 15.2-13, replaced by GROUP DISPATCH in 15.6-03). `divide()`
+now has two paths:
 
-  * `divide(mission_brief, winners=[...])` — the question workshop's tournament
-    winners become the run's research angles, spread over FOUR peer streams
-    (gemini, openai, claude, own). The top `_D6_TOP_K` winners are sent to ALL
-    FOUR, on purpose: the same sub-question answered independently by four
-    providers is what the merge clusters into agreement and contradiction. That
-    duplication is the corroboration signal, not waste, which is why the angle
-    cap trims it LAST.
+  * `divide(mission_brief, winners=[...], groups=[...])` — the question
+    workshop's tournament winners are grouped by shared research groundwork
+    (`question_grouping`), and EVERY GROUP GOES TO EVERY ONE OF THE THREE peer
+    streams (gemini, openai, claude). Dispatch is therefore by TOPIC: there is
+    no top-k, no remainder, no round robin, and no angle is placed by its
+    position in a deal. Every angle is a corroboration copy, so
+    `corroboration_key` — the group id — is populated on ALL of them instead of
+    on the ~3 of 15 the old top-k reached.
+
+    WHY THIS REPLACED THE DEAL (D-R4 / D-W3-1..5). On run 7dcf51d5 the client's
+    coffee question landed on gemini because of WHERE IT FELL IN THE DEAL, not
+    because gemini suits Benelux retail; its three sub-questions each went to one
+    provider, so when two hit the `<TAB>` parser bug the whole question survived
+    on a single provider's 8 claims. Under group dispatch one provider failing
+    leaves two standing. The gain is FAILURE INDEPENDENCE and complementary
+    reach — NOT "more corroboration": V-01 measured 2.9% of URLs cited by >=2
+    providers, so four providers on one question largely read four different
+    corpora.
+
+    The duplication is the corroboration signal, not waste, which is why the
+    angle cap trims it LAST (the F5 reversal, in the constants block).
   * `divide(mission_brief)` — the original focus-area path, unchanged, now
     reached only when the workshop produced no usable winners (a D-12 degrading
     condition the pipeline records in words).
@@ -47,7 +62,8 @@ calls in the run). Its prose is instead run through the full-extraction distille
 by `synthesis.steps.collect_provider_facts`, which records the fallback PER
 PROVIDER in words. Degrade one stream, never the run.
 
-The fourth stream — the own-researcher registered below — is deliberately NOT in
+The own-researcher — still registered below as a RUNNER, but no longer in the
+dispatch rotation since 15.6-03 (D-W3-3) — is deliberately NOT in
 `_D8_PROMPT_PROVIDERS`: it emits its facts through a forced client tool (15.2-12),
 which is tool use and therefore citation-compatible, so also sending it the prose
 block would be a second, weaker instruction for the same data.
@@ -119,24 +135,75 @@ log = logging.getLogger(__name__)
 # provider running concurrently, a slow Gemini angle no longer blocks the others,
 # so Gemini is allowed its full deep-research budget (its adapter polls up to ~35 min).
 # The only timeout here is a generous hang-safety net above every provider's own limit.
+#
+# CORRECTING THE RECORD, 15.6-03 (D-R4). The spec asked to "delete the inverted
+# stakes -> provider map outright" and that is NOT implementable as written, so
+# read this before trying again. THE MAP IS KEPT, deliberately:
+#   * the D6/group branch HAS NEVER CONSULTED IT — `_group_angle` sets
+#     `"provider": stream` straight from the stream tuple below, so no group angle
+#     has ever been routed by stakes;
+#   * its LIVE consumers are `divide()`'s focus-area path (the workshop-fallback
+#     path, which this phase must not touch) and `run_angles`' defensive default
+#     for an angle that arrives with no `provider` key at all.
+# What Wave 3 actually removed is the LAST place stakes influenced WHICH STREAM a
+# winner reached: the `(stakes, rank)` ordering of the round-robin remainder deal.
+# Under group dispatch stakes still exists and still drives checking priority and
+# the report — it just no longer picks a provider for anybody.
 _STAKES_PROVIDER = {"high": "gemini", "med": "openai", "low": "claude"}
 _HIGH_REDUNDANCY_PROVIDER = "claude"  # second provider on doubled high-stakes angles
 _STAKES_ORDER = {"high": 0, "med": 1, "low": 2}
 
-# --- D6 distribution over FOUR peer streams (plan 15.2-13) -------------------
-# The four peer research streams, in preference order. This tuple is the SINGLE
-# source of stream ordering: for dealing the remainder, for laying out a
-# corroboration group, and for the reverse order the trim ladder walks.
-_D6_STREAMS = ("gemini", "openai", "claude", "own")
+# --- D6 distribution over THREE peer streams (15.2-13, narrowed by 15.6-03) ---
+# The peer research streams, in preference order. This tuple is the SINGLE source
+# of stream ordering: for laying out a corroboration group, and for the reverse
+# order the trim ladder walks. EVERY GROUP GOES TO EVERY ENTRY HERE, so this
+# tuple's length is also the per-group paid-call count.
+#
+# `own` LEFT THE ROTATION AND ONLY THE ROTATION (D-R5 / D-W3-3, operator decision
+# 2026-07-29). The evidence: 2 of its 4 angles failed outright on run 7dcf51d5
+# (`own_researcher_no_fact_list`), it reported ENGLISH in a Dutch run, and it
+# contributed 2 unique URLs across the entire run.
+#
+# WHAT IS DELIBERATELY KEPT, so that reinstating it stays a ONE-LINE change to
+# this tuple: `_PROVIDER_RUNNERS["own"]` below, the `own` entry in
+# `_PROVIDER_TIMEOUTS`, and the report label in `pipeline.py`. The spec's
+# instruction is "keep it as a targeted fact-lookup tool, not a research stream",
+# so removing any of those would be a different and unsanctioned change.
+# `_RESUMABLE_PROVIDERS` and `_D8_PROMPT_PROVIDERS` never listed `own` and are
+# untouched.
+_D6_STREAMS = ("gemini", "openai", "claude")
 
-# How many top-ranked winners go to ALL four streams. Clamped in code to the
-# number of streams: a value above that would ask for a fifth copy that has no
-# independent provider to run on, which is spend with no corroboration gain.
-_D6_TOP_K = max(0, min(int(os.environ.get("NESTOR_TRIBUNAL_D6_TOP_K", "3")), len(_D6_STREAMS)))
+# The rank at or below which a winner is HIGH stakes. Read only by
+# `_stakes_for_rank`.
+#
+# READ THIS BEFORE ASSUMING IT IS THE DELETED TOP-K KNOB WEARING A HAT. That knob
+# (deleted by 15.6-03, along with its env var, per D-W3-2) had two unrelated jobs:
+# it chose how many winners were dispatched to every stream — a DISPATCH STRATEGY,
+# now gone outright, because every group goes to every stream and there is nothing
+# left to choose — and it happened to supply the NUMERIC BOUNDARY for "high stakes"
+# here. Only the second job survives, under its own name, and the number is pinned
+# at the value the old constant supplied, so stakes does not move in this phase.
+#
+# IT IS DELIBERATELY NOT ENV-BACKED. Stakes is not a spend dial and not a routing
+# choice: it flows on to `pipeline._propagate_stakes`, the gates' checking priority
+# and the delivered report. This phase is already changing which claims reach paid
+# verification, and letting the stakes boundary move at the same time would make
+# the 15.8 measuring run unable to attribute a change in gate priority to either
+# cause. So it is FIXED, it selects no provider, and it is not tunable.
+_D6_HIGH_RANKS = 3
+
 # The copy floor. Below TWO independent streams a "corroboration group" is not
 # corroboration any more — `grouping.group_claims` has nothing to agree or
 # disagree with, so `pipeline._group_corroboration` counts 1 and the merge's
 # agreement signal for that sub-question is gone.
+#
+# IT IS NOT A SECOND DEAD KNOB LIKE THE DELETED TOP-K ONE, and the open question
+# in the CONTEXT is answered here. Under uniform 3-provider allocation every group
+# has three copies BY CONSTRUCTION, so the floor never binds AT DISPATCH — but
+# dispatch is not where it earns its keep. `_trim_ladder` reads it to decide
+# whether shedding one copy is a P2 trim (depth lost, run still healthy) or a P1
+# trim (the corroboration signal itself destroyed, a named D-12 degradation).
+# That decision is live on every capped run.
 _D6_MIN_CORROBORATION = max(1, int(os.environ.get("NESTOR_TRIBUNAL_D6_MIN_CORROBORATION", "2")))
 # Winners are truncated to this many, BY RANK, before distribution. Every angle
 # is a paid deep-research call and the budget governor is inert by decision
@@ -146,18 +213,42 @@ _D6_MAX_WINNERS = int(os.environ.get("NESTOR_TRIBUNAL_D6_MAX_WINNERS", "15"))
 # D7: how many SEARCH languages one angle may name. Search surface widens; the
 # report's OUTPUT language does not — see `_d7_language_sentence`.
 _D7_MAX_LANGS = int(os.environ.get("NESTOR_TRIBUNAL_D7_MAX_LANGS", "3"))
-# Winner text is model output reaching four third-party providers verbatim.
+# Winner text is model output reaching three third-party providers verbatim.
 # Bounding it is a prompt-injection control, not formatting (T-15.2-60).
+#
+# 15.6-03: THE BOUND IS PER MEMBER, and that is the one thing that changed. A
+# group carries up to `question_grouping._D6_MAX_GROUP_SIZE` members and each one
+# is collapsed and truncated to this many characters INDIVIDUALLY, so the total
+# model-authored text in one query grew from 1 x 600 to at most size x 600. The
+# per-item bound is unchanged; the number of items is what grew, and the cap on
+# that number lives in `question_grouping`, not here.
 _SUBQ_CHARS = int(os.environ.get("NESTOR_TRIBUNAL_SUBQ_CHARS", "600"))
 
 # Cost guard: hard ceiling on total angles per run (research-job explosion guard).
 #
-# THE ARITHMETIC, stated so a future reader can re-derive it rather than guess:
-# the worst normal case is `_D6_MAX_WINNERS` = 15 winners with `_D6_TOP_K` at its
-# clamp of 4, which gives 4 corroboration groups x 4 streams = 16 angles plus the
-# 15 - 4 = 11 remaining winners at one stream each = 27 angles. 28 therefore
-# leaves exactly one slot of headroom and a NORMAL RUN NEVER TRIMS AT ALL. The
-# cap survives only as the bound on a pathological workshop output.
+# THE ARITHMETIC, RE-DERIVED BY 15.6-03 because group dispatch replaced the deal
+# the old derivation was built on. Stated so a future reader can re-derive it
+# rather than guess:
+#
+#   worst NORMAL case = `question_grouping._D6_MAX_GROUPS` (5, a hard operator
+#   ceiling) x `len(_D6_STREAMS)` (3) = 15 angles.
+#
+# So 28 now leaves THIRTEEN slots of headroom and a normal run never trims at all
+# — the cap is even less binding than it was, not more. Note that the number of
+# WINNERS no longer drives the angle count: 15 winners in 3 groups is 9 angles and
+# 6 winners in 5 groups is 15, because groups are what get dispatched.
+#
+# THE ONE CASE THAT CAN EXCEED IT, named with its number so nobody has to guess:
+# the D-W3-2 fallback (one group per client question, taken when grouping fails)
+# is capped by CLIENT-QUESTION COUNT, not by 5. At 3 calls per group it reaches
+# this cap at exactly TEN CLIENT QUESTIONS (10 x 3 = 30 > 28), and it already
+# exceeds the happy-path ceiling of 15 at six. That overshoot was shown to the
+# operator and accepted — on the degraded path, covering every client question
+# beats holding the spend line — which is why the caller must also pass the group
+# count to `question_grouping.warn_if_over_ceiling` and log it LOUDLY. It collides
+# with T-15.2-61 (the angle count is the only real spend control left, because the
+# budget governor is inert under NESTOR_TRIBUNAL_UNCAPPED=1), and the ladder below
+# is what stops it becoming unbounded.
 #
 # THE F5 REVERSAL — read this before "simplifying" the ladder below. The old
 # trimmer dropped the doubled high-stakes REDUNDANCY copies FIRST, which was
@@ -176,9 +267,16 @@ _PROVIDER_RUNNERS = {
     "openai": openai_research,
 }
 if own_research is not None:
-    # OMITTED, not bound to None, when the fourth stream is absent: `_one_angle`
+    # OMITTED, not bound to None, when the own-researcher is absent: `_one_angle`
     # indexes this dict directly and a None runner would be an unhandled
     # TypeError inside the timeout block rather than a clean three-stream run.
+    #
+    # KEPT ON PURPOSE BY 15.6-03 (D-W3-3), even though `own` is no longer in
+    # `_D6_STREAMS`. `divide()` no longer routes any angle here, but the runner is
+    # what makes reinstating the stream a one-line change to that tuple, and the
+    # spec keeps `own` as a targeted fact-lookup tool. It is also still reachable
+    # through `degraded_parallel.ALL_PROVIDERS` on the BROADCAST path — see the
+    # accepted-gap comment in that module. DO NOT delete this as dead code.
     _PROVIDER_RUNNERS["own"] = own_research
 
 # --- R7: which streams have a BACKGROUND JOB that can be reconnected to -------
@@ -470,7 +568,7 @@ def _stakes_for_rank(rank: int, n_winners: int) -> str:
         n = max(1, int(n_winners))
     except Exception:  # noqa: BLE001 — a garbled rank is mid-stakes, never a crash
         return "med"
-    if r <= _D6_TOP_K:
+    if r <= _D6_HIGH_RANKS:
         return "high"
     if r <= math.ceil(0.6 * n):
         return "med"
