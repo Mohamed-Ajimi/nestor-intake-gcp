@@ -970,6 +970,34 @@ async def persist_tribunal_claims(
         # once); `found_by` is the corroboration signal — which research streams
         # stated this fact — that `_dedupe_claims` unioned across streams. Both
         # are clamped and bounded inside `_insert_claim`.
+        #
+        # D-R3 (Phase 15.5): `sub_question`, `corroboration_key` and `as_of`
+        # ride on the SAME claim dict, and they are read here with `.get()` and
+        # passed straight through. Nothing is re-derived, re-parsed or defaulted
+        # at this call site: a SECOND place that decides what a claim's
+        # attribution is, is a second place to get it wrong -- the reasoning
+        # `_insert_research_gap`'s docstring records for `tenant_id`. Clamping
+        # and NULL-coercion belong to `_insert_claim`, which owns them.
+        #
+        # `sub_question` and `corroboration_key` were stamped in PYTHON from the
+        # dispatch assignment in `collect_provider_facts`, never parsed out of
+        # model output; `as_of` came through `extract_as_of`'s grammar over the
+        # EVIDENCE cell, which rejects every ambiguous form rather than guessing.
+        #
+        # TWO EXPECTED SOURCES OF NULL, BOTH CORRECT, NEITHER A BUG:
+        #   * `corroboration_key` is NULL for roughly 12 of 15 winners. Only the
+        #     TOP-3 winners are dealt a key (`w01`/`w02`/...); the remainder is
+        #     dealt round-robin with the empty string, which `_insert_claim`
+        #     writes as NULL. The column fills up in phase 15.6, when every group
+        #     goes to every provider.
+        #   * The `claim_distiller` fallback path carries NO dispatch attribution
+        #     at all, by construction -- there was no angle to inherit from -- so
+        #     claims from it are permanently NULL on the first two.
+        #
+        # `.get()` and never a subscript: this function is also reached by the
+        # recorded-fixture loader and by tests that build claim dicts by hand,
+        # and a claim dict that predates phase 15.5 has none of the three keys.
+        # It must keep working and write NULLs.
         claim_id = await _insert_claim(
             session,
             tenant_id=tenant_id,
@@ -979,6 +1007,9 @@ async def persist_tribunal_claims(
             position=position,
             certainty=claim.get("certainty"),
             found_by=claim.get("found_by"),
+            sub_question=claim.get("sub_question"),
+            corroboration_key=claim.get("corroboration_key"),
+            as_of=claim.get("as_of"),
         )
         claim_ids.append(claim_id)
 
