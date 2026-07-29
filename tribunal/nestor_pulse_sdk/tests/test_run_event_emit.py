@@ -35,13 +35,33 @@ stage shim nor `run_angles` notices. That proves CALLING the emitter is safe.
 NEVER prove that: by the time any recorder runs, the arguments have already been
 constructed successfully. So (i) drives the REAL `run_events` module — no
 monkeypatched `emit`, no monkeypatched `emit_safe` — and hands the paid dispatch
-loop a provider result with no `facts` key, then a `facts` of `None`, and asserts
-`run_angles` returns exactly what it returns for a well-formed result. Its shim
+loop a provider result with no `facts` key, then a `facts` of `None`. Its shim
 half corrupts the timing value the summary line derives `worked` from.
 
 Both halves of (i) carry a NEGATIVE CONTROL: they first assert that the
 construction genuinely raises when performed outside the emitter, so a green run
 cannot mean "the input was harmless after all".
+
+(j) IS WHY (i) NOW ASSERTS SOMETHING STRONGER — 15.4-05
+--------------------------------------------------------
+The two degraded shapes (i) drives used to be SWALLOWED: the `agent_done` line
+read `result["facts"]` as a subscript, `emit_safe` caught the `KeyError` exactly
+as D-06 designs it to, and THE ROW VANISHED. About twenty rows were lost that way
+on run 7dcf51d5 (D-V01-7), leaving the feed showing angles that started and never
+ended. `emit_safe` was never the defect and is not modified by 15.4-05; the build
+lambdas were the intolerant part, and they are what changed.
+
+So (i) no longer asserts "a `KeyError` reached the emitter's log". It asserts the
+line SURVIVES, with a count rendered as honestly unknown rather than as `0` — a
+feed row must never assert a number the run did not establish (T-15.3-23). Its
+negative control now shows what the OLD subscript form would have done.
+
+(j) then drives both degraded shapes and asserts THE COUNT OF RECORDED EVENTS,
+which is the load-bearing part: before the fix these record ZERO events, so a
+test that only checked "nothing raised" would have passed against the bug. And
+because a tolerant helper is a weaker guarantee than a structural one, (j) keeps
+a D-06 proof AT THIS SITE by forcing the label helper itself to raise — if
+anyone ever hoists `build()` above `emit_safe`'s try, that test fails loudly.
 
 NO LLM CALL, NO DATABASE, NO NETWORK, NO KEY, NO MOCKING LIBRARY. The two
 operations in `runs/run_events.py` that touch Postgres are module-level test
@@ -59,13 +79,16 @@ Cloud Build gate:
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any, Optional
 
 import pytest
 
+from nestor_pulse_sdk.pipeline.tribunal import own_researcher as own
 from nestor_pulse_sdk.pipeline.tribunal import pipeline as _pipeline_mod
 from nestor_pulse_sdk.pipeline.tribunal import research_division as rd
+from nestor_pulse_sdk.pipeline.tribunal import serpapi as _serpapi
 from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stages import ENGINE_STAGES
 
@@ -700,17 +723,26 @@ async def _drive_run_angles_with(result: dict, run_id: uuid.UUID) -> list:
         rd._enabled_providers = original_enabled
 
 
-async def test_a_result_missing_the_keys_the_done_line_reads_changes_nothing(
+async def test_a_result_missing_the_keys_the_done_line_reads_still_records_its_line(
     monkeypatch, caplog
 ):
     """(i), the half that matters most: NOTHING is monkeypatched on `run_events`
     except the two Postgres seams. `emit` and `emit_safe` are the real ones.
 
-    The `agent_done` line reads `result["facts"]` as a SUBSCRIPT, deliberately —
-    a `.get` defaulting to 0 would print "0 facts" for an angle whose fact count
-    is merely unknown. So a degrading provider makes the TEXT CONSTRUCTION raise,
-    inside the semaphore, inside the paid dispatch loop. This asserts that costs
-    the line and nothing else."""
+    15.4-05 CHANGED WHAT THIS ASSERTS, and the change is the whole point of the
+    plan. The `agent_done` line used to read `result["facts"]` as a SUBSCRIPT, so
+    a degrading provider made the TEXT CONSTRUCTION raise inside the semaphore,
+    inside the paid dispatch loop; `emit_safe` swallowed it exactly as D-06
+    designs it to and the run was unaffected — but THE ROW WAS LOST, about twenty
+    of them on run 7dcf51d5 (D-V01-7).
+
+    The reason the subscript was chosen still stands: a `.get(..., 0)` would print
+    "0 facts" for an angle whose count is merely UNKNOWN, and a feed row must not
+    assert a number the run never established (T-15.3-23). So the rule is kept
+    and the intolerance is dropped — `_fact_count_label` renders the unknown in
+    words. This test now asserts the LINE SURVIVES all three shapes, and that no
+    build failure is reported for any of them.
+    """
     persisted: list[dict] = []
 
     async def _max_seq(run_id, tenant_id):
@@ -722,13 +754,20 @@ async def test_a_result_missing_the_keys_the_done_line_reads_changes_nothing(
     monkeypatch.setattr(run_events, "_read_max_seq", _max_seq)
     monkeypatch.setattr(run_events, "_writer", _writer)
 
-    # THE NEGATIVE CONTROL, first: the construction the emitter is asked to
-    # perform genuinely raises. Without this, a green test below could mean the
-    # degraded input was harmless all along.
+    # THE NEGATIVE CONTROL, first, and it is now a control on the FIX rather than
+    # on the defect: the construction the OLD line performed genuinely raises on
+    # both degraded shapes, so a green run below cannot mean "these inputs were
+    # harmless all along" — it means the tolerant helper is doing the work.
     with pytest.raises(KeyError):
         len({"status": "success", "report": "r"}["facts"])
     with pytest.raises(TypeError):
         len({"status": "success", "report": "r", "facts": None}["facts"])
+    # And the helper that replaced it survives both, without inventing a zero.
+    assert rd._fact_count_label({"status": "success", "report": "r"}) == rd._UNKNOWN_FACTS
+    assert (
+        rd._fact_count_label({"status": "success", "report": "r", "facts": None})
+        == rd._UNKNOWN_FACTS
+    )
 
     shapes = {
         "well_formed": {
@@ -757,7 +796,13 @@ async def test_a_result_missing_the_keys_the_done_line_reads_changes_nothing(
         returned[name] = [
             (provider, res["_angle"], res["_stakes"]) for provider, res in results
         ]
-        warnings[name] = "\n".join(r.getMessage() for r in caplog.records)
+        # Only what the EMITTER logged. A record from another logger would make
+        # the swallowed-build assertion below pass or fail for the wrong reason.
+        warnings[name] = "\n".join(
+            record.getMessage()
+            for record in caplog.records
+            if record.name.startswith("nestor_pulse_sdk.runs.run_events")
+        )
 
     assert returned["missing_keys"] == returned["well_formed"], (
         "a provider result missing the keys the feed line reads CHANGED what "
@@ -766,25 +811,36 @@ async def test_a_result_missing_the_keys_the_done_line_reads_changes_nothing(
     assert returned["none_facts"] == returned["well_formed"]
     assert len(returned["well_formed"]) == 2
 
-    # AND THE PATH WAS ACTUALLY TAKEN. Without this the test would pass just as
-    # happily against an implementation whose thunk never touched `facts`.
-    assert "KeyError" in warnings["missing_keys"], (
-        "no build failure was reported for the key-missing result, so the "
-        f"fragile construction was never reached: {warnings['missing_keys']!r}"
-    )
-    assert "TypeError" in warnings["none_facts"]
-    assert "KeyError" not in warnings["well_formed"], (
-        "the well-formed result also failed to build — the line is broken for "
-        f"every run, not just degraded ones: {warnings['well_formed']!r}"
-    )
+    # NO BUILD FAILURE ON ANY SHAPE. This is the assertion that inverted in
+    # 15.4-05: it used to demand a `KeyError` in the emitter's log for the two
+    # degraded shapes, because that is what the subscript produced and what the
+    # emitter correctly swallowed. A swallowed build is a LOST ROW, so demanding
+    # one was demanding the defect.
+    for name, text in warnings.items():
+        assert "KeyError" not in text and "TypeError" not in text, (
+            f"the {name!r} shape still failed to BUILD its feed line, so its row "
+            f"was dropped by the emitter rather than emitted: {text!r}"
+        )
 
-    # The well-formed run really did persist a usable line.
+    # AND ALL THREE RUNS PERSISTED THEIR LINES. Two angles per run, three runs.
     done = [row for row in persisted if row["kind"] == "agent_done"]
-    assert done, "not one agent_done row reached the writer on any of the three runs"
-    assert any("2 facts" in row["text"] for row in done), (
-        f"the well-formed fact count never made it into a row: "
-        f"{[row['text'] for row in done]}"
+    assert len(done) == 6, (
+        "every angle of every shape must record a done line; a degrading "
+        f"provider must not cost the row: {[row['text'] for row in done]}"
     )
+    texts = [row["text"] for row in done]
+    assert sum("2 facts" in text for text in texts) == 2, (
+        f"the well-formed fact count never made it into a row: {texts}"
+    )
+    degraded_texts = [text for text in texts if rd._UNKNOWN_FACTS in text]
+    assert len(degraded_texts) == 4, (
+        f"the two degraded shapes did not record honest-unknown lines: {texts}"
+    )
+    for text in degraded_texts:
+        assert not re.search(r"\d+\s+facts", text), (
+            f"a degraded angle rendered a COUNT it never established: {text!r}"
+        )
+        assert "0 facts" not in text
 
 
 def test_a_summary_whose_inputs_are_malformed_costs_the_line_not_the_divider(
@@ -834,6 +890,273 @@ def test_a_stage_that_reported_no_summary_block_still_summarises_cleanly(monkeyp
         f"absent summary values must be omitted, not defaulted: {meta}"
     )
     assert meta["actions"] == 1
+
+
+# ===========================================================================
+# (j) 15.4-05 — A DEGRADED ANGLE STILL SAYS IT FINISHED
+#
+# THE COUNT OF RECORDED EVENTS IS THE LOAD-BEARING ASSERTION IN EVERY TEST
+# BELOW. Before this fix the degraded shapes recorded ZERO events: the build
+# lambda raised, `emit_safe` swallowed it exactly as D-06 designs it to, and the
+# row vanished. A test that only checked "no exception escaped" would therefore
+# have passed against the bug, which is the failure mode this whole phase exists
+# to stop. `len(...) == 1` is what fails without the helpers.
+#
+# The second rule these tests pin is the honest one: a count that could not be
+# established renders as UNKNOWN. `0` would be a number the run is claiming to
+# have measured, and a feed row must not assert something the run never
+# established (T-15.3-23).
+# ===========================================================================
+
+
+def _own_harness():
+    """The own-researcher scripted harness, imported LAZILY and on purpose.
+
+    `test_own_researcher.py` imports `_Recorder` from THIS module at module
+    scope, so a module-scope import back would be a genuine cycle — whichever
+    file pytest imported first would see a half-built module and fail at
+    collection. Inside a function body both modules are fully initialised. This
+    is still the ONE harness rather than a second one to drift, which is the
+    rule this file's header already states for `test_engine_e2e_stubbed`.
+    """
+    from nestor_pulse_sdk.tests import test_own_researcher as own_tests
+
+    return own_tests
+
+
+_ONE_ANGLE = [{"query": "q1", "stakes": "med", "focus_area": "A", "provider": "openai"}]
+
+
+async def _one_angle_returning(monkeypatch, result: dict) -> list:
+    calls: dict = {}
+    _single_stream(monkeypatch, {"openai": _runner_ok(calls, "openai", result)})
+    return await rd.run_angles(
+        angles=list(_ONE_ANGLE),
+        audited=None,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+    )
+
+
+async def test_j_a_healthy_angle_still_renders_its_fact_count(monkeypatch):
+    """The unchanged case, asserted FIRST. Without it the three degraded tests
+    below would pass just as happily against a helper that had given up on
+    counting altogether and printed "unknown" for every angle ever run."""
+    recorder = _install(monkeypatch)
+
+    results = await _one_angle_returning(
+        monkeypatch,
+        {"status": "success", "report": "r", "facts": [1, 2, 3], "cost_usd": 1.5},
+    )
+    assert len(results) == 1
+
+    done = recorder.of("agent_done")
+    assert len(done) == 1, f"expected one done line for one angle: {recorder.kinds()}"
+    assert done[0]["text"] == "Angle 01 done — 3 facts · openai", (
+        f"the healthy done line changed shape: {done[0]['text']!r}"
+    )
+    assert done[0]["text"].endswith("facts · openai")
+    assert done[0]["meta"]["angle"] == 1
+    assert done[0]["meta"]["provider"] == "openai"
+    assert done[0]["meta"]["cost"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    "shape,why",
+    [
+        ({"status": "success", "report": "r"}, "no facts key at all"),
+        ({"status": "success", "report": "r", "facts": None}, "a None under facts"),
+        ({"status": "success", "report": "r", "facts": 7}, "an int, which len refuses"),
+        ({"status": "success", "report": "r", "facts": "none found"}, "a str"),
+    ],
+)
+async def test_j_a_degraded_result_still_records_exactly_one_done_line(
+    monkeypatch, shape, why
+):
+    """Four shapes a degrading provider really does return. Each must still
+    produce ONE `agent_done` row, attributable, with the count admitted as
+    unknown rather than fabricated as zero.
+
+    The `str` case is not padding: `len("none found")` is 10, so a helper that
+    merely called `len` would print "10 facts" — a number invented out of a
+    provider's prose, which is worse than the vanished row it replaced.
+    """
+    recorder = _install(monkeypatch)
+
+    results = await _one_angle_returning(monkeypatch, shape)
+    assert len(results) == 1, f"the angle itself must be unaffected ({why})"
+
+    done = recorder.of("agent_done")
+    assert len(done) == 1, (
+        f"a result with {why} recorded {len(done)} done line(s), not 1 — before "
+        f"15.4-05 this was 0 and the feed showed an angle that never ended: "
+        f"{recorder.kinds()}"
+    )
+    text = done[0]["text"]
+    assert rd._UNKNOWN_FACTS in text, (
+        f"the count was not admitted as unknown: {text!r}"
+    )
+    assert "0 facts" not in text, f"a fabricated zero reached the feed: {text!r}"
+    assert not re.search(r"\d+\s+facts", text), (
+        f"a count the run never established was rendered anyway: {text!r}"
+    )
+    # STILL ATTRIBUTABLE. A row nobody can tie to an angle or a provider is only
+    # marginally better than no row.
+    assert done[0]["meta"]["angle"] == 1
+    assert done[0]["meta"]["provider"] == "openai"
+    assert "openai" in text
+
+
+async def test_j_the_done_line_is_still_built_inside_the_emitters_try(
+    monkeypatch, caplog
+):
+    """D-06, PROVEN AT THIS SITE, AFTER the site stopped raising on its own.
+
+    `_fact_count_label` promising never to raise is a promise by one helper.
+    `build=lambda:` is the STRUCTURAL guarantee that whatever is built here is
+    built inside `emit_safe`'s try — the thing that survives a future edit to
+    the helper. Forcing the helper to raise is the only way to keep asserting
+    it: if anyone ever "tidies" `emit_safe` by hoisting `build()` above its
+    `try`, this test fails with the RuntimeError escaping into `run_angles`.
+    """
+
+    def _boom(_result):
+        raise RuntimeError("synthetic label failure for the D-06 site proof")
+
+    monkeypatch.setattr(rd, "_fact_count_label", _boom)
+    recorder = _install(monkeypatch)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
+        results = await _one_angle_returning(
+            monkeypatch, {"status": "success", "report": "r", "facts": [1, 2]}
+        )
+
+    assert len(results) == 1, "a raising build cost the paid angle, not just its row"
+    emitted = "\n".join(
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("nestor_pulse_sdk.runs.run_events")
+    )
+    assert "RuntimeError" in emitted, (
+        "the raising build was never reached, so nothing about D-06 was proved: "
+        f"{emitted!r}"
+    )
+    assert recorder.of("agent_done") == [], (
+        "a line whose text could not be built was emitted anyway — DROPPED is "
+        "correct here, fabricated is not"
+    )
+
+
+# --- the own_research half -------------------------------------------------
+
+
+async def test_j_an_own_research_turn_reports_what_it_skipped(monkeypatch):
+    """The unchanged own-research case, for the same counterfactual reason as
+    the healthy angle above: two of the three emitted entries carry no usable
+    source URL, so `2 skipped` is a real difference and not a placeholder."""
+    own_tests = _own_harness()
+    monkeypatch.setenv("SERPAPI_API_KEY", own_tests._FAKE_KEY)
+    _serpapi.reset_breaker()
+    recorder = _install(monkeypatch)
+
+    audited = own_tests._ScriptedOwnAudited(
+        [
+            own_tests._server_fetch_turn("https://fin.belgium.be/duty"),
+            own_tests._emit_turn(
+                facts=[
+                    {
+                        "statement": "Diesel duty in Belgium rose in April 2026.",
+                        "source_url": "https://fin.belgium.be/duty",
+                    },
+                    {
+                        "statement": "This one cites a scheme we refuse.",
+                        "source_url": "ftp://example.com/x",
+                    },
+                    {"statement": "This one cites nothing at all."},
+                ],
+                not_found=[],
+            ),
+        ]
+    )
+    try:
+        await own.run_own_research(
+            question="q",
+            facet="f",
+            audited=audited,
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            plan=own_tests._PLAN,
+        )
+    finally:
+        _serpapi.reset_breaker()
+
+    done = recorder.of("agent_done")
+    assert len(done) == 1, f"expected one own-research done line: {recorder.kinds()}"
+    assert done[0]["text"] == "Own query done — 1 facts from 1 pages · 2 skipped"
+    assert done[0]["stage"] == "own_research"
+    assert done[0]["meta"]["provider"] == own.PROVIDER
+
+
+async def test_j_an_uncountable_fact_block_still_records_its_done_line(monkeypatch):
+    """`_raw_fact_count` RAISES rather than guess, and that contract is correct
+    and unchanged — the guard lives at the feed line, in `_skipped_label`.
+
+    Before 15.4-05 this recorded ZERO `agent_done` rows: every own-research turn
+    whose emitted block had no countable `facts` entry simply vanished from the
+    feed. The facts and pages counts are lengths of lists this module built, so
+    they are always real; only the skipped term can be unknown, and it says so.
+    """
+    own_tests = _own_harness()
+    monkeypatch.setenv("SERPAPI_API_KEY", own_tests._FAKE_KEY)
+    _serpapi.reset_breaker()
+
+    # NEGATIVE CONTROL: the count genuinely refuses this block. Without it a
+    # green run below could mean the input was countable after all.
+    uncountable = {"not_found": ["the 2027 tariff schedule"]}
+    with pytest.raises((KeyError, TypeError)):
+        own._raw_fact_count(
+            {"type": "tool_use", "name": "emit_fact_list", "input": uncountable}
+        )
+
+    recorder = _install(monkeypatch)
+    audited = own_tests._ScriptedOwnAudited(
+        [
+            own_tests._server_fetch_turn("https://fin.belgium.be/duty"),
+            own_tests._emit_turn_with_raw_input(uncountable),
+        ]
+    )
+    try:
+        await own.run_own_research(
+            question="q",
+            facet="f",
+            audited=audited,
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            plan=own_tests._PLAN,
+        )
+    finally:
+        _serpapi.reset_breaker()
+
+    done = recorder.of("agent_done")
+    assert len(done) == 1, (
+        f"an uncountable fact block recorded {len(done)} done line(s), not 1 — "
+        f"before 15.4-05 this was 0: {recorder.kinds()}"
+    )
+    text = done[0]["text"]
+    # The two counts that ARE established survive intact — the page count came
+    # from a fetch turn, so it is 1 rather than a vacuous 0.
+    assert "0 facts from 1 pages" in text, (
+        f"the counts the turn DID establish were lost with the skipped term: {text!r}"
+    )
+    assert own._UNKNOWN_SKIPPED in text, (
+        f"the uncomputable skipped count was not admitted as unknown: {text!r}"
+    )
+    assert not re.search(r"\d+\s+skipped", text), (
+        f"a skipped count that cannot be computed was printed anyway: {text!r}"
+    )
+    assert done[0]["stage"] == "own_research"
+    assert done[0]["meta"]["provider"] == own.PROVIDER
 
 
 # ===========================================================================

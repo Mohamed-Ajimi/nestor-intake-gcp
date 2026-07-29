@@ -1128,16 +1128,33 @@ async def test_a_recorder_that_raises_changes_nothing(monkeypatch):
 async def test_a_turn_whose_shape_makes_the_line_itself_raise_changes_nothing(
     monkeypatch, caplog
 ):
-    """(d2) THE ARGUMENT-CONSTRUCTION TEST. The REAL emitter, both halves.
+    """(d2) THE ARGUMENT-CONSTRUCTION TEST. The REAL `emit_safe`, both halves.
 
-    Nothing on `run_events` is monkeypatched here — not `emit`, not `emit_safe`.
-    A recorder cannot exercise this: by the time one runs, the arguments have
-    already been built successfully. Each half carries a NEGATIVE CONTROL that
-    the construction genuinely raises when performed outside the emitter, so a
-    green result cannot mean "the input was harmless after all", and each half
-    asserts the swallowed exception type reaches the emitter's WARNING log —
-    and that it does NOT for the well-formed shape, so the line cannot pass by
-    being broken for every run.
+    `emit_safe` is NEVER monkeypatched here — the real `build()` call and the
+    real try/except are in the path, which is the whole point. (15.4-05 installs
+    a recorder over `emit` so half 1 can assert on the ROW rather than only on a
+    log line; that leaves `emit_safe` untouched, exactly as `_Recorder`'s own
+    docstring requires.) A recorder alone cannot exercise this: by the time one
+    runs, the arguments have already been built successfully. Each half carries
+    a NEGATIVE CONTROL that the construction genuinely raises when performed
+    outside the emitter, so a green result cannot mean "the input was harmless
+    after all".
+
+    15.4-05 CHANGED HALF 1 AND LEFT HALF 2 ALONE, and the asymmetry is the point.
+
+    Half 1 used to assert that a `KeyError` from `_raw_fact_count` reached the
+    emitter's WARNING log. That assertion was demanding the defect: a swallowed
+    build is a LOST ROW, and every own-research `agent_done` line died whenever
+    that raise fired (D-V01-7). The raise itself is still correct — a skipped
+    count that cannot be computed must not be printed as zero — so the guard went
+    to the one caller that would rather print "unknown" than nothing,
+    `_skipped_label`. Half 1 now asserts the LINE SURVIVES with the skipped term
+    admitted as unknown.
+
+    Half 2 is untouched, and it is what keeps this test a D-06 proof: `_host_of`
+    still raises on a `web_fetch` block with no URL, the fetch line is still
+    dropped rather than fabricated, and the session still completes. If anyone
+    ever hoists `build()` above `emit_safe`'s try, half 2 goes red.
     """
     monkeypatch.setenv("SERPAPI_API_KEY", _FAKE_KEY)
 
@@ -1146,9 +1163,17 @@ async def test_a_turn_whose_shape_makes_the_line_itself_raise_changes_nothing(
         "type": "tool_use", "id": "tu_emit", "name": "emit_fact_list",
         "input": {"not_found": ["the 2027 tariff schedule"]},
     }
+    # NEGATIVE CONTROL, and it now controls the FIX rather than the defect: the
+    # raw count genuinely refuses this block, so a green result below means the
+    # guard did the work — not that the input was countable after all.
     with pytest.raises((KeyError, TypeError)):
         own_researcher._raw_fact_count(malformed_block)
+    assert (
+        own_researcher._skipped_label(malformed_block, 0)
+        == own_researcher._UNKNOWN_SKIPPED
+    )
 
+    recorder = _install_recorder(monkeypatch)
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
         degraded = await own_researcher.run_own_research(
@@ -1159,7 +1184,9 @@ async def test_a_turn_whose_shape_makes_the_line_itself_raise_changes_nothing(
             run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
         )
     degraded_log = _emitter_log(caplog)
+    degraded_done = recorder.texts("agent_done")
 
+    recorder = _install_recorder(monkeypatch)
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="nestor_pulse_sdk.runs.run_events"):
         well_formed = await own_researcher.run_own_research(
@@ -1174,18 +1201,33 @@ async def test_a_turn_whose_shape_makes_the_line_itself_raise_changes_nothing(
             run_id=_RUN_ID, tenant_id=_TENANT_ID, plan=_PLAN,
         )
     well_formed_log = _emitter_log(caplog)
+    well_formed_done = recorder.texts("agent_done")
 
     assert degraded == well_formed, (
         "a model that omitted a key it usually sends costs a FEED LINE, never "
         "the session that produced it"
     )
-    assert "KeyError" in degraded_log or "TypeError" in degraded_log, (
-        "the fragile construction must actually have been reached and swallowed"
+    # THE ROW SURVIVES. This is the assertion that inverted: before 15.4-05 the
+    # degraded shape recorded ZERO done lines.
+    assert len(degraded_done) == 1, (
+        f"the degraded shape recorded {len(degraded_done)} done line(s), not 1 — "
+        f"the row was dropped rather than emitted: {degraded_done}"
     )
-    assert "KeyError" not in well_formed_log and "TypeError" not in well_formed_log, (
-        "the well-formed shape must build its line cleanly — otherwise this test "
-        "would pass against a line that is broken for every run"
+    assert own_researcher._UNKNOWN_SKIPPED in degraded_done[0], (
+        f"the uncomputable skipped count was not admitted as unknown: "
+        f"{degraded_done[0]!r}"
     )
+    assert "0 skipped" not in degraded_done[0], (
+        "a skipped count that cannot be computed was fabricated as zero"
+    )
+    # The countable shape still renders its real difference: nothing emitted,
+    # nothing kept, so `0 skipped` here is a MEASURED zero, not an invented one.
+    assert well_formed_done == ["Own query done — 0 facts from 0 pages · 0 skipped"]
+    for name, text in (("degraded", degraded_log), ("well_formed", well_formed_log)):
+        assert "KeyError" not in text and "TypeError" not in text, (
+            f"a build failure was still reported for the {name} shape, so its row "
+            f"was DROPPED by the emitter rather than emitted: {text!r}"
+        )
 
     # --- half 2: the fetch line's host, off a web_fetch block with no URL ---
     with pytest.raises((TypeError, ValueError)):
