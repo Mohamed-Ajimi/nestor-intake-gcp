@@ -1711,7 +1711,47 @@ async def claim_distiller(
     facet_counts: dict[str, int] = {}
     for c in claims:
         facet_counts[c.get("facet", "?")] = facet_counts.get(c.get("facet", "?"), 0) + 1
-    for fa in focus_area_labels:
+    # D-R1(d) — WARN ONLY ABOUT FACETS THIS CALL ACTUALLY SAW.
+    #
+    # This loop used to iterate the WHOLE MISSION BRIEF, so it reported zero for
+    # any label absent from this call's output whether or not that label was ever
+    # in scope for the call. On V-01 it cried wolf about `convenience` — a focus
+    # area that was in a DIFFERENT report, one that parsed its fact list
+    # successfully and never entered the distiller — and printed that false alarm
+    # right beside the real coffee zero. A warning that fires on things that were
+    # never in scope trains an operator to skim past the one that matters, which
+    # is the second half of why the 278-claim loss went unnoticed.
+    #
+    # The scoping key is `_angle`, the per-report focus area, which rides on the
+    # result dicts all the way into `fallback_units`.
+    in_scope = {str((r or {}).get("_angle") or "") for _, r in provider_reports}
+    in_scope.discard("")
+    zero_candidates = [fa for fa in focus_area_labels if fa in in_scope]
+
+    # THE DEGRADATION IS AS LOAD-BEARING AS THE SCOPING. If not one report
+    # carried a usable `_angle`, `in_scope` is empty and the scoped loop would
+    # warn about NOTHING AT ALL — trading a false alarm for total silence, which
+    # is the exact failure mode this phase exists to end. So fall back to the
+    # full brief, exactly as before, and say out loud that these warnings are
+    # unscoped and may name facets that were never in this call.
+    #
+    # The notice is emitted only when there is actually an unscoped warning to
+    # qualify. With nothing at zero the old code said nothing, this says nothing,
+    # and the behaviours are identical — announcing a scoping failure with no
+    # warnings under it would be a new false alarm inside the fix for false alarms.
+    if not in_scope:
+        unscoped_zeros = [fa for fa in focus_area_labels if facet_counts.get(fa, 0) == 0]
+        if unscoped_zeros:
+            log.warning(
+                "claim_distiller: facet scoping UNAVAILABLE for this call — no "
+                "provider report carried an _angle, so the %d ZERO-claims "
+                "warning(s) below are checked against the whole mission brief and "
+                "may name focus areas that were never in this call (D-R1(d))",
+                len(unscoped_zeros),
+            )
+        zero_candidates = unscoped_zeros
+
+    for fa in zero_candidates:
         if facet_counts.get(fa, 0) == 0:
             log.warning("claim_distiller: focus area %r produced ZERO claims — unverified topic", fa)
     log.info(

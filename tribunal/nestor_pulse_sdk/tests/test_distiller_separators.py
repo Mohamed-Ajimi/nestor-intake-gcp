@@ -31,6 +31,13 @@ Three deliverables live here, and they are deliberately not interchangeable:
      trace of the 278 was a `log.debug` and production does not serve DEBUG.
      Asserted on the RECORD CONTENT, never on "a warning happened".
 
+  5. `TestZeroClaimsWarningIsScoped` (plan 15.4-08, D-R1(d)) -- the warning
+     that DID fire on V-01, and cried wolf about a facet that was never in the
+     call. Now scoped to the facets present in the call's own inputs, with a
+     stated degradation when there is no `_angle` to scope by. Asserted on the
+     SET of facets warned about, because counting warnings would have passed
+     against the defect.
+
 PURE: no Postgres, no provider key, no network, no LLM. Every function under
 test here is a pure string function or `claim_distiller` driven through a
 hand-written duck-typed fake client, and the fixture is committed text.
@@ -806,3 +813,262 @@ class TestReturnedLinesKeptNothing:
         assert "Hoe evolueren de koffiestrategie" in message, (
             f"the first recorded line must appear verbatim (truncated): {message!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 7. D-R1(d) -- the ZERO-claims warning stops crying wolf
+#
+# V-01 logged `produced ZERO claims` for TWO focus areas: coffee and
+# convenience. The coffee one was real. The convenience one was a FALSE ALARM:
+# that report parsed its fact list successfully and was never in the distiller
+# call at all -- the loop simply iterated every focus area in the mission brief
+# and reported zero for any label missing from this call's output, in scope or
+# not.
+#
+# That is why these tests assert the SET of facets warned about, extracted from
+# `record.args`, rather than counting warnings. A test that counted them would
+# have passed against the V-01 behaviour: two warnings, one of them about the
+# wrong thing, is still two warnings.
+# ---------------------------------------------------------------------------
+
+COFFEE = "coffee"
+PRICING = "pricing"
+CONVENIENCE = "convenience"
+
+#: The V-01 brief shape: three focus areas, only two of them in this call.
+BRIEF_THREE_FACETS = {
+    "focus_areas": [
+        {"focus_area": COFFEE},
+        {"focus_area": PRICING},
+        {"focus_area": CONVENIENCE},
+    ]
+}
+
+COFFEE_LINE = (
+    f"{COFFEE} ||| Koffieacceptatie bij Benelux-tankstations groeide in 2023. "
+    f"||| Rapport over koffie bij tankstations."
+)
+PRICING_LINE = (
+    f"{PRICING} ||| De marge op koffie ligt hoger dan die op brandstof. "
+    f"||| Rapport over prijszetting."
+)
+CONVENIENCE_LINE = (
+    f"{CONVENIENCE} ||| Shop-omzet steeg sneller dan de brandstofomzet in 2023. "
+    f"||| Rapport over convenience."
+)
+
+
+def _reports(*angles: str | None):
+    """One short report per provider, carrying (or deliberately missing) `_angle`.
+
+    Providers are named `gemini`, `claude`, `openai` in order, because the fake
+    client routes its canned bodies on the `### Provider:` header.
+    """
+    names = ["gemini", "claude", "openai"]
+    out = []
+    for name, angle in zip(names, angles):
+        result: dict = {"report": SHORT_REPORT}
+        if angle is not None:
+            result["_angle"] = angle
+        out.append((name, result))
+    return out
+
+
+def _zero_facets(caplog) -> set[str]:
+    """The SET of facets the ZERO warning named, read off the record args.
+
+    Reading `record.args[0]` rather than substring-matching the rendered message
+    is what makes "it warned about the wrong facet" a failure rather than a
+    detail: a substring check for `coffee` also matches a message about
+    `coffee_convenience`, and a count check matches anything at all.
+    """
+    return {
+        r.args[0]
+        for r in caplog.records
+        if "produced ZERO claims" in r.getMessage()
+    }
+
+
+def _scoping_notices(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if "facet scoping UNAVAILABLE" in r.getMessage()]
+
+
+class TestZeroClaimsWarningIsScoped:
+    """The ZERO-claims warning covers this call's inputs, and nothing else."""
+
+    async def test_the_v01_shape_warns_about_coffee_and_only_coffee(self, caplog):
+        """Coffee in scope and empty; convenience never in the call.
+
+        This is the recorded V-01 shape. Before D-R1(d) it produced two
+        warnings; the false one is what taught the operator to skim.
+        """
+        with caplog.at_level(logging.WARNING):
+            await _distil(
+                _reports(COFFEE, PRICING),
+                {"gemini": FIVE_UNPARSEABLE_LINES, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        assert _zero_facets(caplog) == {COFFEE}, (
+            f"exactly one ZERO warning, for {COFFEE!r}. {CONVENIENCE!r} was never "
+            f"in this call and warning about it is the V-01 false alarm. Got "
+            f"{_zero_facets(caplog)!r}"
+        )
+        assert _scoping_notices(caplog) == [], (
+            "scoping succeeded here, so the degradation notice must be silent"
+        )
+
+    async def test_no_zero_warning_at_all_when_the_in_scope_facet_yields_claims(
+        self, caplog
+    ):
+        """The control: same inputs, coffee now producing claims.
+
+        Without this, the test above is satisfied by a loop that warns about
+        `coffee` unconditionally.
+        """
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                _reports(COFFEE, PRICING),
+                {"gemini": COFFEE_LINE, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        assert {c["facet"] for c in claims} == {COFFEE, PRICING}
+        assert _zero_facets(caplog) == set(), (
+            f"nothing in scope was empty, so nothing may be reported zero; got "
+            f"{_zero_facets(caplog)!r}"
+        )
+
+    async def test_an_out_of_scope_facet_is_never_reported_even_when_empty(
+        self, caplog
+    ):
+        """`convenience` has zero claims in EVERY case here, and must stay silent.
+
+        Stated as its own test because it is the actual regression: the facet
+        that was warned about on V-01 is empty in both scenarios above, and the
+        difference between the old behaviour and the new one is entirely whether
+        that emptiness is reported.
+        """
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                _reports(COFFEE, PRICING),
+                {"gemini": COFFEE_LINE, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        assert not [c for c in claims if c["facet"] == CONVENIENCE], (
+            "the fixture must genuinely produce no convenience claims, or this "
+            "test proves nothing"
+        )
+        assert CONVENIENCE not in _zero_facets(caplog)
+
+    async def test_blank_angles_fall_back_to_the_whole_brief_and_say_so(self, caplog):
+        """The degradation. Silence would be a worse bug than the false alarm.
+
+        With no `_angle` anywhere there is nothing to scope by, so the loop
+        reverts to today's behaviour over the full brief -- AND announces that
+        the warnings under it are unscoped, so a reader is not misled into
+        treating an out-of-scope facet as a real gap.
+        """
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                _reports(None, None),
+                {"gemini": FIVE_UNPARSEABLE_LINES, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        # "Today's behaviour" derived from the claims themselves rather than
+        # hardcoded, so this stays an equivalence claim if the fixture changes.
+        produced = {c["facet"] for c in claims}
+        todays_behaviour = {
+            fa for fa in (COFFEE, PRICING, CONVENIENCE) if fa not in produced
+        }
+        assert todays_behaviour == {COFFEE, CONVENIENCE}, (
+            f"fixture drift: expected coffee and convenience empty, got "
+            f"{todays_behaviour!r}"
+        )
+        assert _zero_facets(caplog) == todays_behaviour, (
+            f"with no _angle to scope by the warning must degrade to the full "
+            f"brief, not go silent. Got {_zero_facets(caplog)!r}"
+        )
+
+        notices = _scoping_notices(caplog)
+        assert len(notices) == 1, (
+            f"exactly one scoping-unavailable notice per call, got {len(notices)}"
+        )
+        assert notices[0].levelno == logging.WARNING, (
+            f"the notice qualifies WARNINGs, so it must itself be visible in "
+            f"production. Got {notices[0].levelname}"
+        )
+        assert "_angle" in notices[0].getMessage(), (
+            "the notice must name the missing key, or nobody can fix it"
+        )
+
+    async def test_an_empty_angle_string_counts_as_no_angle(self, caplog):
+        """`_angle: ""` is the shape `str(result.get("_angle") or "")` produces.
+
+        A blank string must not become an in-scope facet named `""`, which would
+        make `in_scope` truthy and silently suppress the degradation.
+        """
+        with caplog.at_level(logging.WARNING):
+            await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": ""}),
+                 ("claude", {"report": SHORT_REPORT, "_angle": None})],
+                {"gemini": FIVE_UNPARSEABLE_LINES, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        assert len(_scoping_notices(caplog)) == 1, (
+            "a blank _angle is not a scope; the call must degrade and say so"
+        )
+        assert _zero_facets(caplog) == {COFFEE, CONVENIENCE}
+
+    async def test_the_degradation_notice_is_silent_when_there_is_nothing_to_qualify(
+        self, caplog
+    ):
+        """No `_angle`, but every focus area produced claims.
+
+        Today's behaviour in that case is SILENCE, and the fallback reproduces
+        it exactly. Announcing a scoping failure with no warnings beneath it
+        would be a brand-new false alarm inside the fix for false alarms --
+        recorded as a deliberate narrowing of the plan text, which asks only
+        that the degradation not be silent when it matters.
+        """
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                _reports(None, None),
+                {
+                    "gemini": f"{COFFEE_LINE}\n{CONVENIENCE_LINE}",
+                    "claude": PRICING_LINE,
+                },
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        assert {c["facet"] for c in claims} == {COFFEE, PRICING, CONVENIENCE}
+        assert _zero_facets(caplog) == set()
+        assert _scoping_notices(caplog) == [], (
+            "nothing was zero, so there is nothing to qualify and nothing to say"
+        )
+
+    async def test_facet_counts_and_the_closing_summary_are_unchanged(self, caplog):
+        """D-R1(d) changes which facets are WARNED about. Nothing else.
+
+        `facet_counts` feeds the closing INFO line, and that line is the only
+        place a run records its per-facet yield. A scoping change that quietly
+        narrowed it would remove the measurement this whole phase is judged on.
+        """
+        with caplog.at_level(logging.INFO):
+            await _distil(
+                _reports(COFFEE, PRICING),
+                {"gemini": COFFEE_LINE, "claude": PRICING_LINE},
+                mission_brief=BRIEF_THREE_FACETS,
+            )
+
+        summaries = [
+            r.getMessage() for r in caplog.records if "claims per facet" in r.getMessage()
+        ]
+        assert len(summaries) == 1, f"expected one summary line, got {summaries!r}"
+        assert f"{COFFEE!r}: 1" in summaries[0], (
+            f"the per-facet counts must still be reported in full: {summaries[0]!r}"
+        )
+        assert f"{PRICING!r}: 1" in summaries[0], summaries[0]
