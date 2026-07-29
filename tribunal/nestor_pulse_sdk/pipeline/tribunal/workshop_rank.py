@@ -106,7 +106,12 @@ import uuid  # noqa: F401 — used in the postponed annotations below
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
-from nestor_pulse_sdk.pipeline.tribunal import gates, question_grouping, workshop
+from nestor_pulse_sdk.pipeline.tribunal import (
+    discovery_bracket,
+    gates,
+    question_grouping,
+    workshop,
+)
 from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     CircuitOpenError,
     PauseContinuation,
@@ -1648,6 +1653,23 @@ def _reason_stage_b_crashed(detail: str) -> str:
     )
 
 
+def _note_discovery_yielded_its_slot(dropped: int, questions: int) -> str:
+    """GAP A: the mandate needed every group, so no cross-cutting group was made.
+
+    A NOTE, not a degradation. Every client question is still researched to the same
+    depth — the only thing lost is a question the CLIENT DID NOT ASK, and D-W3-4 is
+    explicit that discovery never borrows from the mandate. Demoting the run for
+    holding that line is the D-12 alarm fatigue this module warns against.
+    """
+    return (
+        f"research scope: {questions} client question(s) already need every "
+        f"available research group, so {dropped} question(s) that the evidence "
+        f"itself raised are reported but were not researched this run. The client's "
+        f"own questions were researched in full, which is the trade this engine "
+        f"makes every time."
+    )
+
+
 def _note_scope_promoted(label: str) -> str:
     return (
         f"question workshop: client question '{label[:80]}' had no winner in the "
@@ -2764,7 +2786,21 @@ def _stage_b_result(
     degradation_reasons: Sequence[str],
     workshop_notes: Sequence[str],
     counts: dict[str, int],
+    groups: Sequence[dict[str, Any]] = (),
+    discovery: Sequence[dict[str, Any]] = (),
+    discovery_not_researched: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
+    """The ONE builder for stage B's contract, so no path can omit a key.
+
+    `groups`, `discovery` and `discovery_not_researched` default to empty rather
+    than being required, because the three keys must be PRESENT on every path
+    including the crash path. A key that exists on the happy path and vanishes on
+    the degraded one is how a caller learns to use `.get()` and then stops noticing
+    the difference.
+
+    Everything here must stay plain and JSON-safe: `pipeline.py` checkpoints the
+    whole result.
+    """
     return {
         "winners": winners,
         "workshop_fallback": bool(workshop_fallback),
@@ -2772,6 +2808,9 @@ def _stage_b_result(
         "deep_research_prompt": str(deep_research_prompt or ""),
         "client_questions": list(client_questions),
         "brief_conflicts": list(brief_conflicts or []),
+        "groups": list(groups or []),
+        "discovery": list(discovery or []),
+        "discovery_not_researched": list(discovery_not_researched or []),
         "degradation_reasons": _dedup_reasons(degradation_reasons),
         "workshop_notes": _dedup_reasons(workshop_notes),
         "counts": {key: int(value) for key, value in counts.items()},
@@ -2853,12 +2892,55 @@ async def run_workshop_stage_b(
       brief_conflicts     list[dict]  passed through from stage A untouched;
                                       plan 15.2-06's "Disputed & changed" section
                                       consumes them and nothing here reads them.
+      groups              list[dict]  D-R4's group records, in the shape
+                                      `question_grouping`'s module docstring
+                                      defines. THIS IS WHAT
+                                      `research_division.divide(..., groups=...)`
+                                      CONSUMES, and a group's `group_id` becomes
+                                      the angle's `corroboration_key` — which is
+                                      why every claim finally gets one instead of
+                                      roughly 3 of 15. At most
+                                      `question_grouping._D6_MAX_GROUPS` of them,
+                                      fewer on a simple brief, and NEVER empty
+                                      while there is a winner: the crash path
+                                      builds one group per client question rather
+                                      than omitting the key.
+      discovery           list[dict]  the questions the EVIDENCE raised that were
+                                      actually DISPATCHED — allocated, minus any
+                                      rider shed for prompt space, minus any
+                                      cross-cutting question the mandate's own slot
+                                      needs (GAP A). It is the dispatched set and
+                                      not the allocated one because
+                                      `discovery_bracket.annotate_conflicts`
+                                      writes `researched_as` from it, and an
+                                      undispatched question must render with no
+                                      such clause. Each carries `provenance` —
+                                      the quote and the URL that provoked it, for
+                                      the report section and the Art. 12 trail.
+                                      Every entry ranks BELOW every winner.
+      discovery_not_researched
+                          list[dict]  the allocated discovery questions that were
+                                      NOT dispatched, carried separately so
+                                      nothing is silently lost. They still reach
+                                      the client as plain brief-vs-world conflicts.
       degradation_reasons list[str]   stage A's reasons plus this stage's TRUE
-                                      degradations only.
-      workshop_notes      list[str]   the scope-guard sentences and any other
-                                      non-degrading observation.
+                                      degradations only — which now includes a
+                                      grouping FULL fallback.
+      workshop_notes      list[str]   the scope-guard sentences, the group-coverage
+                                      repairs, the discovery allocation notes and
+                                      any other non-degrading observation.
       counts              dict[str,int]  candidates_in / killed / ranked /
-                                      winners / scope_injected / matches_unjudged.
+                                      winners / scope_injected / matches_unjudged /
+                                      groups / mandate_groups / discovery_questions
+                                      / discovery_riders / discovery_cross_cutting
+                                      / discovery_not_researched /
+                                      group_coverage_injected.
+
+    NO DISCOVERY QUESTION EVER ENTERS `winners`. They live only as group MEMBERS.
+    `research_division.build_mission_brief_from_winners` derives the report's
+    focus-area sections from the winners list, so a discovered question in there
+    would mint a new client-facing section — and D4 says depth may grow while scope
+    may not.
 
     NEVER RAISES. On an unexpected failure it logs at ERROR and returns the
     fallback shape — one verbatim winner per client-validated question, ranked in
@@ -2931,11 +3013,200 @@ async def run_workshop_stage_b(
                 winner.get("langs"), run_language=run_language
             )
 
+        # ------------------------------------------------------------------
+        # D-W3-4 — THE DISCOVERY BRACKET. Questions the EVIDENCE raised, each
+        # carrying the quote and the source that provoked it. No source, no slot.
+        # ------------------------------------------------------------------
+        discovery, per_parent, disc_notes = discovery_bracket.allocate_discovery(
+            conflicts, labels
+        )
+        riders, cross_cutting = discovery_bracket.partition_discovery(discovery)
+
+        # A provisional rank BELOW every client winner. The mandate can never be
+        # displaced by a question the client did not ask (D-W3-4), and `rank` is the
+        # one place `research_division._stakes_for_rank` derives that from. It is
+        # provisional because the coverage guard below may PREPEND repair winners and
+        # grow the count — `_stamp_discovery_ranks` re-stamps it once `final` is
+        # final. Distinct provisional numbers also make rider shedding deterministic
+        # by allocation order rather than a `_RANK_LAST` tie.
+        for offset, question in enumerate(discovery):
+            question["rank"] = len(final) + offset + 1
+
+        # DISCOVERY QUESTIONS DO NOT ENTER `final`. They live only as group MEMBERS.
+        # `build_mission_brief_from_winners` derives the report's focus-area sections
+        # from the winners list, so a discovered question in there would mint a new
+        # client-facing section — and D4 is that depth may grow while SCOPE MAY NOT.
+
+        # ------------------------------------------------------------------
+        # D-W3-5.3 — the subtraction is on `cross_cutting`, NOT on `discovery`.
+        # A rider costs no slot because it rides inside a mandate group; only a
+        # cross-cutting `__discovery__` question earns `d1`. With none, the mandate
+        # gets the whole ceiling, and that IS the unused slot rolling back to the
+        # mandate — effected precisely by this subtraction not happening. Subtracting
+        # on `discovery` instead would spend a slot on riders and re-inflate V-01's
+        # three questions from 9-12 calls back to 15.
+        # ------------------------------------------------------------------
+        max_mandate_groups = question_grouping._D6_MAX_GROUPS - (
+            1 if cross_cutting else 0
+        )
+        gap_a_dropped: list[dict[str, Any]] = []
+        if cross_cutting and len(labels) > max_mandate_groups:
+            # GAP A — the case D-W3-5 does not cover: the mandate needs every slot
+            # AND a cross-cutting question exists. THE MANDATE WINS. D-W3-4 says
+            # discovery never borrows from the mandate, and an exact client-question
+            # count is the number the 15.8 run is judged on; forcing a mandate group
+            # to hold two client questions so discovery could have its slot would
+            # trade that exact count for a discovered question, which is the opposite
+            # of what D-W3-5 was chosen for. Same rule as
+            # `_drop_cross_cutting_group`, reached from the allocation side.
+            max_mandate_groups = question_grouping._D6_MAX_GROUPS
+            gap_a_dropped = list(cross_cutting)
+            cross_cutting = []
+            log.warning(
+                "workshop_rank: D-W3-4 — %d client question(s) already need all %d "
+                "research group(s), so the %d cross-cutting discovered question(s) "
+                "get no group of their own and are reported rather than researched. "
+                "Discovery never borrows from the mandate; the client's own question "
+                "count stays exact.",
+                len(labels),
+                max_mandate_groups,
+                len(gap_a_dropped),
+            )
+            notes.append(
+                _note_discovery_yielded_its_slot(len(gap_a_dropped), len(labels))
+            )
+
+        # ------------------------------------------------------------------
+        # D-R4 — THE GROUPING CALL. The LLM proposes, Python clamps.
+        #
+        # D-W3-5, in three sentences, at the one place the call is made. A MANDATE
+        # GROUP HOLDS EXACTLY ONE CLIENT QUESTION. The reason is that the primary
+        # fact-list contract has no per-fact facet column, so `facet` is stamped in
+        # Python from the angle and everything sharing a group shares one
+        # attribution. The single exception is MORE THAN FIVE client questions,
+        # where the ceiling makes single-parent arithmetically impossible and a
+        # group may span two, flagged and warned.
+        #
+        # THERE IS NO KNOB HERE, AND DELIBERATELY SO. `group_winners` pins the policy
+        # internally and DERIVES its prompt sentence from
+        # `len(client_questions) <= max_groups`, so the sentence and the clamp cannot
+        # disagree and nobody has to keep two values in step. Adding a second
+        # constant in this module to pass down would create exactly that pair —
+        # and giving it an env knob would make it a feature flag between two engine
+        # paths, which D-03 forbids.
+        # ------------------------------------------------------------------
+        group_stats: dict[str, Any] = {}
+        groups, group_notes, group_reasons = await question_grouping.group_winners(
+            winners=final,
+            client_questions=labels,
+            decision_context=decision_context,
+            max_groups=max_mandate_groups,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            breaker=breaker,
+            stats=group_stats,
+        )
+
+        # RIDERS FIRST, THEN THE CROSS-CUTTING GROUP — in that order, because a shed
+        # rider must be known before the dispatched set (and therefore the report's
+        # `researched_as` annotation) can be built.
+        groups, shed_riders, rider_notes = question_grouping.attach_discovery_riders(
+            groups, riders, max_size=question_grouping._D6_MAX_GROUP_SIZE
+        )
+        if cross_cutting:
+            # ONE group, and its id is the literal `d1`. There is never a `d2`.
+            groups = groups + question_grouping.build_groups(
+                [list(range(len(cross_cutting)))],
+                cross_cutting,
+                bracket=question_grouping.GROUP_BRACKET_DISCOVERY,
+            )
+
+        shed_texts = {
+            str(q.get("text") or "") for q in shed_riders if isinstance(q, dict)
+        }
+        gap_a_texts = {
+            str(q.get("text") or "") for q in gap_a_dropped if isinstance(q, dict)
+        }
+        undispatched = shed_texts | gap_a_texts
+        dispatched_discovery = [
+            q
+            for q in discovery
+            if str(q.get("text") or "") not in undispatched
+        ]
+        not_researched = [
+            q for q in discovery if str(q.get("text") or "") in undispatched
+        ]
+
+        # D-W3-4 requires run one to be able to SHOW whether the cap-of-3 dominance
+        # risk bit, and these three numbers are how 15.8 checks whether D-W3-5
+        # delivered its saving. Logged verbatim, not summarised.
+        log.info(
+            "workshop_rank: discovery bracket — per-parent distribution %r; %d "
+            "rider(s) riding inside a mandate group at no extra call, %d "
+            "cross-cutting question(s) earning a group, %d shed for prompt space, "
+            "%d not researched in total; the mandate was allowed %d group(s)",
+            per_parent,
+            len(riders),
+            len(cross_cutting),
+            len(shed_riders),
+            len(not_researched),
+            max_mandate_groups,
+        )
+
+        # ------------------------------------------------------------------
+        # D4 AGAIN, OVER THE GROUPS. An LLM deciding grouping is an LLM that can
+        # drop a question, so Python re-asserts it after the model has spoken.
+        # ------------------------------------------------------------------
+        coverage_shed: list[dict[str, Any]] = []
+        groups, final, cov_notes, cov_injected = enforce_group_coverage(
+            groups=groups,
+            winners=final,
+            client_questions=labels,
+            all_ranked=ranked,
+            question_texts=texts,
+            max_groups=question_grouping._D6_MAX_GROUPS,
+            shed_out=coverage_shed,
+        )
+        if coverage_shed:
+            coverage_texts = {
+                str(q.get("text") or "") for q in coverage_shed if isinstance(q, dict)
+            }
+            dispatched_discovery = [
+                q
+                for q in dispatched_discovery
+                if str(q.get("text") or "") not in coverage_texts
+            ]
+            not_researched = not_researched + [
+                q for q in discovery
+                if str(q.get("text") or "") in coverage_texts
+            ]
+            notes.append(
+                _note_discovery_yielded_its_slot(len(coverage_shed), len(labels))
+            )
+
+        # The mandate may have grown by a repair, so the discovery ranks are
+        # re-stamped from the FINAL winner count — see `_stamp_discovery_ranks`.
+        _stamp_discovery_ranks(groups, dispatched_discovery, base=len(final))
+
         fallback = bool(source.get("stage_a_fallback")) or (
             bool(final) and all(w.get("source") == "verbatim" for w in final)
         )
         reasons = list(upstream) + list(critique_reasons) + list(tourney_reasons)
         reasons += list(evolve_reasons)
+        # A grouping FULL fallback DEGRADES — shared groundwork gets searched once
+        # per question instead of once per topic, so the deliverable is complete but
+        # the run is worse. A coverage repair only NOTES, because the question IS
+        # researched. Keeping the two channels apart is the D-12 alarm-fatigue rule
+        # this module already states at `enforce_scope_guard`.
+        reasons += list(group_reasons)
+        notes = (
+            list(notes)
+            + list(disc_notes)
+            + list(group_notes)
+            + list(rider_notes)
+            + list(cov_notes)
+        )
         if fallback:
             log.warning(
                 "workshop_rank: the workshop produced nothing beyond the %d "
@@ -2948,11 +3219,21 @@ async def run_workshop_stage_b(
             int(critique_stats.get("calls") or 0)
             + int(tourney_stats.get("calls") or 0)
             + int(evolve_stats.get("calls") or 0)
+            + int(group_stats.get("calls") or 0)
         )
         cost = Decimal("0")
         for stats in (critique_stats, tourney_stats, evolve_stats):
             cost = _add_cost(cost, stats.get("cost_usd"))
+        # `group_winners` accumulates a DECIMAL under `cost` (its own accounting
+        # shape), not a string under `cost_usd`. Reading the wrong key here would
+        # silently under-report every grouping call's spend as zero, and the budget
+        # governor is inert by decision — so the reported number is the only spend
+        # signal there is.
+        cost = _add_cost(cost, group_stats.get("cost"))
 
+        mandate_groups = [
+            g for g in groups if str(g.get("bracket") or "") != "discovery"
+        ]
         result = _stage_b_result(
             winners=final,
             workshop_fallback=fallback,
@@ -2960,6 +3241,9 @@ async def run_workshop_stage_b(
             deep_research_prompt=deep_research_prompt,
             client_questions=labels,
             brief_conflicts=conflicts,
+            groups=groups,
+            discovery=dispatched_discovery,
+            discovery_not_researched=not_researched,
             degradation_reasons=reasons,
             workshop_notes=notes,
             counts={
@@ -2969,6 +3253,13 @@ async def run_workshop_stage_b(
                 "winners": len(final),
                 "scope_injected": len(injected),
                 "matches_unjudged": int(tourney_stats.get("unjudged") or 0),
+                "groups": len(groups),
+                "mandate_groups": len(mandate_groups),
+                "discovery_questions": len(dispatched_discovery),
+                "discovery_riders": len(riders) - len(shed_riders),
+                "discovery_cross_cutting": len(cross_cutting),
+                "discovery_not_researched": len(not_researched),
+                "group_coverage_injected": len(cov_injected),
             },
         )
 
@@ -2977,11 +3268,17 @@ async def run_workshop_stage_b(
         )
         log.info(
             "workshop_rank: stage B done — %d candidate(s) in, %d ranked, %d "
-            "winner(s), %d scope injection(s), fallback=%s",
+            "winner(s), %d scope injection(s), %d research group(s) (%d mandate), "
+            "%d discovered question(s) dispatched, %d group coverage repair(s), "
+            "fallback=%s",
             result["counts"]["candidates_in"],
             result["counts"]["ranked"],
             result["counts"]["winners"],
             result["counts"]["scope_injected"],
+            result["counts"]["groups"],
+            result["counts"]["mandate_groups"],
+            result["counts"]["discovery_questions"],
+            result["counts"]["group_coverage_injected"],
             result["workshop_fallback"],
         )
         return result
@@ -2989,6 +3286,15 @@ async def run_workshop_stage_b(
     except Exception as exc:  # noqa: BLE001 — the workshop degrades, never fails
         log.error("workshop_rank: stage B failed outright: %r", exc, exc_info=True)
         winners = _fallback_winners(labels, texts, run_language)
+        # THE CRASH PATH CARRIES THE GROUPS TOO. `divide()` cannot dispatch without
+        # them, and a contract key that exists on the happy path and vanishes on the
+        # degraded one is exactly how `pipeline.py` learns to reach for `.get()` and
+        # then stops noticing the difference. D-W3-2's deterministic shape: ONE GROUP
+        # PER CLIENT QUESTION, and no discovery at all — the orientation output this
+        # would have been allocated from is not trustworthy on a path where the whole
+        # stage just failed.
+        crash_assignment, _ = question_grouping.fallback_groups(winners, labels)
+        crash_groups = question_grouping.build_groups(crash_assignment, winners)
         return _stage_b_result(
             winners=winners,
             workshop_fallback=True,
@@ -2996,6 +3302,9 @@ async def run_workshop_stage_b(
             deep_research_prompt=deep_research_prompt,
             client_questions=labels,
             brief_conflicts=conflicts,
+            groups=crash_groups,
+            discovery=[],
+            discovery_not_researched=[],
             degradation_reasons=list(upstream)
             + [_reason_stage_b_crashed(f"{type(exc).__name__}: {exc}")],
             workshop_notes=[],
@@ -3006,6 +3315,13 @@ async def run_workshop_stage_b(
                 "winners": len(winners),
                 "scope_injected": len(winners),
                 "matches_unjudged": 0,
+                "groups": len(crash_groups),
+                "mandate_groups": len(crash_groups),
+                "discovery_questions": 0,
+                "discovery_riders": 0,
+                "discovery_cross_cutting": 0,
+                "discovery_not_researched": 0,
+                "group_coverage_injected": 0,
             },
         )
 
