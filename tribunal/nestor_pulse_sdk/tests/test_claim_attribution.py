@@ -44,6 +44,7 @@ import datetime
 import importlib.util
 import inspect
 import re
+import runpy
 import uuid
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -641,6 +642,29 @@ def test_the_extractor_module_stays_stdlib_pure() -> None:
     source and DRIVEN there, which is how the grammar above was proved before it
     ever reached this gate. An import from elsewhere in the SDK would take that
     away, so it is asserted rather than hoped for.
+
+    THIS TEST WAS TIGHTENED AFTER IT FAILED, NOT LOOSENED TO PASS. Read on.
+
+    Plan 15.5-01 wrote it as an exact allowlist of the four modules the file
+    happened to import at the time. Plan 15.5-02 then added `parent_index` /
+    `resolved_facet` to the same module with type annotations, which brought in
+    `typing` and (under `if TYPE_CHECKING:`, so never at runtime)
+    `collections.abc`. The engine gate went red on the merged tree -- the first
+    thing either plan could not have caught alone, since neither could run the
+    other's tests from its worktree.
+
+    Both new names are STDLIB, and `collections.abc` is not even imported at
+    runtime, so liftability was never actually lost. The allowlist was measuring
+    a proxy, and measuring it too narrowly. So the proxy is widened to the
+    stdlib names in genuine use, and the two things the docstring actually
+    promises are now asserted DIRECTLY:
+
+      1. no import from the SDK itself -- the failure mode named above; and
+      2. the module really does lift and run under a bare interpreter, proved by
+         DOING it rather than by inferring it from an import list.
+
+    (2) is the one that cannot rot: any import that truly breaks liftability
+    fails it, whatever the allowlist happens to say that day.
     """
     from nestor_pulse_sdk.pipeline.synthesis import claim_attribution
 
@@ -652,7 +676,22 @@ def test_the_extractor_module_stays_stdlib_pure() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
 
-    assert imported <= {"re", "datetime", "logging", "__future__"}, imported
+    # Stdlib only. `typing` / `collections` are the 15.5-02 annotations.
+    assert imported <= {
+        "re", "datetime", "logging", "__future__", "typing", "collections",
+    }, imported
+
+    # (1) THE ACTUAL INVARIANT the allowlist was standing in for. An SDK import
+    #     is what would make the module un-liftable, and it is now named.
+    sdk_imports = {name for name in imported if name == "nestor_pulse_sdk"}
+    assert not sdk_imports, f"claim_attribution must not import from the SDK: {sdk_imports}"
+
+    # (2) THE PROPERTY ITSELF. Execute the committed file in a namespace of its
+    #     own, exactly as the dev box does, and use what comes out. If any
+    #     import in it were unavailable to a bare interpreter this raises.
+    lifted = runpy.run_path(claim_attribution.__file__)
+    assert lifted["extract_as_of"]("4 maart 2021") == datetime.date(2021, 3, 4)
+    assert lifted["extract_as_of"]("maart 2021") == datetime.date(2021, 3, 1)
 
 
 # --------------------------------------------------------------------------
