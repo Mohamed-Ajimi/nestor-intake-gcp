@@ -1805,6 +1805,52 @@ async def test_d_r3_a_fact_list_claim_carries_the_dispatched_sub_question_and_ke
         assert claim["facet"] == "supply-chain"
 
 
+async def test_d_r3_a_forced_tool_pre_parsed_claim_carries_the_attribution_too() -> None:
+    """The own-researcher branch is NOT a special case for attribution.
+
+    `own` is one of the four `_D6_STREAMS`, so it receives corroboration copies
+    like every other stream — its claims are exactly the ones a corroboration
+    query needs keyed. But its facts arrive ALREADY PARSED on the result dict
+    through the forced `emit_fact_list` tool and take a different `continue`d
+    branch of `collect_provider_facts`, so a change applied to the prose branches
+    alone would silently leave this whole stream unattributed.
+    """
+    audited = RecordingAudited()
+    entries = [
+        _entry(
+            "own",
+            angle="supply-chain",
+            prompted=False,
+            report="Own-researcher prose that carries no machine-readable block at all.",
+            facts=[
+                {
+                    "text": "SerpAPI returned 41 distinct Benelux roaster domains",
+                    "facet": "supply-chain",
+                    "evidence": "41 distinct domains, measured 2021-03-04",
+                    "found_by": ["own"],
+                    "source_urls": ["https://example-roasters.be/index"],
+                    "certainty": "single",
+                    "provider_quality": "other",
+                    "source_domain": "example-roasters.be",
+                    "quality_tier_hint": 3,
+                }
+            ],
+            _sub_question="How fragmented is Benelux roasting?",
+            _corroboration_key="w03",
+        )
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert audited.calls == [], "a forced-tool stream must never be re-distilled"
+    assert len(result.claims) == 1
+    claim = result.claims[0]
+    assert claim["fact_source"] == "fact_list"
+    assert claim["sub_question"] == "How fragmented is Benelux roasting?"
+    assert claim["corroboration_key"] == "w03"
+    assert claim["as_of"] == date(2021, 3, 4), "the evidence cell is read on this branch too"
+
+
 async def test_d_r3_a_pre_15_5_checkpoint_entry_yields_null_and_never_raises() -> None:
     """T-15.5-07: a resumed run must not crash on a checkpoint it can still use.
 
@@ -1867,6 +1913,44 @@ async def test_d_r3_an_empty_corroboration_key_is_recorded_as_null() -> None:
         assert claim["corroboration_key"] != "", "explicitly not the empty string"
         # The sub-question is unaffected — a remainder angle still answers one.
         assert claim["sub_question"] == "When does the EUDR bite?"
+
+
+async def test_d_r3_a_rescued_retry_claim_keeps_the_first_passs_attribution() -> None:
+    """The D-R2 corrective re-ask is a FOURTH `_normalise_fact_claim` call site.
+
+    It is treated exactly as a first-pass block by every other measure — same
+    counter, same normaliser, same `fact_source`, same not-found harvest — and a
+    rescued claim came from the SAME dispatched angle. Omitting the attribution
+    here would silently strip it from every claim a re-ask recovered, on the one
+    path whose entire purpose is to recover what the first pass lost.
+    """
+    audited = RetryAwareAudited(
+        retry_response=_retry_block([
+            _fact_line(
+                "Robusta bean imports rose 12 percent during 2025",
+                "https://ec.europa.eu/eurostat/robusta-2025",
+                "official", "certain", "imports rose 12 percent",
+            ),
+        ])
+    )
+    entries = [
+        _entry(
+            "gemini",
+            report=_NO_BLOCK_REPORT,
+            _sub_question="How fast is Robusta demand growing?",
+            _corroboration_key="w01",
+        )
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.retry_calls) == 1, "the fixture must exercise the retry path"
+    assert audited.distiller_calls == [], "a rescued report is never also distilled"
+    assert result.claims
+    for claim in result.claims:
+        assert claim["fact_source"] == "fact_list"
+        assert claim["sub_question"] == "How fast is Robusta demand growing?"
+        assert claim["corroboration_key"] == "w01"
 
 
 async def test_d_r3_a_distiller_fallback_claim_carries_no_dispatch_attribution() -> None:

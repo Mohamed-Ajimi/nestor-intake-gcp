@@ -42,6 +42,7 @@ import asyncio
 import copy
 import re
 import uuid
+from datetime import date
 
 import pytest
 
@@ -594,3 +595,161 @@ class TestDedupeMerges:
         assert out[0]["found_by"] == ["gemini"], (
             f"a later provider must still register on the kept claim, got {out[0]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# D-W2-3 (phase 15.5 wave 2): the merge rule for the three attribution columns.
+#
+# FIRST-WINS, and it needed NO PRODUCTION CODE — `_dedupe_claims` already keeps
+# the first occurrence's dict whole and mutates only the fields it unions. These
+# tests pin that emergent behaviour so a future "tidy-up" of the function has to
+# turn a named test red before it can change it, and they pin the byte-identity
+# of the `claim_distiller` path through the same function.
+#
+# Nothing below modifies `_old_dedupe`, `MIXED_CLAIMS` or any existing test. If
+# one of those goes red, the production change was not additive and belongs
+# fixed there, not accommodated here.
+# ---------------------------------------------------------------------------
+
+#: A claim in the shape `collect_provider_facts` now produces — the nine older
+#: keys are irrelevant to the merge, so only the ones under test are set.
+def _attributed(text, *, found_by, sub_question, corroboration_key, as_of=None):
+    return {
+        "text": text,
+        "facet": "general",
+        "evidence": "",
+        "found_by": list(found_by),
+        "sub_question": sub_question,
+        "corroboration_key": corroboration_key,
+        "as_of": as_of,
+    }
+
+
+class TestDedupeAttributionIsFirstWins:
+    """D-W2-3. The first occurrence's attribution survives the cross-stream merge."""
+
+    def test_dedupe_first_wins_silently_loses_the_second_claims_sub_question(self):
+        """THE ACCEPTED INFORMATION LOSS, named in the test rather than found later.
+
+        Two streams state the same fact under DIFFERENT sub-questions. They merge
+        to one claim carrying the FIRST sub-question, and the second is gone with
+        no warning — the cross-key-merge warning was explicitly DECLINED for this
+        wave. That is a recorded decision, not an oversight; do not add it back
+        without reopening D-W2-3.
+        """
+        claims = [
+            _attributed("Cronos holds 18% of the Belgian IT market.",
+                        found_by=["gemini"], sub_question="How big is Cronos?",
+                        corroboration_key="w01"),
+            _attributed("cronos holds 18 of the belgian it market",
+                        found_by=["claude"], sub_question="Who leads Belgian IT?",
+                        corroboration_key="w02"),
+        ]
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 1, "both variants normalise to one fact"
+        assert out[0]["sub_question"] == "How big is Cronos?", "the FIRST wins"
+        assert out[0]["sub_question"] != "Who leads Belgian IT?", (
+            "the second sub-question is silently lost — that is the accepted cost"
+        )
+        # The corroboration signal itself still survives, in found_by.
+        assert out[0]["found_by"] == ["gemini", "claude"]
+
+    def test_dedupe_first_wins_attributes_a_cross_group_merge_to_the_first_group(self):
+        """Same rule, the column that actually joins the corroboration query.
+
+        A claim merged across two corroboration groups is attributed to the
+        first. `provider_quality_by_url`'s first-to-introduce-owns-it is the
+        precedent this follows.
+        """
+        claims = [
+            _attributed("Cronos holds 18% of the Belgian IT market.",
+                        found_by=["gemini"], sub_question="q", corroboration_key="w01"),
+            _attributed("Cronos  holds  18%  of the Belgian IT market!!",
+                        found_by=["openai"], sub_question="q", corroboration_key="w07"),
+        ]
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 1
+        assert out[0]["corroboration_key"] == "w01", "the FIRST group wins"
+        assert out[0]["corroboration_key"] != "w07"
+
+    def test_dedupe_keeps_a_none_first_occurrence_over_a_later_real_value(self):
+        """First-wins working AS SPECIFIED, not a bug — and bounded by ORDERING.
+
+        `collect_provider_facts` calls `_dedupe_claims(d8_claims +
+        fallback_claims)`, with the ATTRIBUTED fact-list claims FIRST. So in the
+        real pipeline the unattributed distiller paraphrase is the duplicate and
+        never the survivor, and this case only arises where nothing was recorded
+        for either. Asserted anyway, because the mitigation is an ordering
+        convention in another function and conventions drift.
+        """
+        claims = [
+            _attributed("Cronos holds 18% of the Belgian IT market.",
+                        found_by=["claude"], sub_question=None,
+                        corroboration_key=None),
+            _attributed("cronos holds 18 of the belgian it market",
+                        found_by=["gemini"], sub_question="How big is Cronos?",
+                        corroboration_key="w01", as_of=date(2021, 3, 4)),
+        ]
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 1
+        assert out[0]["sub_question"] is None, "first-wins, even when the first is None"
+        assert out[0]["corroboration_key"] is None
+        assert out[0]["as_of"] is None
+        # `is None`, not falsiness: the empty string is falsy too, and D-W2-2
+        # exists precisely to keep "absent" and "the empty key" apart.
+        assert out[0]["corroboration_key"] != ""
+
+    def test_dedupe_invents_no_attribution_key_on_the_claim_distiller_path(self):
+        """THE BYTE-IDENTITY ASSERTION for the path that carries none of these keys.
+
+        `_dedupe_claims` runs over RAW distiller claims at the end of
+        `claim_distiller`, BEFORE `_normalise_fact_claim` has ever been reached —
+        so those claims have no `sub_question`, no `corroboration_key` and no
+        `as_of` key at all. Not `None`: ABSENT. A merge that invented one would
+        change what that path produces, and this wave changes nothing.
+        """
+        claims = [
+            _claim("Cronos holds 18% of the Belgian IT market.", ["gemini"]),
+            _claim("cronos holds 18 of the belgian it market", ["claude"]),
+            _claim("Capgemini Belgium grew its public sector practice.", ["openai"]),
+        ]
+        before_keys = [set(c) for c in claims]
+        assert all(
+            k not in keys
+            for keys in before_keys
+            for k in ("sub_question", "corroboration_key", "as_of")
+        ), "the fixture's own premise: distiller claims carry none of the three"
+
+        out = _dedupe_claims(claims)
+
+        assert len(out) == 2
+        for survivor in out:
+            for invented in ("sub_question", "corroboration_key", "as_of"):
+                assert invented not in survivor, (
+                    f"_dedupe_claims invented {invented!r} on a distiller claim: "
+                    f"{sorted(survivor)}"
+                )
+
+    def test_dedupe_of_distiller_shaped_claims_still_matches_the_old_implementation(self):
+        """The same oracle `test_dedupe_merges_preserving_count` uses, aimed at
+        the distiller shape specifically.
+
+        Count, order and texts must be what the verbatim pre-15.1 DISCARD
+        implementation produced. If this drifts, the recorded-run replay premise
+        collapses and so does the phase 15.8 measuring run's one held-still
+        variable.
+        """
+        new_out = _dedupe_claims(copy.deepcopy(MIXED_CLAIMS))
+        old_out = _old_dedupe(copy.deepcopy(MIXED_CLAIMS))
+
+        assert len(new_out) == len(old_out)
+        assert [c["text"] for c in new_out] == [c["text"] for c in old_out]
+        # And no survivor grew a key that the old implementation's survivor lacks.
+        for new_claim, old_claim in zip(new_out, old_out):
+            gained = set(new_claim) - set(old_claim)
+            assert gained <= {"found_by", "provider_quality_by_url"}, (
+                f"the merge invented key(s) {sorted(gained)} on a distiller claim"
+            )
