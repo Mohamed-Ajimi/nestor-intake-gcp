@@ -400,9 +400,14 @@ def extract_as_of(evidence: str | None) -> date | None:
 def parent_index(winners: "Iterable[object] | None") -> dict[str, str]:
     """Build ``{winner_text: parent_label}`` from a workshop winners list.
 
-    **DELIBERATELY NOT CALLED BY THE PIPELINE IN THIS WAVE.** Its only consumer
-    today is `resolved_facet` and the test that proves invariant 2 is a no-op.
-    Phase 15.6 is its first production caller.
+    **DELIBERATELY NOT CALLED BY THE PIPELINE.** Its only consumer today is
+    `resolved_facet` and the test that proves invariant 2 is a no-op.
+
+    **PHASE 15.6 EXAMINED THIS SEAM AND LEFT IT UNCALLED.** Wave 2 predicted 15.6
+    would be its first production caller. It is not, and the reason is now
+    STRUCTURAL rather than incidental — read `resolved_facet` below for the full
+    finding, including the one code path on which the two values genuinely differ
+    and resolving is nevertheless the WORSE answer.
 
     The winners list is the workshop tournament's own output — the same list
     `research_division.divide(..., winners=...)` consumes — where each entry is a
@@ -449,14 +454,67 @@ def parent_index(winners: "Iterable[object] | None") -> dict[str, str]:
 def resolved_facet(claim: dict, parents: "Mapping[str, str] | None") -> str | None:
     """The client question a claim really answers, resolved via its sub-question.
 
-    **DELIBERATELY NOT CALLED BY THE PIPELINE IN THIS WAVE.** In wave 2 this
-    function returns exactly ``claim["facet"]`` for every claim a real run
-    produces, because `research_division._angle` stamps `focus_area` from the
-    winner's ``parent`` and `sub_question` from the winner's ``text`` — so the
-    parent of a claim's sub-question IS the facet already on it. Calling it would
-    change nothing and would add a live call path for zero gain, which D-R3
-    invariant 3 forbids. It exists so phase 15.6 has a NAMED SEAM to fill when an
-    LLM-formed group can span two client questions and `facet` stops being true.
+    **DELIBERATELY NOT CALLED BY THE PIPELINE.** In wave 2 this function returns
+    exactly ``claim["facet"]`` for every claim a real run produces, because
+    `research_division._angle` stamps `focus_area` from the winner's ``parent`` and
+    `sub_question` from the winner's ``text`` — so the parent of a claim's
+    sub-question IS the facet already on it. Calling it would change nothing and
+    would add a live call path for zero gain, which D-R3 invariant 3 forbids.
+
+    ==================================================================
+    PHASE 15.6 EXAMINED THIS SEAM AND LEFT IT UNCALLED. Do not wire it in
+    without reading all four cases below; each one has been checked against
+    the code rather than reasoned about.
+    ==================================================================
+
+    Wave 2 recorded that this function exists so phase 15.6 could fill it "when an
+    LLM-formed group can span two client questions and `facet` stops being true".
+    **Operator decision D-W3-5 (2026-07-29) removed that condition.** Under
+    mandate-strict grouping a mandate group contains members from exactly ONE
+    client question, so the group's parent IS the angle's ``focus_area`` AND IS
+    every mandate claim's correct facet. The resolver would return the claim's own
+    facet for every claim in the run — a no-op for exactly the structural reason it
+    was a no-op in wave 2, which is a STRONGER justification than the one wave 2
+    recorded, not a weaker one.
+
+    THE FOUR RESIDUAL CASES, recorded rather than papered over:
+
+    1. **A discovery RIDER files under its host client question.** Accepted by
+       D-W3-5.2, and this function could not improve it: the rider's own ``parent``
+       IS that host label, so resolving returns the same value.
+    2. **A cross-cutting ``d1`` claim files under ``labels[0]`` via the existing
+       orphan rule.** Resolving would return ``__discovery__``, which is not a
+       client question and therefore not a member of
+       ``mission_brief["focus_areas"]`` — so `pipeline._propagate_stakes` would
+       silently default its stakes to ``med`` and ``claims_per_facet`` would gain a
+       key with no report section behind it. **Calling it here is WORSE, not
+       better.** Say so explicitly, because it is the obvious "improvement" the
+       next reader will attempt.
+    3. **The ORPHAN path is the one place the two values genuinely DIFFER, and
+       resolving is still worse.** `_angle` reads
+       ``w["parent"] if w["parent"] in parent_prompt else labels[0]``, so a winner
+       naming a parent that matches no client-validated label gets
+       ``focus_area == labels[0]`` while this resolver would return the unmatched
+       label itself. `build_mission_brief_from_winners` builds ``focus_areas``
+       from the client labels ONLY, so that unmatched label is not one — and
+       resolving to it would move the claim out of every report section and out of
+       the client question's own count, which is precisely what the orphan rule
+       exists to prevent. The rule is deliberate ("attached rather than dropped");
+       this function would undo it.
+    4. **More than five client questions**, where the ≤5 ceiling makes
+       single-parent impossible and one mandate group may legitimately span two.
+       This is the only case with anything to gain — and it is still not reachable,
+       because a per-claim resolution needs a per-claim sub-question, and under
+       group dispatch one angle covers the whole group. Phase 15.5 ruled that
+       fabricating a sub-question is worse than a NULL, and that ruling stands.
+
+    THE ONE CONDITION THAT WOULD MAKE THIS A CALLER: a genuine per-claim
+    sub-question attribution channel, which requires a ``facet`` column in the D8
+    fact-list contract (``facts.py`` — ``STATEMENT<TAB>SOURCE_URL<TAB>QUALITY<TAB>
+    CERTAINTY<TAB>EVIDENCE`` has none, which is why `synthesis/steps.py` stamps
+    ``facet`` in Python from the angle at three ``fact_source="fact_list"`` call
+    sites). Changing that contract is out of scope for phase 15.6 and high-risk for
+    the reasons D-W3-5 records.
 
     THE LOOKUP IS EXACT-STRING, ON PURPOSE. Both sides of it are the SAME
     engine-authored string: `divide()` copies ``w["text"]`` onto the angle as
