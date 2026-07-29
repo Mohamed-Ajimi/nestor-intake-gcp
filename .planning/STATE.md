@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: Phase 15.4 inserted 2026-07-29, awaiting /gsd-plan-phase 15.4
+status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T13:22:44.566Z"
+last_updated: "2026-07-29T14:17:03.579Z"
 last_activity: "2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)"
 progress:
   total_phases: 12
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.4 (research-engine-redesign-extraction-repair-wave-1) — NOT PLANNED
-Plan: 0 of TBD — not planned yet
-Status: Phase 15.4 inserted 2026-07-29, awaiting /gsd-plan-phase 15.4
+Plan: 0 of 11 executed
+Status: Phase 15.4 PLANNED — 11 plans / 5 waves, plan check PASSED (0 blockers, 2 warnings closed). Ready to execute.
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
@@ -71,7 +71,7 @@ BEFORE V-01, verify by hand:
     Blocking, not advisory.
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
-Next: /gsd-plan-phase 15.4  (Wave 1 of .planning/ENGINE-REDESIGN-SPEC.md; ships ALONE, measured by one live run before waves 2-5). Then: 15.2 gap closure remainder -> 15.3 plan 09 operator checkpoints -> 19 -> 20. Phase 18 Tasks 4-6 (V-01/V-02/V-03) are superseded by the 15.4 run.
+Next: /gsd-execute-phase 15.4  (Wave 1 of ENGINE-REDESIGN-SPEC.md; ships ALONE, measured by one live run before waves 2-5). ROTATE Nestor_Claude_Temp before plan 15.4-11 s live run. Then: 15.2 gap remainder -> 15.3 plan 09 checkpoints -> 19 -> 20.
 Last activity: 2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)
 
 Progress: [██████████] 100%
