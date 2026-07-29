@@ -387,3 +387,60 @@ was adjusted to look clean is not a scan. Verified by re-running with `-n`: line
 
 Quoted content is limited to two Dutch sentences about public fuel-retail market structure and the
 gate model's own decision tokens.
+
+---
+
+# OPERATOR RULING — 2026-07-29 (plan 15.4-06 Task 3, blocking checkpoint)
+
+**Ruling: APPROVED — nothing enters Phase 15.4.** The scope fence holds. Wave 1 ships as scoped and
+is measured by one clean run.
+
+**Q3 disposition: A now, C later.** Null certainty is accepted for now — `certainty` has a writer and
+no reader, so a null is indistinguishable from a stated value and changes nothing today. Later,
+surface the **skeptic's verdict** instead, which is the signal that actually carries meaning.
+Option B (build a reader and hedge on provider-stated certainty) was declined: it would make a
+write-only column load-bearing, and after the `<TAB>` fix roughly 67% of claims would carry no value
+to display anyway.
+
+## Why Q2 was deferred even though it is a real, costed defect
+
+Not because it is small. Because fixing it **changes which claims reach paid verification** — the
+one variable Wave 1 exists to hold still. Wave 1's whole purpose is to be measured by a single clean
+run against V-01; if the gate's selection changes in the same deploy, the next run stops being a
+measurement of the extraction fix and becomes a measurement of two things at once. That is precisely
+the mistake the phase was designed to avoid: the spec's own instruction is to ship Wave 1 alone,
+because "shipping the redesign on top of a broken meter would attribute the parser bug to the
+redesign."
+
+## Booked, not dropped — carry these into the next phase
+
+1. **The gate one-column shorthand (Q2, the parsing half).** 153 gate answers rejected whole against
+   a two-column contract; all 11 calls returned `finish_reason: STOP` with full answers, so this is
+   **provider format drift, not failure — the same class as the `<TAB>` defect, one stage over.**
+   43 of the 153 were the model explicitly saying DROP with a reason, and those claims were sent to
+   paid skeptic sessions regardless: order **$6–8 per run**, recoverable.
+2. **The un-rendered degradation sentence (Q2, the reporting half).** `verification/report.py`
+   `_degradation` returns early at `if not degraded: return False, None`, and the one sentence that
+   would tell a human about defaulted gate answers sits *inside* the branch below it — gated behind
+   `shortfall > 0`, which was 0. So a third of the gate stage failed its contract and the feed
+   rendered `status: "done"`. **Independently verified 2026-07-29 by reading the function.** This
+   half changes no claim's fate and is the cheaper, safer of the two.
+3. **86 of 302 verdicts came back `insufficient`** — 28% of what the Tribunal checked came back "we
+   could not establish this", and the report says so nowhere. Bigger and better-grounded than Q3, and
+   the natural home for the "C later" work above: surfacing the skeptic verdict answers this and Q3
+   together.
+4. **The null-certainty share expires as an argument.** 175/396 ≈ 44% today; the `<TAB>` fix adds 278
+   claims that all land on the distiller path, projecting ~67%. "Acceptable because it is a minority"
+   will not be available next time — which is *not* the reason A was chosen (unreadability is), but
+   is the reason C should not be left indefinitely.
+
+## What Q1 closed
+
+`426 distilled − 27 refuted − 3 conflict losers = 396 persisted`, residual **0**. `293` was never on
+that line — it is the gate-**kept** count, a different cut of the same 426, and gate-dropped claims
+are never removed from the funnel. Every integer re-measured from the audit blobs by replaying the
+production parsers, not taken from the prior forensics. **Closed. No fix.**
+
+One residual left honestly open: 302 claims carry a verdict against a recorded `checked: 293`.
+Consistent with `checked_incidentally` but **not verified** — gate requests are truncated to 2,000
+chars in the audit blob, so claims cannot be mapped to gate decisions from the bucket alone.
