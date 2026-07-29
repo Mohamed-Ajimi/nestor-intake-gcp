@@ -392,6 +392,37 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 
 ## 5. Wave 4 — the creative workshop loop (D-R6, D-R9)
 
+> ### ⚠️ SIX OPEN AMBIGUITIES — settle these BEFORE planning 15.7
+>
+> Recorded 2026-07-29 by an audit of this document for the defect class that nearly shipped in Wave 3:
+> **the spec saying two different things in two places, where each reading looks complete on its own.**
+> Wave 3's grouping ambiguity survived a full planning pass and was only caught mid-review. These are
+> the same shape. **A planner must not resolve any of them silently — route them to the operator.**
+>
+> 1. **§ 5 argues with D-R9, a locked decision.** D-R9 says *"keep the tournament and make it real."*
+>    "Fix the arithmetic" below then offers replacing pairwise Elo with **a ranked list in one call plus
+>    a run-off**, and calls that *"better at our size."* Replacing the tournament is not obviously
+>    keeping it. **Two defensible readings, no ruling.** This is the closest match to the Wave 3 defect
+>    in the whole document.
+> 2. **Dropping the tournament may destroy the measuring run's control.** § 8 nominates
+>    `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false` as the A/B control that proves the loop earned its
+>    cost. If the tournament becomes a ranked list, that switch may no longer mean anything — and there
+>    is only ONE measuring run.
+> 3. **The exit rule and the cost estimate contradict each other.** Exit needs **all three** criteria,
+>    one being *"no `WEAK` question remains in the winner set"*. V-01 had **9 of 10 winners `WEAK`**. If
+>    that is typical the loop runs all 10 rounds EVERY run — yet this section says *"the cap is a
+>    ceiling, not a target, and you will rarely reach it."* Both cannot hold. Cost of being wrong:
+>    ~$3 and +5–7 min on every run rather than occasionally.
+> 4. **The spend ceiling has no value.** Named as the second backstop and never set — the same omission
+>    as the group-size cap, which Wave 3 had to choose for itself. This section itself names the shape
+>    it must bound: a round-9 prompt carrying 60 candidates, which a round-count cap does not catch.
+> 5. **"Barred this run, kept for the next" describes storage that does not exist.** Nothing persists
+>    workshop state across runs. Either that is a new table (a **fourth** unpaid migration) or the
+>    phrase means something narrower.
+> 6. **Enrichment has no source for a discovery question.** Evolve is to be passed *"the orientation
+>    findings for the parent question"*. A cross-cutting discovery question's parent is
+>    `__discovery__`, which has no findings. Same class of gap D-W3-5 closed for dispatch.
+
 ### What is wrong today, precisely
 
 | | Co-Scientist | Ours |
@@ -528,6 +559,17 @@ Winner set frozen → LLM groups into ≤5 → **Python asserts** every client q
 
 ## 6. Wave 5 — yield instrumentation (D-R8)
 
+> ### ⚠️ TWO GAPS — under-specified rather than ambiguous (audit 2026-07-29)
+>
+> 1. **No home is named for the yield data.** This section says *what* to record and never *where*.
+>    That is a schema decision, and it means **a THIRD unpaid alembic migration** joining
+>    `0015 -> 0016` and `0016 -> 0017`, neither of which has ever touched a database. Decide the table
+>    before planning, and budget the proof line.
+> 2. **The per-assignment tuple assumes one client question.** `(provider, group_id, client_question,
+>    stakes)` is correct for a mandate group under D-W3-5 — but a cross-cutting `d1` group has **no**
+>    client question, and a discovery rider's assignment carries one that is not really its own.
+>    Decide what those rows record before the run, not after.
+
 Nothing today ties an assignment decision to its outcome. `audit_log` has cost and tokens but no row
 says *this provider, on this question, at this stakes, in this group, yielded N parseable facts, M
 surviving verification, K resolvable sources, for $X.*
@@ -574,10 +616,28 @@ Per wave:
 | Wave | Verified by |
 |---|---|
 | 1 | replay proof (278 recovered); all four separator forms parse identically; WARNING fires on lines-but-no-claims; all three gemini deviations retried |
-| 2 | a claim from a mixed group carries the sub-question's parent as `facet`; nullable columns leave legacy rows untouched |
-| 3 | coverage assertion catches a deliberately dropped client question; group-size cap holds; 5×3 = 15 calls issued |
+| 2 | ~~a claim from a mixed group carries the sub-question's parent as `facet`~~ **SUPERSEDED — see below**; nullable columns leave legacy rows untouched ✅ |
+| 3 | coverage assertion catches a deliberately dropped client question ✅; group-size cap holds ✅; ~~5×3 = 15 calls issued~~ **now a band of 9–15, see below** |
 | 4 | loop exits on saturation before the cap; a resurrected candidate does **not** satisfy coverage; barred questions do not reappear; losers remain promotable |
 | 5 | one run produces a complete yield record per assignment and per round |
+
+> ### ⚠️ TWO ROWS ABOVE ARE STALE — read before ticking anything at 15.8
+>
+> Recorded 2026-07-29 after an audit of this document for grouping-class ambiguities. **Do not tick
+> either strikethrough item; they describe a world operator decision D-W3-5 removed.**
+>
+> **Wave 2's mixed-group test cannot be run, and that is correct.** D-W3-5 (`15.6-CONTEXT.md`) ruled
+> **mandate-strict**: a mandate group holds exactly one client question unless there are more than 5 of
+> them. So mixed groups are the rare forced case, not the norm, and `claim_attribution.resolved_facet`
+> is deliberately left with **no production caller** — under mandate-strict the group's parent already
+> IS every mandate claim's correct facet, and on a cross-cutting `d1` group the resolver would return
+> `__discovery__`, which is not a valid facet for `_propagate_stakes` or any report section. Wave 2
+> shipped correctly and is gate-verified; only this checklist row is wrong.
+>
+> **Wave 3 issues 9–15 calls, not 15.** D-W3-1 made 5 groups a **hard ceiling, not a target** (fewer is
+> expected on a simple brief), and D-W3-5 lets a discovery question ride in its parent's mandate group
+> so discovery usually consumes **no slot at all**. V-01's three client questions land at **9–12**.
+> The plans assert the band deliberately — a fixed number would pin the wrong thing.
 
 **Then one clean run.** Compare against V-01 on: claims kept, coffee claims > 0, `WEAK` winners in the
 final set, calls issued, total cost, wall-clock. Use `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false` (ranks
