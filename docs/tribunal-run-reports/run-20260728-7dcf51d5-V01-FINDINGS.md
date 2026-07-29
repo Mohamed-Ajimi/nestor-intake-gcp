@@ -254,6 +254,24 @@ The D-A model swap updated the dispatch path but not the cost table.
 
 ## D-V01-9 — gemini omits the FACTS block and the distiller fallback then yields nothing (BLOCKING, highest value)
 
+> ⛔ **DIAGNOSED 2026-07-29 — THE ROOT CAUSE BELOW IS WRONG, AND THE REAL ONE IS SMALLER AND WORSE.**
+> See [`run-20260728-7dcf51d5-DIAGNOSTICS.md`](run-20260728-7dcf51d5-DIAGNOSTICS.md) for the full
+> evidence chain, read from the per-call audit blobs.
+>
+> 1. **The distiller did NOT yield nothing.** It returned **278 well-formed, evidence-bearing coffee
+>    claims** — 44 mentioning Circle K, 27 LUKOIL, 18 Costa, 10 Shell Café. All 278 were discarded by
+>    `_parse_distiller_response` because gemini wrote the **literal string `<TAB>`** instead of a tab
+>    character, and the prompt itself uses `<TAB>` as a placeholder to describe the separator. Two of
+>    the four distiller calls in the same batch emitted real tabs; two copied the placeholder. The
+>    only log line for the drop is `log.debug`, which production discards (D-V01-6).
+> 2. **Truncation is ruled out** as the cause of the missing `FACTS` block: gemini's two **longest**
+>    reports (88k chars) both carry complete blocks, the block sits ~75% into the output with 9–15k
+>    chars of bibliography after it, and both failing reports end with a complete numbered
+>    bibliography. The cause is format drift. **The Q4 grouping gate is therefore CLEARED.**
+> 3. **The report index in the table below is swapped.** The 4-line unparsed block is **idx 8**, not
+>    idx 4; idx 4 is the 20-line `[cite: N]` case. 172 of the 175 distiller claims trace textually to
+>    idx 8, which this document lists as "usable".
+
 **This outranks D-V01-1/2.** Corroboration failing costs you cross-checking. This costs you whole
 client questions, and then misreports the loss as an evidence gap.
 
@@ -369,6 +387,15 @@ Verified by tracing distinctive terms into the delivered report:
 ```
 
 **Only ~11% of the research corpus reaches the claim layer**, and the report can see nothing else.
+
+> ⚠️ **RESTATED 2026-07-29.** This funnel conflates a parser bug with a capability limit. For the two
+> coffee reports — the whole basis of the "researched, paid for, discarded" case below — extraction
+> **succeeded** and produced 278 claims; a separator mismatch threw them away
+> ([DIAGNOSTICS](run-20260728-7dcf51d5-DIAGNOSTICS.md), 1b). The 89% figure is real as an
+> input→output ratio but must not be read as "the extractor cannot cover this material".
+> **Consequence for the fix list: the `<TAB>` fix, not "the writer must read the research", is the
+> top item.** Feeding reports to the writer remains a worthwhile safety net; it was sized against a
+> hole this one-line fix mostly closes.
 
 **The consequence that makes this urgent.** The delivered coffee section contains **zero Benelux
 content** — it is Irish (Maxol/ROSA), British (MPK/Lavazza) and Swiss (Landi Sursee) — and it tells
