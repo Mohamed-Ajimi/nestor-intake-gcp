@@ -121,6 +121,77 @@ trail intact.
   - [x] 15-06-PLAN.md — Frontend: numbered clickable CitationPanel (stored-snapshot, dead-link safe) + getSource + en/fr/nl i18n
   - [x] 15-07-PLAN.md — DEPLOY-RUNBOOK Phase 15 section (dual rebuild + 0011 migrate + frontend) + 15-UAT.md recorded-run walkthrough + operator UAT checkpoint
 
+### Phase 15.8: Research Engine Redesign — Yield Instrumentation, Deploy + One Measuring Run (Wave 5) (INSERTED)
+
+**Goal:** Record yield per assignment so routing can later be evidence-based — then **deploy the whole
+redesign in ONE release and measure it with ONE live run**.
+**Depends on:** Phases 15.4, 15.5, 15.6, 15.7 — all of them.
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 6 (D-R8) and § 8.
+**SEQUENCING — operator decision 2026-07-29:** *"I don't want to measure anything unless we finish all
+changes."* This reverses the spec's "ship Wave 1 alone" instruction. Nothing deploys until every wave
+is built. The trade-off was stated and accepted: with several waves landing together, an unexpected
+result cannot be attributed to a single change.
+**Absorbs the parked plan `15.4-11`**, which must be RE-SCOPED from "Wave 1 alone" to the full redesign
+before it executes — including V-01 comparison rows for the later waves.
+**Blocking pre-conditions:** rotate `Nestor_Claude_Temp` (it transited a chat in plaintext 2026-07-27
+and is live on both Tribunal services); settle plan 15.4-07's `gpt-5.6-sol` cost row; and prove alembic
+`0016` with the literal `Running upgrade 0015 -> 0016` line, never exit 0.
+**Requirements**: none
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15.8 to break down)
+
+### Phase 15.7: Research Engine Redesign — Creative Workshop Loop (Wave 4) (INSERTED)
+
+**Goal:** Turn the question workshop into a real creative loop: generative evolve, judges that give
+reasons, a meta-review, a **10-round cap** with a saturation exit and a spend ceiling. The tournament is
+kept and made real (Q1 resolved) — it earns its cost only because Wave 3's discovery bracket gives it
+genuinely different ideas to rank, instead of narrower rewordings of questions the client already asked.
+**Depends on:** Phase 15.6 (the discovery bracket is what makes the tournament worth running).
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 5 (D-R6, D-R9).
+**Affordable because thinking is cents and research is fifty dollars:** the whole workshop measured
+$0.54 / 63 s on V-01, of which the entire 4-round tournament was ~$0.00.
+**Requirements**: none
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15.7 to break down)
+
+### Phase 15.6: Research Engine Redesign — Dispatch + Discovery Bracket (Wave 3) (INSERTED)
+
+**Goal:** Replace one-angle-per-question dispatch with an LLM that groups the winning questions into
+**at most 5 groups**, each sent to **all providers** — and add a **discovery bracket** that may raise
+questions the client did not ask, each carrying the quote and source that provoked it. **No source, no
+slot.** `own` is dropped from the rotation (2 of 4 angles failed, English output in a Dutch run, 2
+unique URLs). 5 x 3 = 15 calls against V-01's 19.
+**Depends on:** Phase 15.5 (claim attribution — HARD prerequisite).
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 4 (D-R4, D-R5, D-R7).
+**Why invention is allowed:** D4's `enforce_scope_guard` is a **coverage floor** (winners' parents must
+be a superset of the client questions), not a ceiling. The "never invent" half was only ever two prompt
+sentences — and the same file says a prompt sentence is not a control.
+**Requirements**: none
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15.6 to break down)
+
+### Phase 15.5: Research Engine Redesign — Claim Attribution (Wave 2) (INSERTED)
+
+**Goal:** A claim knows which sub-question it answers. Today a claim's `facet` is the parent client
+question, inherited from the angle (`_angle` -> `facet`, stamped in Python, never read from model
+output). Once a dispatch group can span two client questions that inheritance breaks — a claim from a
+mixed group has no single parent. Stamp the sub-question and a `corroboration_key` on the claim row.
+**Depends on:** Phase 15.4 (extraction repair — code complete, NOT deployed).
+**HARD PREREQUISITE for Phase 15.6.** Not optional, and not reorderable: Wave 3's grouping cannot be
+correct without it.
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 3 (D-R3).
+**Requirements**: none
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15.5 to break down)
+
 ### Phase 15.4: Research Engine Redesign — Extraction Repair (Wave 1) (INSERTED 2026-07-29)
 
 **Goal:** The engine stops silently throwing away claims it successfully extracted. A distiller reply
