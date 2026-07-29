@@ -272,10 +272,21 @@ async def resolve_redirects(urls: Iterable[str]) -> dict[str, Optional[str]]:
     if not _env_flag("NESTOR_REDIRECT_RESOLVE_ENABLED", _DEFAULT_ENABLED):
         log.info(
             "redirect resolution DISABLED by NESTOR_REDIRECT_RESOLVE_ENABLED — "
-            "%d unique url(s) stored unresolved, 0 requests issued",
+            "%d unique url(s) left UNATTEMPTED, 0 requests issued",
             len(unique),
         )
-        return resolved
+        # RETURN AN EMPTY MAP, NOT `resolved`. The three states must not
+        # collapse: NULL means NEVER ATTEMPTED, `unresolved` means ATTEMPTED AND
+        # FAILED. `resolved` was pre-populated with a None for every unique url
+        # above, and a url that is PRESENT in the map with a None value is
+        # exactly how the caller spells "attempted and failed"
+        # (`citations/extractor.py`: `if url not in resolved_map ... -> NULL`,
+        # `else -> unresolved`). Returning it here therefore recorded every
+        # citation as a failed resolution attempt on a run where the kill switch
+        # meant no request was ever issued — a measurement the run did not make,
+        # which is the same class of defect as the "0 facts" this phase removed.
+        # Caught by `test_turning_resolution_off_changes_zero_citations`.
+        return {}
 
     targets = [url for url in unique if is_redirect_url(url)]
     if not targets:

@@ -73,6 +73,154 @@
 #     --config=tribunal/cloudbuild.test-engine.yaml \
 #     --project="$GOOGLE_PROJECT"
 
+# ---------------------------------------------------------------------------
+# WHY THE FILE LIST LOOKS THE WAY IT DOES
+#
+# RELOCATED 2026-07-29 (plan 15.4-03 follow-up). This commentary used to live
+# INSIDE the bash script below. It was moved out — verbatim, not summarised —
+# because Cloud Build caps a single build-step arg at 10,000 characters and
+# registering the 32nd test file pushed the script to 13,473, of which 9,416
+# were these comments. `gcloud builds submit` then failed outright with
+# `build step 0 arg 1 too long`, so the gate could not run at all.
+#
+# YAML comments are not part of the arg, so nothing here counts toward that
+# limit. Not one word was deleted: this file has explicit instructions not to
+# tidy its guards away, and the reasoning below is why the `|| true` and the
+# count assertion are BOTH load-bearing. Deleting it to fit would have thrown
+# away the knowledge instead of the bytes.
+# ---------------------------------------------------------------------------
+# 30 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
+# pure files that 15.2 extends and that cloudbuild.test-gates.yaml
+# does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
+# added by plan 15.2-20, plus the 3 PHASE-15.3 files added by plans
+# 15.3-01, 15.3-02 and 15.3-03. ALL 30 NOW EXIST — the count is
+# asserted below, so this number and the list must be changed
+# together.
+#
+# THAT 30 IS THE 15.2 + 15.3 BASELINE AND IS DELIBERATELY LEFT AS
+# HISTORY, not maintained: phase 15.4 adds on top of it (15.4-02
+# -> 31, 15.4-03 -> 32). The ONE number that must track the list is
+# EXPECTED_FILES below; every other count in these comments is a
+# narrative of how the list was assembled. Corrected 2026-07-29 by
+# plan 15.4-03, because a stale count inside the comments of the
+# very config that exists to reconcile counts is exactly the kind
+# of quietly-wrong number this phase was opened to repair.
+#
+# TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
+#  (1) test_rls_isolation.py, test_citation_roundtrip.py and
+#      test_citation_numbering.py need a REAL Postgres, so they
+#      belong to cloudbuild.test-critical.yaml (and, for the
+#      non-superuser DSN, cloudbuild.test-rls.yaml from plan 15.2-01).
+#  (2) test_gate_replay.py, test_verification_buckets.py,
+#      test_fail_loud.py, test_tribunal_grouping.py,
+#      test_claim_distiller.py and test_stage_schema.py are ALREADY
+#      run by cloudbuild.test-gates.yaml, which the 15.2 sampling
+#      rate runs alongside this gate at every wave merge — listing
+#      them twice would only slow the gate down.
+#
+# THE FIVE GAP-PHASE FILES (the last five entries below) WERE ADDED
+# ALL AT ONCE BY PLAN 15.2-20, four of them before their files
+# existed. Say the trap out loud, because this repository has a
+# documented history of gates that were green because they ran
+# nothing: the `ls … || true` idiom SILENTLY SKIPS a name whose file
+# is absent, so between waves those four names collected as nothing
+# and this gate stayed green having proven nothing about them. The
+# arrangement was deliberate — one owner for this config, no plan
+# left with an ungated test — and it was only honest if each part
+# was done:
+#   * each owning plan proved ITS OWN file was BOTH collected (read
+#     the `collecting:` block) AND green;
+#   * plan 15.2-26 RECONCILED the final collected count before the
+#     phase closed, so a MISTYPED name cannot survive.
+# THAT SECOND PART IS THE `EXPECTED_FILES` ASSERTION BELOW, and the
+# arrangement is now closed. From here on a name in this list whose
+# file is absent or mistyped is a RED BUILD, not a quiet skip.
+#
+# NEVER put an apostrophe anywhere in this block — not even inside a
+# comment, and not to quote this rule. The whole script below is
+# passed to bash as ONE single-quoted -c argument, so any single
+# quote CLOSES that string and the remainder is reparsed by the outer
+# shell. The symptom is bewildering: a bare
+# "python: command not found" long AFTER pip has succeeded. Cost one
+# red build on 2026-07-27.
+#     15.2-20 -> test_stale_reclaim.py   (D-E stale reclaim)
+#     15.2-21 -> test_brief_input.py
+#     15.2-22 -> test_web_fetch_replay.py
+#     15.2-23 -> test_dispatch_pii.py
+#     15.2-24 -> test_stage_logging.py
+#     15.3-01 -> test_run_events.py    (run_event emitter, D-06/D-07)
+#     15.3-02 -> test_run_events_api.py (run_event READ surface)
+#     15.3-03 -> test_run_event_emit.py (the EMIT SITES: dividers
+#                carry labels, one dispatch header per batch, a
+#                failed angle says why, and neither calling the
+#                emitter nor BUILDING its arguments can fail a run)
+#     15.4-02 -> test_source_resolution.py (alembic 0016: the two
+#                nullable `source` columns D-V01-11 needs, the
+#                0015 -> 0016 chain, and the proof that the
+#                migration leaves idx_source_tenant_content_hash
+#                alone. It also carries a NEGATIVE CONTROL that runs
+#                the same scan over a deliberately bad migration, so
+#                a green result here is not a scan that never bit.)
+#
+#     15.4-03 -> test_distiller_separators.py (the V-01 `<TAB>`
+#                defect: the separator-priority table, the
+#                PROMPT-CONTRACT GUARD, and the replay of the four
+#                RECORDED V-01 distiller responses -- 141 + 137 =
+#                278 recovered, 43 and 143 unchanged.)
+#
+# test_distiller_separators.py carries the ONLY assertion in the
+# repo that pins the distiller prompt contract. The docstring at
+# steps.py `_build_distiller_prompt` used to claim that
+# test_claim_distiller.py and test_distiller_coverage.py pinned it
+# BYTE-IDENTICALLY; that claim was FALSE (verified 2026-07-29 by
+# reading both files -- one asserts nothing about the prompt, the
+# other matches only the `### Provider:` header). So if this file
+# is ever dropped from the list below, the `|||` contract goes
+# UNGATED and nothing turns red when `<TAB>` comes back. It is PURE:
+# `_split_distiller_line`, `_parse_distiller_response` and
+# `_build_distiller_prompt` are pure string functions and the
+# run_7dcf51d5 fixture is committed text read from disk. No GCS
+# client is constructed at any point.
+#
+# test_source_resolution.py is PURE: it parses the 0016 migration
+# with ast and builds the Source table metadata in memory. It never
+# CALLS upgrade(), so no alembic migration context and no Postgres
+# is involved -- which also means this gate CANNOT prove the
+# migration ran. That proof is the deploy-time
+# `Running upgrade 0015 -> 0016` line, owned by plan 15.4-11.
+#
+# test_run_event_emit.py is PURE for the same two reasons as the two
+# files above it: the run_events Postgres seams are replaced by the
+# suite, and its end-to-end behaviours drive the stubbed harness that
+# test_engine_e2e_stubbed.py already installs. No Postgres, no key,
+# no network.
+#
+# test_run_events.py is PURE: no Postgres, no provider key, no
+# network. The two operations in runs/run_events.py that touch the
+# database are module-level test seams the suite replaces with a
+# recorder, so this gate RUNS that file rather than skipping it.
+#
+# test_run_events_api.py is PURE for a different reason: it drives
+# GET /{run_id}/events through a hand-written duck-typed session that
+# behaves like a tiny in-memory run_event table, so no Postgres is
+# involved. It needs fastapi + httpx, and BOTH ARE PINNED in
+# requirements.txt (0.136.3 / 0.28.1) which pip installs above -- so
+# its importorskip guards cannot make it skip silently here. If that
+# file ever reports as skipped in the -rs summary, the dependency
+# pin moved and the isolation proofs are NOT running.
+#
+# test_stale_reclaim.py is DB-BOUND and therefore SKIPS in THIS gate,
+# which provisions no Postgres. That is contract-compliant (see the
+# header: a listed file may skip cleanly when DATABASE_URL is unset)
+# and it is NOT a pass. What this gate proves for that file is that it
+# imports, collects and does not error; the harness that RUNS it is
+# cloudbuild.test-critical.yaml, whose DSN is a superuser on a
+# disposable schema. Read the `-rs` skip summary, not the exit status.
+# ONE list, read TWICE: `ls` collects from it and the assertion below
+# reconciles against it. The names live in a variable rather than
+# inline in the `ls` so the failure can NAME the path that went
+# missing instead of printing a bare number at a tired operator.
+
 steps:
   - id: pytest-engine
     name: "gcr.io/cloud-builders/docker"
@@ -86,137 +234,17 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
-            # 30 paths: the 19 NEW 15.2 files (waves 1-11), plus the 3 EXISTING
-            # pure files that 15.2 extends and that cloudbuild.test-gates.yaml
-            # does not already run, plus the 5 GAP-PHASE files (15.2-20…24)
-            # added by plan 15.2-20, plus the 3 PHASE-15.3 files added by plans
-            # 15.3-01, 15.3-02 and 15.3-03. ALL 30 NOW EXIST — the count is
-            # asserted below, so this number and the list must be changed
-            # together.
+            # The full rationale for this list — the two deliberate exclusions,
+            # the gap-phase trap, and why EXPECTED_FILES must change with the
+            # list — lives in the YAML comments above `steps:`. Moved there
+            # 2026-07-29, verbatim, to fit the 10,000-char arg limit.
             #
-            # THAT 30 IS THE 15.2 + 15.3 BASELINE AND IS DELIBERATELY LEFT AS
-            # HISTORY, not maintained: phase 15.4 adds on top of it (15.4-02
-            # -> 31, 15.4-03 -> 32). The ONE number that must track the list is
-            # EXPECTED_FILES below; every other count in these comments is a
-            # narrative of how the list was assembled. Corrected 2026-07-29 by
-            # plan 15.4-03, because a stale count inside the comments of the
-            # very config that exists to reconcile counts is exactly the kind
-            # of quietly-wrong number this phase was opened to repair.
-            #
-            # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
-            #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
-            #      test_citation_numbering.py need a REAL Postgres, so they
-            #      belong to cloudbuild.test-critical.yaml (and, for the
-            #      non-superuser DSN, cloudbuild.test-rls.yaml from plan 15.2-01).
-            #  (2) test_gate_replay.py, test_verification_buckets.py,
-            #      test_fail_loud.py, test_tribunal_grouping.py,
-            #      test_claim_distiller.py and test_stage_schema.py are ALREADY
-            #      run by cloudbuild.test-gates.yaml, which the 15.2 sampling
-            #      rate runs alongside this gate at every wave merge — listing
-            #      them twice would only slow the gate down.
-            #
-            # THE FIVE GAP-PHASE FILES (the last five entries below) WERE ADDED
-            # ALL AT ONCE BY PLAN 15.2-20, four of them before their files
-            # existed. Say the trap out loud, because this repository has a
-            # documented history of gates that were green because they ran
-            # nothing: the `ls … || true` idiom SILENTLY SKIPS a name whose file
-            # is absent, so between waves those four names collected as nothing
-            # and this gate stayed green having proven nothing about them. The
-            # arrangement was deliberate — one owner for this config, no plan
-            # left with an ungated test — and it was only honest if each part
-            # was done:
-            #   * each owning plan proved ITS OWN file was BOTH collected (read
-            #     the `collecting:` block) AND green;
-            #   * plan 15.2-26 RECONCILED the final collected count before the
-            #     phase closed, so a MISTYPED name cannot survive.
-            # THAT SECOND PART IS THE `EXPECTED_FILES` ASSERTION BELOW, and the
-            # arrangement is now closed. From here on a name in this list whose
-            # file is absent or mistyped is a RED BUILD, not a quiet skip.
-            #
-            # NEVER put an apostrophe anywhere in this block — not even inside a
-            # comment, and not to quote this rule. The whole script below is
-            # passed to bash as ONE single-quoted -c argument, so any single
-            # quote CLOSES that string and the remainder is reparsed by the outer
-            # shell. The symptom is bewildering: a bare
-            # "python: command not found" long AFTER pip has succeeded. Cost one
-            # red build on 2026-07-27.
-            #     15.2-20 -> test_stale_reclaim.py   (D-E stale reclaim)
-            #     15.2-21 -> test_brief_input.py
-            #     15.2-22 -> test_web_fetch_replay.py
-            #     15.2-23 -> test_dispatch_pii.py
-            #     15.2-24 -> test_stage_logging.py
-            #     15.3-01 -> test_run_events.py    (run_event emitter, D-06/D-07)
-            #     15.3-02 -> test_run_events_api.py (run_event READ surface)
-            #     15.3-03 -> test_run_event_emit.py (the EMIT SITES: dividers
-            #                carry labels, one dispatch header per batch, a
-            #                failed angle says why, and neither calling the
-            #                emitter nor BUILDING its arguments can fail a run)
-            #     15.4-02 -> test_source_resolution.py (alembic 0016: the two
-            #                nullable `source` columns D-V01-11 needs, the
-            #                0015 -> 0016 chain, and the proof that the
-            #                migration leaves idx_source_tenant_content_hash
-            #                alone. It also carries a NEGATIVE CONTROL that runs
-            #                the same scan over a deliberately bad migration, so
-            #                a green result here is not a scan that never bit.)
-            #
-            #     15.4-03 -> test_distiller_separators.py (the V-01 `<TAB>`
-            #                defect: the separator-priority table, the
-            #                PROMPT-CONTRACT GUARD, and the replay of the four
-            #                RECORDED V-01 distiller responses -- 141 + 137 =
-            #                278 recovered, 43 and 143 unchanged.)
-            #
-            # test_distiller_separators.py carries the ONLY assertion in the
-            # repo that pins the distiller prompt contract. The docstring at
-            # steps.py `_build_distiller_prompt` used to claim that
-            # test_claim_distiller.py and test_distiller_coverage.py pinned it
-            # BYTE-IDENTICALLY; that claim was FALSE (verified 2026-07-29 by
-            # reading both files -- one asserts nothing about the prompt, the
-            # other matches only the `### Provider:` header). So if this file
-            # is ever dropped from the list below, the `|||` contract goes
-            # UNGATED and nothing turns red when `<TAB>` comes back. It is PURE:
-            # `_split_distiller_line`, `_parse_distiller_response` and
-            # `_build_distiller_prompt` are pure string functions and the
-            # run_7dcf51d5 fixture is committed text read from disk. No GCS
-            # client is constructed at any point.
-            #
-            # test_source_resolution.py is PURE: it parses the 0016 migration
-            # with ast and builds the Source table metadata in memory. It never
-            # CALLS upgrade(), so no alembic migration context and no Postgres
-            # is involved -- which also means this gate CANNOT prove the
-            # migration ran. That proof is the deploy-time
-            # `Running upgrade 0015 -> 0016` line, owned by plan 15.4-11.
-            #
-            # test_run_event_emit.py is PURE for the same two reasons as the two
-            # files above it: the run_events Postgres seams are replaced by the
-            # suite, and its end-to-end behaviours drive the stubbed harness that
-            # test_engine_e2e_stubbed.py already installs. No Postgres, no key,
-            # no network.
-            #
-            # test_run_events.py is PURE: no Postgres, no provider key, no
-            # network. The two operations in runs/run_events.py that touch the
-            # database are module-level test seams the suite replaces with a
-            # recorder, so this gate RUNS that file rather than skipping it.
-            #
-            # test_run_events_api.py is PURE for a different reason: it drives
-            # GET /{run_id}/events through a hand-written duck-typed session that
-            # behaves like a tiny in-memory run_event table, so no Postgres is
-            # involved. It needs fastapi + httpx, and BOTH ARE PINNED in
-            # requirements.txt (0.136.3 / 0.28.1) which pip installs above -- so
-            # its importorskip guards cannot make it skip silently here. If that
-            # file ever reports as skipped in the -rs summary, the dependency
-            # pin moved and the isolation proofs are NOT running.
-            #
-            # test_stale_reclaim.py is DB-BOUND and therefore SKIPS in THIS gate,
-            # which provisions no Postgres. That is contract-compliant (see the
-            # header: a listed file may skip cleanly when DATABASE_URL is unset)
-            # and it is NOT a pass. What this gate proves for that file is that it
-            # imports, collects and does not error; the harness that RUNS it is
-            # cloudbuild.test-critical.yaml, whose DSN is a superuser on a
-            # disposable schema. Read the `-rs` skip summary, not the exit status.
-            # ONE list, read TWICE: `ls` collects from it and the assertion below
-            # reconciles against it. The names live in a variable rather than
-            # inline in the `ls` so the failure can NAME the path that went
-            # missing instead of printing a bare number at a tired operator.
+            # NO APOSTROPHES ANYWHERE BELOW THIS LINE. Everything from
+            # `bash -c ` to the closing quote is ONE single-quoted shell string,
+            # so a single apostrophe in a COMMENT closes it early and the build
+            # dies with exit 127 (command not found) — which is what happened
+            # when this note was first written with the word "list" possessive.
+            # The 131 lines that used to live here contained none, deliberately.
             WANTED="nestor_pulse_sdk/tests/test_reliability_retry.py \
                     nestor_pulse_sdk/tests/test_reliability_breaker.py \
                     nestor_pulse_sdk/tests/test_terminal_states.py \
