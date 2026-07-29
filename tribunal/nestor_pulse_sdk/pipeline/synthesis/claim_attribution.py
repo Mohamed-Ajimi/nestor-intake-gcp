@@ -1,8 +1,27 @@
 """Claim attribution helpers (D-R3, phase 15.5 wave 2).
 
-Today this module exports exactly one function, `extract_as_of`, which reads a
-date out of a distilled claim EVIDENCE cell. Plan 15.5-02 adds the facet
-resolution helpers to this same module; do not pre-empt them here.
+This module exports three functions. `extract_as_of` (plan 15.5-01) reads a date
+out of a distilled claim EVIDENCE cell and IS called by the pipeline.
+`parent_index` and `resolved_facet` (plan 15.5-02) are the FACET RESOLUTION SEAM
+and are deliberately NOT called by the pipeline in this wave — see their
+docstrings, and the section below.
+
+WHY TWO OF THE THREE HAVE NO CALLER
+-----------------------------------
+Invariant 2 of D-R3 says a claim whose corroboration group spanned two client
+questions must take its `facet` from its SUB-QUESTION'S PARENT rather than from
+the group. In wave 2 that is a NO-OP BY CONSTRUCTION: `research_division._angle`
+stamps `focus_area` from `w["parent"]`, and `sub_question` from `w["text"]`, so
+a winner's parent label IS the facet already on the claim. `resolved_facet`
+therefore resolves to today's value for EVERY claim in this wave.
+
+Wiring it in would change nothing and would add a live call path for zero gain,
+which invariant 3 forbids outright — no dispatch decision, no merge outcome and
+no report sentence may move in this wave, because that is the one variable the
+phase 15.8 measuring run has to hold still. So the seam exists, is pure, and is
+proven by test instead of by use. Phase 15.6, which breaks the one-angle-one-
+question assumption, is its first real caller and must re-prove the invariant it
+is about to invalidate.
 
 WHY THIS IS THE ONE EXCEPTION IN THE PHASE
 ------------------------------------------
@@ -116,10 +135,14 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover — typing only, never imported at runtime
+    from collections.abc import Iterable, Mapping
 
 log = logging.getLogger(__name__)
 
-__all__ = ["extract_as_of"]
+__all__ = ["extract_as_of", "parent_index", "resolved_facet"]
 
 
 # Untrusted model output is bounded before it is scanned. See the docstring.
@@ -313,4 +336,114 @@ def extract_as_of(evidence: str | None) -> date | None:
         return None
     except Exception:  # pragma: no cover - the never-raises guarantee, belt and braces
         log.debug("extract_as_of: unexpected failure, returning None", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# THE FACET RESOLUTION SEAM (plan 15.5-02).
+#
+# NOT CALLED BY THE PIPELINE IN THIS WAVE. Read the module docstring's "why two
+# of the three have no caller" section before wiring either of these in.
+# ---------------------------------------------------------------------------
+
+
+def parent_index(winners: "Iterable[object] | None") -> dict[str, str]:
+    """Build ``{winner_text: parent_label}`` from a workshop winners list.
+
+    **DELIBERATELY NOT CALLED BY THE PIPELINE IN THIS WAVE.** Its only consumer
+    today is `resolved_facet` and the test that proves invariant 2 is a no-op.
+    Phase 15.6 is its first production caller.
+
+    The winners list is the workshop tournament's own output — the same list
+    `research_division.divide(..., winners=...)` consumes — where each entry is a
+    dict carrying at least ``text`` (the sub-question) and ``parent`` (the client
+    question it deepens).
+
+    TOLERANT, AND NEVER RAISES. A non-dict entry, a missing/blank ``text`` and a
+    missing/blank ``parent`` are each SKIPPED. A resolver that blew up on one
+    malformed winner would cost a whole run its attribution, and this is a pure
+    lookup table — there is nothing here worth failing a $50 run over.
+
+    FIRST WINS on a repeated ``text``, matching D-W2-3's merge rule for the two
+    columns this index resolves. Two winners with the same text and different
+    parents is a workshop defect, not a case to arbitrate here.
+
+    Args:
+        winners: the workshop winners list, or None.
+
+    Returns:
+        A plain ``dict[str, str]``. Empty when there is nothing usable — never
+        None, so a caller can index it without a guard.
+    """
+    index: dict[str, str] = {}
+    try:
+        for winner in winners or ():
+            try:
+                if not isinstance(winner, dict):
+                    continue
+                text = winner.get("text")
+                parent = winner.get("parent")
+                if not isinstance(text, str) or not text:
+                    continue
+                if not isinstance(parent, str) or not parent:
+                    continue
+                # FIRST WINS — `setdefault`, not assignment.
+                index.setdefault(text, parent)
+            except Exception:  # noqa: BLE001 — one bad winner costs that winner only
+                log.debug("parent_index: unusable winner entry skipped")
+    except Exception:  # pragma: no cover — the never-raises guarantee
+        log.debug("parent_index: unexpected failure, returning what was built")
+    return index
+
+
+def resolved_facet(claim: dict, parents: "Mapping[str, str] | None") -> str | None:
+    """The client question a claim really answers, resolved via its sub-question.
+
+    **DELIBERATELY NOT CALLED BY THE PIPELINE IN THIS WAVE.** In wave 2 this
+    function returns exactly ``claim["facet"]`` for every claim a real run
+    produces, because `research_division._angle` stamps `focus_area` from the
+    winner's ``parent`` and `sub_question` from the winner's ``text`` — so the
+    parent of a claim's sub-question IS the facet already on it. Calling it would
+    change nothing and would add a live call path for zero gain, which D-R3
+    invariant 3 forbids. It exists so phase 15.6 has a NAMED SEAM to fill when an
+    LLM-formed group can span two client questions and `facet` stops being true.
+
+    THE LOOKUP IS EXACT-STRING, ON PURPOSE. Both sides of it are the SAME
+    engine-authored string: `divide()` copies ``w["text"]`` onto the angle as
+    ``sub_question``, and this index is built from that same ``w["text"]``. This
+    is NOT the V-01 corroboration-key mistake (an exact-string key over
+    model-written CLAIM TEXT, which merged nothing) — fuzzy matching here would
+    introduce ambiguity where there is none.
+
+    NEVER RAISES, and never invents a parent: an unknown sub-question falls back
+    to the claim's own ``facet`` rather than guessing.
+
+    Args:
+        claim: a claim dict, normally one produced by `collect_provider_facts`.
+        parents: the index from `parent_index`, or None.
+
+    Returns:
+        The resolved parent label, else the claim's own ``facet``, else None.
+        ``None`` means "no facet could be established" and is deliberately
+        distinct from the empty string (D-W2-2: absent is NULL, never ``""``).
+    """
+    try:
+        if not isinstance(claim, dict):
+            return None
+
+        own = claim.get("facet")
+        own = own if isinstance(own, str) and own else None
+
+        sub_q = claim.get("sub_question")
+        if not isinstance(sub_q, str) or not sub_q:
+            return own
+        if not isinstance(parents, dict) and not hasattr(parents, "get"):
+            return own
+
+        parent = parents.get(sub_q) if parents is not None else None
+        if isinstance(parent, str) and parent:
+            return parent
+        return own
+    except Exception:  # pragma: no cover — the never-raises guarantee
+        log.debug("resolved_facet: unexpected failure, falling back to None")
         return None

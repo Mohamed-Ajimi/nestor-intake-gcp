@@ -669,3 +669,323 @@ def test_the_workshop_stage_feed_is_closed_by_the_pipeline():
     assert 'StageFeed(' in source
     assert 'stage_key="workshop"' in source
     assert "async with StageFeed(" in source
+
+
+# ---------------------------------------------------------------------------
+# --- D-R3 claim attribution, wave 2 (plan 15.5-02) ---
+#
+# The dispatch already KNOWS which sub-question an angle answers and which
+# corroboration group it belongs to; both values stopped short of the claim row.
+# These tests pin the two of them onto `_enriched`, pin that recording them
+# cannot move the research checkpoint, and pin invariant 2's no-op with an
+# assertion instead of an assumption.
+#
+# NOTHING here asserts a behaviour change, because there is none: no dispatch
+# decision, no merge outcome and no report sentence moves in this wave. That is
+# the one variable the phase 15.8 measuring run has to hold still.
+# ---------------------------------------------------------------------------
+
+def _all_d6_streams_live(monkeypatch, calls: dict) -> None:
+    """Every `_D6_STREAMS` entry runnable and enabled, so `divide()` output runs."""
+    monkeypatch.setattr(
+        rd, "_PROVIDER_RUNNERS",
+        {n: _runner_recording(calls, n) for n in rd._D6_STREAMS},
+    )
+    monkeypatch.setattr(
+        rd, "_enabled_providers", lambda: [(n, None) for n in rd._D6_STREAMS],
+    )
+
+
+async def _enriched_results(angles: list[dict]) -> list[dict]:
+    """Run the angles and return just the enriched result dicts."""
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4()
+    )
+    return [result for _provider, result in results]
+
+
+@pytest.mark.asyncio
+async def test_d_r3_enriched_carries_the_dispatch_sub_question_and_corroboration_key(
+    monkeypatch,
+):
+    """A top-K angle's own sub-question and group key ride onto its result.
+
+    `_D6_TOP_K` defaults to 3, so winners ranked 1-3 are dealt to every stream
+    with the keys `w01`/`w02`/`w03` — those are the values that must appear.
+    """
+    calls: dict = {}
+    _all_d6_streams_live(monkeypatch, calls)
+
+    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, 5)]
+    angles = rd.divide(_wbrief("Q1"), winners=winners)
+    corroborated = [a for a in angles if a["corroboration"]]
+    assert len(corroborated) == 3 * len(rd._D6_STREAMS), "the fixture's own premise"
+
+    enriched = await _enriched_results(angles)
+
+    by_key: dict[str, set] = {}
+    for result in enriched:
+        assert "_sub_question" in result, "the key must be GUARANTEED, not conditional"
+        assert "_corroboration_key" in result
+        key = result["_corroboration_key"]
+        if key is not None:
+            by_key.setdefault(key, set()).add(result["_sub_question"])
+
+    assert sorted(by_key) == ["w01", "w02", "w03"], (
+        f"the three corroboration groups must be recorded verbatim, got {sorted(by_key)}"
+    )
+    # A group is ONE sub-question seen by four streams — that is the whole point
+    # of the key, and it is exactly what the corroboration query will join on.
+    assert by_key["w01"] == {"sub-question 1"}
+    assert by_key["w02"] == {"sub-question 2"}
+    assert by_key["w03"] == {"sub-question 3"}
+
+
+@pytest.mark.asyncio
+async def test_d_r3_a_remainder_angle_records_none_and_never_the_empty_string(
+    monkeypatch,
+):
+    """D-W2-2: absent is NULL, never `""`.
+
+    `divide()` deals the remainder round-robin with the EMPTY STRING as its
+    corroboration key, so roughly 12 of 15 winners have no key in this wave. The
+    empty key is deliberately NOT populated — it is read for dispatch decisions,
+    and inventing a value there would change reassignment behaviour and group
+    sizes. What must NOT happen is the empty string reaching the column: "no key
+    recorded" and "recorded as the empty key" are different facts and the
+    corroboration queries have to be able to tell them apart.
+
+    `is None` is asserted rather than falsiness ON PURPOSE — the empty string is
+    falsy too, and telling the two apart is the entire reason this test exists.
+    """
+    calls: dict = {}
+    _all_d6_streams_live(monkeypatch, calls)
+
+    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, 5)]
+    angles = rd.divide(_wbrief("Q1"), winners=winners)
+    remainder = [a for a in angles if not a["corroboration"]]
+    assert len(remainder) == 1, "the fixture's own premise: winner 4 is the remainder"
+    assert remainder[0]["corroboration_key"] == "", "dispatch really does deal `''`"
+
+    enriched = await _enriched_results(angles)
+    tail = [r for r in enriched if r["_sub_question"] == "sub-question 4"]
+
+    assert len(tail) == 1
+    assert tail[0]["_corroboration_key"] is None, (
+        "the empty dispatch key must be recorded as NULL, not as the empty string"
+    )
+    assert tail[0]["_corroboration_key"] != "", "explicitly not the empty string"
+    # The sub-question itself is unaffected — a remainder angle still answers one.
+    assert tail[0]["_sub_question"] == "sub-question 4"
+
+
+@pytest.mark.asyncio
+async def test_d_r3_the_focus_area_path_records_both_values_as_none(monkeypatch):
+    """The pre-D6 division path produces angles with NO `sub_question` key at all.
+
+    Those claims get NULL for both columns, correctly. There is deliberately no
+    `focus_area` fallback for the sub-question: writing the PARENT question into
+    the one column whose purpose is to be distinguishable from the parent would
+    make the column useless, and `facet` already carries `focus_area`.
+    """
+    calls: dict = {}
+    _all_d6_streams_live(monkeypatch, calls)
+
+    angles = rd.divide(_brief(("Pricing", "high"), ("Trends", "med")))
+    assert all("sub_question" not in a for a in angles), "the fixture's own premise"
+
+    enriched = await _enriched_results(angles)
+
+    assert enriched, "the focus-area path must still produce results"
+    for result in enriched:
+        assert result["_sub_question"] is None, "never the parent label, never `''`"
+        assert result["_corroboration_key"] is None
+        # The parent question is still recorded, where it always was.
+        assert result["_angle"] in {"Pricing", "Trends"}
+
+
+@pytest.mark.asyncio
+async def test_d_r3_recording_the_two_values_cannot_move_the_angles_digest(monkeypatch):
+    """T-15.5-08: no paid angle is re-bought because of this change.
+
+    `ckpt_research` is keyed by angle index and guarded by `angles_digest`, which
+    is derived from each angle's `query` ALONE. The two new keys go on the RESULT
+    dict, not the angle dict, so the digest cannot move — and even if they were
+    put on an angle, the digest would still be blind to them. Both halves are
+    asserted, because a digest that silently changed would discard the research
+    checkpoint and re-buy every already-paid angle on a resumed run.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import checkpoints
+
+    calls: dict = {}
+    _all_d6_streams_live(monkeypatch, calls)
+
+    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, 5)]
+    angles = rd.divide(_wbrief("Q1"), winners=winners)
+    before = checkpoints.angles_digest(angles)
+    assert before, "the digest must actually be computed, not an empty fallback"
+
+    await _enriched_results(angles)
+    assert checkpoints.angles_digest(angles) == before, "run_angles moved the digest"
+
+    with_new_keys = [
+        {**a, "_sub_question": a.get("sub_question"), "_corroboration_key": "w99"}
+        for a in angles
+    ]
+    assert checkpoints.angles_digest(with_new_keys) == before, (
+        "the digest must read `query` and nothing else"
+    )
+    # Non-vacuity: the digest DOES move when `query` moves, so the two assertions
+    # above are not passing because the digest is insensitive to everything.
+    moved = [{**a, "query": a["query"] + " (changed)"} for a in angles]
+    assert checkpoints.angles_digest(moved) != before
+
+
+def test_invariant_2_is_a_no_op_in_wave_2_the_winners_parent_is_already_the_facet():
+    """D-R3 invariant 2, ASSERTED against real `divide()` output, not assumed.
+
+    Invariant 2 says a claim whose group spanned two client questions takes its
+    facet from its SUB-QUESTION'S PARENT rather than from the group. In this wave
+    that is a no-op BY CONSTRUCTION: `_angle()` stamps `focus_area` from
+    `w["parent"]` and `sub_question` from `w["text"]`, so the parent of a claim's
+    sub-question IS the facet already on it.
+
+    THIS IS EXACTLY WHAT PHASE 15.6 BREAKS. Once an LLM groups winners into <=5
+    groups and a group can span two client questions, the equality below stops
+    holding — which makes it exactly what 15.6 has to RE-PROVE, through
+    `resolved_facet`, rather than inherit.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.claim_attribution import (
+        parent_index,
+        resolved_facet,
+    )
+
+    labels = ["Q1", "Q2", "Q3"]
+    winners = [
+        _winner(f"a much deeper sub-question {i}", i, labels[i % 3])
+        for i in range(1, 13)
+    ]
+    angles = rd.divide(_wbrief(*labels), winners=winners)
+    parents = parent_index(winners)
+
+    assert len(parents) == len(winners), "every winner must be indexed"
+    assert angles, "the fixture must produce angles"
+    for angle in angles:
+        assert parents[angle["sub_question"]] == angle["focus_area"], (
+            "wave 2's premise: a winner's parent label IS the stamped facet"
+        )
+        # And the resolver agrees, on a claim shaped the way this wave writes one.
+        claim = {
+            "text": "some distilled fact",
+            "facet": angle["focus_area"],
+            "sub_question": angle["sub_question"],
+        }
+        assert resolved_facet(claim, parents) == claim["facet"], (
+            "resolving must be a NO-OP in this wave — a live call path that "
+            "changed a value here would be out of contract (invariant 3)"
+        )
+
+
+def test_invariant_2_orphan_parent_degrades_to_the_claims_own_facet():
+    """A winner whose parent is not a known label falls back to `labels[0]`.
+
+    `_angle()` already does that (`w["parent"] if w["parent"] in parent_prompt
+    else labels[0]`), so the RAW winners list and the stamped facet DISAGREE for
+    an orphan — the index says `Q9`, the claim says `Q1`. That disagreement is
+    the trap 15.6 inherits, and it is named here rather than discovered there: an
+    index used for resolution must be restricted to labels that are real client
+    questions, because `Q9` is not one.
+
+    With the index built that way, the resolver DEGRADES to the claim's own facet
+    instead of inventing a parent — which is the behaviour invariant 2 needs.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.claim_attribution import (
+        parent_index,
+        resolved_facet,
+    )
+
+    labels = ["Q1", "Q2"]
+    winners = [
+        _winner("a grounded sub-question", 1, "Q2"),
+        _winner("an orphaned sub-question", 2, "Q9"),  # Q9 is not a client question
+    ]
+    angles = rd.divide(_wbrief(*labels), winners=winners)
+    orphan_angles = [a for a in angles if a["sub_question"] == "an orphaned sub-question"]
+    assert orphan_angles, "the orphan winner must still be researched"
+    assert all(a["focus_area"] == "Q1" for a in orphan_angles), (
+        "the existing fallback: an unknown parent becomes labels[0]"
+    )
+
+    raw = parent_index(winners)
+    assert raw["an orphaned sub-question"] == "Q9", (
+        "the index is faithful to the winners list; it does not know the label "
+        "vocabulary — which is precisely why a resolver must filter it"
+    )
+
+    parents = {t: p for t, p in raw.items() if p in labels}
+    for angle in orphan_angles:
+        claim = {"facet": angle["focus_area"], "sub_question": angle["sub_question"]}
+        assert resolved_facet(claim, parents) == "Q1", "degrade, never invent"
+        assert resolved_facet(claim, parents) == claim["facet"]
+
+    # The grounded winner is unaffected: its parent IS a known label.
+    grounded = [a for a in angles if a["sub_question"] == "a grounded sub-question"]
+    assert grounded
+    for angle in grounded:
+        claim = {"facet": angle["focus_area"], "sub_question": angle["sub_question"]}
+        assert resolved_facet(claim, parents) == "Q2" == claim["facet"]
+
+
+def test_the_facet_resolution_seam_is_pure_and_never_raises():
+    """Both helpers are tolerant by contract — a malformed input costs one entry.
+
+    They sit on the persistence path of a roughly $50 run in 15.6. An exception
+    from a lookup table would trade a missing facet for lost claims.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.claim_attribution import (
+        parent_index,
+        resolved_facet,
+    )
+
+    for hostile in (None, [], [None], ["not a dict"], [{}], [{"text": "t"}],
+                    [{"parent": "p"}], [{"text": "", "parent": "p"}],
+                    [{"text": "t", "parent": ""}], [{"text": 7, "parent": 9}], 12345):
+        assert parent_index(hostile) == {}, f"hostile winners: {hostile!r}"
+
+    # FIRST WINS on a repeated text, matching D-W2-3 for the columns it resolves.
+    dupes = [{"text": "t", "parent": "first"}, {"text": "t", "parent": "second"}]
+    assert parent_index(dupes) == {"t": "first"}
+
+    assert resolved_facet(None, {}) is None
+    assert resolved_facet("not a dict", {}) is None
+    assert resolved_facet({}, {}) is None
+    assert resolved_facet({"facet": ""}, {}) is None, "empty facet is NOT a facet"
+    assert resolved_facet({"facet": "Q1"}, None) == "Q1"
+    assert resolved_facet({"facet": "Q1"}, {"other": "Q2"}) == "Q1"
+    assert resolved_facet({"facet": "Q1", "sub_question": "s"}, {"s": "Q2"}) == "Q2"
+    assert resolved_facet({"facet": "Q1", "sub_question": "s"}, {"s": ""}) == "Q1"
+    assert resolved_facet({"sub_question": "s"}, {"other": "Q2"}) is None
+
+
+def test_the_facet_resolution_seam_has_no_production_caller_in_this_wave():
+    """Invariant 3: a live call path that changes nothing is still a call path.
+
+    In wave 2 `resolved_facet` returns today's value for every claim, so wiring
+    it in would buy nothing and would move code on the path of a paid run. The
+    ONLY permitted references are its own module and a test file. Phase 15.6 is
+    the commit that legitimately deletes this test.
+    """
+    from pathlib import Path
+
+    from nestor_pulse_sdk.pipeline.synthesis import claim_attribution
+
+    root = Path(claim_attribution.__file__).resolve().parents[2]
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "claim_attribution.py" or path.name.startswith("test_"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "resolved_facet" in text or "parent_index" in text:
+            offenders.append(str(path.relative_to(root)))
+
+    assert offenders == [], f"the seam gained a production caller: {offenders}"

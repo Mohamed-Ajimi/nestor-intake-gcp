@@ -1410,6 +1410,36 @@ async def run_angles(
         )
         fa = angle.get("focus_area", "")
         stakes = angle.get("stakes", "med")
+        # D-R3 (phase 15.5 wave 2): the two dispatch values that ALREADY EXIST on
+        # the angle and today stop short of the claim row. `_angle()` above sets
+        # both; nothing is invented here and no dispatch decision is affected.
+        #
+        # TWO DELIBERATE DEVIATIONS from the `or ''` idiom the feed lines below
+        # use, and both are load-bearing:
+        #
+        # 1. `or None`, NEVER `or ''`. An empty label in a log line is harmless;
+        #    these two become DATABASE COLUMNS. D-W2-2 is explicit that an absent
+        #    value is written as NULL and never as the empty string — "no key
+        #    recorded" and "recorded as the empty key" are DIFFERENT FACTS and
+        #    the corroboration queries must be able to tell them apart. It is the
+        #    same rule `_insert_claim`'s docstring already records for `found_by`
+        #    ("an ABSENT provenance is bound as None, never as []"). This is also
+        #    what makes the remainder angles come through as None: `divide()`
+        #    deals them round-robin with `""` as their key, so in this wave the
+        #    column is NULL for roughly 12 of 15 winners. That is CORRECT and it
+        #    fills up in 15.6 — the empty key is NOT populated here, because it
+        #    is READ for dispatch decisions (`:684`, `:714`, `:1313`, and
+        #    `pipeline.py`'s `_group_size`) and inventing a value would silently
+        #    change reassignment behaviour and group sizes.
+        # 2. NO `or angle.get("focus_area")` fallback for the sub-question. The
+        #    feed lines fall back so a human sees a label instead of a blank;
+        #    doing it HERE would write the PARENT question into the one column
+        #    whose whole purpose is to be distinguishable from the parent, and
+        #    `facet` already carries `focus_area`. The focus-area division path
+        #    produces angles with no `sub_question` key at all — those claims get
+        #    NULL, correctly.
+        sub_q = angle.get("sub_question") or None
+        corr_key = angle.get("corroboration_key") or None
         async with sem:
             log.info(
                 "research_division.run_angles: angle %d/%d -> %s (timeout=%ss) "
@@ -1513,6 +1543,9 @@ async def run_angles(
             # recorded, or the resume re-buys them.
             _enriched = {
                 **result, "_angle": fa, "_stakes": stakes, "_d8_prompted": prompted,
+                # D-R3 (15.5 wave 2), in THIS literal and not a second dict —
+                # see the paragraph below on why there is exactly one object.
+                "_sub_question": sub_q, "_corroboration_key": corr_key,
             }
             await _record_result(i, provider, _enriched)
             # `_d8_prompted` is read by `synthesis.steps.collect_provider_facts`
@@ -1521,6 +1554,14 @@ async def run_angles(
             # D-14 fallback) versus "this stream was never asked" (the kill switch,
             # or the forced-tool own-researcher). It changes the wording of the
             # recorded reason an operator reads, not the behaviour.
+            #
+            # `_sub_question` and `_corroboration_key` are read by the SAME
+            # function, and for the same reason `_angle` is: they are stamped in
+            # Python from the DISPATCH ASSIGNMENT and are never parsed out of a
+            # provider response (T-15.2-60, and T-15.5-05 for these two). A
+            # model-supplied corroboration key would let model text choose its
+            # own corroboration partner. They are recording only — nothing reads
+            # them to make a decision in this wave.
             #
             # `_enriched` is returned rather than a second identical literal, so
             # the checkpointed value and the returned value are the SAME object:
