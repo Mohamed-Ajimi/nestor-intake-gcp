@@ -154,8 +154,19 @@ broken meter would attribute the parser bug to the redesign.
      retry failure still falls through to the distiller exactly as today.
   5. `vertexaisearch` redirects are deduped and resolved to publisher URLs at ingest, degrading to
      keeping the unresolved redirect — never dropping a citation.
-  6. `gpt-5.6-sol` is in the cost table (`run.cost_pending` can clear) and the dropped
+  6. The `gpt-5.6-sol` cost gap is **resolved either way, deliberately** — and the dropped
      `deep_research`/`own_research` `run_event` rows are emitted.
+     **Amended 2026-07-29** (original wording: "`gpt-5.6-sol` is in the cost table (`run.cost_pending`
+     can clear)"). `_rate()` at `cost_table.py:230` turns a null rate into `Decimal("0")`, so adding
+     the key with nulls produces a confident **$0.00** and clears `cost_pending` on a fabricated
+     number — strictly worse than today's honest NULL, which at least says "unknown". The criterion is
+     therefore a **binary owned by the operator**, and BOTH answers satisfy it:
+     (a) **published rates found** → the key is added and `cost_pending` can clear; or
+     (b) **no published rate exists** → the key stays absent, `cost_pending` legitimately never clears
+     for it, and the decision is recorded with its reason.
+     What would FAIL this criterion is a guessed price, or leaving the question unanswered.
+     Rationale: the original wording made a correct decision look like a gap — this project's recorded
+     failure mode of a gate going red on sanctioned work.
   7. **Replay proof:** V-01's two coffee audit blobs yield **278** claims through the new parser, and
      the two blobs that already worked still yield **43** and **143**.
   8. `test_claim_distiller.py` / `test_distiller_coverage.py` are updated deliberately — the prompt
