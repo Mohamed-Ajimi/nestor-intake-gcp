@@ -27,6 +27,9 @@ Coverage:
   15-20  the wiring: append order, THE D-08 GATE (the writing model never sees
          either section), read-failure end to end, resume-path back-compat,
          byte-stability of the appended region, and bundle serializability
+  21-33  THE DISCOVERY PROVENANCE CLAUSE (phase 15.6): the real producer driven
+         into the real consumer, the clause in all four languages, and the three
+         ways a conflict must render with NO clause at all
 """
 from __future__ import annotations
 
@@ -594,3 +597,362 @@ class TestWriteFinalReportWiring:
         blob = json.dumps(payload, ensure_ascii=False, default=str)
         assert json.loads(blob) == payload
         assert ZZ_BRIEF in blob
+
+
+# ---------------------------------------------------------------------------
+# 21-33. THE DISCOVERY PROVENANCE CLAUSE (phase 15.6, D-W3-4).
+#
+# The workshop is FULLY AUTOMATIC (D5 / D-01) — nothing in it pauses for an
+# operator — so a question the ENGINE raised cannot be gated on an approval
+# click. Transparency is the governance instead: the client is told, in their own
+# language and beside the quote and URL that provoked it, which questions they
+# asked and which the evidence raised. It is also the Art. 12 audit trail.
+#
+# WHY THE HAND-OFF TEST IS THE ONE THAT MATTERS. The comment above the flag loop
+# in `steps.py` records that this exact producer/consumer pair silently NEVER
+# WORKED: `workshop._parse_orientation` emitted `{question, assumption,
+# world_says, source_url}`, this section looked only for `note`/`text`/`finding`,
+# every real flag rendered as "" and was dropped, and the whole subsection never
+# appeared in ANY report. Both sides were tested. Both sides were green. Nobody
+# drove the hand-off. So the tests below run the REAL
+# `discovery_bracket.allocate_discovery` -> `annotate_conflicts` ->
+# `build_disputed_and_changed` chain rather than hand-typing the annotated shape.
+#
+# `_annotation_key` exists for the same reason: everything except the ONE test
+# that deliberately pins the key name DISCOVERS the key from the producer, so a
+# rename in `discovery_bracket` cannot leave these tests passing over a report
+# that lost its clause.
+#
+# Still zero LLM, zero DB, zero network: `discovery_bracket` is stdlib-only and
+# every function in the chain is pure.
+# ---------------------------------------------------------------------------
+
+Q1_LABEL = "Q1 — how often do Dutch fuel prices move?"
+Q2_LABEL = "Q2 — is coffee a margin driver?"
+
+
+def make_orientation_conflicts() -> list[dict]:
+    """`brief_conflicts` in the shape the ORIENTATION PASS emits — exactly the
+    four keys `workshop._parse_orientation` writes, and no report-side key at all.
+
+    Deliberately short: `_SECTION_ITEM_CHARS` bounds the rendered bullet, and a
+    verbose fixture would truncate the very question text these tests assert on.
+    """
+    return [
+        {
+            "question": Q1_LABEL,
+            "assumption": "ZZASSUME prices move weekly",
+            "world_says": "ZZWORLD prices moved twice a day",
+            "source_url": "https://x.test/pricing",
+        },
+        {
+            "question": Q1_LABEL,
+            "assumption": "ZZASSUME2 the network is company-operated",
+            "world_says": "ZZWORLD2 most sites are dealer-owned",
+            "source_url": "https://x.test/network",
+        },
+    ]
+
+
+def make_unsourced_conflict() -> dict:
+    """A real brief-vs-world flag that carries NO fetched http(s) source.
+
+    "No source, no slot" (D-W3-4) means it can never become a research question —
+    so the report must state the conflict and must NOT claim it was answered.
+    """
+    return {
+        "question": Q2_LABEL,
+        "assumption": "ZZASSUME3 coffee is a side line",
+        "world_says": "ZZWORLD3 coffee carries the site margin",
+        "source_url": "",
+    }
+
+
+def _dispatch(conflicts: list, labels: list, *, dispatched: slice = slice(None)):
+    """Drive the REAL producer. Returns `(annotated_conflicts, questions)`.
+
+    `dispatched` narrows which allocated questions are treated as ACTUALLY
+    dispatched, which is how a rider shed for prompt space (plan 15.6-04's GAP A)
+    or a cross-cutting question that lost its group to the mandate (GAP B) is
+    modelled — `annotate_conflicts`' contract is that only the dispatched subset
+    is annotated.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket
+
+    questions, _counts, _notes = discovery_bracket.allocate_discovery(conflicts, labels)
+    annotated = discovery_bracket.annotate_conflicts(conflicts, questions[dispatched])
+    return annotated, questions
+
+
+def _annotation_key(annotated: dict, original: dict) -> str:
+    """The ONE key the producer added — discovered, never typed.
+
+    Also an assertion in its own right: `annotate_conflicts` must add exactly one
+    key and must not drop or rewrite any of the producer's own four.
+    """
+    extra = set(annotated) - set(original)
+    assert len(extra) == 1, f"annotate_conflicts added {sorted(extra)}, expected one key"
+    assert all(annotated[k] == original[k] for k in original), "an original field changed"
+    return extra.pop()
+
+
+def _brief_subsection(rendered: str, strings: dict = EN) -> str:
+    """The brief-vs-world subsection only. It is rendered LAST of the three."""
+    return rendered[rendered.index(strings["sub_brief"]):]
+
+
+class TestDiscoveryProvenanceClause:
+    def test_a_dispatched_discovery_question_reaches_the_report_from_the_real_producer(
+        self,
+    ):
+        """THE HAND-OFF. Producer -> annotator -> renderer, no hand-typed shape.
+
+        This test contains no annotated-key literal on purpose: the key is
+        whatever `discovery_bracket` writes, and the chain is what is under test.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket
+
+        conflicts = make_orientation_conflicts()
+        annotated, questions = _dispatch(conflicts, [Q1_LABEL])
+        assert questions, "the producer dispatched nothing — the test proves nothing"
+        assert len(annotated) == len(conflicts), "length and order are the contract"
+
+        out = build_disputed_and_changed(brief_conflicts=annotated, language="English")
+        sub = _brief_subsection(out)
+
+        # The clause fired, once per dispatched conflict, in English.
+        assert sub.count(EN["brief_raised_question"]) == len(questions)
+
+        # The ENGINE-FRAMED question text reached the client. Derived from the
+        # producer rather than pinned as a phrase, so a reworded frame does not
+        # make this test lie in either direction.
+        framed = discovery_bracket.discovery_question_text(conflicts[0])
+        assert framed, "the producer framed nothing"
+        head = framed[:60]
+        i_clause = sub.index(EN["brief_raised_question"])
+        assert sub.index(head, i_clause) > i_clause, (
+            "the framed question must follow the clause, not precede it"
+        )
+
+        # And the quote and URL that provoked it are still beside it.
+        assert "ZZWORLD prices moved twice a day" in sub
+        assert "https://x.test/pricing" in sub
+
+    def test_the_report_reads_the_key_the_producer_writes(self):
+        """The ONE test that pins the key name. Every other test discovers it.
+
+        A rename on either side is a delivery defect that no rendering test would
+        catch on its own — the clause would simply stop appearing.
+        """
+        conflicts = make_orientation_conflicts()
+        annotated, questions = _dispatch(conflicts, [Q1_LABEL])
+        assert questions
+        key = _annotation_key(annotated[0], conflicts[0])
+        assert key == "researched_as", key
+        assert isinstance(annotated[0][key], str) and annotated[0][key]
+
+    def test_the_clause_exists_in_all_four_report_languages(self):
+        """An English sentence in a Dutch report is a delivery defect, not a nit."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, questions = _dispatch(conflicts, [Q1_LABEL])
+        assert questions
+
+        for lang, key in (
+            ("English", "english"), ("Dutch", "dutch"),
+            ("German", "german"), ("French", "french"),
+        ):
+            strings = _SECTION_STRINGS[key]
+            out = build_disputed_and_changed(brief_conflicts=annotated, language=lang)
+            assert strings["brief_raised_question"] in out, lang
+            for other in _SECTION_STRINGS:
+                if other != key:
+                    assert _SECTION_STRINGS[other]["brief_raised_question"] not in out, (
+                        f"a {lang} report carried the {other} clause"
+                    )
+
+    def test_every_language_carries_the_same_section_string_keys(self):
+        """Set-equality across the four, NOT a hardcoded list — so a fifth
+        language added later without the clause fails loudly instead of shipping
+        an English sentence in someone's report."""
+        keysets = {lang: frozenset(v) for lang, v in _SECTION_STRINGS.items()}
+        assert len(set(keysets.values())) == 1, {k: sorted(v) for k, v in keysets.items()}
+        for lang, strings in _SECTION_STRINGS.items():
+            clause = strings["brief_raised_question"]
+            assert isinstance(clause, str) and clause.strip(), lang
+        clauses = [v["brief_raised_question"] for v in _SECTION_STRINGS.values()]
+        assert len(set(clauses)) == len(clauses), "two languages share one clause"
+
+    def test_a_conflict_renders_once_not_twice(self):
+        """ANNOTATE, NEVER APPEND. A second row would print the same conflict
+        twice — once with the clause and once without — and a client reading it
+        twice cannot tell which reading is the true one."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, questions = _dispatch(conflicts, [Q1_LABEL])
+        assert questions
+
+        out = build_disputed_and_changed(brief_conflicts=annotated, language="English")
+        sub = _brief_subsection(out)
+        assert sub.count("*   ") == 1, sub
+        assert sub.count(EN["brief_raised_question"]) == 1, sub
+        # "The research found:" belongs to the CONSUMER's composed sentence only —
+        # the producer's frame says "A source read during orientation says
+        # instead:" — so counting it counts how many times this conflict was
+        # composed into a bullet. NOT the assumption text: the framed question
+        # legitimately quotes that back, so it appears twice on one correct row.
+        assert sub.count("The research found:") == 1, (
+            "the conflict was composed into more than one bullet"
+        )
+
+    def test_an_unsourced_conflict_renders_with_no_clause_because_it_was_never_researched(
+        self,
+    ):
+        """"No source, no slot", seen from the report end. The evidence raised it,
+        this run did not research it, and the report must not imply otherwise."""
+        conflicts = [make_unsourced_conflict()]
+        annotated, questions = _dispatch(conflicts, [Q2_LABEL])
+        assert questions == [], "an unsourced conflict must never consume a slot"
+        assert annotated[0] == conflicts[0], "nothing was annotated"
+
+        out = build_disputed_and_changed(brief_conflicts=annotated, language="English")
+        sub = _brief_subsection(out)
+        # The conflict STILL reaches the client — it is simply not claimed as answered.
+        assert "ZZWORLD3 coffee carries the site margin" in sub
+        assert EN["brief_raised_question"] not in out
+        assert sub.count("*   ") == 1
+
+    def test_a_discovery_question_that_never_got_dispatched_renders_with_no_clause(self):
+        """A rider shed for prompt space, or a cross-cutting question whose group
+        lost its slot to the mandate: allocated, never dispatched. It must render
+        as a plain brief-vs-world conflict."""
+        conflicts = make_orientation_conflicts()
+        annotated, questions = _dispatch(conflicts, [Q1_LABEL], dispatched=slice(0, 1))
+        assert len(questions) == 2, "the fixture must allocate two to shed one"
+
+        out = build_disputed_and_changed(brief_conflicts=annotated, language="English")
+        sub = _brief_subsection(out)
+        assert sub.count("*   ") == 2, "both conflicts render"
+        assert sub.count(EN["brief_raised_question"]) == 1, (
+            "only the DISPATCHED conflict may carry the clause"
+        )
+        # The shed one is still reported, with its own quote, and no claim of an answer.
+        assert "ZZWORLD2 most sites are dealer-owned" in sub
+        shed_bullet = [ln for ln in sub.splitlines() if "ZZWORLD2" in ln]
+        assert len(shed_bullet) == 1
+        assert EN["brief_raised_question"] not in shed_bullet[0]
+
+    def test_the_clause_also_reaches_the_three_legacy_key_branches(self):
+        """A producer that hands over `note` PLUS the annotation is legitimate, so
+        the read runs for every dict entry, not only the composed branch."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, _questions = _dispatch(conflicts, [Q1_LABEL])
+        key = _annotation_key(annotated[0], conflicts[0])
+
+        for legacy in ("note", "text", "finding"):
+            item = {legacy: "ZZLEGACY a flag from an older producer.",
+                    key: annotated[0][key]}
+            out = build_disputed_and_changed(brief_conflicts=[item], language="Dutch")
+            sub = _brief_subsection(out, _SECTION_STRINGS["dutch"])
+            assert _SECTION_STRINGS["dutch"]["brief_raised_question"] in sub, legacy
+            assert sub.count("*   ") == 1, legacy
+            assert "ZZLEGACY" in sub, legacy
+
+    def test_the_no_clause_rendering_is_byte_identical_to_before(self):
+        """The exact bytes of an un-annotated conflict, pinned.
+
+        Every conflict that never becomes a question renders through this path —
+        the vast majority of them — so a future edit to the composed sentence must
+        be a deliberate act with this expectation updated beside it.
+        """
+        conflict = {
+            "question": Q1_LABEL,
+            "assumption": "prices move weekly",
+            "world_says": "prices moved twice a day",
+            "source_url": "https://x.test/p",
+        }
+        out = build_disputed_and_changed(brief_conflicts=[conflict], language="English")
+        assert out == (
+            "## Disputed & changed\n"
+            "\n"
+            "### Where the brief did not match what the research found\n"
+            "\n"
+            "*   The brief assumes: prices move weekly The research found: "
+            "prices moved twice a day (https://x.test/p)"
+        ), repr(out)
+
+    def test_a_non_string_annotation_renders_exactly_as_the_no_clause_case(self):
+        """The producer only ever writes a `str`, so a non-string cannot have come
+        from this engine. Rendering "the research answered it: ['x']" would assert
+        a question was researched that was never even framed — and a hostile
+        `__str__` reaching the sanitizer would cost the WHOLE section, because
+        `_sanitize` calls `str()` outside its own try block."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, _questions = _dispatch(conflicts, [Q1_LABEL])
+        key = _annotation_key(annotated[0], conflicts[0])
+
+        reference = build_disputed_and_changed(
+            brief_conflicts=[dict(conflicts[0])], language="English"
+        )
+
+        class _Hostile:
+            def __str__(self):
+                raise RuntimeError("hostile __str__")
+
+            def __bool__(self):
+                raise RuntimeError("hostile __bool__")
+
+        for value in ("", "   \n\t ", None, 0, False, [], ["x"], {"a": 1}, 7, 1.5,
+                      b"x", _Hostile()):
+            item = dict(conflicts[0])
+            item[key] = value
+            out = build_disputed_and_changed(brief_conflicts=[item], language="English")
+            assert out == reference, f"{value!r} changed the rendering"
+            assert EN["brief_raised_question"] not in out, repr(value)
+            # The SECTION survived: this is not the swallow-everything placeholder.
+            assert EN["disputed_empty"] not in out, repr(value)
+
+    def test_an_annotation_with_no_conflict_to_attach_to_renders_nothing(self):
+        """Half a conflict is not a conflict and is dropped today. The clause must
+        not resurrect it as a bullet that names a question and no disagreement."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, _questions = _dispatch(conflicts, [Q1_LABEL])
+        key = _annotation_key(annotated[0], conflicts[0])
+
+        for item in (
+            {"assumption": "ZZHALF an assumption with nothing against it",
+             key: "ZZORPHAN a framed question."},
+            {key: "ZZORPHAN a framed question."},
+        ):
+            out = build_disputed_and_changed(brief_conflicts=[item], language="English")
+            assert "ZZORPHAN" not in out, item
+            assert EN["brief_raised_question"] not in out, item
+            assert EN["disputed_empty"] in out, "nothing renderable -> the placeholder"
+
+    def test_the_item_cap_still_bounds_the_annotated_bullet(self):
+        """T-15.6-21. The frame is engine-authored but the fields inside it are
+        model-authored. The bound wins over the clause, deliberately: an oversized
+        conflict loses the clause to truncation rather than escaping the cap."""
+        conflicts = make_orientation_conflicts()[:1]
+        annotated, _questions = _dispatch(conflicts, [Q1_LABEL])
+        key = _annotation_key(annotated[0], conflicts[0])
+
+        item = dict(conflicts[0])
+        item["assumption"] = "L" * 5000
+        item[key] = "ZZCUT the framed question."
+        out = build_disputed_and_changed(brief_conflicts=[item], language="English")
+        bullets = [ln for ln in out.splitlines() if ln.startswith("*   ")]
+        assert len(bullets) == 1
+        assert len(bullets[0]) <= _SECTION_ITEM_CHARS + 8, len(bullets[0])
+        assert bullets[0].endswith("…"), "the cut must be visible"
+        assert "ZZCUT" not in out, "the cap must win over the clause"
+
+    def test_the_annotated_section_is_byte_stable_across_two_renders(self):
+        """Same input, same bytes — no clock, no model, no set iteration. The
+        clause must not have introduced any of the three."""
+        first_conflicts = make_orientation_conflicts()
+        second_conflicts = make_orientation_conflicts()
+        first, _ = _dispatch(first_conflicts, [Q1_LABEL])
+        second, _ = _dispatch(second_conflicts, [Q1_LABEL])
+        a = build_disputed_and_changed(brief_conflicts=first, language="Dutch")
+        b = build_disputed_and_changed(brief_conflicts=second, language="Dutch")
+        assert a == b
+        assert _SECTION_STRINGS["dutch"]["brief_raised_question"] in a

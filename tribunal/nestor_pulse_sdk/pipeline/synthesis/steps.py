@@ -530,6 +530,17 @@ _SECTION_STRINGS: dict[str, dict[str, str]] = {
         "sub_contradictions": "### Contradictions settled during fact-checking",
         "sub_superseded": "### Findings overtaken by newer information",
         "sub_brief": "### Where the brief did not match what the research found",
+        # D-W3-4's governance clause. The workshop is FULLY AUTOMATIC (D5 / D-01)
+        # — nothing in it pauses for an operator — so a question the ENGINE raised
+        # cannot be gated on an approval click. Transparency is the governance
+        # instead: the client is told plainly, in their own language, which
+        # questions they asked and which the evidence raised. It is also the
+        # Art. 12 audit trail. Appended to the conflict that provoked it, never
+        # emitted as a bullet of its own — see `build_disputed_and_changed`.
+        "brief_raised_question": (
+            "This raised a question the client did not ask, "
+            "and the research answered it:"
+        ),
         "disputed_empty": (
             "*(No contradiction was settled and no finding was overtaken during "
             "fact-checking.)*"
@@ -548,6 +559,10 @@ _SECTION_STRINGS: dict[str, dict[str, str]] = {
         "sub_contradictions": "### Tegenstrijdigheden opgelost tijdens de feitencontrole",
         "sub_superseded": "### Bevindingen achterhaald door nieuwere informatie",
         "sub_brief": "### Waar de briefing niet overeenkwam met wat het onderzoek vond",
+        "brief_raised_question": (
+            "Dit riep een vraag op die de klant niet had gesteld; "
+            "het onderzoek heeft die beantwoord:"
+        ),
         "disputed_empty": (
             "*(Er zijn geen tegenstrijdigheden opgelost en geen bevindingen achterhaald "
             "tijdens de feitencontrole.)*"
@@ -566,6 +581,10 @@ _SECTION_STRINGS: dict[str, dict[str, str]] = {
         "sub_contradictions": "### Während der Faktenprüfung geklärte Widersprüche",
         "sub_superseded": "### Durch neuere Informationen überholte Erkenntnisse",
         "sub_brief": "### Wo das Briefing nicht mit den Rechercheergebnissen übereinstimmte",
+        "brief_raised_question": (
+            "Daraus ergab sich eine Frage, die der Kunde nicht gestellt hatte; "
+            "die Recherche hat sie beantwortet:"
+        ),
         "disputed_empty": (
             "*(Bei der Faktenprüfung wurden keine Widersprüche geklärt und keine "
             "Erkenntnis wurde überholt.)*"
@@ -585,6 +604,10 @@ _SECTION_STRINGS: dict[str, dict[str, str]] = {
         "sub_superseded": "### Conclusions dépassées par des informations plus récentes",
         "sub_brief": (
             "### Là où le briefing ne correspondait pas aux résultats de la recherche"
+        ),
+        "brief_raised_question": (
+            "Cela a soulevé une question que le client n'avait pas posée, "
+            "et la recherche y a répondu :"
         ),
         "disputed_empty": (
             "*(Aucune contradiction n'a été tranchée et aucune conclusion n'a été "
@@ -741,6 +764,49 @@ def build_disputed_and_changed(
                         source_url = _sanitize(item.get("source_url"))
                         if source_url.startswith(("http://", "https://")):
                             raw_flag += f" ({source_url})"
+                # THE PROVENANCE CLAUSE (D-W3-4). `discovery_bracket` writes an
+                # optional `researched_as` onto exactly the conflicts that were
+                # DISPATCHED as discovery questions. Three rules govern it:
+                #
+                # 1. IT IS APPENDED TO THE EXISTING SENTENCE, NEVER EMITTED AS A
+                #    SECOND BULLET. A second row would print the same conflict
+                #    twice — once with the clause and once without — and a client
+                #    reading it twice cannot tell which reading is the true one.
+                #    That is why `annotate_conflicts` annotates in place rather
+                #    than appending, and this side must match it.
+                # 2. It applies to the composed `assumption`/`world_says` branch
+                #    AND to the three legacy-key branches: a producer that hands
+                #    over `note` PLUS `researched_as` is legitimate, so the read
+                #    sits outside the `if not raw_flag` block and runs for every
+                #    dict entry.
+                # 3. `.get()`, never a subscript — the vast majority of conflicts
+                #    never become research questions and carry no such key. And
+                #    the value is read only when it is genuinely a `str`:
+                #    `annotate_conflicts` writes nothing else, so a non-string is
+                #    not something this engine produced, and rendering "the
+                #    research answered it: ['x']" would assert a question was
+                #    researched that was never even framed. A non-str is also
+                #    never passed to `str()` here, so a hostile `__str__` cannot
+                #    reach the sanitizer through this key.
+                #
+                # `_sanitize` (per-item flatten + marker strip + `_SECTION_ITEM_CHARS`
+                # truncation) and `_truncated_items` still bound the result: the
+                # frame is engine-authored by `discovery_bracket`, but the fields
+                # inside it are model-authored, and this function's contract is
+                # that a hostile item costs that one item and never the section. A
+                # conflict sentence long enough to fill the item budget on its own
+                # therefore loses the clause to truncation — the bound wins, and
+                # that is the deliberate order of precedence.
+                raw_researched = item.get("researched_as")
+                researched = _sanitize(raw_researched) if isinstance(raw_researched, str) else ""
+                if researched and raw_flag:
+                    # `_flatten`, not `+=`: `raw_flag` may still be a non-string
+                    # legacy value at this point, and a TypeError here would cost
+                    # the whole section rather than this one item.
+                    raw_flag = (
+                        f"{_flatten(raw_flag)} "
+                        f"{strings['brief_raised_question']} {researched}"
+                    )
             else:
                 raw_flag = str(item)
             text_value = _sanitize(raw_flag)
