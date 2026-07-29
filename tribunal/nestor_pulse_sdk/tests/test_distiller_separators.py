@@ -39,6 +39,7 @@ import pytest
 
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     _DISTILLER_SEPARATORS,
+    _build_distiller_prompt,
     _parse_distiller_response,
     _split_distiller_line,
 )
@@ -267,3 +268,108 @@ class TestSeparatorEdgeCases:
         line = f"{FACET}\t{CLAIM}\t{EVIDENCE}"
         assert _parse_distiller_response(line, [FACET], provider="claude")[0]["found_by"] == ["claude"]
         assert _parse_distiller_response(line, [FACET])[0]["found_by"] == []
+
+
+# ---------------------------------------------------------------------------
+# 4. The prompt contract -- THE COVERAGE THAT DID NOT EXIST
+# ---------------------------------------------------------------------------
+
+PROMPT_CONTRACT = "FACET ||| CLAIM_TEXT ||| EVIDENCE"
+MINIMAL_REPORTS = [("gemini", {"status": "success", "report": "Some research prose."})]
+MINIMAL_LABELS = [FACET]
+
+# The exact canned-response shape `test_claim_distiller.py::GOOD_RESPONSE` uses:
+# columns separated by a REAL TAB. The prompt no longer names the tab; the
+# parser must still accept it, and that is what the round-trip below says.
+TAB_CANNED_RESPONSE = (
+    f"{FACET}\tCronos holds ~18% of Belgian IT services market by revenue in 2024.\n"
+    f"{FACET}\tCapgemini Belgium expanded its public-sector practice by 30% YoY.\n"
+)
+
+
+class TestDistillerPromptContract:
+    """The assertion that was BELIEVED to exist and did not.
+
+    `_build_distiller_prompt`'s docstring used to state that
+    `test_claim_distiller.py` and `test_distiller_coverage.py` pin this prompt
+    BYTE-IDENTICALLY. **NEITHER FILE PINS IT, AND NEITHER EVER DID** — verified
+    by reading both on 2026-07-29. `test_distiller_coverage.py` asserts nothing
+    at all about the prompt; `test_claim_distiller.py` matches only the
+    `### Provider:` header its fake client routes on. So before this class
+    existed, changing the separator contract — or reintroducing the `<TAB>`
+    placeholder that cost V-01 278 claims — turned NOTHING red, and a green
+    engine gate proved nothing whatsoever about this prompt.
+
+    This class is that missing coverage. Assertions 1 and 2 are separate named
+    tests on purpose: a failure must say WHICH half of the contract broke, not
+    merely that "the prompt changed".
+    """
+
+    def test_prompt_states_the_pipe_contract(self):
+        """Assertion 1: the prompt tells the model the format it must emit."""
+        prompt = _build_distiller_prompt(MINIMAL_REPORTS, MINIMAL_LABELS)
+        assert PROMPT_CONTRACT in prompt, (
+            f"the built prompt must state {PROMPT_CONTRACT!r}; without it the "
+            f"model is guessing at the column separator"
+        )
+
+    def test_prompt_contains_no_literal_TAB_placeholder(self):
+        """Assertion 2: THE regression that cost 278 claims.
+
+        A placeholder describing a control character is a token the model can
+        render as characters. It did, twice in one batch at temperature 0.0,
+        and `_parse_distiller_response` discarded every claim in both
+        responses. Never name an invisible character in a prompt.
+        """
+        prompt = _build_distiller_prompt(MINIMAL_REPORTS, MINIMAL_LABELS)
+        assert "<TAB>" not in prompt, (
+            "the distiller prompt contains the literal placeholder <TAB>. This "
+            "is the exact V-01 defect: the model copies those five characters "
+            "back as data and every claim in the response is discarded. Use "
+            f"{PROMPT_CONTRACT!r}."
+        )
+
+    @pytest.mark.parametrize("variant", ["full_extraction", "language", "both"])
+    def test_the_optional_rule_fragments_cannot_smuggle_the_placeholder_back(
+        self, variant: str
+    ):
+        """Assertion 3: D-14 and the language rule are covered too.
+
+        Both are empty-string-by-default fragments, so a `<TAB>` added to
+        EITHER would be invisible in the default prompt the other tests build.
+        """
+        kwargs: dict = {}
+        language = ""
+        if variant in ("full_extraction", "both"):
+            kwargs["full_extraction"] = True
+        if variant in ("language", "both"):
+            language = "Nederlands"
+
+        prompt = _build_distiller_prompt(
+            MINIMAL_REPORTS, MINIMAL_LABELS, language, **kwargs
+        )
+        assert PROMPT_CONTRACT in prompt, f"{variant}: contract missing"
+        assert "<TAB>" not in prompt, (
+            f"{variant}: the <TAB> placeholder reached the prompt through an "
+            f"optional rule fragment"
+        )
+
+    def test_a_real_tab_response_still_round_trips(self):
+        """Assertion 4: the prompt stopped naming the tab; the parser still takes it.
+
+        This is what keeps V-01's already-working 43- and 143-claim blobs
+        working, and it is deliberately independent of the new separators — it
+        passes against the OLD tab-only splitter too. Its teeth come from the
+        companion proof that deleting "\\t" from `_DISTILLER_SEPARATORS` turns
+        it RED.
+        """
+        claims = _parse_distiller_response(
+            TAB_CANNED_RESPONSE, MINIMAL_LABELS, provider="gemini"
+        )
+        assert len(claims) == 2, (
+            f"a tab-separated canned response must still parse to its 2 claims, "
+            f"got {len(claims)}: {claims!r}"
+        )
+        assert all(c["facet"] == FACET for c in claims)
+        assert all(len(c["text"]) >= 10 for c in claims)
+        assert claims[0]["text"].startswith("Cronos holds")
