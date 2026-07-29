@@ -121,6 +121,45 @@ trail intact.
   - [x] 15-06-PLAN.md — Frontend: numbered clickable CitationPanel (stored-snapshot, dead-link safe) + getSource + en/fr/nl i18n
   - [x] 15-07-PLAN.md — DEPLOY-RUNBOOK Phase 15 section (dual rebuild + 0011 migrate + frontend) + 15-UAT.md recorded-run walkthrough + operator UAT checkpoint
 
+### Phase 15.4: Research Engine Redesign — Extraction Repair (Wave 1) (INSERTED 2026-07-29)
+
+**Goal:** The engine stops silently throwing away claims it successfully extracted. A distiller reply
+parses whatever separator the model actually used; a unit that returns lines but keeps zero claims is
+**loud**; an unusable gemini fact list is retried once, covering all three observed format deviations;
+gemini grounding redirects are resolved to publisher URLs at ingest so citations cannot rot. Proven by
+replaying V-01's two coffee audit blobs and recovering **278** claims.
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 2 "Wave 1 — extraction repair" (D-R1, D-R2,
+D-V01-11 + smalls). Waves 2–5 of that spec are explicitly NOT in this phase.
+**Depends on:** Phase 15.2 gap closure + Phase 15.3 (deployed engine at SHA 20260727-085533). No
+dependency on 15.3 plan 09's operator checkpoints.
+**Requirements**: none assigned — source of record is `.planning/ENGINE-REDESIGN-SPEC.md` § 2, with
+evidence in `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md`.
+**Ships alone:** Wave 1 must be deployed and measured by ONE live run before any later wave starts —
+everything downstream is judged through the extraction funnel, so shipping the redesign on top of a
+broken meter would attribute the parser bug to the redesign.
+**Success Criteria** (what must be TRUE):
+  1. A distiller response using a real tab, the literal `<TAB>`, `|||`, or ` | ` all parse to the same
+     claims; priority order is respected (a real tab wins over a literal `<TAB>` on the same line).
+  2. A unit that returns non-empty lines but zero parsed claims logs at **WARNING** with the offending
+     first line — the failure that put a false statement in a client report is no longer invisible.
+  3. The ZERO-claims warning fires only for facets present in that call's inputs (no more crying wolf
+     about a facet that was never in scope).
+  4. All three gemini fact-list deviations (no block · `STATEMENT`-prefixed lines · `[cite: N]` in the
+     `SOURCE_URL` column) are covered by one additive retry per report; the `STATEMENT` normaliser has
+     a test; retry failure still falls through to the distiller exactly as today.
+  5. `vertexaisearch` redirects are deduped and resolved to publisher URLs at ingest, degrading to
+     keeping the unresolved redirect — never dropping a citation.
+  6. `gpt-5.6-sol` is in the cost table (`run.cost_pending` can clear) and the dropped
+     `deep_research`/`own_research` `run_event` rows are emitted.
+  7. **Replay proof:** V-01's two coffee audit blobs yield **278** claims through the new parser, and
+     the two blobs that already worked still yield **43** and **143**.
+  8. `test_claim_distiller.py` / `test_distiller_coverage.py` are updated deliberately — the prompt
+     contract change is reviewed as the substantive edit it is, not an incidental fixup.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15.4 to break down)
+
 ### Phase 15.3: Research run page — engine run-events + dedicated run route (INSERTED)
 
 **Goal:** A deep-research run has its own page — openable, closeable, bookmarkable and reopenable at `/admin/pulse/runs/:runId` — showing an ordered, durable feed of what the engine actually did at every step, with an elapsed clock that does not restart and every one of the eight run statuses handled honestly. The engine emits the events that page needs (dispatch, tool, search, reasoning, stream config, agent start/finish/retry/fail, per-stage summaries) into a new append-only `run_event` table, best-effort and PII-scrubbed, without changing anything the pipeline decides, dispatches or produces.

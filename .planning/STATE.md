@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
+status: Phase 15.4 inserted 2026-07-29, awaiting /gsd-plan-phase 15.4
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T08:40:00.000Z"
-last_activity: 2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed; cross-stream corroboration never operated (8 defects in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)
+last_updated: "2026-07-29T13:22:44.566Z"
+last_activity: "2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)"
 progress:
-  total_phases: 11
-  completed_phases: 7
+  total_phases: 12
+  completed_phases: 8
   total_plans: 79
-  completed_plans: 69
-  percent: 64
+  completed_plans: 78
+  percent: 67
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.3 — research-run-page-engine-run-events-dedicated-run-route
+**Current focus:** Phase 15.4 — research-engine-redesign-extraction-repair-wave-1 (Wave 1 of ENGINE-REDESIGN-SPEC.md)
 
 ## Current Position
 
-Phase: 15.3 (research-run-page-engine-run-events-dedicated-run-route) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 15.3
+Phase: 15.4 (research-engine-redesign-extraction-repair-wave-1) — NOT PLANNED
+Plan: 0 of TBD — not planned yet
+Status: Phase 15.4 inserted 2026-07-29, awaiting /gsd-plan-phase 15.4
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
@@ -71,7 +71,7 @@ BEFORE V-01, verify by hand:
     Blocking, not advisory.
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
-Next: park until 2026-08-01, then plan 18 Tasks 4-6; remaining order 15.2 -> 19 -> 20.
+Next: /gsd-plan-phase 15.4  (Wave 1 of .planning/ENGINE-REDESIGN-SPEC.md; ships ALONE, measured by one live run before waves 2-5). Then: 15.2 gap closure remainder -> 15.3 plan 09 operator checkpoints -> 19 -> 20. Phase 18 Tasks 4-6 (V-01/V-02/V-03) are superseded by the 15.4 run.
 Last activity: 2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)
 
 Progress: [██████████] 100%
@@ -117,6 +117,7 @@ Progress: [██████████] 100%
 
 - Phase 15 edited: Deferred after Phase 19 (operator decision 2026-07-21): spine 16-19 ships on engine as-is; Phase 16 dep on 15 removed (dynamic stage-list contract added); Phase 20 now also depends on 15
 - Phase 15.3 inserted after Phase 15: Research run page — engine run-events + dedicated run route. Operator decisions 2026-07-27: (a) ships in the SAME deploy batch as the 15.2 gap fixes, (b) engine events are built BEFORE the UI. Does not block 15.2's operator deploy; must merge to master before that deploy's image build. (URGENT)
+- Phase 15.4 inserted after Phase 15: Research Engine Redesign — Extraction Repair (Wave 1): the <TAB> parser defect that dropped 278 claims, the loud zero-claims warning, the gemini fact-list retry, redirect resolution at ingest. Scope = ENGINE-REDESIGN-SPEC.md § 2 only; ships alone and is measured by one live run before waves 2-5. (URGENT)
 
 ### Decisions
 
