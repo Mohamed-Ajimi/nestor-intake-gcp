@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T14:17:03.579Z"
+last_updated: "2026-07-29T14:51:37.927Z"
 last_activity: "2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)"
 progress:
   total_phases: 12
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.4 (research-engine-redesign-extraction-repair-wave-1) — NOT PLANNED
-Plan: 0 of 11 executed
-Status: Phase 15.4 PLANNED — 11 plans / 5 waves, plan check PASSED (0 blockers, 2 warnings closed). Ready to execute.
+Plan: Wave 1 COMPLETE — plans 01/02/04/05 executed and gate-verified (892 passed / 13 skipped / 0 failed, collecting 31 of 31, build 40039e33). Plan 07 deferred by operator. Next: Wave 2 = 03, 09 (auto) + 06 (operator checkpoint).
+Status: Phase 15.4 EXECUTING — Wave 1 done, Wave 2 starting
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
