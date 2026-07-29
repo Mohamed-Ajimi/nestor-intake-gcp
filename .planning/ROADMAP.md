@@ -145,9 +145,13 @@ broken meter would attribute the parser bug to the redesign.
      first line — the failure that put a false statement in a client report is no longer invisible.
   3. The ZERO-claims warning fires only for facets present in that call's inputs (no more crying wolf
      about a facet that was never in scope).
-  4. All three gemini fact-list deviations (no block · `STATEMENT`-prefixed lines · `[cite: N]` in the
-     `SOURCE_URL` column) are covered by one additive retry per report; the `STATEMENT` normaliser has
-     a test; retry failure still falls through to the distiller exactly as today.
+  4. All three gemini fact-list deviations are covered — **but not all by the retry** (corrected
+     2026-07-29 during planning; the original wording over-stated it). Ownership is split because the
+     deviations fail differently: **no block** → the one additive retry per report; **`STATEMENT`-prefixed
+     lines** → the normalising pre-parse, with the retry as a safety net; **`[cite: N]` in the
+     `SOURCE_URL` column** → the cite index, because those facts *survived* parsing and so never reach
+     `needs_distiller_fallback` where a retry could see them. The `STATEMENT` normaliser has a test;
+     retry failure still falls through to the distiller exactly as today.
   5. `vertexaisearch` redirects are deduped and resolved to publisher URLs at ingest, degrading to
      keeping the unresolved redirect — never dropping a citation.
   6. `gpt-5.6-sol` is in the cost table (`run.cost_pending` can clear) and the dropped
