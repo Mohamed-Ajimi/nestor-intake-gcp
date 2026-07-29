@@ -46,6 +46,11 @@ from nestor_pulse_sdk.citations.anchors import (
     render_fact_ledger,
 )
 from nestor_pulse_sdk.citations.numbering import _domain
+# D-R3 (phase 15.5 wave 2): the EVIDENCE-cell date grammar. Imported at MODULE
+# SCOPE, unlike the deferred `pipeline.tribunal.facts` imports below, because
+# `claim_attribution` is stdlib-pure — `re`, `datetime`, `logging` and nothing
+# else — so it adds no weight and no cycle to this module's import graph.
+from nestor_pulse_sdk.pipeline.synthesis.claim_attribution import extract_as_of
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -1451,6 +1456,23 @@ def _dedupe_claims(claims: list[dict]) -> list[dict]:
     Every one of those branches is guarded on the key being present, because
     ``claim_distiller`` claims carry no ``source_urls``, no ``provider_quality``
     and no ``certainty`` — their behaviour here is byte-identical to before.
+
+    * **``sub_question``, ``corroboration_key`` and ``as_of`` are FIRST-WINS BY
+      CONSTRUCTION** (D-W2-3, phase 15.5 wave 2) — and that rule needed NO CODE.
+      This function already keeps the first occurrence's dict WHOLE
+      (``seen[norm] = c``) and mutates only the named fields above, so a merge
+      preserves the first claim's three attribution values without a branch.
+      Writing one would be writing code to preserve behaviour that needs none,
+      and every line added here is a line that can perturb the ``claim_distiller``
+      path, which carries none of these keys at all. TWO CONSEQUENCES ARE
+      ACCEPTED rather than discovered later: (a) a claim merged across two
+      corroboration groups is SILENTLY attributed to the first — the cross-key
+      merge warning was explicitly declined for this wave; (b) a first
+      occurrence carrying ``None`` keeps its ``None`` even when a later
+      duplicate carries a real value. (b) is bounded by ORDERING, not by luck:
+      ``collect_provider_facts`` calls ``_dedupe_claims(d8_claims +
+      fallback_claims)`` with the ATTRIBUTED fact-list claims FIRST, so the
+      unattributed distiller paraphrase is the duplicate, never the survivor.
     """
     seen: dict[str, dict] = {}
     out: list[dict] = []
@@ -1806,10 +1828,26 @@ async def claim_distiller(
 #: operator's report. NESTOR_TRIBUNAL_* idiom (grouping.py).
 _NOT_FOUND_TOTAL_MAX = int(os.environ.get("NESTOR_TRIBUNAL_NOT_FOUND_TOTAL_MAX", "300"))
 
-#: The nine keys 15.2-04 guarantees on every fact dict, in its order.
+#: THE GUARANTEED KEY SET on every fact dict, in order. 15.2-04 contributed the
+#: first five plus the four D-13 / Pitfall-10 fields; phase 15.5 (D-R3, wave 2)
+#: APPENDED THE LAST THREE:
+#:
+#:   * ``sub_question``      — the winner text this claim was dispatched under
+#:   * ``corroboration_key`` — the group key (``w01``/``w02``/…), NULL for a
+#:                             remainder angle and NULL on the distiller path
+#:   * ``as_of``             — the claim's own date, where the EVIDENCE cell
+#:                             stated an unambiguous one
+#:
+#: The first two are stamped in Python from the DISPATCH ASSIGNMENT and are
+#: never read from model output (T-15.5-05); ``as_of`` is D-W2-1's single
+#: bounded exception. This comment deliberately no longer states a COUNT: a
+#: stale number inside the very constant that exists to guarantee a key set is
+#: precisely the class of quietly-wrong fact this phase family was opened to
+#: repair. What the keys ARE is the contract; how many there are is derivable.
 _FACT_CLAIM_KEYS: tuple[str, ...] = (
     "text", "facet", "evidence", "found_by", "source_urls",
     "certainty", "provider_quality", "source_domain", "quality_tier_hint",
+    "sub_question", "corroboration_key", "as_of",
 )
 
 
@@ -1893,7 +1931,13 @@ class ProviderFactsResult:
 
 
 def _normalise_fact_claim(
-    claim: dict, *, provider: str, facet: str, fact_source: str
+    claim: dict,
+    *,
+    provider: str,
+    facet: str,
+    fact_source: str,
+    sub_question: str | None = None,
+    corroboration_key: str | None = None,
 ) -> dict | None:
     """One claim -> the single key set, whichever path produced it. NEVER RAISES.
 
@@ -1911,6 +1955,33 @@ def _normalise_fact_claim(
 
     On the ``fact_list`` branch the values come from 15.2-04's parser, which has
     already clamped them to ``CERTAINTY_VALUES`` / ``QUALITY_VALUES``.
+
+    D-R3 (PHASE 15.5 WAVE 2) — THE THREE ATTRIBUTION KEYS
+    -----------------------------------------------------
+    ``sub_question`` and ``corroboration_key`` are CALLER-SUPPLIED keyword-only
+    arguments defaulted to ``None``, in the same register as ``certainty`` /
+    ``found_by`` on ``_insert_claim``, so every pre-existing call site stays
+    valid unchanged. They are read from the ANGLE, never from ``claim`` — the
+    same rule this function already applies to ``provider`` and ``facet``
+    (T-15.2-60, and T-15.5-05 for these two). A model-supplied corroboration key
+    would let model text choose its own corroboration partner.
+
+    An empty or non-string value becomes ``None``. D-W2-2: an ABSENT value is
+    NULL and never the empty string, because "no key recorded" and "recorded as
+    the empty key" are different facts and the corroboration queries have to be
+    able to tell them apart.
+
+    ``as_of`` is set on BOTH branches, distiller fallback included, and that does
+    NOT contradict T-15.2-61 above. The four fields hard-written to ``None``
+    there are FREE-TEXT PROVIDER CLAIMS ABOUT THEIR OWN CONFIDENCE, so a web
+    page saying "certainty: certain" is an indirect prompt injection aimed at a
+    persisted, queryable column. ``as_of`` is D-W2-1's single, bounded exception:
+    it passes through `claim_attribution.extract_as_of`, a strict grammar that
+    rejects every ambiguous form, yields a ``datetime.date`` or ``None`` and can
+    express nothing else — there is no sentence a provider can write that turns
+    it into arbitrary data. The residual risk it does not cover is a provider
+    stating a WELL-FORMED BUT UNTRUE date, which is the same trust level as the
+    claim text itself and is accepted for the same reason.
     """
     if not isinstance(claim, dict):
         return None
@@ -1947,6 +2018,23 @@ def _normalise_fact_claim(
             out["provider_quality"] = claim.get("provider_quality")
             out["source_domain"] = claim.get("source_domain")
             out["quality_tier_hint"] = claim.get("quality_tier_hint")
+        # --- D-R3 (15.5 wave 2): the dispatch attribution -------------------
+        # From the CALLER, never from `claim`. Absent means None, never `""`.
+        out["sub_question"] = (
+            sub_question if isinstance(sub_question, str) and sub_question else None
+        )
+        out["corroboration_key"] = (
+            corroboration_key
+            if isinstance(corroboration_key, str) and corroboration_key
+            else None
+        )
+        # The ONE model-derived column in this phase, and the only one on the
+        # `distiller_fallback` branch that is not hard-written to None. See the
+        # docstring for why that is not a hole in T-15.2-61: the grammar can
+        # return a date or nothing, and nothing else. Parsed from the SAME
+        # evidence string written above, so a claim whose evidence was dropped
+        # cannot acquire a date from anywhere else.
+        out["as_of"] = extract_as_of(out["evidence"])
         # One key set for both paths, guaranteed rather than assumed: 15.2-15's
         # merge and persistence loop read these by name and a missing key there
         # would be a KeyError inside a paid run.
@@ -2310,6 +2398,16 @@ async def collect_provider_facts(
             # report text — the rule `_parse_distiller_response` states above.
             # A model must not be able to set its own attribution (T-15.2-60).
             facet = str(result.get("_angle") or "") or "general"
+            # D-R3 (15.5 wave 2): the same rule, one row down. `research_division`
+            # writes these two onto the enriched result from the DISPATCH
+            # ASSIGNMENT, so they are engine-authored exactly as `_angle` is.
+            #
+            # `.get()` AND NOT A SUBSCRIPT. A run RESTORED from a checkpoint
+            # written before this change carries neither key, so a subscript
+            # would raise at the precise moment the resume exists to avoid
+            # re-buying paid angles (T-15.5-07).
+            sub_question = result.get("_sub_question")
+            corroboration_key = result.get("_corroboration_key")
             report_text = result.get("report") or ""
             if not isinstance(report_text, str):
                 report_text = ""
@@ -2334,7 +2432,9 @@ async def collect_provider_facts(
                 kept = 0
                 for raw in pre_parsed:
                     norm = _normalise_fact_claim(
-                        raw, provider=name, facet=facet, fact_source="fact_list"
+                        raw, provider=name, facet=facet, fact_source="fact_list",
+                        sub_question=sub_question,
+                        corroboration_key=corroboration_key,
                     )
                     if norm is None:
                         unusable_claims += 1
@@ -2395,7 +2495,9 @@ async def collect_provider_facts(
                 kept = 0
                 for raw in parsed.facts:
                     norm = _normalise_fact_claim(
-                        raw, provider=name, facet=facet, fact_source="fact_list"
+                        raw, provider=name, facet=facet, fact_source="fact_list",
+                        sub_question=sub_question,
+                        corroboration_key=corroboration_key,
                     )
                     if norm is None:
                         unusable_claims += 1
@@ -2457,8 +2559,17 @@ async def collect_provider_facts(
                     )
                     kept = 0
                     for raw in retried.facts:
+                        # D-R3: the SAME angle values as the first pass. This
+                        # branch is treated exactly as a first-pass block by
+                        # every other measure (same counter, same normaliser,
+                        # same fact_source), and a recovered retry's claims came
+                        # from the SAME dispatched angle — omitting them here
+                        # would silently strip attribution from every claim a
+                        # corrective re-ask rescued.
                         norm = _normalise_fact_claim(
-                            raw, provider=name, facet=facet, fact_source="fact_list"
+                            raw, provider=name, facet=facet, fact_source="fact_list",
+                            sub_question=sub_question,
+                            corroboration_key=corroboration_key,
                         )
                         if norm is None:
                             unusable_claims += 1
@@ -2513,6 +2624,18 @@ async def collect_provider_facts(
                 provider=attributed,
                 facet="general",
                 fact_source="distiller_fallback",
+                # D-R3: EXPLICITLY None, and this is a fact about the code
+                # rather than a gap to close. `claim_distiller` builds its units
+                # as `(provider_name, chunk_text)` (see `_chunk_text`'s caller
+                # above), so the ANGLE IS ALREADY GONE by the time distillation
+                # happens — there is no per-claim dispatch attribution left to
+                # carry. `fallback_units` mixes every fallen-back stream into
+                # ONE call, so passing some other report's loop variable would
+                # be a FABRICATED attribution: worse than the NULL, because it
+                # would look like a real corroboration partner. This is exactly
+                # why the two columns are nullable (D-R3 invariant 1).
+                sub_question=None,
+                corroboration_key=None,
             )
             if norm is None:
                 unusable_claims += 1

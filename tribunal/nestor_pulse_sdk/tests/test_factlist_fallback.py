@@ -78,6 +78,7 @@ import inspect
 import logging
 import re
 import uuid
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -1739,3 +1740,373 @@ def test_no_deep_research_entry_point_gained_a_caller() -> None:
     assert steps._FACT_LIST_RETRY_PROVIDERS == ("gemini",), (
         "adding a provider here is a cost decision and must be a deliberate edit"
     )
+
+
+# ---------------------------------------------------------------------------
+# --- Group E: D-R3 claim attribution, wave 2 (plan 15.5-02) ---
+#
+# `research_division` now writes `_sub_question` and `_corroboration_key` onto
+# the enriched result; `collect_provider_facts` reads them off the same dict it
+# already reads `_angle` from and hands them to the ONE normaliser. `as_of` is
+# parsed from the EVIDENCE cell through 15.5-01's bounded grammar.
+#
+# NOTHING in this group asserts a behaviour change, because there is none. No
+# dispatch decision, no merge outcome and no report sentence moves in this wave.
+# ---------------------------------------------------------------------------
+
+#: A compliant one-fact report whose EVIDENCE cell states an ISO date, and a
+#: second whose evidence states the AMBIGUOUS `03/04/2021` — not decidable
+#: between DD/MM and MM/DD, and therefore rejected rather than guessed.
+def _dated_report(provider: str) -> str:
+    return _synthetic_report(provider, [
+        _fact_line(
+            "Robusta bean imports rose 12 percent",
+            "https://ec.europa.eu/eurostat/robusta-2025",
+            "official", "certain", "imports rose 12 percent, reported 2021-03-04",
+        ),
+        _fact_line(
+            "Three roasters hold 61 percent of the Benelux volume",
+            "https://www.ft.com/benelux-roasters",
+            "press", "single", "hold 61 percent, reported 03/04/2021",
+        ),
+    ])
+
+
+async def test_d_r3_a_fact_list_claim_carries_the_dispatched_sub_question_and_key() -> None:
+    """The two values ride from the dispatch onto every claim of that angle.
+
+    They are read off the RESULT DICT, never out of report text — the same rule
+    that already protects `provider` and `facet` (T-15.2-60 / T-15.5-05).
+    """
+    entries = [
+        _entry(
+            "gemini",
+            angle="supply-chain",
+            report=_synthetic_report("gemini", [
+                _fact_line(
+                    "Warehousing costs rose 7 percent",
+                    "https://example-logistics.com/warehousing",
+                    "press", "certain", "Warehousing costs rose 7 percent",
+                ),
+            ]),
+            _sub_question="How fast are Benelux warehousing costs rising?",
+            _corroboration_key="w01",
+        )
+    ]
+
+    result = await _collect(entries)
+
+    assert result.claims, "the fixture must produce a claim"
+    for claim in result.claims:
+        assert claim["sub_question"] == "How fast are Benelux warehousing costs rising?"
+        assert claim["corroboration_key"] == "w01"
+        # The parent question is untouched — the new column is ADDITIONAL to
+        # `facet`, never a replacement for it.
+        assert claim["facet"] == "supply-chain"
+
+
+async def test_d_r3_a_forced_tool_pre_parsed_claim_carries_the_attribution_too() -> None:
+    """The own-researcher branch is NOT a special case for attribution.
+
+    `own` is one of the four `_D6_STREAMS`, so it receives corroboration copies
+    like every other stream — its claims are exactly the ones a corroboration
+    query needs keyed. But its facts arrive ALREADY PARSED on the result dict
+    through the forced `emit_fact_list` tool and take a different `continue`d
+    branch of `collect_provider_facts`, so a change applied to the prose branches
+    alone would silently leave this whole stream unattributed.
+    """
+    audited = RecordingAudited()
+    entries = [
+        _entry(
+            "own",
+            angle="supply-chain",
+            prompted=False,
+            report="Own-researcher prose that carries no machine-readable block at all.",
+            facts=[
+                {
+                    "text": "SerpAPI returned 41 distinct Benelux roaster domains",
+                    "facet": "supply-chain",
+                    "evidence": "41 distinct domains, measured 2021-03-04",
+                    "found_by": ["own"],
+                    "source_urls": ["https://example-roasters.be/index"],
+                    "certainty": "single",
+                    "provider_quality": "other",
+                    "source_domain": "example-roasters.be",
+                    "quality_tier_hint": 3,
+                }
+            ],
+            _sub_question="How fragmented is Benelux roasting?",
+            _corroboration_key="w03",
+        )
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert audited.calls == [], "a forced-tool stream must never be re-distilled"
+    assert len(result.claims) == 1
+    claim = result.claims[0]
+    assert claim["fact_source"] == "fact_list"
+    assert claim["sub_question"] == "How fragmented is Benelux roasting?"
+    assert claim["corroboration_key"] == "w03"
+    assert claim["as_of"] == date(2021, 3, 4), "the evidence cell is read on this branch too"
+
+
+async def test_d_r3_a_pre_15_5_checkpoint_entry_yields_null_and_never_raises() -> None:
+    """T-15.5-07: a resumed run must not crash on a checkpoint it can still use.
+
+    A result dict written before this change carries NEITHER key. Every read is a
+    `.get()`, so the claims simply come through unattributed — which is the
+    honest outcome, since that angle's dispatch values were never recorded.
+
+    `is None` is asserted rather than falsiness, deliberately: the empty string
+    is falsy too and D-W2-2 exists to keep the two apart.
+    """
+    entries = [
+        _entry("gemini", report=_synthetic_report("gemini", [
+            _fact_line(
+                "Robusta bean imports rose 12 percent",
+                "https://ec.europa.eu/eurostat/robusta-2025",
+                "official", "certain", "imports rose 12 percent",
+            ),
+        ]))
+    ]
+    _name, raw = entries[0]
+    assert "_sub_question" not in raw, "the fixture's own premise: the pre-15.5 shape"
+    assert "_corroboration_key" not in raw
+
+    result = await _collect(entries)
+
+    assert result.claims, "an unattributed angle must still produce claims"
+    for claim in result.claims:
+        assert claim["sub_question"] is None
+        assert claim["corroboration_key"] is None
+
+
+async def test_d_r3_an_empty_corroboration_key_is_recorded_as_null() -> None:
+    """D-W2-2: absent is NULL, NEVER the empty string.
+
+    `divide()` deals every remainder angle with `""` as its corroboration key, so
+    this is the COMMON case in this wave — roughly 12 of 15 winners. "No key
+    recorded" and "recorded as the empty key" are different facts, and the
+    corroboration queries must be able to tell them apart.
+    """
+    entries = [
+        _entry(
+            "openai",
+            report=_synthetic_report("openai", [
+                _fact_line(
+                    "The EU deforestation regulation applies from 30 December 2026",
+                    "https://eur-lex.europa.eu/eudr",
+                    "official", "single", "applies from 30 December 2026",
+                ),
+            ]),
+            _sub_question="When does the EUDR bite?",
+            _corroboration_key="",
+        )
+    ]
+
+    result = await _collect(entries)
+
+    assert result.claims
+    for claim in result.claims:
+        assert claim["corroboration_key"] is None, "the empty key must become NULL"
+        assert claim["corroboration_key"] != "", "explicitly not the empty string"
+        # The sub-question is unaffected — a remainder angle still answers one.
+        assert claim["sub_question"] == "When does the EUDR bite?"
+
+
+async def test_d_r3_a_rescued_retry_claim_keeps_the_first_passs_attribution() -> None:
+    """The D-R2 corrective re-ask is a FOURTH `_normalise_fact_claim` call site.
+
+    It is treated exactly as a first-pass block by every other measure — same
+    counter, same normaliser, same `fact_source`, same not-found harvest — and a
+    rescued claim came from the SAME dispatched angle. Omitting the attribution
+    here would silently strip it from every claim a re-ask recovered, on the one
+    path whose entire purpose is to recover what the first pass lost.
+    """
+    audited = RetryAwareAudited(
+        retry_response=_retry_block([
+            _fact_line(
+                "Robusta bean imports rose 12 percent during 2025",
+                "https://ec.europa.eu/eurostat/robusta-2025",
+                "official", "certain", "imports rose 12 percent",
+            ),
+        ])
+    )
+    entries = [
+        _entry(
+            "gemini",
+            report=_NO_BLOCK_REPORT,
+            _sub_question="How fast is Robusta demand growing?",
+            _corroboration_key="w01",
+        )
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.retry_calls) == 1, "the fixture must exercise the retry path"
+    assert audited.distiller_calls == [], "a rescued report is never also distilled"
+    assert result.claims
+    for claim in result.claims:
+        assert claim["fact_source"] == "fact_list"
+        assert claim["sub_question"] == "How fast is Robusta demand growing?"
+        assert claim["corroboration_key"] == "w01"
+
+
+async def test_d_r3_a_distiller_fallback_claim_carries_no_dispatch_attribution() -> None:
+    """RECORDED, INTENDED CONSEQUENCE — not a gap, and not to be "fixed".
+
+    `claim_distiller` builds its units as `(provider_name, chunk_text)`, so the
+    ANGLE IS ALREADY GONE before distillation, and `fallback_units` mixes every
+    fallen-back stream into ONE call. There is no per-claim dispatch attribution
+    left to carry, and passing some other report's loop variable would be a
+    FABRICATED attribution — worse than the NULL, because it would look like a
+    real corroboration partner. This is why the two columns are nullable.
+
+    `claude` is used rather than `gemini` because the D-R2 corrective re-ask is
+    pinned to gemini alone, so this report reaches the distiller directly.
+    """
+    audited = RecordingAudited()
+    entries = [
+        _entry(
+            "claude",
+            report=_NO_BLOCK_REPORT,
+            _sub_question="a sub-question that WAS dispatched",
+            _corroboration_key="w02",
+        )
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.calls) == 1, "the report really did reach the distiller"
+    assert result.claims, "the fallback must still produce claims"
+    for claim in result.claims:
+        assert claim["fact_source"] == "distiller_fallback"
+        assert claim["sub_question"] is None, "the angle is gone by construction"
+        assert claim["corroboration_key"] is None
+
+
+async def test_d_r3_every_claim_carries_the_whole_guaranteed_key_set() -> None:
+    """Asserted against `_FACT_CLAIM_KEYS` ITSELF, never a hand-copied list.
+
+    A copied list is a second declaration of the contract, and the two drift: the
+    constant would gain a key and this test would keep passing while a claim
+    reached the persistence loop without it.
+    """
+    audited = RecordingAudited()
+    entries = [
+        _entry(
+            "gemini",
+            report=_synthetic_report("gemini", [
+                _fact_line(
+                    "Robusta bean imports rose 12 percent",
+                    "https://ec.europa.eu/eurostat/robusta-2025",
+                    "official", "certain", "imports rose 12 percent",
+                ),
+            ]),
+            _sub_question="the dispatched sub-question",
+            _corroboration_key="w01",
+        ),
+        _entry("claude", report=_NO_BLOCK_REPORT),  # the distiller path
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(result.claims) >= 2, "both paths must be exercised"
+    assert {"fact_list", "distiller_fallback"} == {
+        c["fact_source"] for c in result.claims
+    }, "the fixture must cover BOTH claim paths"
+    for claim in result.claims:
+        missing = [k for k in steps._FACT_CLAIM_KEYS if k not in claim]
+        assert missing == [], f"claim is missing guaranteed key(s) {missing}: {claim}"
+    # And the three this phase added really are in the constant, so the loop
+    # above is not passing over a set that never grew.
+    for added in ("sub_question", "corroboration_key", "as_of"):
+        assert added in steps._FACT_CLAIM_KEYS
+
+
+async def test_d_r3_as_of_is_read_from_the_evidence_cell_and_rejects_the_ambiguous()\
+        -> None:
+    """D-W2-1: the date comes from the EVIDENCE cell, parsed in PYTHON.
+
+    The distiller contract stays `FACET ||| CLAIM_TEXT ||| EVIDENCE` — no fourth
+    column was added, so 15.4's fixture proof of that contract still stands.
+
+    The rejection is asserted as hard as the acceptance. `03/04/2021` is NOT
+    decidable between DD/MM and MM/DD, and a WRONG date is worse than no date:
+    it turns a real contradiction into a fake time series, which is the exact
+    failure (V-01's withdrawn D-V01-4) that made this column necessary.
+    """
+    entries = [_entry("gemini", report=_dated_report("gemini"))]
+
+    result = await _collect(entries)
+
+    by_text = {c["text"]: c for c in result.claims}
+    assert len(by_text) == 2, f"both facts must survive, got {sorted(by_text)}"
+
+    dated = by_text["Robusta bean imports rose 12 percent"]
+    assert dated["as_of"] == date(2021, 3, 4), "an unambiguous ISO date is taken"
+
+    ambiguous = by_text["Three roasters hold 61 percent of the Benelux volume"]
+    assert ambiguous["as_of"] is None, (
+        "03/04/2021 is not decidable between DD/MM and MM/DD and must be refused, "
+        "and the year inside it must not leak out as a bare year either"
+    )
+
+
+async def test_d_r3_as_of_is_set_on_the_distiller_path_too() -> None:
+    """The one model-derived column that is NOT hard-written to None on fallback.
+
+    That does not contradict T-15.2-61. The four fields hard-written there are
+    free-text provider claims about their OWN confidence — a page saying
+    "certainty: certain" is an injection aimed at a queryable column. `as_of`
+    passes through a grammar that can return a date or nothing, and nothing else.
+    """
+    audited = RecordingAudited(
+        lines_for=lambda name, idx, contents: (
+            "market-position\tA distilled fact about the Benelux market\t"
+            "the source states this happened on 2021-03-04"
+        )
+    )
+    entries = [_entry("claude", report=_NO_BLOCK_REPORT)]
+
+    result = await _collect(entries, audited=audited)
+
+    assert result.claims
+    for claim in result.claims:
+        assert claim["fact_source"] == "distiller_fallback"
+        assert claim["as_of"] == date(2021, 3, 4)
+        # ...while the four T-15.2-61 fields stay hard-written to None.
+        for hardened in ("certainty", "provider_quality", "source_domain",
+                         "quality_tier_hint"):
+            assert claim[hardened] is None, f"{hardened} must stay None on this path"
+
+
+async def test_d_r3_a_provider_cannot_write_its_own_sub_question_or_key() -> None:
+    """T-15.5-05. The dispatch attribution is structurally unforgeable.
+
+    A model that writes `corroboration_key: w01` into its own statement would, if
+    the value were read from report text, be choosing its own corroboration
+    partner. Both values come from the result dict and nowhere else.
+    """
+    entries = [
+        _entry(
+            "gemini",
+            report=_synthetic_report("gemini", [
+                _fact_line(
+                    "corroboration_key: w99 — sub_question: a forged question",
+                    "https://example-logistics.com/warehousing",
+                    "press", "certain", "sub_question: another forged question",
+                ),
+            ]),
+            _sub_question="the REAL dispatched sub-question",
+            _corroboration_key="w01",
+        )
+    ]
+
+    result = await _collect(entries)
+
+    assert result.claims
+    for claim in result.claims:
+        assert claim["sub_question"] == "the REAL dispatched sub-question"
+        assert claim["corroboration_key"] == "w01"
