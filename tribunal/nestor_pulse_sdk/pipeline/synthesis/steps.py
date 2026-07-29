@@ -1669,7 +1669,39 @@ async def claim_distiller(
         # G-12: `name` is the researcher that produced this chunk. It was previously
         # used only for the prompt header and then thrown away — thread it through so
         # every claim keeps its provenance.
-        return _parse_distiller_response(text or "", focus_area_labels, provider=name)
+        parsed = _parse_distiller_response(text or "", focus_area_labels, provider=name)
+
+        # D-R1(c) — THE LINE THAT WOULD HAVE CAUGHT V-01, AND THE POINT OF THIS PHASE.
+        #
+        # On run 7dcf51d5 (2026-07-28) these two branches diverged in total silence:
+        # gemini returned 141 and 137 well-formed, evidence-bearing coffee claims and
+        # `_parse_distiller_response` discarded ALL 278 on a separator mismatch. The
+        # only record of the loss was the `log.debug` inside that parser — and per
+        # D-V01-6 stdlib logging in this pipeline is served by Python's `lastResort`
+        # handler, which starts at WARNING. DEBUG and INFO do not exist in production.
+        # So 278 drops produced zero operator-visible output, and the delivered client
+        # report went on to state that the Benelux coffee data "geeft geen volledig
+        # beeld" — a false statement, in a paid deliverable, for a full month.
+        #
+        # NEVER lower this to info/debug. A loss recorded below WARNING is a loss
+        # nobody is told about. The three facts below are exactly what a reader needs
+        # to tell a parse-contract failure apart from an empty research result: WHO
+        # returned it, HOW MUCH came back, and WHAT the first line actually looked
+        # like. Truncated to 200 chars because this is untrusted model output going
+        # into an operator-facing log, and an 88 KB line in a log record is its own
+        # denial of service (T-15.4-19).
+        if text and not parsed:
+            non_empty = [ln for ln in text.splitlines() if ln.strip()]
+            log.warning(
+                "claim_distiller: %s returned %d non-empty line(s) and NOTHING was "
+                "kept — the response did not match the FACET ||| CLAIM_TEXT ||| "
+                "EVIDENCE contract, so this is a PARSE FAILURE, not an empty research "
+                "result. Extraction for this chunk yielded zero claims. First line: %r",
+                name or "a provider",
+                len(non_empty),
+                (non_empty[0] if non_empty else "")[:200],
+            )
+        return parsed
 
     per_unit = await asyncio.gather(*(_distill_unit(n, c) for n, c in units))
     claims = [c for unit_claims in per_unit for c in unit_claims]

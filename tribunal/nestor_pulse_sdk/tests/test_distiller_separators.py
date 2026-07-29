@@ -25,8 +25,15 @@ Three deliverables live here, and they are deliberately not interchangeable:
   3. `TestV01Replay` -- the four RECORDED V-01 responses replayed through the
      real parser: 141 + 137 = 278 recovered, 43 and 143 unchanged.
 
+  4. `TestReturnedLinesKeptNothing` (plan 15.4-08, D-R1(c)) -- the WARNING that
+     would have caught V-01 on day one. The parser fix above stops THIS
+     failure; the warning is what makes the NEXT one visible, because the only
+     trace of the 278 was a `log.debug` and production does not serve DEBUG.
+     Asserted on the RECORD CONTENT, never on "a warning happened".
+
 PURE: no Postgres, no provider key, no network, no LLM. Every function under
-test here is a pure string function, and the fixture is committed text.
+test here is a pure string function or `claim_distiller` driven through a
+hand-written duck-typed fake client, and the fixture is committed text.
 
 Cloud Build invocation:
   gcloud builds submit tribunal \\
@@ -35,13 +42,18 @@ Cloud Build invocation:
 """
 from __future__ import annotations
 
+import logging
+import uuid
+
 import pytest
 
+from nestor_pulse_sdk.pipeline.synthesis import steps as steps_module
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     _DISTILLER_SEPARATORS,
     _build_distiller_prompt,
     _parse_distiller_response,
     _split_distiller_line,
+    claim_distiller,
 )
 from nestor_pulse_sdk.tests.fixtures.run_7dcf51d5.loader import (
     COFFEE_EXPECTED_CLAIMS,
@@ -552,4 +564,245 @@ class TestV01Replay:
         assert no_labels == wrong_labels, (
             f"{call.audit_prefix}: the focus-area label list changed the parsed "
             f"claims ({len(no_labels)} vs {len(wrong_labels)})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. D-R1(c) -- returned lines, kept NOTHING, and SAID SO at WARNING
+#
+# The parser fix above closes the `<TAB>` hole. This section closes the reason
+# nobody noticed it for a month: the drop was a `log.debug`, and per D-V01-6
+# stdlib logging in this pipeline is served by Python's `lastResort` handler,
+# which starts at WARNING. DEBUG and INFO DO NOT EXIST IN PRODUCTION.
+#
+# Every assertion below is on the record CONTENT -- provider, line count, first
+# line. "A warning was logged" is precisely the shape of assertion that lets a
+# useless warning survive review, which is the other half of what went wrong on
+# V-01 (see section 7).
+# ---------------------------------------------------------------------------
+
+#: Substring identifying the D-R1(c) record among everything else claim_distiller
+#: logs. Deliberately a phrase from the message rather than a code, so a rewrite
+#: that guts the message has to notice this test.
+DROP_MARKER = "NOTHING was kept"
+
+#: Five lines carrying NO separator of any accepted kind: no tab, no `<TAB>`,
+#: no `|`, no `|||`, and -- the easy one to get wrong -- no run of two or more
+#: spaces anywhere, since that is the last-resort separator. Single spaces only.
+FIVE_UNPARSEABLE_LINES = "\n".join([
+    "De koffieacceptatie bij Benelux-tankstations blijft achter op de verwachting.",
+    "Shell zet in op een hybride model van private label en barista-concepten.",
+    "Circle K rolde een barista-concept uit op honderdtwintig stations.",
+    "TotalEnergies koos voor een franchisemodel met een externe koffieketen.",
+    "Q8 rapporteerde een stijging van de koffieomzet in het segment.",
+])
+
+#: One line that DOES parse, in the current prompt contract.
+ONE_GOOD_LINE = f"{FACET} ||| {CLAIM} ||| {EVIDENCE}"
+
+MISSION_BRIEF_ONE_FACET = {"focus_areas": [{"focus_area": FACET}]}
+
+#: Short enough to be a single `_chunk_text` chunk, so one report == one distiller
+#: call == at most one D-R1(c) record. `exactly one` is an assertion in this
+#: section, and it would be untestable against a chunked report.
+SHORT_REPORT = "Korte onderzoekstekst over koffie bij tankstations in de Benelux."
+
+
+class _CannedResponse:
+    """The `.text` half of a google-genai response object."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class CannedAudited:
+    """Duck-typed `AuditedLLMClient` returning one canned body per provider.
+
+    Keyed by provider name because that is the ONLY per-report signal visible in
+    the built prompt (`### Provider: <name>`) -- the report `_angle` is not
+    rendered into it. Section 7 depends on that routing to give one facet claims
+    and another none.
+    """
+
+    def __init__(self, by_provider: dict[str, str], default: str = "") -> None:
+        self.by_provider = by_provider
+        self.default = default
+        self.calls: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.calls.append(contents)
+        import re as _re
+
+        m = _re.search(r"### Provider: (\w+)", contents)
+        name = m.group(1) if m else ""
+        return _CannedResponse(self.by_provider.get(name, self.default))
+
+
+async def _distil(reports, response_by_provider, mission_brief=None):
+    """Run the REAL `claim_distiller` over canned responses. Returns its claims."""
+    audited = CannedAudited(response_by_provider)
+    return await claim_distiller(
+        provider_reports=reports,
+        mission_brief=mission_brief or MISSION_BRIEF_ONE_FACET,
+        audited=audited,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+    )
+
+
+def _drop_records(caplog) -> list[logging.LogRecord]:
+    """Only the D-R1(c) records -- claim_distiller logs several other things."""
+    return [r for r in caplog.records if DROP_MARKER in r.getMessage()]
+
+
+class TestReturnedLinesKeptNothing:
+    """D-R1(c): the model returned output and the parser kept none of it.
+
+    That is a PARSE-CONTRACT FAILURE and it must not read like an empty research
+    result -- on V-01 it was reported as one, in a paid client deliverable.
+    """
+
+    async def test_five_unparseable_lines_produce_exactly_one_loud_warning(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": FACET})],
+                {"gemini": FIVE_UNPARSEABLE_LINES},
+            )
+
+        assert claims == [], "the canned lines must genuinely parse to nothing"
+
+        records = _drop_records(caplog)
+        assert len(records) == 1, (
+            f"expected exactly ONE D-R1(c) record, got {len(records)}: "
+            f"{[r.getMessage() for r in records]}"
+        )
+        record = records[0]
+        message = record.getMessage()
+
+        # Four assertions, each named in the failure text. Asserting only that a
+        # warning was emitted would pass against a message saying nothing useful.
+        assert record.levelno == logging.WARNING, (
+            f"D-R1(c) must be WARNING -- production serves nothing below it "
+            f"(D-V01-6). Got {record.levelname}."
+        )
+        assert "gemini" in message, f"the provider must be named: {message!r}"
+        assert "5" in message, f"the non-empty line count must appear: {message!r}"
+        assert "De koffieacceptatie bij Benelux" in message, (
+            f"the first offending line must appear so the shape can be "
+            f"diagnosed without the audit bucket: {message!r}"
+        )
+
+    async def test_a_response_that_parses_produces_no_such_warning(self, caplog):
+        """The control. A warning that also fires on success is noise."""
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": FACET})],
+                {"gemini": ONE_GOOD_LINE},
+            )
+
+        assert claims == [EXPECTED_CLAIM], (
+            f"the good line must still produce its claim unchanged, got {claims!r}"
+        )
+        assert _drop_records(caplog) == [], (
+            "a parsed response must NOT warn about dropping everything"
+        )
+
+    async def test_empty_text_produces_no_such_warning(self, caplog):
+        """Nothing came back at all -- a different event, already covered.
+
+        The distinction is the whole point of the message: `returned output and
+        kept nothing` is a parser bug, `returned nothing` is a provider/research
+        outcome. Collapsing them would recreate the V-01 misreading.
+        """
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": FACET})],
+                {"gemini": ""},
+            )
+
+        assert claims == []
+        assert _drop_records(caplog) == [], (
+            "an empty response must not be reported as a parse failure"
+        )
+
+    async def test_the_first_line_is_truncated_to_200_characters(self, caplog):
+        """T-15.4-19: untrusted model output, bounded before it reaches a log.
+
+        V-01s real lines run to several hundred characters and a chunk can be
+        60k. Logging one verbatim is a denial of service the operator inflicts
+        on themselves.
+        """
+        # Deliberately NON-REPEATING. A repeated phrase makes the `not in`
+        # assertion below vacuous the other way round: a slice taken past
+        # character 200 would also occur before it, and the test would go red
+        # against a correct truncation.
+        long_line = " ".join(f"woord{i:03d}" for i in range(120))  # ~1080 chars
+        assert len(long_line) > 400
+        assert long_line[220:300] not in long_line[:200], (
+            "the fixture must not repeat, or the truncation assertion is a lie"
+        )
+
+        with caplog.at_level(logging.WARNING):
+            await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": FACET})],
+                {"gemini": long_line},
+            )
+
+        records = _drop_records(caplog)
+        assert len(records) == 1
+        message = records[0].getMessage()
+        assert long_line[:150] in message, (
+            "the truncated prefix must survive -- a truncation that logs nothing "
+            "useful is as bad as no log at all"
+        )
+        assert long_line[220:300] not in message, (
+            f"the line was NOT truncated at 200 chars; the record carries "
+            f"{len(message)} chars"
+        )
+
+    async def test_the_v01_coffee_blob_under_the_old_parser_fires_this_warning(
+        self, caplog, monkeypatch
+    ):
+        """THE DEMONSTRATION: this one line would have caught V-01 on day one.
+
+        The parser is reverted to the tab-only version IN THE TEST ONLY (the
+        same `_parse_with_old_tab_only_splitter` the replay section uses as its
+        oracle) and fed a RECORDED coffee response. That is exactly the
+        production state of 2026-07-28: 141 well-formed claims returned, zero
+        kept, and the only record a `log.debug` nobody could see.
+
+        With D-R1(c) in place that same state emits a WARNING naming the
+        provider, the 141 lines, and the first line of the response.
+        """
+        call = COFFEE_CALLS[0]
+        assert call.non_empty_lines == 141, (
+            f"fixture manifest changed under this test: {call.non_empty_lines}"
+        )
+        blob = load_distiller_response(call.audit_prefix)
+
+        monkeypatch.setattr(
+            steps_module, "_parse_distiller_response", _parse_with_old_tab_only_splitter
+        )
+
+        with caplog.at_level(logging.WARNING):
+            claims = await _distil(
+                [("gemini", {"report": SHORT_REPORT, "_angle": FACET})],
+                {"gemini": blob},
+            )
+
+        assert claims == [], (
+            "the reverted parser must reproduce the V-01 total loss, otherwise "
+            "this is not a demonstration of anything"
+        )
+        records = _drop_records(caplog)
+        assert len(records) == 1, (
+            f"expected one D-R1(c) record, got {len(records)}"
+        )
+        message = records[0].getMessage()
+        assert "141" in message, (
+            f"the 141 returned lines must be counted in the record: {message!r}"
+        )
+        assert "gemini" in message
+        assert "Hoe evolueren de koffiestrategie" in message, (
+            f"the first recorded line must appear verbatim (truncated): {message!r}"
         )
