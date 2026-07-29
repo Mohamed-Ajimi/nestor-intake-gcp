@@ -156,10 +156,20 @@ broken meter would attribute the parser bug to the redesign.
      the two blobs that already worked still yield **43** and **143**.
   8. `test_claim_distiller.py` / `test_distiller_coverage.py` are updated deliberately — the prompt
      contract change is reviewed as the substantive edit it is, not an incidental fixup.
-**Plans:** 0 plans
+**Plans:** 11 plans in 5 waves
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 15.4 to break down)
+- [ ] 15.4-01-PLAN.md (W1) — Commit V-01's four distiller audit blobs as a redaction-checked regression fixture with a 141/137/43/143 manifest (operator sign-off on the credential scan)
+- [ ] 15.4-02-PLAN.md (W1) — Tribunal alembic `0016`: two nullable `source` columns (`resolved_url`, `resolution_status`) + ORM lock-step; engine gate 30 → 31
+- [ ] 15.4-03-PLAN.md (W2) — D-R1(a)+(b): the separator-tolerant `_split_distiller_line`, the `FACET ||| CLAIM_TEXT ||| EVIDENCE` prompt contract, both pinned test files updated deliberately, and the 278/43/143 replay proof; engine gate 31 → 32
+- [ ] 15.4-04-PLAN.md (W1) — D-R2 parser half: the uniform `STATEMENT`-prefix normaliser (idx 8) and a report-derived `[cite: N]` → URL index that recovers idx 4's lost sources
+- [ ] 15.4-05-PLAN.md (W1) — The dropped `run_event` rows: tolerant `agent_done` build lambdas in `research_division.py` and `own_researcher.py` — unknown renders as unknown, never as 0, and `emit_safe` is not touched
+- [ ] 15.4-06-PLAN.md (W2) — Investigate and record the three parked questions (396/426/293, `gate_errors: 153`, 175 null-certainty claims), judged from the delivered report; docs only
+- [ ] 15.4-07-PLAN.md (W1) — `openai/gpt-5.6-sol` cost row: published rates or a recorded absence — never a null-rate entry, which `_rate()` renders as a fabricated $0.00
+- [ ] 15.4-08-PLAN.md (W3) — D-R1(c)+(d): "returned lines, kept zero claims" at WARNING with the offending line, and the ZERO-claims warning scoped to the call's own in-scope facets
+- [ ] 15.4-09-PLAN.md (W2) — Grounding-redirect resolution at ingest: deduped, one hop, http(s)-validated, deadline-bounded, degrading to keeping the unresolved redirect
+- [ ] 15.4-10-PLAN.md (W4) — D-R2 retry half: ONE additive corrective re-ask of the same provider on the `needs_distiller_fallback` branch, falling through to the distiller byte-identically on failure
+- [ ] 15.4-11-PLAN.md (W5) — DEPLOY: runbook § Phase 15.4 (dual Tribunal rebuild + `0016` proven by its literal upgrade line), the deploy, and ONE live run compared against V-01
 
 ### Phase 15.3: Research run page — engine run-events + dedicated run route (INSERTED)
 
