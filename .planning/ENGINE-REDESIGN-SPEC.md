@@ -57,7 +57,9 @@ it is expensive — six flash calls at ~30 output tokens each is what **$0.00** 
 | **D-R6** | The workshop becomes a **creative loop**: generative evolve, judges give reasons, meta-review, **10-round cap** | agreed (operator) |
 | **D-R7** | A **discovery bracket** — evidence-anchored questions the client did not ask | agreed (operator) |
 | **D-R8** | Record yield per assignment so routing can later be evidence-based | agreed |
-| **D-R9** | **Q1 resolved: keep the tournament and make it real.** It earns its cost only because D-R7 gives it genuinely different ideas to rank | agreed |
+| **D-R9** | **Q1 resolved: keep the tournament and make it real.** It earns its cost only because D-R7 gives it genuinely different ideas to rank | agreed · **reaffirmed 2026-07-29** ("we are not killing tournament"); pairwise Elo RETAINED, ties fixed by raising rounds |
+| **D-R10** | **The loop DISCOVERS, it does not only sharpen. Evolve may invent an angle; a grounded lookup decides whether it earns a slot** — source found, it becomes a discovery candidate; nothing found, dropped and logged | agreed (operator) **2026-07-29** |
+| **D-R11** | **Elo CARRIES across loop rounds, and a newly evolved candidate is seeded at the field MEDIAN**, never at a fixed 1200 | agreed (operator) **2026-07-29** |
 
 ### The two premises that changed, and why they hold
 
@@ -416,6 +418,15 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 >    `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false` (ranks by index, zero LLM calls) as the control that
 >    proves the loop earned its cost, and keeping pairwise Elo keeps that switch meaningful. There is
 >    only ONE measuring run, so this mattered.
+> **✅ TWO MORE RULED 2026-07-29 — D-R10 and D-R11, both added to § 1 and written up in full below.**
+> Neither was an ambiguity in the document; both were **gaps nobody had noticed**, surfaced by the
+> operator asking whether the loop was genuine discovery or a fancy rephrase. **D-R10:** as written the
+> loop could not produce a new angle after round 1 (orientation runs once, discovery needs its source,
+> the mandate keeps its scope lock) — so evolve may now invent, and a grounded lookup admits or drops it.
+> **D-R11:** the tournament now runs inside the loop up to 10 times and nothing said what happened to a
+> rating between rounds — Elo carries, and newcomers seed at the field median so a late genuine angle is
+> not structurally last.
+>
 > 3. **The exit rule and the cost estimate contradict each other.** Exit needs **all three** criteria,
 >    one being *"no `WEAK` question remains in the winner set"*. V-01 had **9 of 10 winners `WEAK`**. If
 >    that is typical the loop runs all 10 rounds EVERY run — yet this section says *"the cap is a
@@ -492,6 +503,59 @@ Cheaper, more consistent, no ties.
 
 **Meta-review.** One call that reads every critique flaw and judge reason for the round and writes short
 guidance, fed into the next generation round.
+
+### D-R10 — the loop must DISCOVER, not only sharpen (operator, 2026-07-29)
+
+**The defect this fixes, which nothing above had noticed.** As written, the loop *cannot produce a new
+angle after round one.* Three facts combine: **orientation runs ONCE** (see the cost table — *"runs
+once, not per loop round"*); a discovery question needs a real source (**"no source, no slot"**) and its
+only source is orientation's `brief_conflicts`; and the mandate bracket **keeps its scope lock** (*"a
+mandate question stays inside what the client asked"*). So the pool of genuinely new angles is **frozen
+after round 1** — on V-01 that was **two conflicts, both about Q1** — and ten rounds buy sharper wording
+of those two plus enriched rephrasings of the client's own questions. The operator's requirement is that
+the loop be *"genuine discovery of angles, not a fancy rephrase of a question."* As specified, it was
+the rephrase.
+
+**The mechanism.** Evolve **may invent** an angle in any round. Before it can take a slot it passes a
+**cheap grounded lookup**:
+
+- a real source is found → it becomes a **discovery candidate**, carrying that quote and URL exactly as
+  an orientation-seeded one does;
+- nothing is found → **dropped, and logged as dropped.**
+
+**"No source, no slot" is not weakened — it is enforced one step later.** The rule stops being "only
+orientation may originate an angle" and becomes "only evidence may admit one", which is what the rule was
+always for. New angles become reachable at **every** round instead of only the first.
+
+Unchanged: D-W3-4's allocation still bounds what is *dispatched* — **≤5 discovery slots, per-parent cap
+3, never borrows from the mandate**. D-R10 widens where candidates may *come from*, not how many run.
+
+**Open (a number, not a direction):** a ceiling on grounded lookups per round, so an evolve call that
+invents twenty angles cannot spend twenty lookups. Same family as the unset spend ceiling below; decide
+both together.
+
+**This also raises the stakes on the rejected register:** with invention allowed every round, the barred
+list and the `cluster_candidates` semantic drop are what stop the loop re-proposing its own rejects.
+
+### D-R11 — Elo carries, newcomers seed at the field median (operator, 2026-07-29)
+
+**Also previously unstated.** Today the tournament runs **once**. In this loop `rank` sits **inside** the
+cycle, so it runs up to **ten times** over a population that grows every round — and nothing said what
+happens to a rating between rounds. Both readings were defensible and both are wrong in a different way:
+**reset** discards eight rounds of accumulated judgement every round; **carry with a fixed 1200 seed**
+makes every newly evolved candidate enter *below* an incumbent field that has had rounds to climb — so
+the genuinely novel angle is systematically the lowest-rated at exactly the moment slots are allocated,
+which would defeat D-R10.
+
+**The rule:** ratings **carry** across loop rounds, and a new candidate enters at the **current field
+median**, not at 1200. Neither punished for being new nor handed an advantage.
+
+**Required test:** a strong newcomer introduced in a late round **can still reach the top N**. Without
+that assertion this is unfalsifiable, and the failure it guards against is silent — the same shape as
+ranks 8/9/10 finishing at exactly 1200.0 and taking their research slots by tie order.
+
+**Note for the round-count decision:** "every candidate plays ≥5–6 matches" must now be read as *within
+one loop round*, since ratings persist across them.
 
 ### The rejected register — bar on defect, not on defeat
 
