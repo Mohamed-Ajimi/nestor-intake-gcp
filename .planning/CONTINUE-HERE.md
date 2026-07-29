@@ -1,69 +1,124 @@
-# CONTINUE HERE — session handoff 2026-07-29 (evening)
+# CONTINUE HERE — session handoff 2026-07-29 (late)
 
-Supersedes the earlier 2026-07-29 handoff. The deploy is complete; V-01 is analysed; **both gating
-diagnostics are answered and the engine redesign is fully specified.** Tree is clean, nothing in flight.
+Supersedes the earlier 2026-07-29 handoff, which said *"Next action — Wave 1, and ship it alone."*
+**That is done, and the "ship it alone" half is overridden.** Tree is clean, nothing in flight,
+**nothing is deployed.**
+
+## The one thing to know before you touch anything
+
+**OPERATOR RULING, 2026-07-29:** *"I don't want to measure anything unless we finish all changes."*
+
+No deploy and no live run until the **whole** engine redesign is built. Wave 1 is code-complete and
+gate-verified but deliberately **not live**. Waves 2–5 land on top of it and **one** run measures all
+of it together.
+
+This reverses `.planning/ENGINE-REDESIGN-SPEC.md` § 2 and the previous handoff. The trade-off was
+stated and accepted: with several waves landing at once, an odd result in that run cannot be
+attributed to a single change. **Do not re-argue it.** Both the spec and the parked deploy plan carry
+the override in-place, because both still read as the opposite on their face.
 
 ## Start here
 
-**`.planning/ENGINE-REDESIGN-SPEC.md`** — the whole plan: 9 decisions, 5 waves, exact file/function
-targets, invariants, tests, cost baseline. It is written to be executed without re-deriving anything.
+**`/gsd-plan-phase 15.5`** — Wave 2, claim attribution (D-R3), off `ENGINE-REDESIGN-SPEC.md` § 3.
 
-Background, in order: `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md` (the two root
-causes) → `run-20260728-7dcf51d5-V01-FINDINGS.md` (the run's forensics, with corrections applied).
+It is a **hard prerequisite** for 15.6, not a nice-to-have: today a claim's `facet` is inherited from
+the angle it was dispatched under, so the moment a dispatch group spans two client questions that
+inheritance breaks and the claim has no single parent.
 
-## What changed today, in one paragraph
+## The path, and why it is in this order
 
-The two diagnostics that gated everything were answered, and **both overturned the hypothesis they were
-testing**. The missing `FACTS` block is **format drift, not truncation** — which clears the Q4 grouping
-gate. And the distiller never failed: it returned **278 well-formed coffee claims** that the parser
-threw away because gemini wrote the literal string `<TAB>` instead of a tab character, while the prompt
-itself uses `<TAB>` as a placeholder describing the separator. That single defect is the true origin of
-the client report's false *"geen volledig beeld"* statement. V-01's 225 citations are preserved in the
-repo before their ~late-Aug expiry. The session then went on to design the engine fix with the operator.
+| Phase | Wave | What |
+|---|---|---|
+| 15.4 | 1 | Extraction repair — **DONE, gate-verified, NOT deployed** |
+| **15.5** | **2** | **NEXT** — claim attribution (sub-question + `corroboration_key` on the claim row) |
+| 15.6 | 3 | ≤5 LLM-formed groups × all providers, `own` dropped, **+ discovery bracket** |
+| 15.7 | 4 | Creative workshop loop — generative evolve, reasoned judges, meta-review, 10-round cap |
+| 15.8 | 5 | Yield instrumentation, then **ONE deploy + ONE measuring run** |
 
-## Next action — Wave 1, and ship it alone
+15.5 before 15.6 because grouping across client questions breaks the inherited facet. 15.7 after 15.6
+because the tournament only earns its cost once the discovery bracket gives it genuinely different
+ideas to rank, instead of narrower rewordings of questions the client already asked.
 
-**`/gsd-plan-phase`** off `.planning/ENGINE-REDESIGN-SPEC.md` § Wave 1 (extraction repair).
+## What Wave 1 actually delivered (phase 15.4, 10 plans, ~30 commits)
 
-Wave 1 is: the `<TAB>` parser + prompt fix · make "returned lines, kept zero claims" a **WARNING** ·
-scope the untrustworthy ZERO-claims warning to in-scope facets · retry covering **all three** gemini
-format deviations · resolve redirects at ingest · `gpt-5.6-sol` cost-table entry.
+The engine was discarding research it had successfully extracted and then telling clients it did not
+have it. V-01's report said the coffee data *"geeft geen volledig beeld"*; the engine had **278
+well-formed coffee claims** and threw every one away because gemini wrote the literal string `<TAB>`
+while the prompt used `<TAB>` as a placeholder *describing* the separator.
 
-**Ship Wave 1 by itself and let one run measure it.** Everything downstream is judged through the
-extraction funnel; shipping the redesign on top of a broken meter would attribute the parser bug to the
-redesign. Wave 2 (claim attribution) is a **hard prerequisite** for Wave 3 (grouping) — not optional.
+- **The 278 are recovered** — proven in CI against the real audit blobs
+  (`test_the_two_coffee_calls_sum_to_the_278_the_client_never_saw`), and independently by lifting the
+  committed parser out of `steps.py` and running it over the fixture: **141 / 137 / 43 / 143**. The
+  two already-working responses still yield exactly 43 and 143 — the half that proves a fix, not a
+  trade.
+- **The silence is fixed**, which matters more. A `log.debug` was the only trace of 278 losses. The
+  WARNING now carries the provider, the line count, "this is a PARSE FAILURE, not an empty research
+  result", and the offending first line with the `<TAB>` visible in it.
+- **The ZERO-claims warning stopped crying wolf** — it now names only facets the call actually saw.
+- Plus: one additive retry on an unusable fact list, the `STATEMENT`-prefix normaliser, the
+  `[cite: N]` cite index, redirect resolution at ingest (outside the persistence transaction), and
+  tolerant `agent_done` lambdas.
 
-**Wave 1 has a real regression fixture:** replay V-01's two coffee audit blobs through the new parser
-and assert **278** claims recovered. Exact blob IDs and the `gcloud` command are in the spec § 8.
+Final gate state: engine gate **1030 passed / 32 of 32 files**, gates build **182 passed**, zero
+failures. Full record: `.planning/phases/15.4-.../15.4-WAVE1-GATE.md`.
 
-## Decisions the operator took (do not relitigate)
+## Owed before the 15.8 run — all three block it
 
-| | |
-|---|---|
-| **Dispatch** | An LLM groups winners into **≤5 groups**; each group → **all providers**. `own` is dropped (2 of 4 angles failed, English in a Dutch run, 2 unique URLs). 5 × 3 = **15 calls** vs V-01's 19. |
-| **Tournament** | **Keep it and make it real** (Q1 resolved) — generative evolve, judges give reasons, meta-review, **10-round cap** with saturation exit + spend ceiling. |
-| **Discovery** | A **discovery bracket** may raise questions the client did not ask, each carrying the quote and source that provoked it. **No source, no slot.** It can never borrow from the mandate. |
+1. **Rotate `Nestor_Claude_Temp`.** It transited a chat in plaintext on 2026-07-27 and is still live
+   on both Tribunal services.
+2. **Plan 15.4-07 — the `gpt-5.6-sol` cost row.** Deferred by the operator, still open. Either
+   published rates, or a recorded ruling that none exist. **Adding the key with nulls is not an
+   option** — `_rate()` turns a null into `Decimal("0")`, producing a confident **$0.00** and clearing
+   `cost_pending` on a fabricated number. ROADMAP criterion 6 was amended so "no published rate
+   exists" is a PASS, not a gap.
+3. **Alembic `0016` has never touched a database.** Proof is the literal `Running upgrade 0015 ->
+   0016` line — never exit 0. This repo has been burned by exactly that.
 
-**Why invention is allowed:** D4's `enforce_scope_guard` is a **coverage floor** (winners' parents ⊇
-client questions), not a ceiling. The "never invent" half was only ever two prompt sentences — and the
-same file says a prompt sentence is not a control.
+Also open: **15.4-05's revert-and-confirm-red proof** needs a deliberately mutated tree (batched, not
+per-plan). And **`15.4-11` must be RE-SCOPED** from "Wave 1 alone" to the whole redesign before it
+runs; it is parked with a DO-NOT-EXECUTE banner.
 
-## Standing cautions
+## Booked, deliberately out of scope — do not absorb these
+
+From plan 15.4-06's investigation (`docs/tribunal-run-reports/run-20260728-7dcf51d5-OPEN-QUESTIONS.md`,
+operator ruling appended):
+
+- **`gate_errors: 153` is the same class of defect as `<TAB>`, one stage over** — provider format
+  drift, all 11 calls returned `STOP` with full answers, the model just used a one-column shorthand.
+  43 of the 153 were explicit DROPs sent to paid skeptics anyway (~**$6–8/run**), and the feed
+  rendered `status: "done"`. Deferred **because fixing it changes which claims reach paid
+  verification** — the one variable the measuring run must hold still.
+- **The un-rendered degradation sentence** — `verification/report.py::_degradation` returns early, so
+  the one line that would tell a human about defaulted gate answers never renders. Cheaper and safer
+  than the parsing half; changes no claim's fate.
+- **86 of 302 verdicts came back `insufficient`** (28%) and the report says so nowhere. Bigger than
+  the certainty question, and the natural home for the "surface the skeptic verdict" work.
+- **Q1 closed:** `426 − 27 refuted − 3 conflict losers = 396`, residual 0. The `293` was a different
+  cut of the same 426 — that misreading is why it looked unanswerable.
+- **Q3 ruled A-now-C-later:** `certainty` is a **write-only column** — a writer, a clamp, no reader.
+  Note the null share goes ~44% → ~67% after this phase, so "it's a minority" expires next run.
+
+## Standing cautions that still apply
 
 - **Judge the engine from the delivered report** (`output` row, `format='markdown'`) — not the claim
-  table, not the logs. Four findings had to be withdrawn or corrected because they assumed a missing
-  capability that was working.
+  table, not the logs.
 - **The verification stage works. Do not touch it.**
-- **The audit bucket is how you answer what the logs cannot:**
-  `gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/runs/<run_id>/` — full request **and response** of
-  every LLM call. Both diagnostics were settled from it.
-- **Claim clustering for corroboration goes LAST**, and expect modest gains: only 37/396 claims have any
-  cross-provider partner at Jaccard 0.2; shared-source overlap is 2.9%. Nobody should "fix" corroboration
-  by swapping the matcher and declaring victory.
+- **`tribunal/cloudbuild.test-engine.yaml`** — its script is one single-quoted `bash -c '…'` block
+  capped by Cloud Build at **10,000 chars** (now ~5,300 after its commentary was moved verbatim into
+  YAML comments). **No apostrophes anywhere inside it** — one closes the string and the build dies
+  with exit 127. Cost a build this session.
+- **A stdlib-only Python exists** at
+  `C:/Users/ajimimo/google-cloud-sdk/platform/bundledpython/python.exe` (3.14.4 — `ast`, `py_compile`,
+  `json`; **no** pytest/sqlalchemy). It cannot run the suite, but it makes real proof possible: lift a
+  pure function out with `ast` and drive it. Three executors used it to prove things that would
+  otherwise have been PENDING.
+- **`.planning/` is gitignored** — always `git add -f`.
+- **Parallel executors race STATE.md/ROADMAP.md.** Let them skip it and roll up centrally.
 
-## Also still owed
+## Carried forward — a real finding, deliberately not fixed
 
-Operator's no-engine-behaviour-change attestation (the D-03 gate — a person must write it), 15.3 plan
-09's two operator checkpoints, the D-L elapsed clock check, and the five standing deploy debts — headed
-by **rotating `Nestor_Claude_Temp`**, which transited a chat in plaintext on 2026-07-27 and is still
-live on both Tribunal services. Art. 12 audit-trail deadline: **2026-08-02**.
+`_parse_distiller_response` calls `line.strip()` **before** splitting, so a leading empty facet column
+is reachable via `<TAB>`/`|||`/`|` but a **real tab is eaten and every column shifts left**. Found by
+running the parser, asserted as recorded behaviour with a named test, and left alone: changing
+`line.strip()` would alter how every already-working tab response parses, including V-01's 43 and 143.
+It deserves its own decision, not a drive-by fix.
