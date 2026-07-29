@@ -360,6 +360,38 @@ def _raw_fact_count(block: Any) -> int:
     return len(entries)
 
 
+# The wording an uncomputable skipped count renders as. Named so a test can
+# assert on the CONSTANT rather than retyping the sentence.
+_UNKNOWN_SKIPPED = "skipped: unknown"
+
+
+def _skipped_label(block: Any, kept: int) -> str:
+    """The `N skipped` term, or an honest admission that it cannot be computed.
+
+    WHY THIS EXISTS (15.4-05). `_raw_fact_count` RAISES rather than guess, and
+    that contract is right -- a skipped count that cannot be computed must not be
+    printed as zero, because zero would claim this module refused nothing when in
+    fact it does not know. But the `agent_done` thunk below called it DIRECTLY,
+    so every own-research done line died whenever that raise fired: `emit_safe`
+    swallowed it exactly as D-06 designs it to, and the ROW WAS LOST (D-V01-7).
+    The feed then showed an own-research turn that started and never ended, which
+    is a worse record than one admitting a single unknown number.
+
+    So the guard belongs HERE -- at the one caller that would rather print
+    "unknown" than print nothing -- and NOT inside `_raw_fact_count`, whose raise
+    other callers rely on. And not in `run_events.emit_safe` either: the emitter
+    caught this correctly; the build lambda was the intolerant part. Never
+    loosen `emit_safe`, never hoist its `build()` above its `try`.
+
+    Never raises. `kept` is a length of a list this module built, so only the raw
+    count can fail.
+    """
+    try:
+        return f"{_raw_fact_count(block) - kept} skipped"
+    except Exception:  # noqa: BLE001 -- an unknown count is a wording, never a raise
+        return _UNKNOWN_SKIPPED
+
+
 # ---------------------------------------------------------------------------
 # Untrusted MODEL input: the emitted fact list (ASVS V5).
 # ---------------------------------------------------------------------------
@@ -769,7 +801,14 @@ async def run_own_research(
                 # many pages it came from, and how many of the model's own
                 # entries this module refused (no usable source URL, too short,
                 # not a dict). `_raw_fact_count` RAISES rather than guess that
-                # last number — see its docstring.
+                # last number — see its docstring — so 15.4-05 routes it through
+                # `_skipped_label`, which keeps the honest-unknown rule (never a
+                # fabricated 0) while keeping the LINE. The facts and pages
+                # counts are lengths of lists built here, so they always render.
+                #
+                # The thunk stays a thunk: `build=lambda:` is the STRUCTURAL
+                # guarantee that anything built here is built inside
+                # `emit_safe`'s try, independent of any helper's own promises.
                 run_events.emit_safe(
                     run_id,
                     stage="own_research",
@@ -777,7 +816,7 @@ async def run_own_research(
                     build=lambda: (
                         f"Own query done — {len(facts)} facts from "
                         f"{len(citations)} pages · "
-                        f"{_raw_fact_count(fact_block) - len(facts)} skipped",
+                        f"{_skipped_label(fact_block, len(facts))}",
                         {"items": len(facts), "provider": PROVIDER},
                     ),
                 )
