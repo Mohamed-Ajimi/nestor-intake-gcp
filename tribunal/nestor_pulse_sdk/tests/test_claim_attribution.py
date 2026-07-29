@@ -508,9 +508,25 @@ _ACCEPTED: list[tuple[str, datetime.date]] = [
     # A bare year -> JANUARY 1, the year-precision CONVENTION (not a stated day).
     ("2021", datetime.date(2021, 1, 1)),
     ("bron uit 2021", datetime.date(2021, 1, 1)),
-    # A textual month with NO day falls to the bare-year rule; the month is lost
-    # and that is year precision doing its job.
-    ("maart 2021", datetime.date(2021, 1, 1)),
+    # D-W2-4: MONTH PRECISION keeps the month and encodes it as the 1st of that
+    # month -- the same "first of the stated period" convention as the bare year
+    # one level up. This REPLACED an earlier reading that let `maart 2021` fall
+    # through to the bare-year rule and return 2021-01-01, silently overwriting
+    # March with January.
+    #
+    # The overturned behaviour was not merely lossy, it was the exact failure
+    # this column exists to prevent: De Haan reported 7 sites in one article and
+    # ~90 in a later one, and `maart 2021` / `december 2021` both collapsing onto
+    # 2021-01-01 records a nine-month rollout as one instant -- a contradiction
+    # rather than a time series (V-01 finding D-V01-4).
+    ("maart 2021", datetime.date(2021, 3, 1)),
+    ("March 2021", datetime.date(2021, 3, 1)),
+    ("Mar 2021", datetime.date(2021, 3, 1)),
+    ("in december 2021 waren het er 90", datetime.date(2021, 12, 1)),
+    # Numeric month precision, both orders, same convention.
+    ("2021-03", datetime.date(2021, 3, 1)),
+    ("03-2021", datetime.date(2021, 3, 1)),
+    ("2021/03", datetime.date(2021, 3, 1)),
     # One explicit full date beats a trailing archive year: extra bare years are
     # ignored because the full date is the more precise statement.
     ("2021-03-04, gearchiveerd 2023", datetime.date(2021, 3, 4)),
@@ -527,10 +543,12 @@ _REJECTED: list[str] = [
     "04-03-2021",
     # A two-digit year.
     "04-03-21",
-    # Numeric month precision, both orders: it would have to fabricate a day.
-    "2021-03",
-    "03-2021",
-    "2021/03",
+    # D-W2-4 moved numeric month precision (`2021-03`, `03-2021`, `2021/03`) OUT
+    # of this list and into _ACCEPTED. It is deliberately NOT re-listed here.
+    # Two month-precision statements in one cell are still two candidates, and
+    # the single-candidate rule still refuses to pick between them.
+    "maart 2021 en december 2021",
+    "2021-03 en 2021-07",
     # Impossible calendar dates -- and the year inside one must NOT leak out as
     # a bare year, which is why these are None and not 2021-01-01.
     "2021-02-30",

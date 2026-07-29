@@ -69,22 +69,42 @@ A date is returned for these forms and no others:
     run): `4 maart 2021`, `4 March 2021`, `March 4, 2021`, `4 mrt 2021`,
     `4 Mar 2021`. The accepted vocabulary is the `_MONTHS` table below -- one
     place, greppable.
+  * MONTH PRECISION, textual or numeric, with no day -> `date(YYYY, MM, 1)`.
+    `maart 2021`, `March 2021`, `2021-03`, `03-2021` all yield 2021-03-01.
   * A BARE 4-digit year in 1900..2100 -> `date(YYYY, 1, 1)`.
 
-JANUARY 1 IS A CONVENTION, NOT A STATED DAY
--------------------------------------------
+THE FIRST OF THE PERIOD IS A CONVENTION, NOT A STATED DAY
+---------------------------------------------------------
 Say it out loud, because a reader of the `claim.as_of` column will otherwise
 read `2021-01-01` as a source that said "1 January". It did not. `date(Y, 1, 1)`
 is this module's encoding of YEAR PRECISION -- the source stated a year and
-nothing finer. PostgreSQL has no year-precision date type and D-W2-1 explicitly
-sanctions the bare year rather than dropping it, so the convention is the price.
-Anything reasoning about `as_of` at day resolution must treat January 1 as
-suspect.
+nothing finer -- and `date(Y, M, 1)` is the same encoding one level finer, for a
+source that stated a month and nothing finer. PostgreSQL has no year-precision
+or month-precision date type and D-W2-1 explicitly sanctions the bare year
+rather than dropping it, so the convention is the price. Anything reasoning
+about `as_of` at day resolution must treat the 1st of a month as suspect.
 
-One worked consequence, so it is not a surprise later: `maart 2021` -- a textual
-month with NO day -- yields 2021-01-01, because `2021` is a bare year in text
-that carries no numeric date token. The month is lost. That is year precision
-doing its job, not a bug.
+WHY MONTH PRECISION IS NOT ROUNDED TO THE YEAR (D-W2-4)
+-------------------------------------------------------
+This module originally read `maart 2021` as a bare year and returned 2021-01-01,
+discarding the month. That was overturned by the operator on 2026-07-29, because
+it broke the one case this column exists for.
+
+The old behaviour was also internally inconsistent, and inconsistent in the
+wrong direction: numeric `2021-03` was REJECTED for fabricating a day, while
+`maart 2021` was ACCEPTED after fabricating a day AND overwriting March with
+January. The looser form fabricated more.
+
+The cost was concrete. De Haan reported 7 sites in one article and roughly 90 in
+a later one. Had those read `maart 2021` and `december 2021`, both would have
+collapsed onto 2021-01-01 -- nine months apart, recorded as the same instant,
+which reads as a contradiction rather than a rollout. That is precisely the
+D-V01-4 failure `as_of` was added to prevent, reintroduced by the encoding.
+
+So a stated month is kept and encoded as its first day. This WIDENS what is
+accepted: `2021-03` and `03-2021` used to return None and now parse. Everything
+D-W2-1 actually bounds is untouched -- ambiguous numeric triples, 2-digit years,
+digits inside longer runs, and the more-than-one-candidate rule all still hold.
 
 THE REJECTIONS, WHICH ARE AS DELIBERATE AS THE ACCEPTANCES
 ----------------------------------------------------------
@@ -95,11 +115,6 @@ Every one of these returns None:
     MM/DD -- half the world writes each -- and guessing is precisely how a real
     contradiction becomes a fake time series. A `-` separator is accepted ONLY
     in `YYYY-MM-DD` order.
-  * Numeric month precision with no day: `2021-03` (and its mirror `03-2021`).
-    It would have to FABRICATE a day, and unlike a bare year that fabrication is
-    not sanctioned. Note the difference from the `maart 2021` case above: here
-    the year is glued into a numeric date-shaped token, so it is not a bare year
-    and it never reaches the bare-year rule.
   * Two-digit years (`04-03-21`), years outside 1900..2100, and impossible
     calendar dates (`2021-02-30`).
   * Four digits that are part of a longer digit run -- `20211`, `v20214`, an id
@@ -206,13 +221,27 @@ _TEXTUAL_MDY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# (3) REJECTED numeric forms. These are matched only to CONSUME them, so that
-#     the year buried inside one can never leak out to the bare-year rule.
+# (2c) MONTH PRECISION, textual, no day: `maart 2021`, `March 2021` (D-W2-4).
+#      Deliberately scanned AFTER (2a)/(2b): a day-bearing `4 maart 2021` has
+#      already had its span blanked by then, so this can never re-read the tail
+#      of a full date as a month-precision hit.
+_TEXTUAL_MY_RE = re.compile(
+    r"\b(" + _MONTH_ALTERNATION + r")\b\.?,?\s+(\d{4})(?!\d)",
+    re.IGNORECASE,
+)
+
+# (3) The one REJECTED numeric form. Matched only to CONSUME it, so that the
+#     year buried inside can never leak out to the bare-year rule.
 #     `03/04/2021` must be None, not 2021.
 _AMBIGUOUS_TRIPLE_RE = re.compile(r"(?<!\d)\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}(?!\d)")
-# Numeric month precision, both orders: `2021-03`, `2021/03`, `03-2021`.
-_PARTIAL_YM_RE = re.compile(r"(?<!\d)\d{4}[/.\-]\d{1,2}(?!\d)")
-_PARTIAL_MY_RE = re.compile(r"(?<!\d)\d{1,2}[/.\-]\d{4}(?!\d)")
+
+# (3b) MONTH PRECISION, numeric, both orders: `2021-03`, `2021/03`, `03-2021`
+#      (D-W2-4). Scanned AFTER the ambiguous triple above, so the `03/04` head of
+#      `03/04/2021` is already blanked and cannot be mistaken for a month-year.
+#      An out-of-range month (`2021-13`) is dropped by `take`, and because its
+#      span is consumed anyway the year still cannot fall through.
+_PARTIAL_YM_RE = re.compile(r"(?<!\d)(\d{4})[/.\-](\d{1,2})(?!\d)")
+_PARTIAL_MY_RE = re.compile(r"(?<!\d)(\d{1,2})[/.\-](\d{4})(?!\d)")
 
 # (4) A bare 4-digit year -- DIGIT boundaries, not word boundaries, so `20211`
 #     and `v20214` are not years.
@@ -302,13 +331,34 @@ def extract_as_of(evidence: str | None) -> date | None:
             lambda m: take(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2))),
         )
 
-        # (3) Consume the rejected numeric forms WITHOUT collecting anything.
+        # (2c) Textual month precision, no day (D-W2-4). Day 1 encodes "the
+        #      source stated this month and nothing finer".
+        text = _consume(
+            text,
+            _TEXTUAL_MY_RE,
+            lambda m: take(int(m.group(2)), _MONTHS[m.group(1).lower()], 1),
+        )
+
+        # (3) Consume the ambiguous numeric triple WITHOUT collecting anything.
         #     This is not tidying: it is what stops the year inside `03/04/2021`
-        #     or `2021-03` from being read as a bare year in stage 4.
+        #     from being read as a bare year in stage 4. It runs FIRST so that
+        #     the month-precision scans below cannot chew off one of its halves.
         noop = lambda _match: None  # noqa: E731 - deliberate, keeps _consume uniform
         text = _consume(text, _AMBIGUOUS_TRIPLE_RE, noop)
-        text = _consume(text, _PARTIAL_YM_RE, noop)
-        text = _consume(text, _PARTIAL_MY_RE, noop)
+
+        # (3b) Numeric month precision, both orders (D-W2-4). Same day-1
+        #      convention as (2c) -- see the module docstring for why a stated
+        #      month is kept rather than rounded away to January.
+        text = _consume(
+            text,
+            _PARTIAL_YM_RE,
+            lambda m: take(int(m.group(1)), int(m.group(2)), 1),
+        )
+        text = _consume(
+            text,
+            _PARTIAL_MY_RE,
+            lambda m: take(int(m.group(2)), int(m.group(1)), 1),
+        )
 
         # (4) Whatever 4-digit runs survive are bare years.
         years = {
