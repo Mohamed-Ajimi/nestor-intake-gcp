@@ -155,10 +155,25 @@ guaranteed-zero-overlap stream.
 > **claude** — "De Haan heeft met het Tony's-concept **zeven locaties** per 2021 uitgerold in
 > Nederlandse tankstations."
 
-Two providers disagree by more than 13×, on the same subject, from the same corroboration group.
-Both entered the output as independent true statements and nothing flagged the conflict. Catching
-this is what a tribunal is *for*. Note that this is a **more valuable** output than agreement, and
-the current design has no channel for it.
+Both entered the output as independent true statements and nothing flagged any relationship between
+them.
+
+> ⚠️ **CORRECTION — this is probably NOT a contradiction, and that is the more interesting finding.**
+> Resolving the source URLs (see D-V01-11) shows the two providers read **different articles**:
+> gemini cites `outofhome-shops.nl/de-haan-tankstations-groeit…` (a *growth* piece) plus
+> `foodclicks.nl` and `mobilityenergy.com`; claude cites
+> `outofhome-shops.nl/eerste-vernieuwde-tony's-kiosk-geopend-in-de-bilt` (a *single opening*). And
+> claude's claim is explicitly dated — **"per 2021"** — while gemini's carries no date. A rollout
+> growing from 7 sites in 2021 to ~90 later makes **both claims true**.
+>
+> Neither source could be re-fetched to settle it (404 / JS-gated), which is itself the point:
+> **the engine cannot tell a contradiction from a time series, and neither could I.** Claims carry
+> no `as_of` date and — for distiller claims — no source at all. Any contradiction detector built on
+> today's claim shape will produce exactly this class of false positive, which is what the report
+> already did with the MPK figures (D-V01-10).
+>
+> **The real defect is therefore the missing metadata, not the missing detector.** A claim needs its
+> source and its as-of date before "do these disagree?" is even a well-posed question.
 
 ## D-V01-5 — claims cannot be traced to their sub-question (blocking the fix)
 
@@ -338,6 +353,72 @@ Three smaller defects in the same section:
 - The one place contradiction-detection fired, it **false-positived**: the MPK +60% (Smokin' Bean
   switch) and +18% (Lavazza) figures describe two different events and were reported as
   *"tegenstrijdige informatie"* — while the real 13× De Haan contradiction (D-V01-4) went unflagged.
+
+## D-V01-11 — gemini's sources ARE real and resolvable; the engine never follows them (high, cheap fix)
+
+**Gemini's research is properly sourced.** Every `vertexaisearch` grounding redirect resolves, with a
+plain `302`, to a real publisher URL. Tested on this run's own links:
+
+| Redirect | Resolves to |
+|---|---|
+| `AUZIYQF9cP9SSLZ0…` | `outofhome-shops.nl/circle-k-strijkt-neer-in-nederland` |
+| `AUZIYQHZvgQBhH0N…` | `selecta.com/dam/…/Mobility Inspiration Brochure_BE.pdf` |
+| `AUZIYQGX1UoJM7a4…` | `selecta.com/dam/…/230220_Mobility_Inspiration Brochure.pdf` |
+
+**All 225 unique redirects in this run resolved — 225/225, no failures.** And they resolve to strong
+primary sources: `bundeskartellamt.de` press releases and the MTS-K evaluation report, IEA PDFs,
+academic papers (`zew.de`, `dice.hhu.de`, `econstor.eu`, `jums.academy`).
+
+A `HEAD` request returns the real URL in `Location` — no API key, no auth, one cheap call. Three
+operational notes: the redirects **expire** (Google documents them as short-lived, ~30 days — resolve
+at ingest or citations rot), there are ~1,000 redirect instances per run but only ~225 unique
+(dedupe first), and resolution parallelises trivially.
+
+> **Correction to an earlier claim in this document.** I wrote that the publisher domain is available
+> in gemini's markdown link label. That is true **only in the bibliography** (`[deliveroo.be](…)`,
+> `[traxio.be](…)`). **Inline** citations are labelled `vertexaisearch.cloud.google.com` — generic.
+> So for inline claims there is genuinely no publisher information without resolving the redirect,
+> and `source_domain` (15.2-04) can only be as good as the label it was given.
+
+## D-V01-12 — shared-source corroboration measured: real, but thin (informational)
+
+Since gemini's URLs resolve, "two providers cited the same page" becomes a **deterministic,
+LLM-free** corroboration signal. Measured across the whole run (normalised: scheme/`www.`/query/
+fragment stripped):
+
+| Provider | Unique URLs | Unique domains |
+|---|---|---|
+| gemini (resolved) | 224 | 131 |
+| claude | 105 | 76 |
+| openai | 63 | 51 |
+| own | 2 | 2 |
+
+| | Distinct | Cited by ≥2 providers |
+|---|---|---|
+| URLs | 381 | **11 (2.9%)** |
+| Domains | 231 | **22 (9.5%)** |
+
+Pairwise shared URLs: gemini∩claude **7**, gemini∩openai **5**, openai∩claude **2**, claude∩own **1**,
+gemini∩own **0**.
+
+**The honest reading: this does not solve corroboration either.** At 2.9% of URLs it is the same
+order of magnitude as the claim-text overlap in D-V01-2 (37 of 396 ≈ 9% at a very loose threshold).
+Four providers researching the same three questions largely read **different pages**.
+
+But it is worth building anyway, for three reasons:
+
+1. **It is free and deterministic** — no LLM, no threshold, no non-determinism, and it is auditable,
+   which matters for the Art. 12 trail.
+2. **The shared sources are exactly the load-bearing ones.** `bundeskartellamt.de` (×3 providers),
+   `zew.de` (×3), `kalibrate.com` (×3), `opis.com` (×2) — the regulator, the academic evaluation, and
+   the pricing-software vendors. Where three independent researchers converge on one primary source,
+   that is a strong signal about which sources matter.
+3. **It disambiguates D-V01-4.** Knowing whether two claims came from the *same page* or *different
+   pages* is what separates a contradiction from a time series. Without it, contradiction detection
+   is guesswork.
+
+**What it does not do** is create agreement that isn't there. Same-source corroboration should be
+reported as its own metric (`claims sharing a source`), never merged into the `both` counter.
 
 ---
 
