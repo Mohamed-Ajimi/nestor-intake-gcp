@@ -943,8 +943,27 @@ async def test_the_kill_switch_issues_zero_requests(monkeypatch) -> None:
 
     ZERO requests -- not "requests that are ignored". This is the knob an
     operator reaches for when the redirect host is misbehaving mid-incident, and
-    it must cost nothing. Every URL still comes back as a key, so the caller
-    still upserts every citation.
+    it must cost nothing.
+
+    IT RETURNS AN EMPTY MAP, and the reason is the three-state invariant.
+    CORRECTED 2026-07-29 after the Wave 2 gate: this test used to assert
+    ``result == {url: None, ...}``, on the stated grounds that "every URL still
+    comes back as a key, so the caller still upserts every citation". That
+    premise is FALSE. `persist_tribunal_claims` upserts by iterating the claims'
+    own `deduped_urls` and calls `_upsert_source` unconditionally -- map
+    membership has never had anything to do with whether a citation is written.
+
+    What map membership DOES mean is "this url was attempted": the caller reads
+    `url not in resolved_map` as NULL (never attempted) and a present-but-None
+    value as `unresolved` (attempted and failed). So returning a full map of
+    Nones with the kill switch on stamped every citation "attempted and failed"
+    on a run that issued no requests -- a measurement never made, the same class
+    of defect as the "0 facts" removed by 15.4-05, and a collapse of exactly the
+    NULL/`resolved`/`unresolved` distinction the two columns exist to keep
+    apart. `test_turning_resolution_off_changes_zero_citations` caught it.
+
+    The plan specified the old behaviour ("returns an all-None map") alongside
+    the status rule that contradicts it; the status rule is the one that matters.
     """
     _clear_knobs(monkeypatch)
     monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_ENABLED", "0")
@@ -960,7 +979,8 @@ async def test_the_kill_switch_issues_zero_requests(monkeypatch) -> None:
 
     assert client.requests == []
     assert client.entered == 0
-    assert result == {urls[0]: None, urls[1]: None}
+    # Empty, NOT {url: None}. See the docstring: a present key means "attempted".
+    assert result == {}
 
 
 async def test_the_deadline_leaves_the_rest_none_and_warns_once(
