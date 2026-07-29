@@ -94,6 +94,15 @@ steps:
             # asserted below, so this number and the list must be changed
             # together.
             #
+            # THAT 30 IS THE 15.2 + 15.3 BASELINE AND IS DELIBERATELY LEFT AS
+            # HISTORY, not maintained: phase 15.4 adds on top of it (15.4-02
+            # -> 31, 15.4-03 -> 32). The ONE number that must track the list is
+            # EXPECTED_FILES below; every other count in these comments is a
+            # narrative of how the list was assembled. Corrected 2026-07-29 by
+            # plan 15.4-03, because a stale count inside the comments of the
+            # very config that exists to reconcile counts is exactly the kind
+            # of quietly-wrong number this phase was opened to repair.
+            #
             # TWO DELIBERATE EXCLUSIONS, both intentional, neither an oversight:
             #  (1) test_rls_isolation.py, test_citation_roundtrip.py and
             #      test_citation_numbering.py need a REAL Postgres, so they
@@ -149,6 +158,26 @@ steps:
             #                alone. It also carries a NEGATIVE CONTROL that runs
             #                the same scan over a deliberately bad migration, so
             #                a green result here is not a scan that never bit.)
+            #
+            #     15.4-03 -> test_distiller_separators.py (the V-01 `<TAB>`
+            #                defect: the separator-priority table, the
+            #                PROMPT-CONTRACT GUARD, and the replay of the four
+            #                RECORDED V-01 distiller responses -- 141 + 137 =
+            #                278 recovered, 43 and 143 unchanged.)
+            #
+            # test_distiller_separators.py carries the ONLY assertion in the
+            # repo that pins the distiller prompt contract. The docstring at
+            # steps.py `_build_distiller_prompt` used to claim that
+            # test_claim_distiller.py and test_distiller_coverage.py pinned it
+            # BYTE-IDENTICALLY; that claim was FALSE (verified 2026-07-29 by
+            # reading both files -- one asserts nothing about the prompt, the
+            # other matches only the `### Provider:` header). So if this file
+            # is ever dropped from the list below, the `|||` contract goes
+            # UNGATED and nothing turns red when `<TAB>` comes back. It is PURE:
+            # `_split_distiller_line`, `_parse_distiller_response` and
+            # `_build_distiller_prompt` are pure string functions and the
+            # run_7dcf51d5 fixture is committed text read from disk. No GCS
+            # client is constructed at any point.
             #
             # test_source_resolution.py is PURE: it parses the 0016 migration
             # with ast and builds the Source table metadata in memory. It never
@@ -218,13 +247,14 @@ steps:
                     nestor_pulse_sdk/tests/test_run_events.py \
                     nestor_pulse_sdk/tests/test_run_events_api.py \
                     nestor_pulse_sdk/tests/test_run_event_emit.py \
-                    nestor_pulse_sdk/tests/test_source_resolution.py"
+                    nestor_pulse_sdk/tests/test_source_resolution.py \
+                    nestor_pulse_sdk/tests/test_distiller_separators.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=31
+            EXPECTED_FILES=32
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then

@@ -1131,6 +1131,59 @@ _DISTILLER_CHUNK_CHARS = int(os.environ.get("NESTOR_DISTILLER_CHUNK_CHARS", "600
 #: Parallel distill calls (one per report/chunk).
 _DISTILLER_CONCURRENCY = int(os.environ.get("NESTOR_DISTILLER_CONCURRENCY", "4"))
 
+#: Literal column separators accepted by `_split_distiller_line`, IN PRIORITY
+#: ORDER. The order is the contract, not a style choice -- see that function.
+_DISTILLER_SEPARATORS: tuple[str, ...] = ("\t", "<TAB>", "|||", "|")
+#: Last-resort separator: a run of two or more spaces. Tried only when no
+#: literal separator above is present anywhere in the line.
+_DISTILLER_SPACE_RUN = re.compile(r" {2,}")
+
+
+def _split_distiller_line(line: str) -> list[str] | None:
+    """Split one distiller output line into up to 3 columns, separator-tolerant.
+
+    Returns the column list (1-3 entries, each stripped) or ``None`` when the
+    line carries no recognisable separator at all -- in which case the caller
+    drops it exactly as the old tab-only code did.
+
+    WHY THIS EXISTS -- THE V-01 DEFECT (run 7dcf51d5, 2026-07-28)
+    ------------------------------------------------------------
+    The distiller prompt described its separator with the placeholder token
+    ``<TAB>``. Two of four gemini-2.5-flash calls IN THE SAME BATCH, at
+    temperature 0.0, copied that placeholder back as five literal characters
+    instead of emitting U+0009. `_parse_distiller_response` tested
+    ``if "\\t" not in line`` and threw away **278 well-formed, three-column,
+    evidence-bearing coffee claims** -- every one of which would have passed
+    every downstream filter. The only trace was a ``log.debug``, which
+    production does not serve, so the delivered client report went out saying
+    the Benelux coffee data "geeft geen volledig beeld". That statement was
+    false, and this three-line function is why it can no longer happen.
+
+    THE ORDER IS THE CONTRACT. Every step of it is load-bearing:
+
+    * ``"\\t"`` FIRST -- the real tab is what a compliant model emits and what
+      the existing tab-separated canned fixtures use. A line that contains BOTH
+      a real tab and a literal ``<TAB>`` MUST split on the tab, because the tab
+      is the deliberate separator and the ``<TAB>`` is then data.
+    * ``"<TAB>"`` SECOND -- so a placeholder-copying model is read correctly.
+      This is the line that recovers V-01's 278.
+    * ``"|||"`` BEFORE ``"|"`` -- every ``|||`` line also contains ``|``, so
+      testing ``|`` first would split ``A ||| B`` into ``["A", "", "| B"]``.
+      ``|||`` is also the CURRENT prompt contract (D-R1(b)).
+    * the 2+-space run LAST, and only when no literal separator is present at
+      all -- it is the only separator here that can occur inside ordinary
+      prose, so it must never pre-empt a real one. The downstream
+      ``len(claim_text) < 10`` drop is what keeps an accidental prose split
+      from becoming a forged claim (T-15.4-08).
+    """
+    for sep in _DISTILLER_SEPARATORS:
+        if sep in line:
+            return [p.strip() for p in line.split(sep, 2)]
+    parts = _DISTILLER_SPACE_RUN.split(line, maxsplit=2)
+    if len(parts) > 1:
+        return [p.strip() for p in parts]
+    return None
+
 
 def _make_distiller_config():
     """Build a GenerateContentConfig with thinking disabled.
@@ -1258,10 +1311,13 @@ def _build_distiller_prompt(
 
 
 def _parse_distiller_response(text: str, focus_area_labels: list[str], *, provider: str = "") -> list[dict]:
-    """Parse plain-text tab-separated lines into claim dicts.
+    """Parse plain-text column-separated lines into claim dicts.
 
-    Format: "FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE" (EVIDENCE optional for back-compat).
-    Skips blank lines and malformed lines (no tab separator) defensively.
+    Contract: ``FACET ||| CLAIM_TEXT ||| EVIDENCE`` (EVIDENCE optional for
+    back-compat). The COLUMN SPLIT is separator-tolerant -- see
+    `_split_distiller_line` for the accepted separators and why their priority
+    order is load-bearing. Blank lines, and lines carrying no separator of any
+    accepted kind, are skipped defensively.
 
     ``provider`` (G-12) names the researcher whose report this chunk came from. It
     is supplied by the pipeline from ``provider_reports`` and is NEVER parsed out of
@@ -1278,13 +1334,18 @@ def _parse_distiller_response(text: str, focus_area_labels: list[str], *, provid
         line = line.strip()
         if not line:
             continue
-        if "\t" not in line:
-            # Malformed line — skip without raising
-            log.debug("claim_distiller: skipping malformed line (no tab): %r", line[:80])
-            continue
         # Up to 3 columns: facet, claim_text, evidence. Evidence is optional so a
-        # 2-column response (legacy / model omission) still parses.
-        parts = line.split("\t", 2)
+        # 2-column response (legacy / model omission) still parses. The split is
+        # separator-TOLERANT (D-R1(a)): this used to be a bare
+        # `if "\t" not in line: continue` plus `line.split("\t", 2)`, and that
+        # string comparison silently discarded 278 well-formed claims on V-01.
+        parts = _split_distiller_line(line)
+        if parts is None:
+            # Malformed line — no separator of any accepted kind. Skip without
+            # raising, exactly as before. `_distill_unit` is what says so out
+            # loud when a whole response parses to nothing (D-R1(c)).
+            log.debug("claim_distiller: skipping malformed line (no separator): %r", line[:80])
+            continue
         facet = parts[0].strip()
         claim_text = parts[1].strip() if len(parts) > 1 else ""
         evidence = parts[2].strip() if len(parts) > 2 else ""

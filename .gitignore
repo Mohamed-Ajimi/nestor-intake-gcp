@@ -5,6 +5,10 @@ dist/
 .vite/
 *.tsbuildinfo
 
+# python bytecode (py_compile / local imports generate these; never committed)
+__pycache__/
+*.py[cod]
+
 # env & secrets (NEVER commit)
 .env
 .env.*
