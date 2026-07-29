@@ -132,8 +132,9 @@ replaying V-01's two coffee audit blobs and recovering **278** claims.
 D-V01-11 + smalls). Waves 2–5 of that spec are explicitly NOT in this phase.
 **Depends on:** Phase 15.2 gap closure + Phase 15.3 (deployed engine at SHA 20260727-085533). No
 dependency on 15.3 plan 09's operator checkpoints.
-**Requirements**: none assigned — source of record is `.planning/ENGINE-REDESIGN-SPEC.md` § 2, with
-evidence in `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md`.
+**Requirements**: none
+**Evidence:** `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md` (the two root causes) and
+`run-20260728-7dcf51d5-V01-FINDINGS.md` (full forensics, corrections applied).
 **Ships alone:** Wave 1 must be deployed and measured by ONE live run before any later wave starts —
 everything downstream is judged through the extraction funnel, so shipping the redesign on top of a
 broken meter would attribute the parser bug to the redesign.
