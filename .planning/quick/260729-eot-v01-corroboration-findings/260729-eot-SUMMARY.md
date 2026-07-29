@@ -70,6 +70,34 @@ text → ignore. Contradictions annotate rather than merge. Sonnet not Haiku, gr
 Fixing any defect; filling the V-01 comparison table (needs the frozen baseline read side by side —
 filling it from one side would defeat its purpose).
 
+## Amendments (same day, commits bfb444c · 3ab3163 · 90970ae)
+
+Reading the actual research reports rather than checking for the `FACTS` marker changed both the
+priority order and two root causes. Recorded as D-V01-9 … D-V01-12:
+
+- **D-V01-9/10 now outrank the corroboration defects.** The report is written from claims only, so
+  research that produces no claims is invisible. gemini's two coffee angles returned 98,148 chars of
+  on-target research (Shell Café rollout, Circle K dropping Illy, LUKOIL's own Costa/Douwe Egberts
+  model) and yielded **zero** claims. The delivered coffee section has no Benelux content and tells
+  the client the Benelux data gives no complete picture — a gap of our own making. Funnel: **~89% of
+  the research corpus never reaches the claim layer.**
+- **D-V01-11: gemini's sources are real.** All **225/225** grounding redirects resolve via a plain
+  302 to publisher URLs (Bundeskartellamt, IEA, ZEW). The engine never follows them.
+- **D-V01-12: shared-source corroboration measured** — 11 of 381 URLs (2.9%) cited by ≥2 providers.
+  Deterministic and free, but the same order as claim overlap, so it does **not** solve corroboration.
+
+**Three corrections to my own earlier claims, each recorded in place:**
+
+1. I blamed gemini's redirect URLs for the extraction failure. Wrong — `citations/extractor.py:761`
+   shows redirects are known and handled since 15.2-04/05. The real chain is a missing `FACTS` block
+   plus a distiller that returned zero for that focus area.
+2. I said the publisher domain is in gemini's link label. True only in the bibliography; inline
+   labels are the generic `vertexaisearch.cloud.google.com`.
+3. **D-V01-4 was probably not a contradiction.** gemini and claude read different De Haan articles
+   and claude's claim is dated "per 2021" — a rollout growing 7 → ~90 makes both true. The engine
+   cannot distinguish contradiction from time series because claims carry no as-of date and, for
+   distiller claims, no source. Missing metadata, not a missing detector.
+
 ## Five open questions carried in the document
 
 Answer-level vs fact-level corroboration · the 396/426/293 reconciliation · `gate_errors: 153`
