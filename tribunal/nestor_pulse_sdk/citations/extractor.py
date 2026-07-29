@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import uuid
+from datetime import date, datetime
 from typing import Optional
 
 import sqlalchemy
@@ -75,6 +76,19 @@ _QUALITY_VALUES = ("official", "press", "other")
 #: control -- it is the bound that stops a bug writing an unbounded array.
 _MAX_FOUND_BY = 16
 _FOUND_BY_MAX_CHARS = 64
+
+#: D-R3 (Phase 15.5, migration 0017). Bounds on `claim.sub_question` and
+#: `claim.corroboration_key`. Both values are CALLER-supplied, never model-
+#: supplied -- `_angle()` stamps them in Python from the dispatch assignment,
+#: exactly as `provider` is stamped -- so, like `_MAX_FOUND_BY`, these are NOT an
+#: injection control: they are a BUG BOUND. But the column must not be a place a
+#: bug can write unbounded data, so the cap exists here, at the last point before
+#: the database, and truncation is LOGGED rather than silent.
+#:
+#: The caps are generous on purpose. A corroboration key is `wNN` today -- three
+#: characters -- and a sub-question is one workshop winner's sentence.
+_SUB_QUESTION_MAX_CHARS = 500
+_CORROBORATION_KEY_MAX_CHARS = 32
 
 #: Bounds on the `research_gap` write (T-15.2-55, denial-of-storage). Truncation
 #: is LOGGED with the exact dropped count -- bounded and loud, never silent.
@@ -125,6 +139,71 @@ def _clamp_enum(value: object, allowed: tuple[str, ...], *, field: str) -> Optio
             "persist: %s value %r is not one of %s — stored as NULL",
             field, value[:40], allowed,
         )
+    return None
+
+
+def _clamp_attribution(value: object, max_chars: int, *, field: str) -> Optional[str]:
+    """Bound one D-R3 attribution string; ABSENT becomes None, never ''.
+
+    D-W2-2, and the same rule `_insert_claim`'s docstring already states for
+    `found_by` ("an ABSENT provenance is bound as None, never as []"): "no key
+    recorded" and "recorded as the empty key" are DIFFERENT FACTS, and the
+    corroboration queries must be able to tell them apart. Roughly 12 of 15
+    winners have no corroboration key today, because `research_division.py`
+    deals the remainder round-robin with the EMPTY STRING -- so the empty string
+    arrives here routinely and must land in the column as NULL.
+
+    A non-string, an empty string and a whitespace-only string all become None.
+    An over-long string is TRUNCATED and the truncation is LOGGED with both
+    lengths: a silent truncation is the class of loss this phase family exists
+    to end.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        log.warning(
+            "persist: %s was %s, not a string — stored as NULL",
+            field, type(value).__name__,
+        )
+        return None
+    stripped = value.strip()
+    if not stripped:
+        # NOT '' -- see the docstring. This is the common path, not an edge case.
+        return None
+    if len(stripped) > max_chars:
+        log.warning(
+            "persist: %s was %d characters — truncated to %d",
+            field, len(stripped), max_chars,
+        )
+        return stripped[:max_chars]
+    return stripped
+
+
+def _coerce_as_of(value: object, *, field: str) -> Optional[date]:
+    """Bound `claim.as_of` to a real `datetime.date`, or None with a warning.
+
+    `datetime` is a SUBCLASS of `date`, so an `isinstance(value, date)` test
+    alone would let a timestamp through into a DATE column. It is converted with
+    `.date()` rather than stored, so a time can never reach the column and two
+    claims from the same day can never acquire a false ordering.
+
+    Anything else -- including the ISO STRING the column would happily accept --
+    becomes None. The parsing already happened upstream in
+    `claim_attribution.extract_as_of`, which rejects every ambiguous form rather
+    than guessing; this boundary only refuses what it cannot vouch for. A wrong
+    date is worse than no date: it turns a real contradiction into a fake time
+    series, which is the failure that made this column necessary.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    log.warning(
+        "persist: %s was %s, not a date — stored as NULL",
+        field, type(value).__name__,
+    )
     return None
 
 
@@ -286,10 +365,18 @@ async def _insert_claim(
     position: Optional[int] = None,
     certainty: Optional[str] = None,
     found_by: Optional[list[str]] = None,
+    sub_question: Optional[str] = None,
+    corroboration_key: Optional[str] = None,
+    as_of: Optional[date] = None,
 ) -> uuid.UUID:
     """INSERT one claim row. `certainty` / `found_by` are D-13, ADDITIVE.
 
-    Both default to None so every pre-existing call site stays valid unchanged.
+    `sub_question` / `corroboration_key` / `as_of` are D-R3 (Phase 15.5,
+    migration 0017) and are ADDITIVE in exactly the same way.
+
+    All five default to None so every pre-existing call site stays valid
+    unchanged -- including the coarse-grained one in
+    `extract_and_persist_citations`, which passes only `claim_text` and `facet`.
 
     THREE BINDING RULES, stated here because each one is a trap:
 
@@ -312,10 +399,33 @@ async def _insert_claim(
     never model-supplied (T-15.2-57), so that cap is a bug bound, not an
     injection control -- but the column must not be a place a bug can write
     unbounded data.
+
+    THE THREE D-R3 COLUMNS FOLLOW ALL THREE OF THOSE RULES AGAIN:
+
+    * `as_of` is bound through an EXPLICIT `bindparam("as_of", type_=Date)` for
+      the same reason `found_by` is: a driver left to infer a date type inside
+      the final persistence transaction of a roughly $50 run fails as a RUNTIME
+      ERROR, not as a test failure.
+    * An ABSENT `sub_question` or `corroboration_key` is bound as `None`, never
+      as `''` (D-W2-2). The empty string is what `research_division.py` deals to
+      every non-top-3 winner, so it arrives here on the majority of claims and
+      must land in the column as NULL.
+    * Both strings are capped -- `_SUB_QUESTION_MAX_CHARS` /
+      `_CORROBORATION_KEY_MAX_CHARS` -- and a non-date `as_of` is refused. This
+      function is the last thing between untrusted model wording and the
+      database.
     """
     claim_id = uuid.uuid4()
 
     certainty_value = _clamp_enum(certainty, _CERTAINTY_VALUES, field="claim.certainty")
+
+    sub_question_value = _clamp_attribution(
+        sub_question, _SUB_QUESTION_MAX_CHARS, field="claim.sub_question"
+    )
+    corroboration_key_value = _clamp_attribution(
+        corroboration_key, _CORROBORATION_KEY_MAX_CHARS, field="claim.corroboration_key"
+    )
+    as_of_value = _coerce_as_of(as_of, field="claim.as_of")
 
     found_by_value: Optional[list[str]] = None
     if isinstance(found_by, list) and found_by:
@@ -335,12 +445,15 @@ async def _insert_claim(
 
     statement = text(
         "INSERT INTO claim "
-        "(id, tenant_id, run_id, text, facet, position, certainty, found_by) "
-        "VALUES (:id, :tid, :rid, :text, :facet, :position, :certainty, :found_by)"
+        "(id, tenant_id, run_id, text, facet, position, certainty, found_by, "
+        "sub_question, corroboration_key, as_of) "
+        "VALUES (:id, :tid, :rid, :text, :facet, :position, :certainty, :found_by, "
+        ":sub_question, :corroboration_key, :as_of)"
     ).bindparams(
         sqlalchemy.bindparam(
             "found_by", type_=postgresql.ARRAY(sqlalchemy.Text)
-        )
+        ),
+        sqlalchemy.bindparam("as_of", type_=sqlalchemy.Date),
     )
     await session.execute(
         statement,
@@ -353,6 +466,9 @@ async def _insert_claim(
             "position": position,
             "certainty": certainty_value,
             "found_by": found_by_value,
+            "sub_question": sub_question_value,
+            "corroboration_key": corroboration_key_value,
+            "as_of": as_of_value,
         },
     )
     return claim_id
@@ -854,6 +970,34 @@ async def persist_tribunal_claims(
         # once); `found_by` is the corroboration signal — which research streams
         # stated this fact — that `_dedupe_claims` unioned across streams. Both
         # are clamped and bounded inside `_insert_claim`.
+        #
+        # D-R3 (Phase 15.5): `sub_question`, `corroboration_key` and `as_of`
+        # ride on the SAME claim dict, and they are read here with `.get()` and
+        # passed straight through. Nothing is re-derived, re-parsed or defaulted
+        # at this call site: a SECOND place that decides what a claim's
+        # attribution is, is a second place to get it wrong -- the reasoning
+        # `_insert_research_gap`'s docstring records for `tenant_id`. Clamping
+        # and NULL-coercion belong to `_insert_claim`, which owns them.
+        #
+        # `sub_question` and `corroboration_key` were stamped in PYTHON from the
+        # dispatch assignment in `collect_provider_facts`, never parsed out of
+        # model output; `as_of` came through `extract_as_of`'s grammar over the
+        # EVIDENCE cell, which rejects every ambiguous form rather than guessing.
+        #
+        # TWO EXPECTED SOURCES OF NULL, BOTH CORRECT, NEITHER A BUG:
+        #   * `corroboration_key` is NULL for roughly 12 of 15 winners. Only the
+        #     TOP-3 winners are dealt a key (`w01`/`w02`/...); the remainder is
+        #     dealt round-robin with the empty string, which `_insert_claim`
+        #     writes as NULL. The column fills up in phase 15.6, when every group
+        #     goes to every provider.
+        #   * The `claim_distiller` fallback path carries NO dispatch attribution
+        #     at all, by construction -- there was no angle to inherit from -- so
+        #     claims from it are permanently NULL on the first two.
+        #
+        # `.get()` and never a subscript: this function is also reached by the
+        # recorded-fixture loader and by tests that build claim dicts by hand,
+        # and a claim dict that predates phase 15.5 has none of the three keys.
+        # It must keep working and write NULLs.
         claim_id = await _insert_claim(
             session,
             tenant_id=tenant_id,
@@ -863,6 +1007,9 @@ async def persist_tribunal_claims(
             position=position,
             certainty=claim.get("certainty"),
             found_by=claim.get("found_by"),
+            sub_question=claim.get("sub_question"),
+            corroboration_key=claim.get("corroboration_key"),
+            as_of=claim.get("as_of"),
         )
         claim_ids.append(claim_id)
 
