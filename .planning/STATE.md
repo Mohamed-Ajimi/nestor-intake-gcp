@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: completed
+status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T18:15:00.000Z"
-last_activity: "2026-07-29 -- Phase 15.5 (Wave 2, claim attribution) PLANNED: 3 plans in 2 waves, plan-checker VERIFICATION PASSED with no blockers. Wave 1 (15.4) stays code-complete and deliberately NOT deployed."
+last_updated: "2026-07-29T22:03:44.421Z"
+last_activity: 2026-07-29 -- Phase 15.6 execution started
 progress:
-  total_phases: 12
-  completed_phases: 8
-  total_plans: 79
-  completed_plans: 78
-  percent: 67
+  total_phases: 16
+  completed_phases: 9
+  total_plans: 100
+  completed_plans: 89
+  percent: 56
 ---
 
 # Project State
@@ -21,11 +21,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.5 — research-engine-redesign-claim-attribution-wave-2 (Wave 2 of ENGINE-REDESIGN-SPEC.md § 3)
+**Current focus:** Phase 15.6 — research-engine-redesign-dispatch-discovery-bracket-wave-3
 
 ## Current Position
 
-Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — COMPLETE, GATE-VERIFIED, NOT DEPLOYED
+Phase: 15.6 (research-engine-redesign-dispatch-discovery-bracket-wave-3) — EXECUTING
 Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build 3f57de7a =
   **1118 passed / 0 failed / 13 skipped**, `collecting: 33 of 33 expected files`, 1131 collected
   (reconciles: 1118 + 13). Gates `cloudbuild.test-gates.yaml` build e9e75413 = **187 passed**,
@@ -33,14 +33,14 @@ Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build
   rather than being silently skipped.
   The FIRST engine run (bdf1ec84) FAILED — see the cross-plan regression note below. That failure is
   the argument for running gates per phase rather than batching them to 15.8.
-Plan: 3/3 plans executed and merged to master. Wave 1 = 15.5-01 (columns + alembic 0017 + extract_as_of).
+Plan: 1 of 7
   Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), run in parallel, merged clean, zero conflicts.
   Plus the D-W2-4 follow-up (241d9d5). All worktrees merged, removed, branches deleted; tree clean.
   Integration check the isolated executors could NOT do, run centrally after merge: the three
   claim-dict key names match exactly across the 02→03 seam (steps.py produces, extractor.py:1010-1012
   consumes), and the length cap 02 handed forward IS implemented once, at the DB boundary in
   `_insert_claim` (_SUB_QUESTION_MAX_CHARS=500, _CORROBORATION_KEY_MAX_CHARS=32).
-Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Phase 15.5 executed.
+Status: Executing Phase 15.6
   NO deploy and NO live run until the whole redesign (spec Waves 2-5) is built — operator ruling
   2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from "Wave 1 alone" to the
   whole redesign before it ever runs.
@@ -82,16 +82,20 @@ Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Pha
   class as the `ls || true` trap.
 
   OWED AT 15.8 — carried forward from every plan in this phase, never claimed here:
+
     - `Running upgrade 0016 -> 0017` (alembic 0017 has NEVER run), alongside 0016's still-unpaid
       `Running upgrade 0015 -> 0016`. Proof is the literal line, never exit code 0.
+
     - The pytest runs. BOTH builds: `cloudbuild.test-engine.yaml` (reconcile `collecting: 33 of 33`)
       and `cloudbuild.test-gates.yaml`. Baselines to beat: engine 1030 passed / 33 files, gates 182
       passed — both counts must RISE (~23 new test functions from 15.5-02 alone), and EXPECTED_FILES
       must stay 33 (only 15.5-01 added a file).
 
   Two corrections to ENGINE-REDESIGN-SPEC.md § 3, both verified against source:
+
     - the new alembic revision is 0017 on top of 0016, not "on top of 0015" (the spec predates
       Wave 1 landing 0016_source_resolved_url.py).
+
     - only the top-3 winners carry a corroboration_key at all, which the spec does not mention.
 
   Known, accepted sparseness of the new columns: the distiller-fallback path cannot carry attribution
@@ -141,7 +145,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)
+Last activity: 2026-07-29 -- Phase 15.6 execution started
 
 Progress: [██████████] 100%
 
