@@ -2,3 +2,13 @@
 # work when the repo is checked out on Windows (autocrlf would otherwise inject
 # CRLF and break scripts/ci_no_permissive_rls.sh in CI).
 *.sh text eol=lf
+
+# Recorded LLM responses are EVIDENCE, not source. They must be byte-identical
+# to what the provider actually returned, on every platform — `core.autocrlf` is
+# `true` in this repo, so without this rule the same fixture is CRLF in a Windows
+# working tree and LF in a Cloud Build container. A regression fixture that
+# differs between where it is authored and where it is asserted is not a fixture.
+# Phase 15.4 turns on the exact bytes of these files: the two coffee responses
+# use the literal string `<TAB>`, the other two use U+0009, and telling those
+# apart is the whole point.
+tribunal/nestor_pulse_sdk/tests/fixtures/**/responses/*.txt text eol=lf
