@@ -1141,11 +1141,13 @@ def _divide_from_winners(
         log.warning(
             "research_division.divide: dispatch received no question grouping, so "
             "the winners were grouped ONE GROUP PER CLIENT QUESTION instead (%d "
-            "group(s) over %d client question(s)). Groundwork shared between two "
-            "questions is therefore searched once per question rather than once per "
-            "topic, and the paid-call count is bounded by the number of client "
-            "questions rather than by the %d-group ceiling.",
-            len(resolved), len(labels), len(_D6_STREAMS),
+            "group(s) over %d client question(s), %d paid call(s)). Groundwork "
+            "shared between two questions is therefore searched once per question "
+            "rather than once per topic, and the paid-call count is bounded by the "
+            "number of CLIENT QUESTIONS rather than by the group ceiling. When that "
+            "overshoots, the ceiling alarm below says so separately — this line is "
+            "deliberately not that alarm, so the two can be told apart in a grep.",
+            len(resolved), len(labels), len(resolved) * len(_D6_STREAMS),
         )
 
     resolved = _bound_groups_to_winners(
