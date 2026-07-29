@@ -1,6 +1,19 @@
 # V-01 — the phase-15.2 live run, against the recorded 4cbb5311 baseline
 
-**Status: PARKED — awaiting the Anthropic monthly cap reset on 2026-08-01.**
+**Status: THE V-01 RUN HAS BEEN EXECUTED — 2026-07-28, run `7dcf51d5-1153-4374-b444-c25d17eeea01`.**
+(The park is lifted: the run went out on the `Nestor_Claude_Temp` burner key, so the 2026-08-01
+monthly-cap reset was not a blocker.)
+
+> **The comparison table below is still UNFILLED.** The run's measured numbers, and the defects it
+> surfaced, are written up in
+> [`run-20260728-7dcf51d5-V01-FINDINGS.md`](run-20260728-7dcf51d5-V01-FINDINGS.md) — **read that
+> first.** It carries the headline result, which is not visible in the run's own output:
+> **cross-stream corroboration did not operate at all, and could not have.** `verification_summary.both`
+> is `0` because the merge key is exact-string equality, so 396 claims produced 396 distinct keys and
+> zero merges. Four providers were paid to answer the same three questions and no agreement between
+> them was recorded.
+>
+> Filling the table below is still owed. Do it from the findings document, not from memory.
 
 This is the comparison document for **V-01**: ONE live run of the redesigned engine, read side by
 side with the recorded baseline at
@@ -22,12 +35,12 @@ The checklist this document feeds is
 
 | | Baseline | New run (V-01) |
 |---|---|---|
-| `research_run_id` | `4cbb5311-9f5f-4504-84bb-b0dda2aedf48` | TBD (V-01) |
-| Tribunal `run_id` | `9c84e5a9-…` | TBD (V-01) |
-| Intake id | `e08620c5` | TBD (V-01) |
-| Date | 2026-07-22 | TBD (V-01) |
-| Subject | LUKOIL BeNeLux — dynamic pricing, coffee, Germany-entry 2027 | TBD (V-01) |
-| Engine | pre-15.2 (old path) | phase 15.2 core, image `$SHA` TBD (V-01) |
+| `research_run_id` | `4cbb5311-9f5f-4504-84bb-b0dda2aedf48` | TBD — not captured |
+| Tribunal `run_id` | `9c84e5a9-…` | **`7dcf51d5-1153-4374-b444-c25d17eeea01`** |
+| Intake id | `e08620c5` | TBD — not captured |
+| Date | 2026-07-22 | **2026-07-28** |
+| Subject | LUKOIL BeNeLux — dynamic pricing, coffee, Germany-entry 2027 | **LUKOIL BeNeLux — same brief domain** |
+| Engine | pre-15.2 (old path) | **15.2 + 15.3, worker image `20260728-094409`** |
 
 ## The comparison
 
