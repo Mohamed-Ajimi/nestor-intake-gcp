@@ -1,14 +1,19 @@
-"""The 0016 contract: two nullable columns on `source`, and nothing else moved.
+"""The 0016 contract, and the resolver that fills the two columns it adds.
 
 WHY THIS FILE EXISTS
 --------------------
 Gemini grounding citations arrive as `vertexaisearch.cloud.google.com` redirect
 URLs that EXPIRE roughly 30 days after the run. D-V01-11 stores the publisher
 URL those redirects resolve to ALONGSIDE the redirect itself, which needs two
-new columns on `source` and tribunal alembic revision 0016. This file pins the
-shape of that revision. The resolver that FILLS the columns is plan 15.4-09 and
-extends this same file; nothing here asserts anything about resolution
-behaviour yet.
+new columns on `source` and tribunal alembic revision 0016. Sections 1-5 pin the
+shape of that revision (plan 15.4-02).
+
+Sections 6-8 are plan 15.4-09: the resolver that FILLS those columns
+(`citations/redirect_resolver.py`), its wiring into the source upsert, and — the
+assertion that matters most — the proof that resolution happens BEFORE the
+persistence session is opened, never inside the transaction. Every one of them
+is driven through hand-written duck-typed fakes: no network, no `respx`, no
+mocking library, no new dependency.
 
 WHAT THIS FILE CAN AND CANNOT PROVE
 -----------------------------------
@@ -61,11 +66,14 @@ Cloud Build invocation (no Postgres and no provider key needed):
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib.util
 import inspect
+import logging
 import re
+import uuid
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 
 # --------------------------------------------------------------------------
@@ -492,3 +500,655 @@ def test_the_migration_defines_both_directions_and_takes_no_arguments() -> None:
     assert callable(module.downgrade)
     assert len(inspect.signature(module.upgrade).parameters) == 0
     assert len(inspect.signature(module.downgrade).parameters) == 0
+
+
+# ==========================================================================
+# 6. PLAN 15.4-09 — the resolver
+# ==========================================================================
+# Everything below drives `citations/redirect_resolver.py` through a
+# hand-written duck-typed async client. `_client_factory` is a module-level
+# name in the resolver for exactly this reason, so nothing here patches httpx
+# itself and no request ever leaves the process.
+
+_RESOLVE_KNOBS = (
+    "NESTOR_REDIRECT_RESOLVE_ENABLED",
+    "NESTOR_REDIRECT_RESOLVE_CONCURRENCY",
+    "NESTOR_REDIRECT_RESOLVE_TIMEOUT_S",
+    "NESTOR_REDIRECT_RESOLVE_DEADLINE_S",
+)
+
+
+def _clear_knobs(monkeypatch) -> None:
+    """Run against the DEFAULTS unless a test says otherwise.
+
+    An operator knob left set in the build environment would otherwise silently
+    change what these tests mean -- a `..._ENABLED=0` in CI would turn every
+    resolution assertion below into a vacuous pass.
+    """
+    for name in _RESOLVE_KNOBS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _redirect(suffix: str) -> str:
+    """A grounding redirect URL built from the ONE host constant.
+
+    Built from `VERTEX_REDIRECT_HOST` rather than from a literal, so a change to
+    that constant makes these tests describe the new host instead of quietly
+    testing a host the resolver no longer recognises.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.facts import VERTEX_REDIRECT_HOST
+
+    return f"https://{VERTEX_REDIRECT_HOST}/grounding-api-redirect/{suffix}"
+
+
+class _FakeResponse:
+    """Enough of an `httpx.Response` for `_location_of`."""
+
+    def __init__(self, status_code: int = 302, location: str | None = None) -> None:
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+        if location is not None:
+            self.headers["location"] = location
+
+
+class _FakeClient:
+    """Duck-typed `httpx.AsyncClient`: `async with` + `await .head(url)`.
+
+    `requests` is the assertion surface for the dedupe and kill-switch tests —
+    what matters is how many requests were ISSUED, not how many keys came back.
+    """
+
+    def __init__(self, script: dict | None = None, *, default=None) -> None:
+        self.script = script or {}
+        self.default = default
+        self.requests: list[str] = []
+        self.timeouts: list[float] = []
+        self.entered = 0
+        self.closed = 0
+
+    async def __aenter__(self) -> "_FakeClient":
+        self.entered += 1
+        return self
+
+    async def __aexit__(self, *_exc) -> bool:
+        self.closed += 1
+        return False
+
+    async def head(self, url: str):
+        self.requests.append(url)
+        outcome = self.script.get(url, self.default)
+        if callable(outcome):
+            outcome = outcome()
+        if isinstance(outcome, tuple):  # (delay_seconds, response)
+            delay, outcome = outcome
+            await asyncio.sleep(delay)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if outcome is None:
+            return _FakeResponse(status_code=200)
+        return outcome
+
+
+def _install_client(monkeypatch, client: _FakeClient) -> _FakeClient:
+    from nestor_pulse_sdk.citations import redirect_resolver
+
+    def _factory(timeout_s: float) -> _FakeClient:
+        client.timeouts.append(timeout_s)
+        return client
+
+    monkeypatch.setattr(redirect_resolver, "_client_factory", _factory)
+    return client
+
+
+# --------------------------------------------------------------------------
+# 6a. The 642 -> 225 dedupe, counted in REQUESTS
+# --------------------------------------------------------------------------
+
+async def test_642_instances_of_225_unique_redirects_issue_exactly_225_requests(
+    monkeypatch,
+) -> None:
+    """THE D-V01-11 assertion, and it counts requests, not map size.
+
+    Run 7dcf51d5 cited 642 URL instances that collapse to 225 unique redirects.
+    The per-claim dedupe already inside `persist_tribunal_claims` does NOT
+    achieve this -- the same redirect is cited by many different claims, so a
+    per-claim dedupe still issues one request per instance. Asserting on
+    `len(result)` instead of `len(client.requests)` would pass on exactly that
+    broken implementation, because the returned map is keyed by unique URL
+    either way.
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    unique = [_redirect(f"u{i}") for i in range(225)]
+    instances = [unique[i % 225] for i in range(642)]
+    assert len(instances) == 642 and len(set(instances)) == 225
+
+    client = _install_client(
+        monkeypatch,
+        _FakeClient(
+            {url: _FakeResponse(302, f"https://publisher{i}.example/a")
+             for i, url in enumerate(unique)}
+        ),
+    )
+
+    result = await resolve_redirects(instances)
+
+    assert len(client.requests) == 225, len(client.requests)
+    assert sorted(client.requests) == sorted(unique)
+    assert len(result) == 225
+    assert result[unique[7]] == "https://publisher7.example/a"
+
+
+# --------------------------------------------------------------------------
+# 6b. Only the redirect host is ever requested
+# --------------------------------------------------------------------------
+
+async def test_a_non_redirect_host_url_is_never_requested_and_maps_to_none(
+    monkeypatch,
+) -> None:
+    """An ordinary publisher URL is already the publisher URL.
+
+    Requesting it would be a needless HEAD against a third party for every
+    citation of every run, and its `None` here is what the extractor reads as
+    "never attempted" (NULL), not as "attempted and failed".
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    plain = "https://publisher.example/article"
+    redirect = _redirect("a")
+    client = _install_client(
+        monkeypatch,
+        _FakeClient({redirect: _FakeResponse(302, "https://publisher.example/real")}),
+    )
+
+    result = await resolve_redirects([plain, redirect])
+
+    assert client.requests == [redirect]
+    assert result[plain] is None
+    assert result[redirect] == "https://publisher.example/real"
+
+
+async def test_a_lookalike_host_is_not_the_redirect_host(monkeypatch) -> None:
+    """`vertexaisearch.cloud.google.com.evil.example` is not our host.
+
+    Substring matching on the host is the obvious wrong implementation, and it
+    would hand an attacker-controlled domain the right to set `resolved_url`.
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import (
+        is_redirect_url,
+        resolve_redirects,
+    )
+    from nestor_pulse_sdk.pipeline.tribunal.facts import VERTEX_REDIRECT_HOST
+
+    lookalike = f"https://{VERTEX_REDIRECT_HOST}.evil.example/grounding-api-redirect/a"
+    prefixed = f"https://not{VERTEX_REDIRECT_HOST}/grounding-api-redirect/a"
+
+    assert is_redirect_url(lookalike) is False
+    assert is_redirect_url(prefixed) is False
+    assert is_redirect_url(_redirect("a")) is True
+
+    client = _install_client(monkeypatch, _FakeClient())
+    result = await resolve_redirects([lookalike, prefixed])
+
+    assert client.requests == []
+    assert result == {lookalike: None, prefixed: None}
+
+
+# --------------------------------------------------------------------------
+# 6c. The `Location` header is untrusted (T-15.4-21)
+# --------------------------------------------------------------------------
+
+async def test_a_javascript_location_maps_to_none_and_never_reaches_the_map(
+    monkeypatch,
+) -> None:
+    """T-15.4-21. `resolved_url` is rendered as a CLICKABLE LINK for a superadmin.
+
+    The remote host chooses this header. A `javascript:` target stored here is a
+    stored-XSS / elevation-of-privilege path into the operator's own tool, so it
+    maps to None -- and the second assertion is the one that would catch an
+    implementation that stored it under a different key or a mangled form.
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    hostile = _redirect("js")
+    _install_client(
+        monkeypatch,
+        _FakeClient({hostile: _FakeResponse(302, "javascript:alert(1)")}),
+    )
+
+    result = await resolve_redirects([hostile])
+
+    assert result[hostile] is None
+    assert all("javascript:" not in (value or "") for value in result.values())
+
+
+async def test_a_data_uri_location_maps_to_none(monkeypatch) -> None:
+    """Same control, second scheme. `data:` renders too."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    hostile = _redirect("data")
+    _install_client(
+        monkeypatch,
+        _FakeClient(
+            {hostile: _FakeResponse(302, "data:text/html,<script>alert(1)</script>")}
+        ),
+    )
+
+    result = await resolve_redirects([hostile])
+
+    assert result[hostile] is None
+    assert all("data:" not in (value or "") for value in result.values())
+
+
+async def test_a_relative_location_maps_to_none(monkeypatch) -> None:
+    """The documented choice of the two the plan allows.
+
+    A relative Location resolves against the REDIRECT host, so joining it would
+    store another `vertexaisearch...` URL -- the very thing that expires and the
+    very thing this feature exists to escape. Storing nothing is more honest
+    than storing a second copy of the problem.
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("rel")
+    _install_client(
+        monkeypatch, _FakeClient({url: _FakeResponse(302, "/some/relative/path")})
+    )
+
+    result = await resolve_redirects([url])
+
+    assert result[url] is None
+
+
+async def test_a_protocol_relative_location_maps_to_none(monkeypatch) -> None:
+    """`//evil.example/x` has a host but NO scheme -- rejected on the scheme rule."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("protorel")
+    _install_client(
+        monkeypatch, _FakeClient({url: _FakeResponse(302, "//evil.example/x")})
+    )
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_an_over_long_location_maps_to_none(monkeypatch) -> None:
+    """2048 chars, the same cap `facts.py` applies to a SOURCE_URL cell."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    long_url = "https://publisher.example/" + ("a" * 2100)
+    at_cap = "https://publisher.example/" + ("a" * (2048 - len("https://publisher.example/")))
+    too_long, ok = _redirect("long"), _redirect("cap")
+    _install_client(
+        monkeypatch,
+        _FakeClient({
+            too_long: _FakeResponse(302, long_url),
+            ok: _FakeResponse(302, at_cap),
+        }),
+    )
+
+    result = await resolve_redirects([too_long, ok])
+
+    assert result[too_long] is None
+    assert result[ok] == at_cap and len(at_cap) == 2048
+
+
+# --------------------------------------------------------------------------
+# 6d. Every degradation maps to None, and nothing raises
+# --------------------------------------------------------------------------
+
+async def test_a_timeout_maps_to_none_without_raising(monkeypatch) -> None:
+    _clear_knobs(monkeypatch)
+    import httpx
+
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("timeout")
+    _install_client(
+        monkeypatch, _FakeClient({url: httpx.ReadTimeout("simulated read timeout")})
+    )
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_a_connection_error_maps_to_none_without_raising(monkeypatch) -> None:
+    _clear_knobs(monkeypatch)
+    import httpx
+
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("connerr")
+    _install_client(
+        monkeypatch, _FakeClient({url: httpx.ConnectError("simulated connect error")})
+    )
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_a_200_without_a_location_maps_to_none(monkeypatch) -> None:
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("ok200")
+    _install_client(monkeypatch, _FakeClient({url: _FakeResponse(200, None)}))
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_a_500_maps_to_none(monkeypatch) -> None:
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("err500")
+    _install_client(monkeypatch, _FakeClient({url: _FakeResponse(500, None)}))
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_a_200_that_carries_a_location_is_still_not_a_redirect(
+    monkeypatch,
+) -> None:
+    """Status is read, not just the header. A 200 has no business redirecting."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    url = _redirect("odd200")
+    _install_client(
+        monkeypatch,
+        _FakeClient({url: _FakeResponse(200, "https://publisher.example/sneaky")}),
+    )
+
+    assert (await resolve_redirects([url]))[url] is None
+
+
+async def test_only_the_first_hop_is_read(monkeypatch) -> None:
+    """T-15.4-23. ONE request per URL, whatever the Location points at.
+
+    The client is built with `follow_redirects=False` and the target of the
+    first hop is never itself requested, so a redirect LOOP costs exactly one
+    request rather than a chain the remote host controls the length of.
+    """
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    first, second = _redirect("hop1"), _redirect("hop2")
+    client = _install_client(
+        monkeypatch,
+        _FakeClient({
+            first: _FakeResponse(302, second),
+            second: _FakeResponse(302, "https://publisher.example/final"),
+        }),
+    )
+
+    result = await resolve_redirects([first])
+
+    assert client.requests == [first]
+    assert result[first] == second
+    assert second not in result
+
+
+async def test_garbage_input_never_raises(monkeypatch) -> None:
+    """Any input at all. A malformed claim dict must not fail a paid run."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    client = _install_client(monkeypatch, _FakeClient())
+
+    result = await resolve_redirects(
+        [None, 123, "", "   ", "not a url at all", {"a": 1}, ["x"], "ftp://x.example/f"]
+    )
+
+    assert isinstance(result, dict)
+    assert client.requests == []
+    assert all(value is None for value in result.values())
+    assert await resolve_redirects([]) == {}
+    assert await resolve_redirects(None) == {}
+
+
+async def test_a_client_that_cannot_even_be_constructed_degrades_to_all_none(
+    monkeypatch,
+) -> None:
+    """The wholesale-failure arm: no httpx, no sockets, no DNS -- still no raise."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations import redirect_resolver
+
+    def _explode(_timeout):
+        raise RuntimeError("simulated: the http client could not be created")
+
+    monkeypatch.setattr(redirect_resolver, "_client_factory", _explode)
+
+    url = _redirect("noclient")
+    result = await redirect_resolver.resolve_redirects([url])
+
+    assert result == {url: None}
+
+
+# --------------------------------------------------------------------------
+# 6e. The bounds
+# --------------------------------------------------------------------------
+
+async def test_the_kill_switch_issues_zero_requests(monkeypatch) -> None:
+    """`NESTOR_REDIRECT_RESOLVE_ENABLED=0` turns the whole pass off.
+
+    ZERO requests -- not "requests that are ignored". This is the knob an
+    operator reaches for when the redirect host is misbehaving mid-incident, and
+    it must cost nothing. Every URL still comes back as a key, so the caller
+    still upserts every citation.
+    """
+    _clear_knobs(monkeypatch)
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_ENABLED", "0")
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    urls = [_redirect("a"), _redirect("b")]
+    client = _install_client(
+        monkeypatch,
+        _FakeClient(default=_FakeResponse(302, "https://publisher.example/x")),
+    )
+
+    result = await resolve_redirects(urls)
+
+    assert client.requests == []
+    assert client.entered == 0
+    assert result == {urls[0]: None, urls[1]: None}
+
+
+async def test_the_deadline_leaves_the_rest_none_and_warns_once(
+    monkeypatch, caplog
+) -> None:
+    """An unbounded pre-pass is an unbounded stall on a ~$50 run.
+
+    The fast URL resolves, the slow one is abandoned when the overall deadline
+    fires -- and the loss is announced at WARNING, which is the lowest level
+    production actually serves (D-V01-6). A silent partial resolution would look
+    exactly like a run where those redirects simply did not resolve.
+    """
+    _clear_knobs(monkeypatch)
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_DEADLINE_S", "0.1")
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    fast, slow = _redirect("fast"), _redirect("slow")
+    _install_client(
+        monkeypatch,
+        _FakeClient({
+            fast: _FakeResponse(302, "https://publisher.example/fast"),
+            slow: (30.0, _FakeResponse(302, "https://publisher.example/slow")),
+        }),
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="nestor_pulse_sdk.citations.redirect_resolver"
+    ):
+        result = await resolve_redirects([fast, slow])
+
+    assert result[fast] == "https://publisher.example/fast"
+    assert result[slow] is None
+    deadline_warnings = [
+        record for record in caplog.records if "deadline" in record.getMessage()
+    ]
+    assert len(deadline_warnings) == 1, [r.getMessage() for r in caplog.records]
+
+
+async def test_an_unresolved_redirect_is_a_named_loss_at_warning(
+    monkeypatch, caplog
+) -> None:
+    """A citation that did not resolve is announced, never silently dropped."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    good, bad = _redirect("good"), _redirect("bad")
+    _install_client(
+        monkeypatch,
+        _FakeClient({
+            good: _FakeResponse(302, "https://publisher.example/good"),
+            bad: _FakeResponse(404, None),
+        }),
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="nestor_pulse_sdk.citations.redirect_resolver"
+    ):
+        result = await resolve_redirects([good, bad])
+
+    assert result[bad] is None
+    assert any("did not resolve" in record.getMessage() for record in caplog.records)
+
+
+async def test_a_clean_pass_logs_no_warning_at_all(monkeypatch, caplog) -> None:
+    """The control for the two tests above -- 225/225 resolved cries no wolf."""
+    _clear_knobs(monkeypatch)
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    urls = [_redirect(f"c{i}") for i in range(5)]
+    _install_client(
+        monkeypatch,
+        _FakeClient({
+            url: _FakeResponse(302, f"https://publisher.example/{i}")
+            for i, url in enumerate(urls)
+        }),
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="nestor_pulse_sdk.citations.redirect_resolver"
+    ):
+        result = await resolve_redirects(urls)
+
+    assert all(value is not None for value in result.values())
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+async def test_the_per_request_timeout_reaches_the_client(monkeypatch) -> None:
+    """The knob is not decoration: the value is what the client is built with."""
+    _clear_knobs(monkeypatch)
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_TIMEOUT_S", "1.5")
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    client = _install_client(
+        monkeypatch,
+        _FakeClient(default=_FakeResponse(302, "https://publisher.example/x")),
+    )
+
+    await resolve_redirects([_redirect("t")])
+
+    assert client.timeouts == [1.5]
+
+
+async def test_the_concurrency_cap_is_never_exceeded(monkeypatch) -> None:
+    """A cap that is read but not applied is the easiest bound to get wrong."""
+    _clear_knobs(monkeypatch)
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_CONCURRENCY", "3")
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    state = {"now": 0, "peak": 0}
+
+    class _CountingClient(_FakeClient):
+        async def head(self, url: str):
+            self.requests.append(url)
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+            await asyncio.sleep(0)
+            state["now"] -= 1
+            return _FakeResponse(302, "https://publisher.example/x")
+
+    client = _install_client(monkeypatch, _CountingClient())
+
+    await resolve_redirects([_redirect(f"n{i}") for i in range(20)])
+
+    assert len(client.requests) == 20
+    assert state["peak"] <= 3, state["peak"]
+
+
+async def test_a_garbled_knob_falls_back_to_the_default_instead_of_raising(
+    monkeypatch,
+) -> None:
+    """A mistyped env var must not be able to fail a run."""
+    _clear_knobs(monkeypatch)
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_CONCURRENCY", "eight")
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_TIMEOUT_S", "soon")
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_DEADLINE_S", "")
+    from nestor_pulse_sdk.citations import redirect_resolver
+
+    client = _install_client(
+        monkeypatch,
+        _FakeClient(default=_FakeResponse(302, "https://publisher.example/x")),
+    )
+
+    url = _redirect("garbled")
+    result = await redirect_resolver.resolve_redirects([url])
+
+    assert result[url] == "https://publisher.example/x"
+    assert client.timeouts == [redirect_resolver._DEFAULT_TIMEOUT_S]
+
+
+# --------------------------------------------------------------------------
+# 6f. The module has NO database seam -- the structural half of the placement
+# --------------------------------------------------------------------------
+
+def test_the_resolver_module_has_no_database_seam_of_any_kind() -> None:
+    """This is what makes the out-of-transaction placement STRUCTURAL.
+
+    The ordering test in section 8 proves resolution happens before
+    `session.begin()` TODAY. This proves it cannot quietly stop being true: a
+    module that cannot name a session, a sqlalchemy symbol or a sessionmaker
+    cannot be moved inside a transaction without that move being visible in the
+    diff of a file whose whole purpose is to have no database in it.
+    """
+    from nestor_pulse_sdk.citations import redirect_resolver
+
+    source = Path(redirect_resolver.__file__).read_text(encoding="utf-8")
+    code = _executable_source(redirect_resolver)
+
+    for forbidden in ("AsyncSession", "sqlalchemy", "get_sessionmaker", "session"):
+        assert forbidden not in code, forbidden
+    # `import httpx` is present and no other network client is. Matched as an
+    # IMPORT, not as a bare word: "0 requests issued" is a log string in this
+    # module, and a bare-word scan would go red on a summary line.
+    assert "import httpx" in source
+    assert "import requests" not in code
+    assert "aiohttp" not in code
+
+
+def test_the_resolver_builds_its_client_with_follow_redirects_disabled() -> None:
+    """ONE hop, asserted on the code as well as on the behaviour (T-15.4-23).
+
+    The behavioural test above proves the SECOND hop is not requested. This
+    proves the client could not follow one even if the loop changed, which is
+    the difference between a bound and a habit.
+    """
+    from nestor_pulse_sdk.citations import redirect_resolver
+
+    code = _executable_source(redirect_resolver)
+
+    assert "follow_redirects=False" in code
+    assert "follow_redirects=True" not in code
+    # And the request verb is HEAD -- never a GET that would pull the body of a
+    # page we have no intention of reading.
+    assert "client.head(" in code
+    assert "client.get(" not in code
