@@ -56,6 +56,13 @@
 # Unlike 15.2, no 15.3 name is added AHEAD of its file:
 # each plan registers its test file in the same commit that creates it, so the
 # `ls ... || true` silent-skip window never opens for this phase.
+#
+# PHASE 15.4 reuses this gate for the same reason 15.3 did. Its wave-1 plan
+# 15.4-02 adds BOTH its path and the EXPECTED_FILES bump (30 -> 31) in ONE edit,
+# and every later 15.4 plan that adds a test file does the same for its own
+# file. The list and the number are one change. Splitting them is how a gate
+# goes green having run less than it claims -- which is, in miniature, the
+# exact class of silent failure phase 15.4 exists to repair.
 # Any file listed here must be pure (no Postgres, no provider key, no network)
 # OR must pytest.skip() cleanly when DATABASE_URL is unset (the
 # test_rls_isolation.py::_require_database_url() pattern) — it must never error
@@ -135,6 +142,20 @@ steps:
             #                carry labels, one dispatch header per batch, a
             #                failed angle says why, and neither calling the
             #                emitter nor BUILDING its arguments can fail a run)
+            #     15.4-02 -> test_source_resolution.py (alembic 0016: the two
+            #                nullable `source` columns D-V01-11 needs, the
+            #                0015 -> 0016 chain, and the proof that the
+            #                migration leaves idx_source_tenant_content_hash
+            #                alone. It also carries a NEGATIVE CONTROL that runs
+            #                the same scan over a deliberately bad migration, so
+            #                a green result here is not a scan that never bit.)
+            #
+            # test_source_resolution.py is PURE: it parses the 0016 migration
+            # with ast and builds the Source table metadata in memory. It never
+            # CALLS upgrade(), so no alembic migration context and no Postgres
+            # is involved -- which also means this gate CANNOT prove the
+            # migration ran. That proof is the deploy-time
+            # `Running upgrade 0015 -> 0016` line, owned by plan 15.4-11.
             #
             # test_run_event_emit.py is PURE for the same two reasons as the two
             # files above it: the run_events Postgres seams are replaced by the
@@ -196,13 +217,14 @@ steps:
                     nestor_pulse_sdk/tests/test_stage_logging.py \
                     nestor_pulse_sdk/tests/test_run_events.py \
                     nestor_pulse_sdk/tests/test_run_events_api.py \
-                    nestor_pulse_sdk/tests/test_run_event_emit.py"
+                    nestor_pulse_sdk/tests/test_run_event_emit.py \
+                    nestor_pulse_sdk/tests/test_source_resolution.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=30
+            EXPECTED_FILES=31
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
