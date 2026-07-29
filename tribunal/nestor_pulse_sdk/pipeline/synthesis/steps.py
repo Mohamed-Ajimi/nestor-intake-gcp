@@ -1993,6 +1993,211 @@ def _fallback_note(provider: str, *, prompted: bool, k: int, m: int, c: int) -> 
     )
 
 
+#: The providers whose unusable fact list earns ONE corrective re-ask (D-R2).
+#: Exactly one today, and NAMED rather than defaulted so adding a second is a
+#: decision — the `_LEAD_IN_PROVIDERS` idiom (`facts.py:215`). Gemini is the only
+#: provider ever observed to deviate: on run 7dcf51d5 three of its five reports
+#: fell through to the distiller for three DIFFERENT format reasons, while claude
+#: and openai received a byte-identical block and honoured theirs.
+_FACT_LIST_RETRY_PROVIDERS: tuple[str, ...] = ("gemini",)
+
+#: Kill switch, resolved at IMPORT TIME so a test patches the resolved boolean
+#: rather than the environment (`research_division._D8_BLOCK_ENABLED`, same
+#: convention). With it off nothing is re-asked and every unusable list takes the
+#: distiller fallback exactly as it did before this plan — which is what makes it
+#: a clean switch rather than a behaviour change.
+_FACT_LIST_RETRY_ENABLED = (
+    os.environ.get("NESTOR_TRIBUNAL_FACTLIST_RETRY", "1").strip() != "0"
+)
+
+#: Reports longer than this are NOT re-asked at all.
+#:
+#: THE RETRY DELIBERATELY DOES NOT TRUNCATE, AND DOES NOT CHUNK. Truncating would
+#: hand the model part of the report, and a fact list that parsed over that part
+#: would take the success path and skip the distiller — so the tail's facts would
+#: be lost by an operation whose entire justification is that it cannot lose
+#: anything. Chunking would be several calls, and one call per report is the cap.
+#: Skipping is the only option left that keeps the retry additive: an over-long
+#: report falls through to the distiller, which chunks it properly, exactly as it
+#: does today. 400k chars is ~4x the largest report observed on V-01 and well
+#: inside gemini-2.5-flash's input budget.
+_FACT_LIST_RETRY_MAX_REPORT_CHARS = int(
+    os.environ.get("NESTOR_TRIBUNAL_FACTLIST_RETRY_MAX_CHARS", "400000")
+)
+
+
+def _response_text(response: Any) -> str:
+    """A provider response's text, tolerating both shapes the SDK returns. NEVER RAISES.
+
+    `_distill_unit` (line ~1662) carries these same seven lines inline. They are
+    NOT refactored into this helper here on purpose: that would edit the paid
+    distiller path — whose tests live in `cloudbuild.test-gates.yaml`, a second
+    build — inside a plan whose whole property is that it changes nothing about
+    the fallback. A drive-by refactor of a working path is exactly what 15.4-03
+    declined to do with `line.strip()`, and for the same reason.
+    """
+    try:
+        text = getattr(response, "text", None)
+        if not text:
+            candidates = getattr(response, "candidates", None) or []
+            if candidates:
+                content = getattr(candidates[0], "content", None)
+                parts = getattr(content, "parts", None) or []
+                if parts:
+                    text = getattr(parts[0], "text", None) or ""
+        return text if isinstance(text, str) else ""
+    except Exception:  # noqa: BLE001 — an unreadable response is an empty one
+        return ""
+
+
+async def _retry_fact_list(
+    *,
+    provider: str,
+    facet: str,
+    report_text: str,
+    previous: Any,
+    mission_brief: dict,
+    audited: "AuditedLLMClient",
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> Any:
+    """ONE corrective re-ask of the SAME provider for ONLY its fact list (D-R2).
+
+    Returns a `FactListResult` — usable or not — or ``None`` when no call was
+    made or the call failed. The caller treats a usable result exactly as a
+    first-pass block and everything else as today's fallback.
+
+    THE RETRY IS ADDITIVE. IT MAY RECOVER A REPORT; IT MAY NEVER COST ONE. That
+    is the whole design constraint, and it is why:
+
+      * every exception is caught and answered with ``None`` — a raise here would
+        skip `fallback_units.append` and lose the stream's research entirely;
+      * the report is sent in ONE call, whole, or not at all (see
+        `_FACT_LIST_RETRY_MAX_REPORT_CHARS` for why not truncated);
+      * the model is `_DISTILLER_MODEL` (gemini-2.5-flash), the cheap path, and
+        NEVER `gemini_deep_research_raw` / `openai_deep_research_raw`. A corrective
+        deep-research call is a full re-run on Gemini and D-14 rejected it
+        outright (T-15.4-26);
+      * the response is parsed by the SAME `parse_fact_list` with the SAME
+        caller-supplied ``provider`` and ``facet``. Nothing about attribution is
+        read out of the retry response, so a second parse of untrusted output
+        buys the model no new authority over its own credit (T-15.4-25).
+
+    The label and cite indexes are built from the ORIGINAL REPORT, not from the
+    retry response: the response is only the fact list, so a bare redirect URL or
+    a ``[cite: N]`` marker in it has no bibliography to resolve against unless the
+    report's own one is handed in. This is the same pair the first pass builds
+    over the same text.
+
+    Attempt AND outcome are logged at WARNING. A retry that silently succeeded is
+    a provider-compliance fact nobody measured; a retry that silently failed is
+    the pattern this whole phase exists to end (D-V01-6: WARNING is the lowest
+    level production actually serves).
+    """
+    who = str(provider or "").strip()
+    if who.lower() not in _FACT_LIST_RETRY_PROVIDERS:
+        # Not a deviation and not a decision to announce — claude and openai have
+        # never needed this, and saying so once per report would be noise.
+        return None
+    if not _FACT_LIST_RETRY_ENABLED:
+        log.warning(
+            "collect_provider_facts: %s produced no usable fact list and the "
+            "corrective re-ask is DISABLED (NESTOR_TRIBUNAL_FACTLIST_RETRY=0) — "
+            "its report goes straight to the full-extraction distiller",
+            who,
+        )
+        return None
+    if not isinstance(report_text, str) or not report_text:
+        return None
+    if len(report_text) > _FACT_LIST_RETRY_MAX_REPORT_CHARS:
+        log.warning(
+            "collect_provider_facts: %s report is %d chars, above the %d-char "
+            "re-ask ceiling — NOT re-asked, because a truncated re-ask that "
+            "parsed would skip the distiller and lose the tail. The report falls "
+            "through to the full-extraction distiller, which chunks it",
+            who, len(report_text), _FACT_LIST_RETRY_MAX_REPORT_CHARS,
+        )
+        return None
+
+    log.warning(
+        "collect_provider_facts: %s returned no usable fact list — issuing ONE "
+        "corrective re-ask over its own report (%d chars, model %s, no new "
+        "research, no deep-research call). If it does not parse, the report falls "
+        "through to the full-extraction distiller exactly as before (D-R2).",
+        who, len(report_text), _DISTILLER_MODEL,
+    )
+
+    try:
+        # Function-local, exactly as `collect_provider_facts` imports the parser:
+        # this module gains NO module-scope dependency on pipeline.tribunal.
+        from nestor_pulse_sdk.pipeline.tribunal.facts import (  # noqa: PLC0415
+            build_cite_index,
+            build_fact_list_retry_prompt,
+            build_label_index,
+            parse_fact_list,
+        )
+
+        # The SAME single source `claim_distiller` reads the run language from,
+        # read the same way — not a second source for one value.
+        language = ((mission_brief or {}).get("language") or "").strip()
+        prompt = build_fact_list_retry_prompt(
+            report_text, provider=who, language=language, previous=previous
+        )
+        config = _make_distiller_config()
+        kwargs: dict = {}
+        if config is not None:
+            kwargs["config"] = config
+        response = await audited.gemini_generate(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            model=_DISTILLER_MODEL,
+            contents=prompt,
+            **kwargs,
+        )
+        retried = parse_fact_list(
+            _response_text(response),
+            provider=provider,
+            facet=facet,
+            label_index=build_label_index(report_text),
+            cite_index=build_cite_index(report_text),
+        )
+    except Exception as exc:  # noqa: BLE001 — see the docstring: never cost a report
+        log.warning(
+            "collect_provider_facts: the corrective re-ask for %s failed (%s: %s) "
+            "— its report falls through to the full-extraction distiller, exactly "
+            "as it would have without the re-ask",
+            who, type(exc).__name__, exc,
+        )
+        return None
+
+    if getattr(retried, "needs_distiller_fallback", True):
+        log.warning(
+            "collect_provider_facts: the corrective re-ask for %s did NOT produce "
+            "a usable fact list either — falling through to the full-extraction "
+            "distiller. Two asks, no compliant list: that is a provider format "
+            "fact worth acting on, not a parser fault",
+            who,
+        )
+    else:
+        # THE RETRACTION IS PART OF THE LINE, DELIBERATELY. `parse_fact_list` has
+        # already announced, a few lines above this one, that the report "will be
+        # run through the full-extraction distiller instead (D-14)" — it said so
+        # before any re-ask existed and it is consumed verbatim as the record's
+        # `reason`, so it is not changed here. But it has now been overtaken by
+        # events, and a trail that leaves a superseded statement standing is the
+        # same class of defect as one that says nothing at all.
+        log.warning(
+            "collect_provider_facts: the corrective re-ask for %s RECOVERED %d "
+            "fact(s) — this report keeps its provider-stated certainty and source "
+            "quality instead of being distilled from prose (D-R2). The "
+            "'will be run through the full-extraction distiller' line logged for "
+            "this report above does NOT apply: it was written before the re-ask "
+            "and is superseded by this one.",
+            who, len(getattr(retried, "facts", []) or []),
+        )
+    return retried
+
+
 async def collect_provider_facts(
     *,
     provider_reports: list,
@@ -2010,6 +2215,15 @@ async def collect_provider_facts(
     A stream is never dropped and a research call is NEVER re-issued — a corrective
     deep-research call is among the most expensive calls in the run, and on Gemini
     it is a full re-run (D-14's two rejected alternatives).
+
+    D-R2 ADDS ONE STEP, AND ONLY ONE. Before a report is handed to the distiller it
+    gets ONE corrective re-ask of the same provider, over its own report text, for
+    the fact list alone (`_retry_fact_list`). That is a gemini-2.5-flash call, not
+    a research call, so the sentence above still holds word for word. If the re-ask
+    parses, the report takes the first-pass treatment and never reaches the
+    distiller; if it does not — for any reason at all, including an exception — the
+    report reaches `fallback_units` and the distiller runs exactly as it did before
+    this function ever re-asked anything.
 
     Both rejected alternatives and the no-double-spend property are pinned by
     ``tests/test_factlist_fallback.py``.
@@ -2055,10 +2269,11 @@ async def collect_provider_facts(
         )
         return ProviderFactsResult(reports=[(n, r) for n, r in (_unpack(e) for e in entries)])
 
-    # NOTE: focus-area labels and the run language are NOT resolved here. The only
-    # consumer of either is `claim_distiller`, which derives both from
-    # `mission_brief` itself — resolving them a second time would be two sources
-    # for one value and the first thing to drift.
+    # NOTE: focus-area labels and the run language are NOT resolved here. Their
+    # consumers — `claim_distiller`, and since D-R2 `_retry_fact_list` for the
+    # language — each derive what they need from `mission_brief` itself, the same
+    # way; resolving it a second time HERE and passing it down would be two
+    # sources for one value and the first thing to drift.
 
     # Function-local, mirroring `pipeline.py`'s `strip_unresolved_cite_markers`
     # import: this module gains NO module-scope dependency on pipeline.tribunal.
@@ -2189,13 +2404,79 @@ async def collect_provider_facts(
                     kept += 1
                 rec["facts_from_list"] += kept
             else:
-                rec["reports_fell_back"] += 1
-                if rec["reason"] is None:
-                    # 15.2-04's own sentence, carried verbatim.
-                    rec["reason"] = parsed.fallback_reason
-                # The block is stripped BEFORE distillation too, so the distiller
-                # never re-reads a half-parsed fact table as prose.
-                fallback_units.append((name, {**result, "report": stripped}))
+                # --- D-R2: ONE corrective re-ask, THEN the distiller -----------
+                #
+                # Gated on `_d8_prompted`, and that gate is load-bearing. A stream
+                # that was never ASKED for a fact list has not deviated from
+                # anything: either the `NESTOR_TRIBUNAL_D8_FACT_LIST` kill switch
+                # is off, or it is a provider outside `_D8_PROMPT_PROVIDERS`.
+                # Re-asking it would issue the very request the kill switch exists
+                # to suppress, and would also make `_fallback_note`'s "was not
+                # asked" wording false in the same run that printed it.
+                retried = None
+                if bool(result.get("_d8_prompted")):
+                    try:
+                        retried = await _retry_fact_list(
+                            provider=name,
+                            facet=facet,
+                            report_text=report_text,
+                            previous=parsed,
+                            mission_brief=mission_brief,
+                            audited=audited,
+                            run_id=run_id,
+                            tenant_id=tenant_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — belt AND braces
+                        # `_retry_fact_list` already catches everything. This
+                        # second guard is here because of where we are standing:
+                        # the enclosing `except` below does NOT append to
+                        # `fallback_units`, so an escape from this line would
+                        # silently cost the stream its distillation — the one
+                        # outcome an additive retry must be incapable of.
+                        log.warning(
+                            "collect_provider_facts: the corrective re-ask for %s "
+                            "escaped its own guard (%s) — falling through to the "
+                            "full-extraction distiller",
+                            name or "a provider", type(exc).__name__,
+                        )
+                        retried = None
+
+                if retried is not None and not retried.needs_distiller_fallback:
+                    # Treated EXACTLY as a first-pass block, by the branch above:
+                    # same counter, same normaliser, same `fact_source`, same
+                    # not-found harvest. The two passes' losses are BOTH counted —
+                    # both happened, and a record that hid the first pass's would
+                    # be the silent degradation this phase exists to end.
+                    rec["reports_with_fact_list"] += 1
+                    rec["parse_errors"] += retried.parse_errors
+                    rec["rejected_urls"] += retried.rejected_urls
+                    rec["dropped_over_cap"] += retried.dropped_over_cap
+                    not_found_raw.extend(retried.not_found)
+                    not_found_pairs_raw.extend(
+                        (name, item) for item in retried.not_found
+                    )
+                    kept = 0
+                    for raw in retried.facts:
+                        norm = _normalise_fact_claim(
+                            raw, provider=name, facet=facet, fact_source="fact_list"
+                        )
+                        if norm is None:
+                            unusable_claims += 1
+                            continue
+                        d8_claims.append(norm)
+                        kept += 1
+                    rec["facts_from_list"] += kept
+                else:
+                    rec["reports_fell_back"] += 1
+                    if rec["reason"] is None:
+                        # 15.2-04's own sentence, carried verbatim — and taken from
+                        # the FIRST pass, never from the retry. The reason an
+                        # operator reads for a fallback must be the same sentence
+                        # it was before the retry existed.
+                        rec["reason"] = parsed.fallback_reason
+                    # The block is stripped BEFORE distillation too, so the
+                    # distiller never re-reads a half-parsed fact table as prose.
+                    fallback_units.append((name, {**result, "report": stripped}))
         except Exception as exc:  # noqa: BLE001 — one bad report degrades itself only
             log.warning(
                 "collect_provider_facts: %s report could not be read as a fact "

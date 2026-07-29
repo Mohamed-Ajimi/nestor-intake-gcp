@@ -48,15 +48,24 @@ Coverage:
     20. collect_provider_facts never raises, for anything
     21. a failing feed does not break the run
   F. D-R2's retry half — ONE corrective re-ask before the distiller (plan 15.4-10)
-    22. the corrective names the deviation that was ACTUALLY observed
+     The prompt (Task 1):
+    22. the corrective names the deviation ACTUALLY observed — all three shapes
     23. it carries `build_fact_list_prompt_block`'s output VERBATIM — one contract
-    24. it never raises, for any `previous`
+    24. it never raises, for any `previous`, and never for a non-str report
     25. report text is confined to the fenced region (indirect prompt injection)
-    26. a retry that parses rescues the report from the distiller
-    27. a retry that does not parse leaves the fallback BYTE-IDENTICAL
-    28. at most ONE retry per report, and none for a provider outside the map
-    29. a retry that raises still reaches the distiller
-    30. no deep-research entry point gains a caller
+     The retry (Task 2):
+    26. a retry that parses rescues the report from the distiller entirely
+    27. the label/cite indexes come from the REPORT, not from the re-ask
+    28. a retry that does not parse leaves the fallback BYTE-IDENTICAL
+    29. at most ONE retry per report, and none for a provider outside the map
+    30. a retry that raises still reaches the distiller — twice over, helper and
+        call site
+    31. the kill switch restores today's behaviour exactly
+    32. a stream that was never ASKED is never re-asked (the D8 switch composes)
+    33. an over-long report is SKIPPED rather than truncated
+    34. the prompt that reached the client is the one Task 1 builds
+    35. the attempt and the outcome are both at WARNING
+    36. no deep-research entry point gains a caller
 
 Cloud Build invocation (no Postgres and no provider key needed):
   gcloud builds submit tribunal \\
@@ -66,6 +75,7 @@ Cloud Build invocation (no Postgres and no provider key needed):
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -1260,3 +1270,472 @@ def test_retry_prompt_tolerates_a_non_string_report(report: object) -> None:
     )
     assert isinstance(prompt, str)
     assert RETRY_REPORT_START in prompt and RETRY_REPORT_END in prompt
+
+
+# --- the retry at the call site -------------------------------------------
+
+
+class RetryAwareAudited(RecordingAudited):
+    """`RecordingAudited`, splitting the calls into re-asks and distillations.
+
+    A retry prompt is the ONLY prompt that fences a report with
+    `RETRY_REPORT_START`, so the classification is structural rather than a guess
+    at wording. `models` exists so the cheap-path requirement (gemini-2.5-flash,
+    never a deep-research entry point) is asserted rather than assumed.
+
+    The inherited deep-research entry points still RAISE — reaching for one is a
+    test failure, not a slow test.
+    """
+
+    def __init__(self, retry_response=None, lines_for=None, retry_raises=False) -> None:
+        super().__init__(lines_for=lines_for)
+        self.retry_calls: list[str] = []
+        self.distiller_calls: list[str] = []
+        self.models: list[str] = []
+        self._retry_response = retry_response
+        self._retry_raises = retry_raises
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        self.models.append(model)
+        if _OPEN_FENCE in contents:
+            self.retry_calls.append(contents)
+            self.calls.append(contents)
+            if self._retry_raises:
+                raise RuntimeError("the corrective re-ask exploded")
+            body = self._retry_response
+            if callable(body):
+                body = body(contents)
+            return _FakeResponse(body or "")
+        self.distiller_calls.append(contents)
+        return await super().gemini_generate(
+            run_id=run_id, tenant_id=tenant_id, model=model, contents=contents, **kwargs
+        )
+
+
+def _retry_block(fact_lines: list[str], not_found_lines: list[str] | None = None) -> str:
+    """What a COMPLIANT retry answers with: the two blocks and nothing else."""
+    return "\n".join(
+        [
+            FACTS_START,
+            *fact_lines,
+            FACTS_END,
+            NOT_FOUND_START,
+            *(not_found_lines or []),
+            NOT_FOUND_END,
+        ]
+    )
+
+
+#: A report with no machine-readable region anywhere — V-01 idx 12 / idx 16's shape,
+#: and the ONLY shape this retry owns.
+_NO_BLOCK_REPORT = (
+    "A gemini research narrative about Benelux coffee, written as ordinary prose "
+    "from beginning to end. It never tabulates a fact and it carries no "
+    "machine-readable region of any kind.\n"
+)
+
+#: 15.2-04's own sentence for that shape, rebuilt from the sentinels rather than
+#: pasted, so a sentinel rename fails loudly instead of asserting an obsolete
+#: string. THIS IS THE ADDITIVE PROPERTY'S YARDSTICK: when the retry fails, the
+#: operator must read exactly the words they read before the retry existed.
+_NO_BLOCK_REASON = (
+    f"gemini returned no {FACTS_START}/{FACTS_END} block — its report will "
+    f"be run through the full-extraction distiller instead (D-14)."
+)
+
+
+async def test_a_parseable_retry_rescues_the_report_from_the_distiller() -> None:
+    """D-R2's whole point: the report keeps its provider-stated fields.
+
+    Without the retry this stream's claims reach the merge with `certainty=None`,
+    `provider_quality=None` and a domain heuristic filling the tier — honest, but
+    strictly less than the provider actually knew. One cheap re-ask recovers all
+    of it, and the distiller is never reached for this report at all.
+    """
+    audited = RetryAwareAudited(
+        retry_response=_retry_block(
+            [
+                _fact_line(
+                    "Robusta bean imports rose 12 percent during 2025",
+                    "https://ec.europa.eu/eurostat/robusta-2025",
+                    "official", "certain", "imports rose 12 percent",
+                ),
+                _fact_line(
+                    "Three roasters hold 61 percent of the Benelux volume",
+                    "https://www.ft.com/benelux-roasters",
+                    "press", "single", "hold 61 percent of the Benelux volume",
+                ),
+            ],
+            ["the 2026 harvest forecast could not be established"],
+        )
+    )
+    entries = [_entry("gemini", report=_NO_BLOCK_REPORT)]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.retry_calls) == 1, "one re-ask, no more"
+    assert audited.distiller_calls == [], (
+        "a rescued report must never also be distilled — that is the double spend "
+        "the whole D8-first design exists to avoid"
+    )
+    assert audited.models == [steps._DISTILLER_MODEL], "the cheap flash path only"
+
+    assert len(result.claims) == 2
+    assert {c["fact_source"] for c in result.claims} == {"fact_list"}
+    for claim in result.claims:
+        assert claim["found_by"] == ["gemini"], "the TUPLE decides attribution"
+        assert claim["facet"] == "market-position", "the ANGLE decides the facet"
+        assert claim["certainty"] is not None, "the provider stated it; keep it"
+        assert claim["provider_quality"] is not None
+
+    record = next(r for r in result.records if r.provider == "gemini")
+    assert record.reports_with_fact_list == 1
+    assert record.reports_fell_back == 0, "it did NOT fall back"
+    assert record.facts_from_list == 2
+    assert record.claims_from_fallback == 0
+    assert result.fallback_notes == [], "nothing degraded, so nothing to report"
+
+    # The retry's own not-found lines are harvested exactly as a first pass's are.
+    assert "the 2026 harvest forecast could not be established" in result.not_found
+    assert {
+        (p["provider"], p["text"]) for p in result.not_found_by_provider
+    } == {("gemini", "the 2026 harvest forecast could not be established")}
+
+
+async def test_the_retry_reads_the_reports_own_bibliography() -> None:
+    """The label and cite indexes come from the REPORT, not from the re-ask.
+
+    A retry answers with the fact list alone, so a `[cite: N]` marker in it has no
+    bibliography to resolve against unless the report's own one is handed to the
+    parser. If it is not, the source is lost while the same report names it a few
+    hundred lines down — which is exactly V-01 idx 4's loss, reintroduced by the
+    fix for idx 12.
+    """
+    report = (
+        _NO_BLOCK_REPORT
+        + "\nBronnen\n"
+        + "3. [eurostat.ec.europa.eu](https://ec.europa.eu/eurostat/robusta-2025)\n"
+    )
+    audited = RetryAwareAudited(
+        retry_response=_retry_block(
+            [
+                _fact_line(
+                    "Robusta bean imports rose 12 percent during 2025",
+                    "[cite: 3]",
+                    "official", "certain", "imports rose 12 percent",
+                )
+            ]
+        )
+    )
+
+    result = await _collect([_entry("gemini", report=report)], audited=audited)
+
+    assert len(result.claims) == 1
+    claim = result.claims[0]
+    assert claim["source_urls"] == ["https://ec.europa.eu/eurostat/robusta-2025"], (
+        "the marker must resolve against the REPORT's bibliography"
+    )
+    assert claim["fact_source"] == "fact_list"
+
+
+async def test_a_failing_retry_leaves_the_fallback_byte_identical() -> None:
+    """THE ADDITIVE PROPERTY, asserted as string equality against the real path.
+
+    The comparison is not against a hand-copied sentence: the same entries are run
+    twice, once with the retry switched OFF — which IS the pre-retry code path —
+    and once with it on and answering garbage. Every operator-facing string must
+    match. A retry that can change what a failure looks like is a change to the
+    failure, and this plan is not allowed to make one.
+    """
+    entries = [_entry("gemini", report=_NO_BLOCK_REPORT)]
+
+    without = RetryAwareAudited()
+    steps._FACT_LIST_RETRY_ENABLED = False
+    try:
+        before = await _collect(entries, audited=without)
+    finally:
+        steps._FACT_LIST_RETRY_ENABLED = True
+
+    after_client = RetryAwareAudited(retry_response="still not a fact list, sorry")
+    after = await _collect(entries, audited=after_client)
+
+    assert without.retry_calls == [], "the switch really was off"
+    assert len(after_client.retry_calls) == 1, "and really was on for the second run"
+
+    assert after.fallback_notes == before.fallback_notes
+    assert [r.reason for r in after.records] == [r.reason for r in before.records]
+    assert [r.reports_fell_back for r in after.records] == [
+        r.reports_fell_back for r in before.records
+    ]
+    assert [r.reports_with_fact_list for r in after.records] == [
+        r.reports_with_fact_list for r in before.records
+    ]
+
+    # And the sentence itself, spelled out, so a change to BOTH paths at once
+    # still fails here.
+    record = next(r for r in after.records if r.provider == "gemini")
+    assert record.reason == _NO_BLOCK_REASON
+    assert record.reports_fell_back == 1
+
+    # The distiller genuinely ran over this report, in both runs.
+    assert len(after_client.distiller_calls) >= 1
+    assert any("### Provider: gemini" in c for c in after_client.distiller_calls)
+    assert after.claims, "the paid research still reaches the merge"
+    assert {c["fact_source"] for c in after.claims} == {"distiller_fallback"}
+
+
+async def test_at_most_one_retry_per_report_and_none_for_other_providers() -> None:
+    """T-15.4-26: the cost bound, counted on the client rather than reasoned about.
+
+    One re-ask per REPORT, so two failing gemini reports are two re-asks and never
+    a loop. claude and openai are not in `_FACT_LIST_RETRY_PROVIDERS` and are never
+    re-asked at all — they have never been observed to deviate, and a retry map
+    that quietly grew would be a cost increase nobody decided on.
+    """
+    audited = RetryAwareAudited(retry_response="not a fact list")
+    entries = [
+        _entry("gemini", report=_NO_BLOCK_REPORT),
+        _entry("gemini", report=_NO_BLOCK_REPORT + "A second angle's prose.\n"),
+        _entry("claude", report="Claude prose with no machine-readable list at all."),
+        _entry("openai", report="OpenAI prose with no machine-readable list either."),
+    ]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.retry_calls) == 2, (
+        "exactly one re-ask per failing gemini report — never a loop, and never "
+        f"one for claude or openai (got {len(audited.retry_calls)})"
+    )
+    for call in audited.retry_calls:
+        assert "### Provider: claude" not in call
+        assert "### Provider: openai" not in call
+
+    by_name = {r.provider: r for r in result.records}
+    assert by_name["gemini"].reports_fell_back == 2
+    assert by_name["claude"].reports_fell_back == 1
+    assert by_name["openai"].reports_fell_back == 1
+
+
+async def test_a_retry_that_raises_still_reaches_the_distiller() -> None:
+    """The failure mode this retry is forbidden to become.
+
+    The call site sits INSIDE `collect_provider_facts`'s per-report `try`, whose
+    `except` does NOT append to `fallback_units`. So an exception escaping the
+    re-ask would not merely skip the rescue — it would cost the stream its
+    distillation, silently, after the research was already paid for.
+    """
+    audited = RetryAwareAudited(retry_raises=True)
+    entries = [_entry("gemini", report=_NO_BLOCK_REPORT)]
+
+    result = await _collect(entries, audited=audited)
+
+    assert len(audited.retry_calls) == 1, "it was genuinely attempted"
+    assert len(audited.distiller_calls) >= 1, "and the fallback still ran"
+    assert result.claims, "the paid research still reached the merge"
+    assert {c["fact_source"] for c in result.claims} == {"distiller_fallback"}
+    record = next(r for r in result.records if r.provider == "gemini")
+    assert record.reports_fell_back == 1
+    assert record.reason == _NO_BLOCK_REASON, "unchanged wording, unchanged path"
+
+
+async def test_the_call_sites_own_guard_catches_a_raising_helper() -> None:
+    """Belt AND braces, proven separately from the helper's own try/except.
+
+    `_retry_fact_list` catches everything itself. This test removes that guarantee
+    entirely — the helper is replaced by one that raises before it can catch
+    anything — and asserts the report STILL reaches the distiller. Without the
+    second guard at the call site this is a lost stream.
+    """
+    async def _exploding(**kwargs):
+        raise RuntimeError("the helper itself is broken")
+
+    original = steps._retry_fact_list
+    steps._retry_fact_list = _exploding
+    try:
+        audited = RetryAwareAudited()
+        result = await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    finally:
+        steps._retry_fact_list = original
+
+    assert audited.retry_calls == [], "the helper never got as far as a call"
+    assert len(audited.distiller_calls) >= 1, "and the fallback still ran"
+    assert result.claims
+    record = next(r for r in result.records if r.provider == "gemini")
+    assert record.reports_fell_back == 1
+    assert record.reason == _NO_BLOCK_REASON
+
+
+async def test_the_retry_kill_switch_restores_todays_behaviour_exactly() -> None:
+    """`NESTOR_TRIBUNAL_FACTLIST_RETRY=0`, resolved at import time.
+
+    A clean switch: no re-ask is issued, every unusable list takes the distiller
+    fallback, and the run completes with the same numbers it produced yesterday.
+    """
+    audited = RetryAwareAudited(retry_response=_retry_block([
+        _fact_line(
+            "A fact the provider would have been able to give on a re-ask",
+            "https://example.org/x", "other", "single", "would have been able",
+        )
+    ]))
+
+    steps._FACT_LIST_RETRY_ENABLED = False
+    try:
+        result = await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    finally:
+        steps._FACT_LIST_RETRY_ENABLED = True
+
+    assert audited.retry_calls == [], "no re-ask may be issued with the switch off"
+    assert len(audited.distiller_calls) >= 1
+    assert {c["fact_source"] for c in result.claims} == {"distiller_fallback"}
+
+
+async def test_a_stream_that_was_never_asked_is_never_re_asked() -> None:
+    """The D8 kill switch composes with this one instead of being bypassed by it.
+
+    `_d8_prompted` is False when `NESTOR_TRIBUNAL_D8_FACT_LIST` is off or when the
+    provider is outside `_D8_PROMPT_PROVIDERS`. Re-asking such a stream would issue
+    the very request that switch exists to suppress, and would make
+    `_fallback_note`'s "was not asked" wording false in the same run that printed
+    it. Nothing DEVIATED here — nothing was asked for.
+    """
+    audited = RetryAwareAudited(retry_response=_retry_block([
+        _fact_line(
+            "A fact nobody asked this stream for",
+            "https://example.org/x", "other", "single", "nobody asked",
+        )
+    ]))
+    entries = [_entry("gemini", prompted=False, report=_NO_BLOCK_REPORT)]
+
+    result = await _collect(entries, audited=audited)
+
+    assert audited.retry_calls == [], "an unasked stream has not deviated"
+    assert len(result.fallback_notes) == 1
+    assert "was not asked" in result.fallback_notes[0], "and is still worded so"
+
+
+async def test_an_over_long_report_is_skipped_rather_than_truncated() -> None:
+    """Truncating would be the one way this retry could COST a report.
+
+    A fact list built from the first N characters, parsed successfully, would take
+    the success path and skip the distiller — so every fact in the tail would be
+    lost by an operation that is supposed to be incapable of losing anything.
+    Skipping keeps the report on the distiller path, which chunks it properly.
+    """
+    audited = RetryAwareAudited(retry_response=_retry_block([
+        _fact_line(
+            "A fact drawn from the first fragment of a very long report",
+            "https://example.org/x", "other", "single", "first fragment",
+        )
+    ]))
+    original = steps._FACT_LIST_RETRY_MAX_REPORT_CHARS
+    steps._FACT_LIST_RETRY_MAX_REPORT_CHARS = 50
+    try:
+        result = await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    finally:
+        steps._FACT_LIST_RETRY_MAX_REPORT_CHARS = original
+
+    assert len(_NO_BLOCK_REPORT) > 50, "the report really is over the ceiling"
+    assert audited.retry_calls == [], "no truncated re-ask may be issued"
+    assert len(audited.distiller_calls) >= 1, "the distiller still chunks it"
+    assert {c["fact_source"] for c in result.claims} == {"distiller_fallback"}
+
+
+async def test_the_prompt_actually_sent_fences_the_report_and_reuses_the_contract() -> None:
+    """The prompt is asserted as SENT, not merely as built.
+
+    Task 1 proves `build_fact_list_retry_prompt`'s shape. This proves the wiring:
+    that the thing which reached the client is that prompt, over THIS report, with
+    the report's own text confined to the fenced region.
+    """
+    report = _NO_BLOCK_REPORT + _CANARY + "\n"
+    audited = RetryAwareAudited(retry_response="not a fact list")
+
+    await _collect([_entry("gemini", report=report)], audited=audited)
+
+    assert len(audited.retry_calls) == 1
+    sent = audited.retry_calls[0]
+
+    assert build_fact_list_prompt_block(
+        language=MISSION_BRIEF["language"], provider="gemini"
+    ) in sent, "the run language reaches the re-ask through the mission brief"
+
+    start = sent.index(_OPEN_FENCE)
+    end = sent.index(_CLOSE_FENCE)
+    assert sent.count(_CANARY) == 1
+    assert start < sent.index(_CANARY) < end, "report text stays inside the fence"
+    assert _CANARY not in sent[:start]
+
+    # A re-ask is not a re-research, and the prompt says so in the words the model
+    # reads rather than only in a comment a human reads.
+    assert "do NOT do any new research" in sent
+
+
+async def test_the_retry_says_out_loud_what_it_did(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D-V01-6: WARNING is the lowest level production actually serves.
+
+    A retry that silently succeeded is a provider-compliance fact nobody measured
+    — the honour rate is the ONLY evidence available for whether the prompt-side
+    fixes in this phase worked, and it cannot be read from a DEBUG line. A retry
+    that silently failed is the exact pattern V-01 was: 278 claims dropped with
+    nothing above DEBUG to say so.
+
+    Both the attempt AND the outcome are asserted, at WARNING, on the real path.
+    """
+    caplog.set_level(logging.WARNING)
+
+    # (a) recovered
+    audited = RetryAwareAudited(retry_response=_retry_block([
+        _fact_line(
+            "Robusta bean imports rose 12 percent during 2025",
+            "https://ec.europa.eu/eurostat/robusta-2025",
+            "official", "certain", "imports rose 12 percent",
+        )
+    ]))
+    await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    said = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("issuing ONE corrective re-ask" in m for m in said), "the attempt"
+    assert any("RECOVERED 1 fact(s)" in m for m in said), "the outcome"
+    # `parse_fact_list` announced the distiller a few lines earlier, before any
+    # re-ask existed. That sentence is 15.2-04's and is consumed verbatim as the
+    # record's `reason`, so it is not rewritten — it is RETRACTED, in the line
+    # that overtook it. A trail that leaves a superseded statement standing is
+    # the same class of defect as one that says nothing.
+    assert any("does NOT apply" in m for m in said), "the retraction"
+
+    # (b) failed
+    caplog.clear()
+    audited = RetryAwareAudited(retry_response="still not a fact list")
+    await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    said = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("issuing ONE corrective re-ask" in m for m in said)
+    assert any("did NOT produce a usable fact list either" in m for m in said)
+
+    # (c) raised
+    caplog.clear()
+    audited = RetryAwareAudited(retry_raises=True)
+    await _collect([_entry("gemini", report=_NO_BLOCK_REPORT)], audited=audited)
+    said = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("re-ask for gemini failed" in m for m in said)
+    assert any("RuntimeError" in m for m in said), "name the exception, not just 'failed'"
+
+
+def test_no_deep_research_entry_point_gained_a_caller() -> None:
+    """T-15.4-26, at the source level as well as at runtime.
+
+    `RecordingAudited`'s research entry points raise, so a runtime reach for one
+    fails every async test above. This closes the other half: a call added on a
+    path no test happens to walk. The only permitted occurrences of the name in
+    `steps.py` are prose — the docstring that forbids exactly this.
+    """
+    src = Path(steps.__file__).read_text(encoding="utf-8")
+
+    calls = re.findall(r"(?:await\s+)?\w+\.\w*deep_research_raw\s*\(", src)
+    assert calls == [], f"a deep-research entry point gained a caller: {calls}"
+
+    # And the retry is pinned to the cheap model by name.
+    assert steps._DISTILLER_MODEL == "gemini-2.5-flash"
+    assert steps._FACT_LIST_RETRY_PROVIDERS == ("gemini",), (
+        "adding a provider here is a cost decision and must be a deliberate edit"
+    )
