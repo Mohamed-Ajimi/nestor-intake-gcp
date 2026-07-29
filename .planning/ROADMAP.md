@@ -176,14 +176,14 @@ unique URLs). 5 x 3 = 15 calls against V-01's 19.
 be a superset of the client questions), not a ceiling. The "never invent" half was only ever two prompt
 sentences — and the same file says a prompt sentence is not a control.
 **Requirements**: none
-**Plans:** 2/7 plans executed
+**Plans:** 5/7 plans executed
 
 Plans:
 - [x] 15.6-01-PLAN.md — wave 1: the `emit_question_groups` index-only tool, the group record, and the pure validator / clamp / one-group-per-client-question fallback
 - [x] 15.6-02-PLAN.md — wave 1: the discovery bracket — no source no slot, global pool with a per-parent cap of 3, the engine-authored question frame and the report provenance annotator
-- [ ] 15.6-03-PLAN.md — wave 2: group-driven dispatch — `own` leaves `_D6_STREAMS`, `_D6_TOP_K` and the round-robin deal are deleted, every group goes to all three providers, and the `degraded_parallel` gap is commented not closed
-- [ ] 15.6-04-PLAN.md — wave 2: `enforce_group_coverage` (the same repair ladder, one level up) plus the grouping + discovery wiring into `run_workshop_stage_b`
-- [ ] 15.6-05-PLAN.md — wave 2: the `researched_as` provenance clause in the brief-vs-world report section, in four languages
+- [x] 15.6-03-PLAN.md — wave 2: group-driven dispatch — `own` leaves `_D6_STREAMS`, `_D6_TOP_K` and the round-robin deal are deleted, every group goes to all three providers, and the `degraded_parallel` gap is commented not closed
+- [x] 15.6-04-PLAN.md — wave 2: `enforce_group_coverage` (the same repair ladder, one level up) plus the grouping + discovery wiring into `run_workshop_stage_b`
+- [x] 15.6-05-PLAN.md — wave 2: the `researched_as` provenance clause in the brief-vs-world report section, in four languages
 - [ ] 15.6-06-PLAN.md — wave 3: pipeline wiring — groups into `divide()`, discovery into the report, the over-ceiling warning, and end-to-end coverage
 - [ ] 15.6-07-PLAN.md — wave 4: register the two new test files (33 -> 35), run BOTH builds, and close the PENDING ledger
 
