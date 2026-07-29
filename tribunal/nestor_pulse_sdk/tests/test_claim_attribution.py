@@ -44,8 +44,9 @@ import datetime
 import importlib.util
 import inspect
 import re
+import uuid
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -634,3 +635,340 @@ def test_the_extractor_module_stays_stdlib_pure() -> None:
             imported.add(node.module.split(".")[0])
 
     assert imported <= {"re", "datetime", "logging", "__future__"}, imported
+
+
+# --------------------------------------------------------------------------
+# 5. THE WRITE PATH -- does anything actually PUT the three values in the row?
+#
+# Sections 1-4 prove the columns EXIST. That is not the same as proving they
+# are ever written, and this repository has the scar: before plan 15.1-14
+# NOTHING in production wrote a `verification_verdict` row, the table was
+# schema-perfect, and every report published four empty verdict lists. A column
+# with no writer is exactly as useless as a column that does not exist, and it
+# is harder to notice.
+#
+# WHAT THIS SECTION CAN PROVE
+#   That `persist_tribunal_claims` names all three columns in its claim INSERT,
+#   binds the claim dict values through unchanged, coerces ABSENT and EMPTY to
+#   NULL, truncates an over-long value, refuses a non-date `as_of`, and runs the
+#   whole thing INSIDE the tenant context.
+#
+# WHAT IT CANNOT PROVE, AND WHY NO ATTEMPT IS MADE
+#   It cannot prove that RLS actually DENIES a cross-tenant write. That needs a
+#   real Postgres AND a non-superuser role, and this gate provisions neither: a
+#   DB-bound test here would connect as SUPERUSER, RLS does not apply to a
+#   superuser, and every isolation assertion would PASS VACUOUSLY -- reporting
+#   as proof while proving nothing, which is strictly worse than no test.
+#
+#   The enforcement is covered BY CONSTRUCTION instead. A PostgreSQL row-level
+#   POLICY is a TABLE-level object evaluated against row values, so the three
+#   columns added by 0017 are governed by `claim`s existing
+#   `claim_tenant_isolation` / `claim_worker_all` policies (migrations 0003 and
+#   0008) with no new DDL -- the same reasoning migrations 0013 and 0016 record.
+#   What is left to check is that the INSERT runs where the policy can see it,
+#   and that is an ORDERING fact about the recorded calls, which a fake session
+#   proves honestly. Hence `test_the_tenant_context_is_set_before_the_first_
+#   claim_insert` below and no `test_cross_tenant_read_is_denied` anywhere.
+#
+# THE HARNESS IS COPIED, NOT IMPORTED, from test_verdict_write_path.py -- the
+# same choice test_source_resolution.py made, and for the same reason: those
+# two files are collected by DIFFERENT Cloud Build configs, and a fixture shared
+# across a gate boundary is a coupling neither config expresses. A file that
+# imports its harness from a file the other gate owns can be broken by an edit
+# nobody ran against it.
+#
+# PURE: no Postgres, no network, no provider key, no mocking library.
+# `asyncio_mode = "auto"` is set in pyproject.toml, so the async tests need no
+# decorator.
+# --------------------------------------------------------------------------
+
+_TENANT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_RUN_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+# SQL needles. The trailing paren in "INSERT INTO claim (" is load-bearing: it
+# keeps claim rows distinct from the "INSERT INTO claim_source (" join rows,
+# which would otherwise match the same prefix.
+_CLAIM_INSERT = "INSERT INTO claim ("
+_TENANT_CONTEXT = "set_config"
+
+
+class _FakeResult:
+    """Enough of a Result for the RETURNING path in `_upsert_source`."""
+
+    def __init__(self) -> None:
+        self._row = SimpleNamespace(id=uuid.uuid4())
+
+    def first(self):
+        return self._row
+
+
+class _FakeSession:
+    """Records `(sql_text, params)` per execute. Opens no connection.
+
+    No begin/commit on purpose: `persist_tribunal_claims` is documented as
+    running inside a transaction the CALLER opens.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def execute(self, stmt, params=None):
+        self.calls.append((str(stmt), params or {}))
+        return _FakeResult()
+
+
+def _sql(calls: list[tuple[str, dict]], needle: str) -> list[tuple[str, dict]]:
+    """The recorded calls whose SQL text contains `needle`, in call order."""
+    return [(s, p) for s, p in calls if needle in s]
+
+
+def _params(calls: list[tuple[str, dict]], needle: str) -> list[dict]:
+    return [p for _, p in _sql(calls, needle)]
+
+
+async def _persist(claims: list[dict]) -> _FakeSession:
+    """Drive the real `persist_tribunal_claims` over a fake session."""
+    from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+
+    session = _FakeSession()
+    await persist_tribunal_claims(
+        claims=claims,
+        verdicts_by_claim={},
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        session=session,
+    )
+    return session
+
+
+async def _one_claim_row(claim: dict) -> dict:
+    """The single bound parameter dict for a one-claim run."""
+    session = await _persist([claim])
+    rows = _params(session.calls, _CLAIM_INSERT)
+    assert len(rows) == 1, f"expected exactly one claim row, got {len(rows)}"
+    return rows[0]
+
+
+async def test_the_claim_insert_names_all_three_new_columns() -> None:
+    """The statement text, not the model -- a column the INSERT never names is
+    a column that is NULL on every row forever, whatever the ORM says.
+
+    The COLUMN LIST and the VALUES list are checked SEPARATELY, and that split
+    is not fussiness. A plain `"as_of" in sql_text` is satisfied by the `:as_of`
+    PLACEHOLDER in the VALUES clause, so a statement that had lost `as_of` from
+    its column list -- the exact shape that writes nothing while looking
+    correct -- passed a substring check during this test's own mutation run. The
+    two halves are split here so that mutation turns it red.
+    """
+    session = await _persist([{"text": "Rate X stood at 21 percent.", "facet": "market"}])
+    statements = _sql(session.calls, _CLAIM_INSERT)
+
+    assert statements, "no claim INSERT was recorded at all"
+    sql_text = statements[0][0]
+
+    head, _, tail = sql_text.partition("VALUES")
+    assert tail, f"no VALUES clause in the claim INSERT: {sql_text}"
+
+    for column in _NEW_COLUMNS:
+        assert column in head, f"{column} missing from the INSERT COLUMN LIST"
+        assert f":{column}" in tail, f":{column} missing from the VALUES list"
+
+    # The column list and the VALUES list must also be the same LENGTH -- a
+    # mismatch is a runtime error in the final persistence transaction of a
+    # roughly $50 run, and nowhere earlier.
+    columns = [c.strip() for c in head[head.index("(") + 1:head.rindex(")")].split(",")]
+    values = [v.strip().lstrip(":") for v in tail[tail.index("(") + 1:tail.rindex(")")].split(",")]
+    assert len(columns) == len(values), f"{len(columns)} columns vs {len(values)} values"
+
+    # The three new columns must sit at the SAME INDEX in both lists, or each
+    # value lands in the wrong column. (The first three pre-existing binds are
+    # deliberately named `tid` / `rid` rather than after their columns, so the
+    # two lists are compared positionally for the D-R3 columns, not by name.)
+    for column in _NEW_COLUMNS:
+        assert columns.index(column) == values.index(column), column
+
+    # And the values actually reach the driver, keyed by those names.
+    assert set(_NEW_COLUMNS) <= set(statements[0][1]), statements[0][1].keys()
+
+
+async def test_the_three_values_are_bound_through_unchanged() -> None:
+    """The happy path. Nothing between the claim dict and the row rewrites a
+    value that is already valid."""
+    row = await _one_claim_row(
+        {
+            "text": "De Haan operated 7 sites.",
+            "facet": "market",
+            "sub_question": "How many sites did De Haan operate?",
+            "corroboration_key": "w01",
+            "as_of": datetime.date(2021, 3, 4),
+        }
+    )
+
+    assert row["sub_question"] == "How many sites did De Haan operate?"
+    assert row["corroboration_key"] == "w01"
+    assert row["as_of"] == datetime.date(2021, 3, 4)
+
+
+async def test_a_pre_15_5_claim_dict_binds_three_nulls_and_does_not_raise() -> None:
+    """D-R3 invariant 1. A claim dict built before phase 15.5 -- and every dict
+    the `claim_distiller` fallback path produces, which carries NO dispatch
+    attribution by construction -- has none of the three keys. It must keep
+    working and write NULLs, not raise a KeyError inside the final persistence
+    transaction of a roughly $50 run.
+    """
+    row = await _one_claim_row({"text": "A fact with no attribution.", "facet": "market"})
+
+    assert row["sub_question"] is None
+    assert row["corroboration_key"] is None
+    assert row["as_of"] is None
+
+
+async def test_an_empty_corroboration_key_binds_as_null_not_as_the_empty_string() -> None:
+    """D-W2-2, and the single most load-bearing assertion in this section.
+
+    `research_division.py` deals the top-3 winners a real key and deals the
+    REMAINDER round-robin with the EMPTY STRING, so roughly 12 of 15 winners
+    arrive here with `""`. `is None` rather than `not value` is deliberate: the
+    empty string is falsy too, and a falsiness check would pass on exactly the
+    bug this asserts against. "No key recorded" and "recorded as the empty key"
+    are DIFFERENT FACTS -- the first is the honest state of a claim outside the
+    top 3, the second is a claim that belongs to a corroboration group whose key
+    is the empty string, and a corroboration query joining on the column must be
+    able to tell them apart.
+    """
+    row = await _one_claim_row(
+        {"text": "A remainder-stream fact.", "facet": "market", "corroboration_key": ""}
+    )
+
+    assert row["corroboration_key"] is None
+    # Whitespace-only is the same fact wearing a hat.
+    row = await _one_claim_row(
+        {"text": "Another one.", "facet": "market", "corroboration_key": "   "}
+    )
+    assert row["corroboration_key"] is None
+
+    # Same rule for the sibling column.
+    row = await _one_claim_row(
+        {"text": "And a third.", "facet": "market", "sub_question": ""}
+    )
+    assert row["sub_question"] is None
+
+
+async def test_an_over_long_sub_question_is_truncated_to_the_cap() -> None:
+    """A bug bound, not an injection control -- these values are caller-supplied
+    -- but the column must not be a place a bug can write unbounded data. The
+    cap is read from the module rather than hardcoded here, so raising it stays
+    a one-line change instead of a two-file one."""
+    from nestor_pulse_sdk.citations.extractor import (
+        _CORROBORATION_KEY_MAX_CHARS,
+        _SUB_QUESTION_MAX_CHARS,
+    )
+
+    row = await _one_claim_row(
+        {
+            "text": "A fact.",
+            "facet": "market",
+            "sub_question": "q" * (_SUB_QUESTION_MAX_CHARS + 250),
+            "corroboration_key": "k" * (_CORROBORATION_KEY_MAX_CHARS + 10),
+        }
+    )
+
+    assert len(row["sub_question"]) == _SUB_QUESTION_MAX_CHARS
+    assert len(row["corroboration_key"]) == _CORROBORATION_KEY_MAX_CHARS
+
+    # A value AT the cap is untouched -- the bound must not be off by one.
+    exact = "e" * _SUB_QUESTION_MAX_CHARS
+    row = await _one_claim_row(
+        {"text": "A fact.", "facet": "market", "sub_question": exact}
+    )
+    assert row["sub_question"] == exact
+
+
+async def test_an_as_of_string_binds_as_null_rather_than_reaching_the_column() -> None:
+    """A date-shaped STRING that slipped past `extract_as_of` is refused here.
+
+    The parsing already happened upstream, where every ambiguous form is
+    rejected rather than guessed; this boundary only refuses what it cannot
+    vouch for. A wrong date is worse than no date -- it turns a real
+    contradiction into a fake time series, which is the failure that made this
+    column necessary in the first place.
+    """
+    for bad in ("2021-03-04", "maart 2021", "", 20210304, ["2021-03-04"]):
+        row = await _one_claim_row(
+            {"text": "A fact.", "facet": "market", "as_of": bad}
+        )
+        assert row["as_of"] is None, bad
+
+
+async def test_a_datetime_as_of_binds_as_a_date_so_no_time_can_reach_the_column() -> None:
+    """`datetime` is a SUBCLASS of `date`, so an `isinstance(value, date)` test
+    alone would let a timestamp through into a DATE column. It is narrowed with
+    `.date()`, so two claims from the same day can never acquire a false
+    ordering from a time nobody stated."""
+    row = await _one_claim_row(
+        {
+            "text": "A fact.",
+            "facet": "market",
+            "as_of": datetime.datetime(2021, 3, 4, 13, 46, 7),
+        }
+    )
+
+    assert row["as_of"] == datetime.date(2021, 3, 4)
+    assert type(row["as_of"]) is datetime.date
+    assert not isinstance(row["as_of"], datetime.datetime)
+
+
+async def test_the_tenant_context_is_set_before_the_first_claim_insert() -> None:
+    """RUNTIME ordering proof -- source line order cannot establish this.
+
+    `_insert_claim` is DEFINED far above `persist_tribunal_claims`, so comparing
+    source positions would invert and prove nothing. What matters is that every
+    claim INSERT EXECUTES after `set_tenant_context`, in the same transaction,
+    binding the same tenant_id: that is what puts the write -- and therefore the
+    three new columns on it -- under `claim`s row-level policies rather than
+    around them. This is the honest half of the RLS question; see the section
+    heading for why the other half is deliberately not attempted here.
+    """
+    session = await _persist(
+        [
+            {"text": "First fact.", "facet": "market", "corroboration_key": "w01"},
+            {"text": "Second fact.", "facet": "policy", "corroboration_key": "w02"},
+        ]
+    )
+
+    context_idx = min(
+        i for i, (s, _) in enumerate(session.calls) if _TENANT_CONTEXT in s
+    )
+    claim_idx = [i for i, (s, _) in enumerate(session.calls) if _CLAIM_INSERT in s]
+
+    assert len(claim_idx) == 2, "expected one claim INSERT per survivor"
+    assert all(i > context_idx for i in claim_idx)
+
+    bound_tenant = session.calls[context_idx][1]["tid"]
+    assert bound_tenant == str(_TENANT_ID)
+    assert {p["tid"] for p in _params(session.calls, _CLAIM_INSERT)} == {bound_tenant}
+
+
+async def test_the_pre_existing_columns_are_untouched_by_the_three_new_ones() -> None:
+    """D-R3 invariant 3: NO BEHAVIOUR CHANGE BEYOND RECORDING.
+
+    The 15.8 measuring run has to hold one variable still -- which claims reach
+    paid verification -- so the D-13 columns beside the new ones are asserted to
+    bind exactly as they did before, on the same call that now carries three
+    more values.
+    """
+    row = await _one_claim_row(
+        {
+            "text": "A corroborated fact.",
+            "facet": "market",
+            "certainty": "certain",
+            "found_by": ["gemini", "claude"],
+            "corroboration_key": "w01",
+        }
+    )
+
+    assert row["text"] == "A corroborated fact."
+    assert row["facet"] == "market"
+    assert row["position"] == 0
+    assert row["certainty"] == "certain"
+    assert row["found_by"] == ["gemini", "claude"]
