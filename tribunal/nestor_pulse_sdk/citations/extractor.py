@@ -86,6 +86,20 @@ _GAP_PROVIDER_MAX_CHARS = 64
 #: 15.2-04's `display_domain` -- never an invented string.
 _SOURCE_TITLE_MAX_CHARS = 200
 
+#: D-V01-11 (Phase 15.4, migration 0016). The only two words
+#: `source.resolution_status` may hold. NULL is the third state and means
+#: something DIFFERENT -- "never attempted" -- so it is deliberately absent from
+#: this tuple: "attempted and failed" must never collapse into "never tried",
+#: which is the entire reason `source` carries two columns rather than one.
+_RESOLUTION_STATUS_VALUES = ("resolved", "unresolved")
+
+#: `source.resolved_url` holds a `Location` header chosen by a REMOTE HOST, and
+#: the value is later rendered as a clickable link. `redirect_resolver` already
+#: validates scheme and length; this is the same bound applied AGAIN at the last
+#: point before the column, on the D-13 rule that a bound which exists only in
+#: the parser is one refactor away from being gone.
+_RESOLVED_URL_MAX_CHARS = 2048
+
 
 def _clamp_enum(value: object, allowed: tuple[str, ...], *, field: str) -> Optional[str]:
     """Return `value` lowercased if it is one of `allowed`, else None + a warning.
@@ -140,6 +154,8 @@ async def _upsert_source(
     provider: str,
     snapshot_text: str,
     title: str | None = None,
+    resolved_url: str | None = None,
+    resolution_status: str | None = None,
 ) -> uuid.UUID:
     """INSERT a source row, deduping by (tenant_id, content_hash).
 
@@ -162,19 +178,44 @@ async def _upsert_source(
       time instead, which is honest.
     * 15.2-15 threads the real D8 provider-supplied titles through this
       parameter.
+
+    `resolved_url` and `resolution_status` (D-V01-11, migration 0016) are
+    ADDITIVE in exactly the same way and live under exactly the same three rules:
+
+    * NEITHER is part of `content_hash` -- the dedupe key is still computed from
+      `snapshot_capped` alone -- so supplying them CANNOT change source dedupe.
+    * On conflict the existing row wins (`DO NOTHING`) and KEEPS whatever it
+      already had. A later, better resolution never rewrites a historic row
+      (T-15.4-24).
+    * Both default to None, so every existing call site stays valid unchanged and
+      reads back as NULL -- which is the "never attempted" state, distinct from
+      the `'unresolved'` that means "attempted and failed".
+
+    `url` itself is NEVER rewritten with the resolved target. The redirect the
+    provider returned is the citation; the publisher URL is stored beside it.
     """
     snapshot_capped = (snapshot_text or "")[:_SNAPSHOT_MAX_CHARS]
     chash = _content_hash(snapshot_capped) if snapshot_capped else None
     new_id = uuid.uuid4()
     title_value = (title or "").strip() or None
 
+    # Both values originate outside this process -- one in a remote host's
+    # `Location` header, one in this module's own caller -- so both are bounded
+    # HERE as well as where they were produced.
+    resolved_value = (resolved_url or "").strip()[:_RESOLVED_URL_MAX_CHARS] or None
+    status_value = _clamp_enum(
+        resolution_status, _RESOLUTION_STATUS_VALUES, field="source.resolution_status"
+    )
+
     if chash is None:
         # No snapshot to hash -- skip dedupe and insert plainly.
         await session.execute(
             text(
                 "INSERT INTO source "
-                "(id, tenant_id, url, provider, title, snapshot_text, content_hash) "
-                "VALUES (:id, :tid, :url, :provider, :title, :snapshot, NULL)"
+                "(id, tenant_id, url, provider, title, snapshot_text, content_hash, "
+                "resolved_url, resolution_status) "
+                "VALUES (:id, :tid, :url, :provider, :title, :snapshot, NULL, "
+                ":resolved_url, :resolution_status)"
             ),
             {
                 "id": str(new_id),
@@ -183,6 +224,8 @@ async def _upsert_source(
                 "provider": provider,
                 "title": title_value,
                 "snapshot": snapshot_capped or None,
+                "resolved_url": resolved_value,
+                "resolution_status": status_value,
             },
         )
         return new_id
@@ -191,8 +234,10 @@ async def _upsert_source(
     result = await session.execute(
         text(
             "INSERT INTO source "
-            "(id, tenant_id, url, provider, title, snapshot_text, content_hash) "
-            "VALUES (:id, :tid, :url, :provider, :title, :snapshot, :chash) "
+            "(id, tenant_id, url, provider, title, snapshot_text, content_hash, "
+            "resolved_url, resolution_status) "
+            "VALUES (:id, :tid, :url, :provider, :title, :snapshot, :chash, "
+            ":resolved_url, :resolution_status) "
             "ON CONFLICT (tenant_id, content_hash) "
             "WHERE content_hash IS NOT NULL DO NOTHING "
             "RETURNING id"
@@ -205,6 +250,8 @@ async def _upsert_source(
             "title": title_value,
             "snapshot": snapshot_capped,
             "chash": chash,
+            "resolved_url": resolved_value,
+            "resolution_status": status_value,
         },
     )
     row = result.first()
@@ -460,6 +507,97 @@ def _verdicts_for(claim: dict, verdicts_by_claim: dict) -> list[dict]:
     return [v for v in raw if isinstance(v, dict)]
 
 
+def _as_list(value: object) -> list:
+    """`value` if it is a sequence of items, else an empty list.
+
+    A STRING is deliberately NOT a sequence of items here. Every field this
+    guards (`source_urls`, `evidence_refs`, `citations`) is model-authored, and
+    iterating a bare string yields its CHARACTERS -- which then pass the
+    `isinstance(url, str)` test one at a time and become one-character source
+    rows. The empty list is the honest reading of a field that is not a list.
+    """
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return []
+
+
+def _gather_source_urls(claims: list[dict], verdicts_by_claim: dict) -> list[str]:
+    """Every source URL `claims` would upsert, de-duplicated, in first-seen order.
+
+    ONE extraction, called from TWO places, which is the whole reason it exists
+    as a function (D-V01-11):
+
+      * the RESOLUTION PRE-PASS in `pipeline/tribunal/pipeline.py` Stage 7, over
+        the whole run's claims at once, BEFORE any session is opened;
+      * the per-claim loop in `persist_tribunal_claims` below, called with a
+        single-element list.
+
+    If those two views could drift, the pre-pass would resolve a set of URLs that
+    is not the set the loop then upserts, and the difference would show up as
+    citations silently missing their publisher URL for no stated reason. Calling
+    the same function from both makes drift impossible rather than unlikely.
+
+    NOTE ON DEDUPE. The de-duplication here is PER CALL. Called with one claim it
+    reproduces exactly the per-claim dedupe this loop has always done; called
+    with every claim it produces the run-wide unique set D-V01-11 asks for --
+    V-01's 642 citation instances collapsing to 225 unique URLs. The per-claim
+    dedupe alone is NOT sufficient for resolution: the same redirect is cited by
+    many different claims, so it would still issue 642 requests.
+
+    Nothing raises: a claim that is not a dict, a verdict that is not a dict, a
+    citation of an unexpected shape and a non-string URL are each skipped.
+    """
+    verdicts_by_claim = verdicts_by_claim or {}
+    source_urls: list[str] = []
+
+    for claim in claims or []:
+        if not isinstance(claim, dict):
+            continue
+
+        # From the claim dict (e.g., source_urls or evidence_refs added by
+        # intake/distiller).
+        #
+        # `_as_list` guard added with the extraction: these keys are
+        # model-authored, and a STRING here used to be iterated CHARACTER BY
+        # CHARACTER, so `"unknown"` silently became seven one-character source
+        # rows. A shape that is not a list is not a list of URLs.
+        for url_field in ("source_urls", "evidence_refs"):
+            for url in _as_list(claim.get(url_field)):
+                if url and isinstance(url, str):
+                    source_urls.append(url)
+
+        # From skeptic verdict(s) for this claim -- SAME normalisation the
+        # verdict writes use, via `_verdicts_for`, so the two views of
+        # verdicts_by_claim cannot diverge either.
+        for claim_verdict in _verdicts_for(claim, verdicts_by_claim):
+            for ref in _as_list(claim_verdict.get("evidence_refs")):
+                if ref and isinstance(ref, str):
+                    source_urls.append(ref)
+            for citation in _as_list(claim_verdict.get("citations")):
+                if isinstance(citation, dict):
+                    url = citation.get("url") or citation.get("source_url") or ""
+                elif isinstance(citation, str):
+                    url = citation
+                else:
+                    url = ""
+                # `isinstance` guard added with the extraction: a citation dict
+                # whose `url` is model-authored and not a string used to reach
+                # the `.strip()` below and raise inside the persistence step of
+                # a paid run.
+                if url and isinstance(url, str):
+                    source_urls.append(url)
+
+    # De-duplicate while preserving order.
+    seen_urls: set[str] = set()
+    deduped_urls: list[str] = []
+    for url in source_urls:
+        url = url.strip()
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            deduped_urls.append(url)
+    return deduped_urls
+
+
 async def _link_claim_source(
     session: AsyncSession,
     *,
@@ -591,6 +729,7 @@ async def persist_tribunal_claims(
     session: AsyncSession,
     dropped_claims: Optional[list[dict]] = None,
     research_gaps: Optional[list[dict]] = None,
+    resolved_urls: Optional[dict[str, Optional[str]]] = None,
 ) -> dict:
     """Persist fine-grained claim + claim_source + verification_verdict rows.
 
@@ -650,6 +789,28 @@ async def persist_tribunal_claims(
                           de-duplicated order-preservingly, and the total is capped at
                           `_MAX_RESEARCH_GAPS` with the exact dropped count logged.
 
+        resolved_urls:    D-V01-11 (Phase 15.4). The redirect -> publisher-URL map the
+                          CALLER resolved, keyed by source URL. It is produced by the
+                          resolver in `citations/redirect_resolver.py`, and it is
+                          produced BEFORE the caller opens the session and the
+                          transaction this function runs inside -- deliberately, and
+                          asserted by an ordering test. Resolving here would put up to
+                          30 s of network I/O inside the final persistence transaction
+                          of a ~$50 run, holding a pooled connection with RLS tenant
+                          context set, for an ENRICHMENT that is by design allowed to
+                          fail. So this function only ever READS the finished map; the
+                          resolver is not reachable from it at all.
+
+                          Keyword-optional and defaulted to None so every pre-existing
+                          call shape stays valid unchanged. None means resolution was
+                          NEVER ATTEMPTED, and every source row written then carries
+                          `resolved_url` and `resolution_status` NULL -- byte-identical
+                          to the behaviour before this parameter existed.
+
+                          A URL that FAILED to resolve is still upserted, marked
+                          `'unresolved'`. Turning resolution on or off changes zero
+                          citations; it only changes what is known about them.
+
     Returns:
         {"claim_ids": [uuid, ...], "source_ids": [uuid, ...],
          "verdict_ids": [uuid, ...], "verdict_count": int,
@@ -657,7 +818,20 @@ async def persist_tribunal_claims(
 
         `research_gap_count` is ADDITIVE — the four pre-existing keys are unchanged.
     """
+    # D-V01-11. `is_redirect_url` is imported FUNCTION-LOCALLY and it is the only
+    # thing this module ever takes from the resolver package: a pure predicate
+    # over a string, with no client, no request and no I/O. The resolver's own
+    # entry point is deliberately NOT imported anywhere in this file, and a test
+    # asserts that it is not — so no future edit can start resolving inside the
+    # caller's transaction by adding one line here. The import is function-local
+    # so `httpx` is not pulled into this module's import graph either.
+    from nestor_pulse_sdk.citations.redirect_resolver import is_redirect_url
+
     await set_tenant_context(session, tenant_id)
+
+    # An empty map is the "never attempted" case and is read exactly like None:
+    # no URL is a member, so every `resolution_status` below comes out NULL.
+    resolved_map = resolved_urls or {}
 
     claim_ids: list[uuid.UUID] = []
     source_ids: list[uuid.UUID] = []
@@ -712,39 +886,11 @@ async def persist_tribunal_claims(
                 )
             )
 
-        # Gather source URLs from the claim itself + from skeptic verdicts
-        source_urls: list[str] = []
-
-        # From the claim dict (e.g., source_urls or evidence_refs added by intake/distiller)
-        for url_field in ("source_urls", "evidence_refs"):
-            for url in (claim.get(url_field) or []):
-                if url and isinstance(url, str):
-                    source_urls.append(url)
-
-        # From skeptic verdict(s) for this claim — SAME normalisation the verdict
-        # writes above use, so the two views of verdicts_by_claim cannot diverge.
-        for claim_verdict in claim_verdicts:
-            for ref in (claim_verdict.get("evidence_refs") or []):
-                if ref and isinstance(ref, str):
-                    source_urls.append(ref)
-            for citation in (claim_verdict.get("citations") or []):
-                if isinstance(citation, dict):
-                    url = citation.get("url") or citation.get("source_url") or ""
-                elif isinstance(citation, str):
-                    url = citation
-                else:
-                    url = ""
-                if url:
-                    source_urls.append(url)
-
-        # De-duplicate while preserving order
-        seen_urls: set[str] = set()
-        deduped_urls: list[str] = []
-        for url in source_urls:
-            url = url.strip()
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                deduped_urls.append(url)
+        # Gather source URLs from the claim itself + from skeptic verdicts.
+        # THE SAME function the resolution pre-pass called over the whole run's
+        # claims before this transaction was opened (D-V01-11) — called here
+        # with a single-element list so the two views cannot drift.
+        deduped_urls = _gather_source_urls([claim], verdicts_by_claim)
 
         # D-13 per-URL grading. `provider_quality_by_url` is the map
         # `_dedupe_claims` builds when two streams' versions of one fact merge —
@@ -774,6 +920,31 @@ async def persist_tribunal_claims(
 
         # Upsert source rows + link claim_source rows
         for url in deduped_urls:
+            # D-V01-11. THREE STATES, and they are not interchangeable:
+            #   NULL         the URL was never a resolution candidate (an
+            #                ordinary publisher URL) or no map was supplied at
+            #                all -- nothing was ever attempted for it;
+            #   'resolved'   a redirect whose publisher URL came back;
+            #   'unresolved' a redirect that WAS attempted and did not resolve.
+            #
+            # The last two must never collapse into the first. `'unresolved'` is
+            # a citation whose publisher URL is about to be lost when the
+            # redirect expires ~30 days after the run; NULL is a citation that
+            # never needed one. Recording both as NULL would erase the
+            # difference and make the loss unfindable.
+            #
+            # AND THE ROW IS WRITTEN EITHER WAY. Resolution failing NEVER skips
+            # the upsert: the redirect itself is still the citation. That is
+            # D-V01-11's rule verbatim -- keep the redirect and mark it
+            # unresolved, never drop a citation.
+            resolved_target = resolved_map.get(url)
+            if url not in resolved_map or not is_redirect_url(url):
+                resolution_status = None
+            elif resolved_target:
+                resolution_status = "resolved"
+            else:
+                resolution_status = "unresolved"
+
             sid = await _upsert_source(
                 session,
                 tenant_id=tenant_id,
@@ -781,6 +952,8 @@ async def persist_tribunal_claims(
                 provider="tribunal_skeptic",
                 snapshot_text=url,  # minimal snapshot; Phase 2 can enrich
                 title=source_title,
+                resolved_url=resolved_target,
+                resolution_status=resolution_status,
             )
             source_ids.append(sid)
             await _link_claim_source(

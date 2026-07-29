@@ -158,3 +158,25 @@ def fake_auth_provider():
 def two_tenants():
     """Return a `(tenant_a, tenant_b)` UUID tuple for RLS isolation tests."""
     return uuid.uuid4(), uuid.uuid4()
+
+
+# ---------------------------------------------------------------------------
+# NO OUTBOUND HTTP FROM THE SUITE (phase 15.4, D-V01-11)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_live_redirect_resolution(monkeypatch):
+    """Turn redirect resolution OFF for every test that does not ask for it.
+
+    Plan 15.4-09 wired `resolve_redirects` into Stage 7 of the pipeline. Several
+    suite files drive that stage against RECORDED gemini reports, and those
+    fixtures contain real `vertexaisearch.cloud.google.com` grounding redirects
+    (`tests/fixtures/run_4cbb5311/…`, `tests/fixtures/run_7dcf51d5/…`). Without
+    this fixture those tests would issue LIVE HEAD requests to Google from CI —
+    from a gate whose own config header states that it makes no network calls.
+
+    The resolver's OWN tests clear this variable and inject a duck-typed client,
+    so they still exercise the enabled path with zero requests leaving the
+    process. Nothing here changes the PRODUCTION default, which stays on.
+    """
+    monkeypatch.setenv("NESTOR_REDIRECT_RESOLVE_ENABLED", "0")

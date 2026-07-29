@@ -71,9 +71,12 @@ import importlib.util
 import inspect
 import logging
 import re
+import textwrap
 import uuid
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 
 # --------------------------------------------------------------------------
@@ -1152,3 +1155,660 @@ def test_the_resolver_builds_its_client_with_follow_redirects_disabled() -> None
     # page we have no intention of reading.
     assert "client.head(" in code
     assert "client.get(" not in code
+
+
+# ==========================================================================
+# 7. PLAN 15.4-09 — the map reaches the source upsert
+# ==========================================================================
+# `persist_tribunal_claims` is driven through a hand-written session that
+# records every `(sql, params)` pair -- the same shape test_verdict_write_path.py
+# uses, and for the same reason: this function SWALLOWS nothing but its caller
+# does, so "it did not raise" proves nothing. The recorded parameters are the
+# only honest evidence that a row was written and what was in it.
+
+_TENANT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_RUN_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+_SOURCE_INSERT = "INSERT INTO source"
+
+
+class _FakeResult:
+    """Enough of a Result for `_upsert_source`'s RETURNING path."""
+
+    def __init__(self) -> None:
+        self._row = SimpleNamespace(id=uuid.uuid4())
+
+    def first(self):
+        return self._row
+
+
+class _FakeSession:
+    """Records `(sql, params)` per execute. No begin/commit: the CALLER owns
+    the transaction, which is the whole subject of section 8."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def execute(self, stmt, params=None):
+        self.calls.append((str(stmt), params or {}))
+        return _FakeResult()
+
+
+def _source_params(session: _FakeSession) -> list[dict]:
+    """The bound parameters of every `INSERT INTO source` in call order."""
+    return [p for sql, p in session.calls if _SOURCE_INSERT in sql]
+
+
+async def test_a_resolved_redirect_is_stored_beside_the_redirect_not_instead_of_it(
+    monkeypatch,
+) -> None:
+    """Both columns written, and `url` still holds the REDIRECT.
+
+    Overwriting `url` with the publisher URL would be the obvious "tidier"
+    implementation and it would destroy the citation as the provider stated it,
+    which is the thing the audit trail is.
+    """
+    from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+
+    redirect = _redirect("stored")
+    claim = {"text": "A fact worth a citation.", "facet": "market",
+             "source_urls": [redirect]}
+    session = _FakeSession()
+
+    await persist_tribunal_claims(
+        claims=[claim],
+        verdicts_by_claim={},
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        session=session,
+        resolved_urls={redirect: "https://publisher.example/article"},
+    )
+
+    rows = _source_params(session)
+    assert len(rows) == 1
+    assert rows[0]["url"] == redirect
+    assert rows[0]["resolved_url"] == "https://publisher.example/article"
+    assert rows[0]["resolution_status"] == "resolved"
+
+
+async def test_a_redirect_that_failed_to_resolve_is_still_written_as_unresolved(
+    monkeypatch,
+) -> None:
+    """D-V01-11 verbatim: keep the redirect and mark it unresolved, NEVER drop it.
+
+    The row exists, `resolved_url` is NULL and the status is `'unresolved'` --
+    which is a DIFFERENT fact from NULL. NULL would say nobody ever looked;
+    `'unresolved'` says we looked and this citation's publisher URL will be gone
+    when the redirect expires. Collapsing the two makes that loss unfindable.
+    """
+    from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+
+    redirect = _redirect("failed")
+    claim = {"text": "A fact whose redirect would not resolve.", "facet": "market",
+             "source_urls": [redirect]}
+    session = _FakeSession()
+
+    await persist_tribunal_claims(
+        claims=[claim],
+        verdicts_by_claim={},
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        session=session,
+        resolved_urls={redirect: None},
+    )
+
+    rows = _source_params(session)
+    assert len(rows) == 1, "the citation was DROPPED — this is the one thing forbidden"
+    assert rows[0]["url"] == redirect
+    assert rows[0]["resolved_url"] is None
+    assert rows[0]["resolution_status"] == "unresolved"
+
+
+async def test_an_ordinary_publisher_url_gets_null_not_unresolved() -> None:
+    """Never attempted is not the same fact as attempted and failed.
+
+    An ordinary publisher URL is already the publisher URL. Marking it
+    `'unresolved'` would fill the column with hundreds of fake losses and drown
+    the real ones.
+    """
+    from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+
+    plain = "https://publisher.example/article"
+    claim = {"text": "A fact with a direct citation.", "facet": "market",
+             "source_urls": [plain]}
+    session = _FakeSession()
+
+    await persist_tribunal_claims(
+        claims=[claim],
+        verdicts_by_claim={},
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        session=session,
+        resolved_urls={plain: None},
+    )
+
+    rows = _source_params(session)
+    assert len(rows) == 1
+    assert rows[0]["resolved_url"] is None
+    assert rows[0]["resolution_status"] is None
+
+
+async def test_calling_with_no_resolved_urls_argument_writes_both_columns_null() -> None:
+    """BACK COMPAT. The five existing call sites pass no such argument.
+
+    The parameter defaults to None and None means "never attempted", so every
+    row those callers write is byte-identical to what they wrote before this
+    plan -- both new columns NULL.
+    """
+    from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+
+    claim = {
+        "text": "A fact from a caller that predates redirect resolution.",
+        "facet": "market",
+        "source_urls": [_redirect("legacy"), "https://publisher.example/x"],
+    }
+    session = _FakeSession()
+
+    await persist_tribunal_claims(
+        claims=[claim],
+        verdicts_by_claim={},
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+        session=session,
+    )
+
+    rows = _source_params(session)
+    assert len(rows) == 2
+    for row in rows:
+        assert row["resolved_url"] is None
+        assert row["resolution_status"] is None
+
+
+async def test_an_existing_unmodified_call_site_still_writes_both_columns_null() -> None:
+    """The same proof, through a call site this plan did not touch.
+
+    `test_verdict_write_path.py::_run` is a pre-existing fixture that calls
+    `persist_tribunal_claims` in its original shape. Driving IT is a stronger
+    back-compat statement than writing a fresh call that merely omits the new
+    argument, because that file was written before the argument existed and
+    would be red here if the default had been got wrong.
+    """
+    from nestor_pulse_sdk.tests import test_verdict_write_path
+
+    session, _result = await test_verdict_write_path._run()
+
+    rows = [p for sql, p in session.calls if _SOURCE_INSERT in sql]
+    assert rows, "the pre-existing fixture wrote no source row at all"
+    for row in rows:
+        assert row["resolved_url"] is None
+        assert row["resolution_status"] is None
+
+
+async def test_a_garbled_status_is_clamped_to_null_rather_than_written() -> None:
+    """The `claim.certainty` idiom. A bug must not write a fourth vocabulary word.
+
+    `resolution_status` is deliberately not a CHECK constraint or an enum in the
+    DDL -- a resolver bug must not be able to fail an INSERT inside a paid run --
+    so the clamp is here, in Python, and it stores NULL plus a log line.
+    """
+    from nestor_pulse_sdk.citations import extractor
+
+    session = _FakeSession()
+    await extractor._upsert_source(
+        session,
+        tenant_id=_TENANT_ID,
+        url="https://publisher.example/x",
+        provider="tribunal_skeptic",
+        snapshot_text="https://publisher.example/x",
+        resolved_url="https://publisher.example/x",
+        resolution_status="MAYBE",
+    )
+
+    rows = _source_params(session)
+    assert rows[0]["resolution_status"] is None
+    # 'resolved' and 'unresolved' survive the clamp, case-insensitively.
+    for word in ("resolved", "UNRESOLVED"):
+        session = _FakeSession()
+        await extractor._upsert_source(
+            session,
+            tenant_id=_TENANT_ID,
+            url="https://publisher.example/x",
+            provider="tribunal_skeptic",
+            snapshot_text="https://publisher.example/x",
+            resolution_status=word,
+        )
+        assert _source_params(session)[0]["resolution_status"] == word.lower()
+
+
+async def test_an_over_long_resolved_url_is_truncated_at_the_writer() -> None:
+    """The bound is applied AGAIN here, on the D-13 rule.
+
+    The resolver already rejects a Location over 2048 chars. A bound that exists
+    only in the parser is one refactor away from being gone, and this function is
+    the last thing between a remote host's header and a persisted column.
+    """
+    from nestor_pulse_sdk.citations import extractor
+
+    session = _FakeSession()
+    await extractor._upsert_source(
+        session,
+        tenant_id=_TENANT_ID,
+        url="https://publisher.example/x",
+        provider="tribunal_skeptic",
+        snapshot_text="https://publisher.example/x",
+        resolved_url="https://publisher.example/" + ("a" * 4000),
+        resolution_status="resolved",
+    )
+
+    assert len(_source_params(session)[0]["resolved_url"]) == 2048
+
+
+def test_neither_new_column_reaches_the_content_hash_computation() -> None:
+    """T-15.4-24, restated after the columns were actually threaded through.
+
+    Section 4 asserted this before `_upsert_source` named the columns at all.
+    Now that it does, the statement worth making is that the hash INPUT is still
+    the snapshot alone -- so `ON CONFLICT` still fires on exactly the same rows
+    and an existing row keeps whatever it had.
+    """
+    from nestor_pulse_sdk.citations import extractor
+
+    source = inspect.getsource(extractor._upsert_source)
+    hash_line = [
+        line.strip()
+        for line in source.splitlines()
+        if "_content_hash(" in line and not line.strip().startswith("#")
+    ]
+
+    assert hash_line == [
+        "chash = _content_hash(snapshot_capped) if snapshot_capped else None"
+    ]
+    assert "resolved_url" in source  # the columns ARE written...
+    for name in _NEW_COLUMNS:  # ...and neither is part of the hash INPUT
+        assert name not in hash_line[0]
+
+
+# --------------------------------------------------------------------------
+# 7b. ONE extraction, two callers
+# --------------------------------------------------------------------------
+
+def test_the_pre_pass_and_the_loop_see_exactly_the_same_url_set() -> None:
+    """`_gather_source_urls` called over the run == the union of the per-claim calls.
+
+    If the two views could drift, the pre-pass would resolve a set of URLs that
+    is not the set the loop upserts, and the difference would surface as
+    citations silently missing a publisher URL for no stated reason. Calling ONE
+    function from both places makes drift impossible; this asserts it.
+    """
+    from nestor_pulse_sdk.citations.extractor import _gather_source_urls
+
+    shared = _redirect("shared")
+    claim_a = {"text": "A", "source_urls": [shared, "https://a.example/1"]}
+    claim_b = {"text": "B", "evidence_refs": [shared], "source_urls": ["https://b.example/2"]}
+    verdict_a = {"verdict": "support", "evidence_refs": ["https://skeptic.example/3"],
+                 "citations": [{"url": "https://skeptic.example/4"}]}
+    verdict_b = {"verdict": "support", "citations": ["https://skeptic.example/5"]}
+    verdicts = {id(claim_a): [verdict_a], id(claim_b): verdict_b}
+
+    claims = [claim_a, claim_b]
+    pre_pass = _gather_source_urls(claims, verdicts)
+
+    from_the_loop: list[str] = []
+    for claim in claims:
+        for url in _gather_source_urls([claim], verdicts):
+            if url not in from_the_loop:
+                from_the_loop.append(url)
+
+    assert pre_pass == from_the_loop
+    assert set(pre_pass) == {
+        shared, "https://a.example/1", "https://b.example/2",
+        "https://skeptic.example/3", "https://skeptic.example/4",
+        "https://skeptic.example/5",
+    }
+    # THE 642 -> 225 shape in miniature: two claims cite one redirect, and the
+    # run-wide set names it ONCE.
+    assert pre_pass.count(shared) == 1
+
+
+def test_gather_source_urls_never_raises_on_a_malformed_claim() -> None:
+    """Model-authored shapes reach this function on the path of a paid run."""
+    from nestor_pulse_sdk.citations.extractor import _gather_source_urls
+
+    claim = {
+        "text": "A claim with a hostile citation list.",
+        "source_urls": ["https://ok.example/1", None, 42, ""],
+        "evidence_refs": "not-a-list",
+        }
+    verdict = {"verdict": "support", "evidence_refs": [None, 7],
+               "citations": [{"url": 99}, {"source_url": "https://ok.example/2"}, 5, None]}
+
+    result = _gather_source_urls(
+        [claim, "not-a-dict", None], {id(claim): [verdict, "not-a-dict"]}
+    )
+
+    assert result == ["https://ok.example/1", "https://ok.example/2"]
+    assert _gather_source_urls([], {}) == []
+    assert _gather_source_urls(None, None) == []
+
+
+# ==========================================================================
+# 8. PLAN 15.4-09 — THE PLACEMENT. Resolution finishes before the transaction.
+# ==========================================================================
+# This is the section that stops the change being silently undone. A test that
+# only checked "the map arrived" would still pass if a future edit moved
+# resolution back inside `async with session.begin()`, which is the edit the
+# operator decision of 2026-07-29 exists to prevent.
+
+
+class _OrderingSession(_FakeSession):
+    """A session that RECORDS when it is opened and when `begin()` is entered."""
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__()
+        self.events = events
+
+    async def __aenter__(self) -> "_OrderingSession":
+        self.events.append("session-open")
+        return self
+
+    async def __aexit__(self, *_exc) -> bool:
+        self.events.append("session-close")
+        return False
+
+    def begin(self):
+        events = self.events
+
+        class _Begin:
+            async def __aenter__(self_inner):
+                events.append("begin")
+                return None
+
+            async def __aexit__(self_inner, *_exc):
+                events.append("commit")
+                return False
+
+        return _Begin()
+
+
+def _install_ordering_sessionmaker(monkeypatch, session: _OrderingSession):
+    """Replace `get_sessionmaker` on the pipeline module with a fake factory.
+
+    `pipeline.py` does `_sm = get_sessionmaker()` and then `async with _sm()`,
+    so the fake returns a callable that returns the session itself.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import pipeline as pipeline_mod
+
+    monkeypatch.setattr(pipeline_mod, "get_sessionmaker", lambda: (lambda: session))
+    return pipeline_mod
+
+
+async def test_the_last_resolver_request_completes_before_session_begin(
+    monkeypatch,
+) -> None:
+    """THE PLACEMENT ASSERTION, stated as an ORDERING and not as an inspection.
+
+    Up to 30 s of third-party network I/O inside the final persistence
+    transaction of a ~$50 run would hold a pooled connection with RLS tenant
+    context set. A pool stall or a hung socket there costs the run its claims --
+    for an enrichment that is by design allowed to fail. So every request must
+    be DONE before the transaction opens, and this fails the moment that stops
+    being true.
+    """
+    _clear_knobs(monkeypatch)
+    events: list[str] = []
+    session = _OrderingSession(events)
+    pipeline_mod = _install_ordering_sessionmaker(monkeypatch, session)
+
+    urls = [_redirect("p1"), _redirect("p2"), _redirect("p3")]
+
+    class _OrderingClient(_FakeClient):
+        async def head(self, url: str):
+            self.requests.append(url)
+            # Yield, so a resolution that had been moved inside the transaction
+            # would interleave with it rather than completing by luck.
+            await asyncio.sleep(0)
+            events.append(f"request-done:{url}")
+            return _FakeResponse(302, f"https://publisher.example/{len(self.requests)}")
+
+    client = _install_client(monkeypatch, _OrderingClient())
+
+    survivors = [{"text": f"Claim {i}", "facet": "market", "source_urls": [url]}
+                 for i, url in enumerate(urls)]
+
+    await pipeline_mod._resolve_then_persist_claims(
+        survivors=survivors,
+        dropped=[],
+        verdicts_by_claim={},
+        research_gaps=None,
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+    )
+
+    assert len(client.requests) == 3, client.requests
+    assert "begin" in events, f"the transaction was never opened: {events}"
+    request_indexes = [
+        i for i, event in enumerate(events) if event.startswith("request-done:")
+    ]
+    assert len(request_indexes) == 3, events
+    assert max(request_indexes) < events.index("session-open"), events
+    assert max(request_indexes) < events.index("begin"), events
+
+
+async def test_resolution_failure_does_not_stop_the_claims_being_persisted(
+    monkeypatch,
+) -> None:
+    """The enrichment is allowed to fail. The claims are not.
+
+    A resolver that blew up entirely must degrade to an empty map and leave
+    persistence untouched -- a citation without its publisher URL is still a
+    citation, and a ~$50 run must not lose its claims to a redirect service.
+    """
+    _clear_knobs(monkeypatch)
+    session = _OrderingSession([])
+    pipeline_mod = _install_ordering_sessionmaker(monkeypatch, session)
+
+    async def _boom(_urls):
+        raise RuntimeError("simulated: the resolver itself failed")
+
+    monkeypatch.setattr(
+        "nestor_pulse_sdk.citations.redirect_resolver.resolve_redirects", _boom
+    )
+
+    redirect = _redirect("boom")
+    await pipeline_mod._resolve_then_persist_claims(
+        survivors=[{"text": "A claim that must survive.", "facet": "market",
+                    "source_urls": [redirect]}],
+        dropped=[],
+        verdicts_by_claim={},
+        research_gaps=None,
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+    )
+
+    rows = _source_params(session)
+    assert len(rows) == 1
+    assert rows[0]["url"] == redirect
+    assert rows[0]["resolved_url"] is None
+    assert rows[0]["resolution_status"] is None  # never attempted, honestly stated
+    assert [p for sql, p in session.calls if "INSERT INTO claim (" in sql]
+
+
+async def test_turning_resolution_off_changes_zero_citations(monkeypatch) -> None:
+    """THE NO-CITATION-LOST PROOF: an EQUAL upsert count in both modes.
+
+    Enabling or disabling resolution must change what is KNOWN about a citation
+    and nothing else. If the two counts ever differ, some code path is skipping
+    the upsert when resolution fails -- the one thing D-V01-11 forbids.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import pipeline as pipeline_mod
+
+    urls = [_redirect("e1"), _redirect("e2"), "https://publisher.example/plain"]
+
+    async def _run(enabled: bool) -> list[dict]:
+        with pytest.MonkeyPatch.context() as patch:
+            for name in _RESOLVE_KNOBS:
+                patch.delenv(name, raising=False)
+            if not enabled:
+                patch.setenv("NESTOR_REDIRECT_RESOLVE_ENABLED", "0")
+
+            from nestor_pulse_sdk.citations import redirect_resolver
+
+            client = _FakeClient(default=_FakeResponse(302, "https://publisher.example/r"))
+            patch.setattr(redirect_resolver, "_client_factory", lambda _t: client)
+
+            session = _OrderingSession([])
+            patch.setattr(
+                pipeline_mod, "get_sessionmaker", lambda: (lambda: session)
+            )
+            await pipeline_mod._resolve_then_persist_claims(
+                survivors=[{"text": f"Claim {i}", "facet": "market", "source_urls": [url]}
+                           for i, url in enumerate(urls)],
+                dropped=[],
+                verdicts_by_claim={},
+                research_gaps=None,
+                run_id=_RUN_ID,
+                tenant_id=_TENANT_ID,
+            )
+            return _source_params(session)
+
+    on = await _run(enabled=True)
+    off = await _run(enabled=False)
+
+    assert len(on) == len(off) == 3
+    assert [row["url"] for row in on] == [row["url"] for row in off] == urls
+    # What DOES differ is only what is known about them.
+    assert [row["resolution_status"] for row in on] == ["resolved", "resolved", None]
+    assert [row["resolution_status"] for row in off] == [None, None, None]
+
+
+async def test_two_claims_citing_one_redirect_cost_exactly_one_request(
+    monkeypatch,
+) -> None:
+    """The run-wide dedupe, proven end to end through Stage 7.
+
+    The per-claim dedupe that has always been in the persistence loop does NOT
+    achieve this: the same redirect cited by two claims would be two requests.
+    Both claims still get their own `claim_source` link, and both source upserts
+    name the same URL -- so Postgres` ON CONFLICT dedupes them to ONE row (that
+    last step needs a real database and is proven in test_citation_roundtrip.py).
+    """
+    _clear_knobs(monkeypatch)
+    session = _OrderingSession([])
+    pipeline_mod = _install_ordering_sessionmaker(monkeypatch, session)
+
+    shared = _redirect("shared-by-two")
+    client = _install_client(
+        monkeypatch,
+        _FakeClient({shared: _FakeResponse(302, "https://publisher.example/one")}),
+    )
+
+    await pipeline_mod._resolve_then_persist_claims(
+        survivors=[
+            {"text": "First claim.", "facet": "market", "source_urls": [shared]},
+            {"text": "Second claim.", "facet": "policy", "evidence_refs": [shared]},
+        ],
+        dropped=[],
+        verdicts_by_claim={},
+        research_gaps=None,
+        run_id=_RUN_ID,
+        tenant_id=_TENANT_ID,
+    )
+
+    assert client.requests == [shared]
+    rows = _source_params(session)
+    assert len(rows) == 2
+    assert {row["url"] for row in rows} == {shared}
+    for row in rows:
+        assert row["resolved_url"] == "https://publisher.example/one"
+        assert row["resolution_status"] == "resolved"
+    assert len([p for sql, p in session.calls if "INSERT INTO claim_source" in sql]) == 2
+
+
+# --------------------------------------------------------------------------
+# 8b. The structural half of the placement
+# --------------------------------------------------------------------------
+
+def test_the_persistence_function_cannot_reach_the_resolver_at_all() -> None:
+    """`resolve_redirects` appears NOWHERE in `citations/extractor.py`.
+
+    The ordering test above proves the placement holds today. This proves the
+    persistence function has no way to resolve anything itself: the only thing
+    it takes from the resolver package is `is_redirect_url`, a pure predicate
+    over a string with no client and no I/O.
+    """
+    from nestor_pulse_sdk.citations import extractor
+
+    source = Path(extractor.__file__).read_text(encoding="utf-8")
+
+    assert "resolve_redirects" not in source
+    assert "is_redirect_url" in source
+    # And no http client is imported here either -- the resolver package's only
+    # export this module takes is a pure string predicate.
+    assert "import httpx" not in source
+
+
+def test_no_resolver_call_sits_inside_an_async_with_block_in_the_pipeline() -> None:
+    """AST proof: every `resolve_redirects` call in `pipeline.py` is OUTSIDE
+    every `async with`.
+
+    `async with _sm() as session` and `async with session.begin()` are the two
+    blocks that must never contain network I/O. Rather than naming them, this
+    walks EVERY `AsyncWith` in the module and asserts no resolver call is a
+    descendant of any of them -- so a resolver call placed inside some future
+    third `async with` is caught too.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import pipeline as pipeline_mod
+
+    tree = ast.parse(Path(pipeline_mod.__file__).read_text(encoding="utf-8"))
+
+    def _resolver_calls(node: ast.AST) -> list[ast.Call]:
+        return [
+            child
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and (
+                (isinstance(child.func, ast.Name) and child.func.id == "resolve_redirects")
+                or (
+                    isinstance(child.func, ast.Attribute)
+                    and child.func.attr == "resolve_redirects"
+                )
+            )
+        ]
+
+    all_calls = _resolver_calls(tree)
+    assert len(all_calls) == 1, f"expected exactly one resolver call, got {len(all_calls)}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncWith):
+            assert not _resolver_calls(node), (
+                "a resolve_redirects() call sits inside an `async with` block in "
+                "pipeline.py — that is network I/O inside the persistence "
+                "transaction of a paid run (D-V01-11, T-15.4-22)"
+            )
+
+
+def test_stage_7_resolves_before_it_asks_for_a_sessionmaker() -> None:
+    """Lexical order inside `_resolve_then_persist_claims`, asserted.
+
+    Belt and braces beside the ordering test: the resolver await comes before
+    the first mention of `get_sessionmaker` in the function body, so the
+    placement is visible in the diff as well as in the run.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import pipeline as pipeline_mod
+
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(pipeline_mod._resolve_then_persist_claims))
+    )
+    function = tree.body[0]
+    assert isinstance(function, ast.AsyncFunctionDef)
+    # Strip the docstring: it DISCUSSES `get_sessionmaker()` before the code
+    # calls anything, so a raw-text scan would compare prose to code and pass or
+    # fail for the wrong reason. `ast.unparse` drops comments on its own.
+    if isinstance(function.body[0], ast.Expr) and isinstance(
+        function.body[0].value, ast.Constant
+    ):
+        function.body = function.body[1:]
+    code = ast.unparse(function)
+
+    assert code.index("resolve_redirects(") < code.index("get_sessionmaker()")
+    assert code.index("resolve_redirects(") < code.index("session.begin()")

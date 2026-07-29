@@ -280,13 +280,22 @@ async def test_tribunal_pipeline_clear_brief_full_flow(monkeypatch):
     # the real writer, but a stand-in must still ACCEPT what Stage 7 now passes.
     # Captured rather than ignored, so this test also pins that the merge stage's
     # couldn't-find list actually reaches persistence.
+    #
+    # `resolved_urls` is 15.4-09's D-V01-11 redirect map, and it is THE WIDENING
+    # THE COMMENT ABOVE PREDICTED: Stage 7 resolves gemini grounding redirects
+    # BEFORE it opens the session, then hands the finished map to the writer.
+    # Named explicitly here for the same reason as `dropped_claims` — and
+    # captured, so this test also pins that the map actually reaches persistence
+    # rather than being resolved and dropped on the floor.
     async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session,
-                           dropped_claims=None, research_gaps=None):
+                           dropped_claims=None, research_gaps=None,
+                           resolved_urls=None):
         persist_calls.append({
             "claims": list(claims),
             "verdicts_by_claim": verdicts_by_claim,
             "dropped_claims": list(dropped_claims or []),
             "research_gaps": list(research_gaps or []),
+            "resolved_urls": dict(resolved_urls or {}),
         })
         return {
             "claim_ids": [uuid.uuid4() for _ in claims],
@@ -429,11 +438,14 @@ async def test_tribunal_pipeline_never_parks_for_clarification(monkeypatch):
         "nestor_pulse_sdk.pipeline.tribunal.pipeline.run_skeptic",
         fake_run_skeptic,
     )
-    # Same widened contract as the double above (15.1-14 / ENGINE-10): Stage 7 also
-    # passes the refuted / conflict-lost claims, persisted with claim_id = NULL.
-    # Explicit parameter, never a **kwargs catch-all.
+    # Same widened contract as the double above (15.1-14 / ENGINE-10, then
+    # 15.4-09 / D-V01-11): Stage 7 also passes the refuted / conflict-lost
+    # claims, persisted with claim_id = NULL, and the resolved-redirect map it
+    # built before opening the session. Explicit parameters, never a **kwargs
+    # catch-all.
     async def fake_persist(*, claims, verdicts_by_claim, run_id, tenant_id, session,
-                           dropped_claims=None, research_gaps=None):
+                           dropped_claims=None, research_gaps=None,
+                           resolved_urls=None):
         return {
             "claim_ids": [uuid.uuid4() for _ in claims],
             "source_ids": [],
@@ -623,8 +635,13 @@ async def test_persist_tribunal_claims_shape(monkeypatch):
     ):
         return uuid.uuid4()
 
+    # `resolved_url` / `resolution_status` are 15.4-09's D-V01-11 columns:
+    # additive and defaulted on the real writer, but a stand-in must ACCEPT what
+    # the loop now passes on every URL. Named explicitly, never a **kwargs
+    # catch-all, for the same reason `title` is.
     async def fake_upsert_source(
         session, *, tenant_id, url, provider, snapshot_text, title=None,
+        resolved_url=None, resolution_status=None,
     ):
         return uuid.uuid4()
 

@@ -189,7 +189,12 @@ from nestor_pulse_sdk.runs.stages import (
     stages_for,
 )
 from nestor_pulse_sdk.pipeline.tribunal.taxonomy import TAXONOMY
-from nestor_pulse_sdk.citations.extractor import persist_tribunal_claims
+from nestor_pulse_sdk.citations.extractor import (
+    persist_tribunal_claims,
+    # D-V01-11: the SAME URL extraction the persistence loop performs, so the
+    # pre-pass resolves exactly the set that is about to be upserted.
+    _gather_source_urls,
+)
 from nestor_pulse_sdk.pipeline.synthesis.steps import extract_focus_areas
 from nestor_pulse_sdk.db.base import get_sessionmaker
 
@@ -1103,6 +1108,107 @@ def _park_result(
     if verification_summary:
         result["verification_summary"] = verification_summary
     return result
+
+
+async def _resolve_then_persist_claims(
+    *,
+    survivors: list[dict],
+    dropped: list[dict],
+    verdicts_by_claim: dict,
+    research_gaps: Optional[list[dict]],
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> None:
+    """Stage 7. Resolve gemini redirects, THEN open the session and persist.
+
+    THE ORDER OF THE TWO HALVES IS THE POINT OF THIS FUNCTION (D-V01-11).
+
+    `persist_tribunal_claims` documents that the CALLER opens the session and the
+    transaction — so anything awaited inside that block holds a pooled connection
+    with RLS tenant context set. Redirect resolution is up to
+    `NESTOR_REDIRECT_RESOLVE_DEADLINE_S` (30 s by default) of network I/O against
+    a third party, and this is the FINAL persistence step of a ~$50 run: a pool
+    stall or a hung socket there costs the run its claims. Resolution is an
+    ENRICHMENT that is allowed to fail; the claims are not. So the resolver runs
+    HERE, before `get_sessionmaker()` is even called, and only the finished map
+    crosses into the transaction.
+
+    `tests/test_source_resolution.py` asserts the ORDERING — the resolver's last
+    request completes before `session.begin()` is entered — rather than merely
+    asserting that the map arrived. A test of the second kind would still pass if
+    a future edit moved resolution back inside the transaction, which is exactly
+    the edit this arrangement exists to prevent. This body is a module-level
+    function, not an inline block, so that ordering can be driven directly.
+
+    Extracted from the inline Stage 7 block; the `except Exception` that
+    deliberately does NOT block synthesis on a persistence failure is preserved
+    verbatim, including its log line.
+    """
+    from nestor_pulse_sdk.citations.redirect_resolver import resolve_redirects
+
+    # ------------------------------------------------------------------
+    # 7a. OUTSIDE any session or transaction: resolve the run's redirects.
+    # ------------------------------------------------------------------
+    # `_gather_source_urls` is the SAME extraction `persist_tribunal_claims`
+    # performs per claim, so the set resolved here is exactly the set upserted
+    # below — no drift, by construction rather than by care.
+    #
+    # `dropped` is included as well as `survivors` because both are handed to
+    # `persist_tribunal_claims`, and the dedupe means a URL cited by both costs
+    # one request, not two.
+    #
+    # A resolution failure degrades to an EMPTY MAP and persistence proceeds
+    # unchanged: a citation without its publisher URL is still a citation.
+    resolved_urls: dict = {}
+    try:
+        resolved_urls = await resolve_redirects(
+            _gather_source_urls(list(survivors) + list(dropped), verdicts_by_claim)
+        )
+    except Exception as exc:  # the resolver promises not to raise; belt and braces
+        log.warning(
+            "tribunal_pipeline: redirect resolution failed (%s) — persisting "
+            "citations without publisher URLs", exc,
+        )
+        resolved_urls = {}
+
+    # ------------------------------------------------------------------
+    # 7b. NOW open the session and the transaction. No network from here on.
+    # ------------------------------------------------------------------
+    try:
+        _sm = get_sessionmaker()
+        async with _sm() as session:
+            async with session.begin():
+                # ENGINE-10 / CR-02 — `dropped_claims` is NOT optional in
+                # spirit. A refuted claim lives in `dropped`, never in
+                # `survivors`, and gets no `claim` row; without this argument
+                # its verdict is never persisted at all, so
+                # report["verdicts"]["refute"] and report["refuted"] stay
+                # structurally empty on every run no matter how many claims
+                # the skeptic refuted. `dropped` here already covers BOTH
+                # adjudication losers and conflict losers — it is the same
+                # list the rejected_claims ledger was built from.
+                #
+                # D-13 — `research_gaps` is the merge stage's ATTRIBUTED
+                # couldn't-find list. It is written HERE, inside the same
+                # tenant context and the same transaction as the claims,
+                # because 15.2-06's "What we could not establish" section
+                # reads the `research_gap` table DIRECTLY rather than taking
+                # a hand-off through the synthesis bundle: the rows simply
+                # have to exist before `_write_final_report` runs, and this
+                # is the last tenant-scoped transaction before it.
+                await persist_tribunal_claims(
+                    claims=survivors,
+                    dropped_claims=dropped,
+                    verdicts_by_claim=verdicts_by_claim,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    session=session,
+                    research_gaps=research_gaps,
+                    resolved_urls=resolved_urls,
+                )
+    except Exception as exc:
+        # Do NOT block synthesis on persistence failures; log for audit
+        log.error("tribunal_pipeline: persist_tribunal_claims failed: %s", exc, exc_info=True)
 
 
 class TribunalPipeline:
@@ -3069,42 +3175,23 @@ class TribunalPipeline:
             })
 
         # ------------------------------------------------------------------
-        # Stage 7: Persist fine-grained survivor claims (RECALL MECHANISM)
+        # Stage 7: Resolve gemini redirects, THEN persist fine-grained survivor
+        # claims (RECALL MECHANISM)
         # ------------------------------------------------------------------
-        try:
-            _sm = get_sessionmaker()
-            async with _sm() as session:
-                async with session.begin():
-                    # ENGINE-10 / CR-02 — `dropped_claims` is NOT optional in
-                    # spirit. A refuted claim lives in `dropped`, never in
-                    # `survivors`, and gets no `claim` row; without this argument
-                    # its verdict is never persisted at all, so
-                    # report["verdicts"]["refute"] and report["refuted"] stay
-                    # structurally empty on every run no matter how many claims
-                    # the skeptic refuted. `dropped` here already covers BOTH
-                    # adjudication losers and conflict losers — it is the same
-                    # list the rejected_claims ledger just above was built from.
-                    #
-                    # D-13 — `research_gaps` is the merge stage's ATTRIBUTED
-                    # couldn't-find list. It is written HERE, inside the same
-                    # tenant context and the same transaction as the claims,
-                    # because 15.2-06's "What we could not establish" section
-                    # reads the `research_gap` table DIRECTLY rather than taking
-                    # a hand-off through the synthesis bundle: the rows simply
-                    # have to exist before `_write_final_report` runs, and this
-                    # is the last tenant-scoped transaction before it.
-                    await persist_tribunal_claims(
-                        claims=survivors,
-                        dropped_claims=dropped,
-                        verdicts_by_claim=verdicts_by_claim,
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                        session=session,
-                        research_gaps=research_gaps,
-                    )
-        except Exception as exc:
-            # Do NOT block synthesis on persistence failures; log for audit
-            log.error("tribunal_pipeline: persist_tribunal_claims failed: %s", exc, exc_info=True)
+        # The body lives in `_resolve_then_persist_claims` above, at module
+        # level, for ONE reason: the order of its two halves is load-bearing
+        # (D-V01-11) and a module-level function can be driven directly by the
+        # ordering test that pins it. Nothing about the persistence call itself
+        # changed — the `except Exception` that deliberately does not block
+        # synthesis on a persistence failure moved with it.
+        await _resolve_then_persist_claims(
+            survivors=survivors,
+            dropped=dropped,
+            verdicts_by_claim=verdicts_by_claim,
+            research_gaps=research_gaps,
+            run_id=run_id,
+            tenant_id=tenant_id,
+        )
 
         # ------------------------------------------------------------------
         # Stage 8: Scrub discredited content, then synthesise from FULL research
