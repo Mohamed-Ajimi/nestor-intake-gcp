@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: completed
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T17:12:15.174Z"
-last_activity: "2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)"
+last_updated: "2026-07-29T18:15:00.000Z"
+last_activity: "2026-07-29 -- Phase 15.5 (Wave 2, claim attribution) PLANNED: 3 plans in 2 waves, plan-checker VERIFICATION PASSED with no blockers. Wave 1 (15.4) stays code-complete and deliberately NOT deployed."
 progress:
   total_phases: 12
   completed_phases: 8
@@ -21,13 +21,39 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.4 — research-engine-redesign-extraction-repair-wave-1 (Wave 1 of ENGINE-REDESIGN-SPEC.md)
+**Current focus:** Phase 15.5 — research-engine-redesign-claim-attribution-wave-2 (Wave 2 of ENGINE-REDESIGN-SPEC.md § 3)
 
 ## Current Position
 
-Phase: 15.4 (research-engine-redesign-extraction-repair-wave-1) — NOT PLANNED
-Plan: Waves 1 code COMPLETE + gate-verified (10 plans; 07 deferred). 15.4-11 deploy plan is PARKED — operator ruled 2026-07-29: NO deploy, NO live run until the whole redesign (spec Waves 2-5) is built. Next: Wave 2 = claim attribution (D-R3), the hard prerequisite for Wave 3 grouping.
-Status: Phase 15.4 code-complete, NOT deploying — building Waves 2-5 before any measurement
+Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — PLANNED, not executed
+Plan: 3 plans in 2 waves, committed 6501929. Plan-checker returned VERIFICATION PASSED — no blockers,
+  no warnings. Wave 1 = 15.5-01 (three nullable `claim` columns, alembic 0017 on 0016, the pure bounded
+  `extract_as_of`). Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), parallel, zero file overlap.
+  Next: /gsd-execute-phase 15.5
+Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Phase 15.5 planned.
+  NO deploy and NO live run until the whole redesign (spec Waves 2-5) is built — operator ruling
+  2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from "Wave 1 alone" to the
+  whole redesign before it ever runs.
+
+  Phase 15.5 decisions taken in session (recorded in 15.5-CONTEXT.md), all three closing gaps the
+  spec left open:
+    D-W2-1  as_of is parsed in Python from EVIDENCE; the distiller prompt contract is NOT touched
+            (it is what Wave 1 just proved: 141/137/43/143 against the real audit blobs).
+    D-W2-2  record the dispatch corroboration_key as-is. Only the top-3 winners have one; the
+            remainder is dealt round-robin with "". NULL for ~12 of 15 winners is CORRECT here and
+            fills in Wave 3. The key is read for dispatch at research_division.py:684/:714/:1313
+            and pipeline.py:3920, so it must not be populated.
+    D-W2-3  _dedupe_claims merges sub_question/corroboration_key first-wins. Verified to need ZERO
+            production code — the function already keeps the first occurrence whole.
+
+  Two corrections to ENGINE-REDESIGN-SPEC.md § 3, both verified against source:
+    - the new alembic revision is 0017 on top of 0016, not "on top of 0015" (the spec predates
+      Wave 1 landing 0016_source_resolved_url.py).
+    - only the top-3 winners carry a corroboration_key at all, which the spec does not mention.
+
+  Known, accepted sparseness of the new columns: the distiller-fallback path cannot carry attribution
+  at all — claim_distiller builds units as (provider_name, chunk_text) at steps.py:1624-1630, so the
+  angle is gone before distillation. Those claims are permanently NULL. Recorded in three places.
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
