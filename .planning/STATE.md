@@ -25,12 +25,15 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — PLANNED, not executed
-Plan: 3 plans in 2 waves, committed 6501929. Plan-checker returned VERIFICATION PASSED — no blockers,
-  no warnings. Wave 1 = 15.5-01 (three nullable `claim` columns, alembic 0017 on 0016, the pure bounded
-  `extract_as_of`). Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), parallel, zero file overlap.
-  Next: /gsd-execute-phase 15.5
-Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Phase 15.5 planned.
+Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — EXECUTED, awaiting phase verification
+Plan: 3/3 plans executed and merged to master. Wave 1 = 15.5-01 (columns + alembic 0017 + extract_as_of).
+  Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), run in parallel, merged clean, zero conflicts.
+  Plus the D-W2-4 follow-up (241d9d5). All worktrees merged, removed, branches deleted; tree clean.
+  Integration check the isolated executors could NOT do, run centrally after merge: the three
+  claim-dict key names match exactly across the 02→03 seam (steps.py produces, extractor.py:1010-1012
+  consumes), and the length cap 02 handed forward IS implemented once, at the DB boundary in
+  `_insert_claim` (_SUB_QUESTION_MAX_CHARS=500, _CORROBORATION_KEY_MAX_CHARS=32).
+Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Phase 15.5 executed.
   NO deploy and NO live run until the whole redesign (spec Waves 2-5) is built — operator ruling
   2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from "Wave 1 alone" to the
   whole redesign before it ever runs.
@@ -45,6 +48,18 @@ Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Pha
             and pipeline.py:3920, so it must not be populated.
     D-W2-3  _dedupe_claims merges sub_question/corroboration_key first-wins. Verified to need ZERO
             production code — the function already keeps the first occurrence whole.
+    D-W2-4  (taken after wave 1 landed) month precision keeps its month: `maart 2021` and `2021-03`
+            both resolve to 2021-03-01, not 2021-01-01/None. As built, the bare-year convention was
+            overwriting March with January, which collapses `maart 2021` and `december 2021` onto one
+            instant — the exact D-V01-4 rollout-vs-contradiction failure as_of exists to prevent.
+
+  OWED AT 15.8 — carried forward from every plan in this phase, never claimed here:
+    - `Running upgrade 0016 -> 0017` (alembic 0017 has NEVER run), alongside 0016's still-unpaid
+      `Running upgrade 0015 -> 0016`. Proof is the literal line, never exit code 0.
+    - The pytest runs. BOTH builds: `cloudbuild.test-engine.yaml` (reconcile `collecting: 33 of 33`)
+      and `cloudbuild.test-gates.yaml`. Baselines to beat: engine 1030 passed / 33 files, gates 182
+      passed — both counts must RISE (~23 new test functions from 15.5-02 alone), and EXPECTED_FILES
+      must stay 33 (only 15.5-01 added a file).
 
   Two corrections to ENGINE-REDESIGN-SPEC.md § 3, both verified against source:
     - the new alembic revision is 0017 on top of 0016, not "on top of 0015" (the spec predates
