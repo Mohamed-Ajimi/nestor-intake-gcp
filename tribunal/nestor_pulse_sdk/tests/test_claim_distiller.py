@@ -94,14 +94,33 @@ class FakeAudited:
 # Canned multi-line claim responses (plain-text line format)
 # ---------------------------------------------------------------------------
 
-# Three valid claims in tab-separated "FACET<TAB>CLAIM_TEXT" format.
+# Three valid claims, columns separated by a REAL TAB (U+0009).
+#
+# THIS FIXTURE STAYS TAB-SEPARATED ON PURPOSE (phase 15.4, plan 15.4-03). The
+# distiller PROMPT contract is now `FACET ||| CLAIM_TEXT ||| EVIDENCE` — the old
+# prompt described its separator as the placeholder `<TAB>`, a model copied
+# those five characters back as data, and 278 V-01 coffee claims were discarded
+# on a string comparison. The PARSER still accepts a real tab, first in its
+# priority order, and keeping this fixture tab-separated is how that back-compat
+# stays a behaviour UNDER TEST rather than an accident. `GOOD_RESPONSE_PIPES`
+# below is the same three claims in the new contract; they must parse alike.
 GOOD_RESPONSE = (
     "Belgian IT market share trends\tCronos holds ~18% of Belgian IT services market by revenue in 2024.\n"
     "Key competitor strategies\tCapgemini Belgium expanded its public-sector practice by 30% YoY.\n"
     "Belgian IT market share trends\tCloud migration projects grew 45% across Cronos client portfolio in 2025.\n"
 )
 
-# Response with one malformed line (missing tab separator) mixed with valid lines.
+# The SAME three claims in the current `|||` prompt contract. A model answering
+# the prompt as written now sends this shape; it must produce claims identical
+# to GOOD_RESPONSE's.
+GOOD_RESPONSE_PIPES = (
+    "Belgian IT market share trends ||| Cronos holds ~18% of Belgian IT services market by revenue in 2024.\n"
+    "Key competitor strategies ||| Capgemini Belgium expanded its public-sector practice by 30% YoY.\n"
+    "Belgian IT market share trends ||| Cloud migration projects grew 45% across Cronos client portfolio in 2025.\n"
+)
+
+# Response with one malformed line (NO separator of any accepted kind — no tab,
+# no `<TAB>`, no `|||`, no `|`, and single spaces only) mixed with valid lines.
 MIXED_RESPONSE = (
     "Belgian IT market share trends\tCronos holds ~18% market share in Belgian IT services.\n"
     "THIS LINE IS MALFORMED NO TAB SEPARATOR\n"
@@ -240,6 +259,56 @@ class TestClaimDistillerNormalPath:
         assert "config" in call["kwargs"], (
             "gemini_generate must receive a 'config' kwarg to disable thinking"
         )
+
+
+class TestPipeSeparatedResponseMatchesTabSeparated:
+    """15.4-03: the `|||` prompt contract and the tab back-compat agree.
+
+    The distiller prompt now asks for `FACET ||| CLAIM_TEXT ||| EVIDENCE`. The
+    parser still accepts a real tab, because the old prompt asked for one and
+    because dropping that acceptance is how V-01's already-working 43 and 143
+    claim blobs would have been lost while "fixing" the 278 broken ones.
+
+    Both canned responses are driven through the REAL `claim_distiller`, so this
+    covers the whole path and not just the splitter.
+    """
+
+    def setup_method(self):
+        self.run_id = uuid.uuid4()
+        self.tenant_id = uuid.uuid4()
+
+    def _claims_for(self, canned: str) -> list[dict]:
+        return _run(
+            claim_distiller(
+                provider_reports=PROVIDER_REPORTS,
+                mission_brief=MISSION_BRIEF,
+                audited=FakeAudited(canned),
+                run_id=self.run_id,
+                tenant_id=self.tenant_id,
+            )
+        )
+
+    def test_pipe_separated_response_produces_claims(self):
+        claims = self._claims_for(GOOD_RESPONSE_PIPES)
+        assert len(claims) >= 2, (
+            f"the `|||` contract the prompt now asks for must parse, got {claims}"
+        )
+
+    def test_pipe_and_tab_responses_produce_identical_claims(self):
+        """Equality, not "both produced something" — that weaker assertion is
+        the shape that let the `<TAB>` defect survive a full paid run."""
+        tabbed = self._claims_for(GOOD_RESPONSE)
+        piped = self._claims_for(GOOD_RESPONSE_PIPES)
+        assert piped == tabbed, (
+            f"the same three claims written with ||| and with a tab must parse "
+            f"identically.\n  tab : {tabbed}\n  pipe: {piped}"
+        )
+
+    def test_the_two_fixtures_really_are_different_strings(self):
+        """Non-vacuity: the equality above must not be comparing a string to itself."""
+        assert GOOD_RESPONSE != GOOD_RESPONSE_PIPES
+        assert "\t" in GOOD_RESPONSE and "|||" not in GOOD_RESPONSE
+        assert "|||" in GOOD_RESPONSE_PIPES and "\t" not in GOOD_RESPONSE_PIPES
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,19 @@ Root cause being pinned: the old distiller made ONE call over ALL concatenated
 reports with max_output_tokens=4096 — extraction silently stopped ~29 claims in,
 so on the LUKOIL final run only question 5 was ever fact-checked. Now: one call
 per report chunk, in parallel, each with the model-maximum output budget.
+
+WHAT THIS FILE DOES *NOT* TEST — recorded 2026-07-29, phase 15.4 plan 15.4-03
+-----------------------------------------------------------------------------
+It asserts NOTHING about the distiller prompt. `_build_distiller_prompt`'s
+docstring used to claim this file pinned that prompt byte-identically; that
+claim was false. `FakeAudited` below reads two ANCHORS out of the prompt —
+`### Provider: (\\w+)` (line 35) and the `--- Research reports ---` split (line
+37) — purely to route a canned response back per chunk. Both anchors are
+untouched by the 15.4-03 switch of the separator contract from `<TAB>` to
+`|||`, which is why this file needed no functional change; verified by reading
+it and by building the prompt. If you are looking for the assertion that holds
+the prompt contract, it is
+`test_distiller_separators.py::TestDistillerPromptContract`, not this file.
 """
 from __future__ import annotations
 

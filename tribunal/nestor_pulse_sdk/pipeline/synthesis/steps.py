@@ -1244,18 +1244,61 @@ def _build_distiller_prompt(
 ) -> str:
     """Build the plain-text distiller prompt.
 
-    Uses a tab-separated "FACET<TAB>CLAIM_TEXT" line format (one claim per line),
+    THE CONTRACT IS ``FACET ||| CLAIM_TEXT ||| EVIDENCE`` (one claim per line),
     mirroring the RelevanceGate line discipline (CLAUDE.md anti-pattern section).
     NOT JSON mode — citations⊗structured-outputs HTTP 400 trap.
+
+    A REAL TAB IS STILL ACCEPTED BY THE PARSER, AND IS DELIBERATELY NOT NAMED
+    HERE. `_split_distiller_line` takes a tab first in its priority order, so
+    every compliant model and every existing tab-separated fixture keeps
+    working. What changed is that this prompt no longer DESCRIBES its separator
+    with a token the model can render as characters.
+
+    WHY (V-01, run 7dcf51d5, 2026-07-28)
+    ------------------------------------
+    This prompt used to say ``FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE``. Two of four
+    gemini-2.5-flash calls in one batch, at temperature 0.0, copied the
+    placeholder back as five literal characters. The parser tested for U+0009,
+    found none, and discarded **278 well-formed, evidence-bearing coffee
+    claims** — after which the delivered client report stated that the Benelux
+    coffee data "geeft geen volledig beeld". That was false, and it was caused
+    by a placeholder describing a control character. Do not reintroduce
+    ``<TAB>``, or any other angle-bracket placeholder standing for a character
+    the model cannot see, anywhere in the returned string.
+
+    WHAT ACTUALLY GUARDS THIS CONTRACT — READ THIS BEFORE EDITING
+    -------------------------------------------------------------
+    The previous version of this docstring claimed the default prompt stayed
+    "BYTE-IDENTICAL to the one `test_claim_distiller.py` and
+    `test_distiller_coverage.py` pin". **NEITHER OF THOSE TWO FILES PINS THIS
+    PROMPT, AND NEITHER EVER DID** — verified by reading both on 2026-07-29:
+
+      * ``test_distiller_coverage.py`` asserts NOTHING about the prompt. It
+        regexes ``### Provider: (\\w+)`` and splits on ``--- Research reports ---``
+        inside its fake client (lines 35 and 37) purely to route a canned
+        response back.
+      * ``test_claim_distiller.py`` does the same at line 339. Its only tab
+        reference is its canned *response* fixture, which is test INPUT, not an
+        assertion about this function's output.
+
+    So the ``|||`` switch turned neither of them red, and no green gate proved
+    anything about this contract. A docstring that claims coverage which does
+    not exist is worse than no docstring: it is precisely what made this edit
+    look safe. The coverage now genuinely exists — it is
+    ``tests/test_distiller_separators.py::TestDistillerPromptContract``, whose
+    assertions are that the built prompt CONTAINS
+    ``FACET ||| CLAIM_TEXT ||| EVIDENCE`` and contains NO ``<TAB>``, under the
+    default, ``full_extraction=True`` and non-empty-``language`` variants.
+    **That class is what holds this contract. Change this string and it goes
+    red; that is the intended way to find out.**
 
     ``full_extraction`` (D-14, plan 15.2-14) switches on the PER-PROVIDER FALLBACK
     voice: this report carried no usable machine-readable fact list, so this
     extraction is the only record of what that researcher found. It is built as an
     extra rule fragment that is the EMPTY STRING in the default case, exactly the
-    way ``lang_rule`` is, so the default prompt stays BYTE-IDENTICAL to the one
-    `test_claim_distiller.py` and `test_distiller_coverage.py` pin. That is the
-    mechanism by which D-15 holds: this function's existing behaviour is untouched
-    and neither of those two test files needs editing.
+    way ``lang_rule`` is — so the D-14 and language fragments cannot smuggle a
+    separator placeholder into the default prompt. That mechanism is unchanged
+    by this edit; only the claim about who tests it was wrong.
     """
     facet_block = "\n".join(f"  - {f}" for f in focus_area_labels) or "  - general"
 
@@ -1287,7 +1330,7 @@ def _build_distiller_prompt(
         "You are a claim distiller. Extract atomic factual claims from the research reports below.\n\n"
         "Rules:\n"
         "  - One claim per line. Do NOT use JSON, bullets, or numbered lists.\n"
-        "  - Each line MUST use this format: FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE\n"
+        "  - Each line MUST use this format: FACET ||| CLAIM_TEXT ||| EVIDENCE\n"
         "    where FACET is one of the focus area labels listed below.\n"
         "  - CLAIM_TEXT = one self-contained atomic fact (no conjunctions joining two facts).\n"
         "  - EVIDENCE = the shortest VERBATIM sentence or phrase, copied EXACTLY from the\n"
@@ -1302,11 +1345,11 @@ def _build_distiller_prompt(
         "    number of claims — thorough coverage matters more than brevity. Each focus\n"
         "    area should be covered in proportion to how much the reports say about it.\n"
         f"{full_rule}"
-        "  - Blank lines and lines without at least one TAB separator are ignored.\n\n"
+        "  - Blank lines and lines without at least one ||| separator are ignored.\n\n"
         f"Focus area labels (use one per claim):\n{facet_block}\n\n"
         f"--- Research reports ---\n\n{reports_text}\n\n"
         "--- End reports ---\n\n"
-        "Output claims now (one per line, FACET<TAB>CLAIM_TEXT<TAB>EVIDENCE format):"
+        "Output claims now (one per line, FACET ||| CLAIM_TEXT ||| EVIDENCE format):"
     )
 
 
