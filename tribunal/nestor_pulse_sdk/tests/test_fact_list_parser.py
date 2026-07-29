@@ -34,6 +34,8 @@ Coverage:
   E. Provider format deviations recovered at the parser (15.4-04)
     18. a uniform leading STATEMENT/FACT/CLAIM column is stripped, and a LONE
         echoed header row still is not (V-01 idx 8)
+    19. a `[cite: N]` SOURCE_URL cell resolves against the report's own numbered
+        bibliography, and an unresolvable one is COUNTED (V-01 idx 4)
 
 Cloud Build invocation (no Postgres and no provider key needed):
   gcloud builds submit tribunal \\
@@ -56,6 +58,7 @@ from nestor_pulse_sdk.pipeline.tribunal.facts import (
     NOT_FOUND_START,
     QUALITY_VALUES,
     VERTEX_REDIRECT_HOST,
+    build_cite_index,
     build_fact_list_prompt_block,
     build_label_index,
     display_domain,
@@ -933,6 +936,22 @@ def test_the_normaliser_preserves_blank_lines_and_reports_its_token() -> None:
     ]
 
 
+def test_no_leading_column_token_could_ever_have_been_a_fact() -> None:
+    """The structural guarantee behind the whole normaliser, pinned as a bound.
+
+    Every token is shorter than `_MIN_STATEMENT_CHARS`, so a line whose first column
+    is one of them cannot be a line that parses as a fact today: it is already
+    discarded by the echoed-header guard or by the minimum-length rule. Normalisation
+    can only ever change the outcome of lines that are currently thrown away — which
+    is why it cannot corrupt a fact list that already works. A future edit that adds a
+    longer token (say `OBSERVATION`) breaks that argument, and must break here first.
+    """
+    assert facts._LEADING_COLUMN_TOKENS
+    for token in facts._LEADING_COLUMN_TOKENS:
+        assert token == token.upper().strip()
+        assert len(token) < facts._MIN_STATEMENT_CHARS
+
+
 def test_a_shifted_block_cannot_forge_its_own_attribution_or_grades() -> None:
     """T-15.4-11 — normalisation moves COLUMN BOUNDARIES and nothing else.
 
@@ -956,3 +975,262 @@ def test_a_shifted_block_cannot_forge_its_own_attribution_or_grades() -> None:
         assert fact["certainty"] in CERTAINTY_VALUES
     assert result.facts[0]["provider_quality"] == "other"
     assert result.facts[0]["certainty"] == "single"
+
+
+# ---------------------------------------------------------------------------
+# V-01 idx 4 — a well-formed 20-line block whose SOURCE_URL column held the
+# `[cite: N]` marker instead of a URL. ~20 × `rejecting non-http(s) SOURCE_URL
+# '[cite: 25, 26]'` in the trail: THE FACTS SURVIVED, THEIR SOURCES DID NOT.
+# The marker is resolvable, because the report's own numbered bibliography puts
+# the citation number and the URL on the SAME line.
+# ---------------------------------------------------------------------------
+
+
+def _bibliography(n: int, first: int = 1) -> str:
+    """A report's trailing numbered source list — the shape `build_cite_index` reads."""
+    return "\n".join(
+        f"{i}. [bron-{i}.example.com](https://bron-{i}.example.com/artikel)"
+        for i in range(first, first + n)
+    )
+
+
+def _idx4_lines(n: int = 20) -> list[str]:
+    """The idx-4 shape: every SOURCE_URL cell a two-number `[cite: N, M]` marker."""
+    return [
+        f"Feit nummer {i} over de Benelux-koffiemarkt, lang genoeg om te tellen."
+        f"\t[cite: {i}, {i + 1}]\tpress\tcertain\tbewijs {i}"
+        for i in range(1, n + 1)
+    ]
+
+
+def test_build_cite_index_maps_numbers_to_urls() -> None:
+    """Number and URL are on the same line, which is what makes the index possible."""
+    text = "25. [example.com](https://host/a)\n26. [other.org](https://host/b)\n"
+    assert build_cite_index(text) == {25: "https://host/a", 26: "https://host/b"}
+
+    # `44)` as well as `44.`, and leading indentation.
+    assert build_cite_index("  44) [x.com](https://host/c)") == {44: "https://host/c"}
+
+    # First number wins — a report that re-uses a number does not get to overwrite.
+    assert build_cite_index(
+        "7. [a](https://host/first)\n7. [b](https://host/second)"
+    ) == {7: "https://host/first"}
+
+    # Not a bibliography line: a number with no link, and a link with no number.
+    assert build_cite_index("12. geen link op deze regel") == {}
+    assert build_cite_index("[example.com](https://host/a)") == {}
+
+
+@pytest.mark.parametrize(
+    "hostile_link",
+    ["javascript:alert(1)", "data:text/html;base64,AAAA", "file:///etc/passwd"],
+)
+def test_build_cite_index_never_returns_a_non_http_url(hostile_link: str) -> None:
+    """T-15.4-10 — SECURITY CONTROL, NOT A FORMATTING NICETY.
+
+    A URL recovered here is persisted and later rendered as a CLICKABLE LINK in the
+    superadmin citation panel, so it is held to exactly the scheme discipline
+    `_parse_url_cell` states. The bibliography is model-written text carrying pages
+    the provider chose to ingest; it is not more trusted for being numbered.
+    """
+    assert build_cite_index(f"1. [klik hier]({hostile_link})") == {}
+
+
+def test_build_cite_index_is_bounded_and_never_raises() -> None:
+    """T-15.4-12 — a hostile 88 KB report degrades a run, it must not fail one."""
+    big = "\n".join(
+        f"{i}. [d{i}.example.com](https://d{i}.example.com/a)" for i in range(1, 4000)
+    )
+    assert len(build_cite_index(big)) <= facts._MAX_LABEL_INDEX
+
+    for hostile in (None, "", "\t", "[cite: 1]", "1." * 20_000, "x" * 200_000,
+                    "1. [" + "a" * 5_000 + "](https://host/a)"):
+        assert isinstance(build_cite_index(hostile), dict)
+
+
+def test_cite_markers_resolve_against_the_reports_own_bibliography() -> None:
+    """V-01 idx 4 — the rescue. Twenty facts, twenty sources, nothing rejected."""
+    report = f"Een rapport over de koffiemarkt.\n\n## Bronnen\n{_bibliography(21)}"
+    result = parse_fact_list(
+        f"{report}\n\n{_fact_block(_idx4_lines(20))}\n", provider=PROVIDER, facet=FACET
+    )
+
+    assert len(result.facts) == 20
+    assert all(fact["source_urls"] for fact in result.facts), "every source recovered"
+    assert result.facts[0]["source_urls"] == [
+        "https://bron-1.example.com/artikel",
+        "https://bron-2.example.com/artikel",
+    ]
+    assert result.facts[0]["source_domain"] == "bron-1.example.com"
+    assert result.rejected_urls == 0, "a resolved marker is not a rejection"
+    assert result.unresolved_cite_markers == 0
+    assert result.parse_errors == 0
+    assert result.needs_distiller_fallback is False
+
+
+def test_an_unresolvable_cite_marker_keeps_the_fact_and_is_counted() -> None:
+    """The SAME block with the bibliography removed: degraded, and visibly so.
+
+    The facts still survive — a badly-written source never costs a fact — but the
+    loss of twenty citations is a NAMED number, not a silence.
+    """
+    result = parse_fact_list(
+        _fact_block(_idx4_lines(20)), provider=PROVIDER, facet=FACET
+    )
+
+    assert len(result.facts) == 20
+    assert all(fact["source_urls"] == [] for fact in result.facts)
+    assert all(fact["source_domain"] == "" for fact in result.facts)
+    assert result.unresolved_cite_markers == 20
+    assert result.rejected_urls == 20, "unresolved keeps today's rejection accounting"
+    assert result.needs_distiller_fallback is False
+
+
+def test_a_partly_resolvable_marker_counts_as_resolved() -> None:
+    """One number that names a source is a source. Numbers that name nothing are not."""
+    report = "5. [a.example.com](https://a.example.com/x)"
+    line = (
+        "Een feit dat lang genoeg is om te tellen.\t[cite: 5, 99]\tpress\tcertain\tbewijs"
+    )
+    result = parse_fact_list(
+        f"{report}\n\n{_fact_block([line])}", provider=PROVIDER, facet=FACET
+    )
+
+    assert result.facts[0]["source_urls"] == ["https://a.example.com/x"]
+    assert result.unresolved_cite_markers == 0
+    assert result.rejected_urls == 0
+
+
+def test_repeated_cite_numbers_resolve_to_one_url() -> None:
+    """Deduped, in order — `source_urls` is a list of sources, not of mentions."""
+    report = "5. [a.example.com](https://a.example.com/x)"
+    line = "Een feit dat lang genoeg is om te tellen.\t[cite: 5, 5]\tpress\tcertain\tbewijs"
+    result = parse_fact_list(
+        f"{report}\n\n{_fact_block([line])}", provider=PROVIDER, facet=FACET
+    )
+
+    assert result.facts[0]["source_urls"] == ["https://a.example.com/x"]
+
+
+def test_a_recovered_citation_is_graded_like_any_other_url() -> None:
+    """A recovered source must not sit at tier 3 by accident.
+
+    `source_domain` and `quality_tier_hint` are derived from the FIRST resolved URL
+    through the same `display_domain` call every other fact line uses.
+    """
+    report = "12. [spglobal.com](https://www.spglobal.com/report-2024)"
+    line = (
+        "De Benelux-markt telde in 2024 ruim 8.000 tankstations."
+        "\t[cite: 12]\tpress\tcertain\truim 8.000 tankstations"
+    )
+    result = parse_fact_list(
+        f"{report}\n\n{_fact_block([line])}", provider=PROVIDER, facet=FACET
+    )
+
+    fact = result.facts[0]
+    assert fact["source_urls"] == ["https://www.spglobal.com/report-2024"]
+    assert fact["source_domain"] == "spglobal.com"
+    assert fact["quality_tier_hint"] <= 2
+
+
+def test_a_recovered_vertex_redirect_still_resolves_its_display_domain() -> None:
+    """Pitfall 10 and the cite index compose: the bibliography carries BOTH answers.
+
+    Gemini is the provider that writes `[cite: N]` AND the provider whose URLs are
+    opaque redirects. A citation recovered from its bibliography must still reach the
+    real domain through that same line's markdown label.
+    """
+    url = f"https://{VERTEX_REDIRECT_HOST}/grounding-api-redirect/AbCd1234"
+    report = f"44. [hnsenergygroup.com]({url})"
+    line = "Een feit dat lang genoeg is om te tellen.\t[cite: 44]\tpress\tcertain\tbewijs"
+    result = parse_fact_list(
+        f"{report}\n\n{_fact_block([line])}", provider=PROVIDER, facet=FACET
+    )
+
+    assert result.facts[0]["source_urls"] == [url]
+    assert result.facts[0]["source_domain"] == "hnsenergygroup.com"
+
+
+def test_a_non_cite_malformed_url_behaves_exactly_as_before() -> None:
+    """The cite path must not swallow the ordinary rejection path (regression)."""
+    line = (
+        "De marktomvang bedroeg naar schatting EUR 1,2 miljard in 2024."
+        "\tjavascript:alert(1)\tpress\tcertain\tEUR 1,2 miljard"
+    )
+    result = parse_fact_list(_fact_block([line]), provider=PROVIDER, facet=FACET)
+
+    assert len(result.facts) == 1
+    assert result.facts[0]["source_urls"] == []
+    assert result.rejected_urls == 1
+    assert result.unresolved_cite_markers == 0
+
+
+def test_a_placeholder_url_is_never_read_as_a_cite_marker() -> None:
+    """A stated absence of a source still drops the fact (T-15.2-234, unchanged)."""
+    line = "De marktomvang bedroeg EUR 1,2 miljard.\tN/A\tpress\tcertain\tEUR 1,2"
+    result = parse_fact_list(_fact_block([line]), provider=PROVIDER, facet=FACET)
+
+    assert result.facts == []
+    assert result.placeholder_urls == 1
+    assert result.unresolved_cite_markers == 0
+
+
+@pytest.mark.parametrize(
+    "cell",
+    ["[cite: 25, 26]", "[cite: 7]", "[cite:7]", "[CITE: 7]", "[cite_7]",
+     " [cite: 1, 2, 3] ", "[cite: 1 , 2]"],
+)
+def test_cite_cells_are_recognised(cell: str) -> None:
+    """The cell must be ONLY a marker — the spelling mirrors _CITE_MARKER_RE."""
+    assert facts._is_cite_cell(cell) is True
+
+
+@pytest.mark.parametrize(
+    "cell",
+    ["https://example.com/a", "https://example.com/a [cite: 7]", "[cite: abc]",
+     "[cite: ]", "[citation: 7]", "zie [cite: 7] hierboven", "", "N/A"],
+)
+def test_non_cite_cells_are_not_recognised(cell: str) -> None:
+    """A cell that merely CONTAINS a marker is not a citation-only cell."""
+    assert facts._is_cite_cell(cell) is False
+
+
+def test_resolve_cite_cell_never_raises_on_a_hostile_index() -> None:
+    """The module contract: nothing here raises, for any input."""
+    assert facts._resolve_cite_cell("[cite: 1]", None) == []
+    assert facts._resolve_cite_cell("", {1: "https://host/a"}) == []
+    assert facts._resolve_cite_cell("[cite: 1]", {}) == []
+    assert facts._resolve_cite_cell("not a marker", {1: "https://host/a"}) == []
+    assert facts._resolve_cite_cell("[cite: 1]", {1: "https://host/a"}) == [
+        "https://host/a"
+    ]
+
+
+def test_fact_list_result_still_constructs_without_the_new_counter() -> None:
+    """The new field is APPENDED LAST and defaulted, so every construction stays valid."""
+    empty = facts.FactListResult(facts=[], not_found=[])
+    assert empty.unresolved_cite_markers == 0
+
+    positional = facts.FactListResult([], [], False, 0, 0, 0, 0, True, None)
+    assert positional.unresolved_cite_markers == 0
+
+
+def test_no_extra_key_reaches_the_fact_dicts() -> None:
+    """A recovered citation lands in `source_urls` — the ONE place it can survive.
+
+    `_normalise_fact_claim` (steps.py) builds its output from a fixed key set, so an
+    extra key added here would be SILENTLY DROPPED before persistence. Asserted for
+    both the resolved and the unresolved shape.
+    """
+    expected_keys = [
+        "text", "facet", "evidence", "found_by", "source_urls",
+        "certainty", "provider_quality", "source_domain", "quality_tier_hint",
+    ]
+    report = f"## Bronnen\n{_bibliography(21)}"
+    block = _fact_block(_idx4_lines(20))
+
+    for text in (f"{report}\n\n{block}", block):
+        result = parse_fact_list(text, provider=PROVIDER, facet=FACET)
+        assert len(result.facts) == 20
+        for fact in result.facts:
+            assert list(fact.keys()) == expected_keys
