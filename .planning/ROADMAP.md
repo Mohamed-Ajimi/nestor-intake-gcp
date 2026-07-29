@@ -187,10 +187,12 @@ mixed group has no single parent. Stamp the sub-question and a `corroboration_ke
 correct without it.
 **Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 3 (D-R3).
 **Requirements**: none
-**Plans:** 0 plans
+**Plans:** 3 plans in 2 waves
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 15.5 to break down)
+- [ ] 15.5-01-PLAN.md — wave 1: the three nullable `claim` columns, alembic 0017 on 0016, and the pure bounded `extract_as_of`
+- [ ] 15.5-02-PLAN.md — wave 2: thread `_sub_question` / `_corroboration_key` from dispatch onto every claim dict, attach `as_of`, pin the invariant-2 no-op
+- [ ] 15.5-03-PLAN.md — wave 2: `_insert_claim` writes the three columns (typed, clamped, absent-means-NULL) and the write path is proven with a fake session
 
 ### Phase 15.4: Research Engine Redesign — Extraction Repair (Wave 1) (INSERTED 2026-07-29)
 
