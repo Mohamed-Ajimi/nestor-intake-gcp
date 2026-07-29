@@ -1,62 +1,69 @@
-# CONTINUE HERE — session handoff 2026-07-29
+# CONTINUE HERE — session handoff 2026-07-29 (evening)
 
-Top-level handoff. The per-phase `.continue-here.md` files under `.planning/phases/15.2/`, `15.3/`
-and `16/` are **superseded for deploy purposes** — the deploy they describe is now COMPLETE.
+Supersedes the earlier 2026-07-29 handoff. The deploy is complete; V-01 is analysed; **both gating
+diagnostics are answered and the engine redesign is fully specified.** Tree is clean, nothing in flight.
 
-## Where things stand in one paragraph
+## Start here
 
-The combined 15.2 + 15.3 deploy is **finished**: all four services are live, `tribunal-worker` was
-recreated and unpaused after the 2026-07-28 incident, and `DEPLOY-RUNBOOK` § 15.2.k's dangerous
-ordering has been corrected. **V-01 has run** (`7dcf51d5`, 2026-07-28, 65.1 min, $53.48, 396 claims,
-`completed_degraded`) and has been analysed end to end. The full forensics are in
-**`docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md`** — read that before forming any
-view about the engine. Nothing is in flight; the tree is clean.
+**`.planning/ENGINE-REDESIGN-SPEC.md`** — the whole plan: 9 decisions, 5 waves, exact file/function
+targets, invariants, tests, cost baseline. It is written to be executed without re-deriving anything.
 
-## The next actions, in order (the order is load-bearing)
+Background, in order: `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md` (the two root
+causes) → `run-20260728-7dcf51d5-V01-FINDINGS.md` (the run's forensics, with corrections applied).
 
-Full detail in the memory note `engine-fix-sequence-post-v01`.
+## What changed today, in one paragraph
 
-0. **TIME-LIMITED — preserve V-01's citations.** Gemini's grounding redirects expire ~30 days from
-   2026-07-28, i.e. **around late August 2026**. All 225 resolved cleanly on 2026-07-29. Resolve and
-   store the real publisher URLs or the forensics doc's evidence base becomes unverifiable.
-1. **Two diagnostics — these gate everything else.**
-   a. Why did gemini omit the `FACTS_START/FACTS_END` block on 2 of 5 reports? (The two without one
-      are its longest — 40k and 57k chars — so truncation is the prime suspect.)
-   b. Why did the distiller return ZERO claims for the coffee focus area while producing 186 from
-      other focus areas in the same pass?
-   **A truncation cause and a tagging cause need OPPOSITE fixes**, and one of them makes the Q4
-   grouping change dangerous. Do not design before these are answered.
-2. **Operator decision: Q1 + Q4 together** (see memory `engine-design-open-questions`). Q4 is
-   supported by V-01 evidence but gated on 1a.
-3. **Then plan the phase**: writer reads the research (not only claims) → extraction fix → resolve
-   redirects at ingest → `corroboration_key` + `as_of` date on claims → claim clustering LAST.
+The two diagnostics that gated everything were answered, and **both overturned the hypothesis they were
+testing**. The missing `FACTS` block is **format drift, not truncation** — which clears the Q4 grouping
+gate. And the distiller never failed: it returned **278 well-formed coffee claims** that the parser
+threw away because gemini wrote the literal string `<TAB>` instead of a tab character, while the prompt
+itself uses `<TAB>` as a placeholder describing the separator. That single defect is the true origin of
+the client report's false *"geen volledig beeld"* statement. V-01's 225 citations are preserved in the
+repo before their ~late-Aug expiry. The session then went on to design the engine fix with the operator.
 
-## The finding that survived every check
+## Next action — Wave 1, and ship it alone
 
-**The report is written from claims only, and ~89% of the research never reaches the claim layer.**
-Gemini's two coffee angles returned 98,148 chars of on-target research — Shell Café, Circle K
-dropping Illy, LUKOIL's own Costa/Douwe Egberts model — and produced **zero** claims. The delivered
-coffee section has no Benelux content and tells the client the Benelux data "geeft geen volledig
-beeld": a gap of our own making, reported as a limitation of the evidence.
+**`/gsd-plan-phase`** off `.planning/ENGINE-REDESIGN-SPEC.md` § Wave 1 (extraction repair).
 
-## READ THIS BEFORE JUDGING THE ENGINE
+Wave 1 is: the `<TAB>` parser + prompt fix · make "returned lines, kept zero claims" a **WARNING** ·
+scope the untrustworthy ZERO-claims warning to in-scope facets · retry covering **all three** gemini
+format deviations · resolve redirects at ingest · `gpt-5.6-sol` cost-table entry.
 
-**Read the delivered report (`output` row, `format='markdown'`), not the claim table or the logs.**
-Four claims in the findings doc were written from intermediate artifacts and had to be withdrawn or
-corrected — each time assuming a capability was missing when it was working:
+**Ship Wave 1 by itself and let one run measure it.** Everything downstream is judged through the
+extraction funnel; shipping the redesign on top of a broken meter would attribute the parser bug to the
+redesign. Wave 2 (claim attribution) is a **hard prerequisite** for Wave 3 (grouping) — not optional.
 
-- D-V01-4 ("a contradiction shipped unflagged") — **WITHDRAWN**. The report has 34 settled
-  contradictions with live re-fetching; De Haan was entry 34, settled better than the analysis was.
-- `brief_conflicts` "never reaches the report" — **false**, it renders in full.
-- gemini's redirects blamed for the extraction failure — **false**, they are known and handled since
-  plan 15.2-04/05.
-- gemini's link label as publisher domain — true only in the bibliography, not inline.
+**Wave 1 has a real regression fixture:** replay V-01's two coffee audit blobs through the new parser
+and assert **278** claims recovered. Exact blob IDs and the `gcloud` command are in the spec § 8.
 
-**The verification stage works. Do not touch it.**
+## Decisions the operator took (do not relitigate)
+
+| | |
+|---|---|
+| **Dispatch** | An LLM groups winners into **≤5 groups**; each group → **all providers**. `own` is dropped (2 of 4 angles failed, English in a Dutch run, 2 unique URLs). 5 × 3 = **15 calls** vs V-01's 19. |
+| **Tournament** | **Keep it and make it real** (Q1 resolved) — generative evolve, judges give reasons, meta-review, **10-round cap** with saturation exit + spend ceiling. |
+| **Discovery** | A **discovery bracket** may raise questions the client did not ask, each carrying the quote and source that provoked it. **No source, no slot.** It can never borrow from the mandate. |
+
+**Why invention is allowed:** D4's `enforce_scope_guard` is a **coverage floor** (winners' parents ⊇
+client questions), not a ceiling. The "never invent" half was only ever two prompt sentences — and the
+same file says a prompt sentence is not a control.
+
+## Standing cautions
+
+- **Judge the engine from the delivered report** (`output` row, `format='markdown'`) — not the claim
+  table, not the logs. Four findings had to be withdrawn or corrected because they assumed a missing
+  capability that was working.
+- **The verification stage works. Do not touch it.**
+- **The audit bucket is how you answer what the logs cannot:**
+  `gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/runs/<run_id>/` — full request **and response** of
+  every LLM call. Both diagnostics were settled from it.
+- **Claim clustering for corroboration goes LAST**, and expect modest gains: only 37/396 claims have any
+  cross-provider partner at Jaccard 0.2; shared-source overlap is 2.9%. Nobody should "fix" corroboration
+  by swapping the matcher and declaring victory.
 
 ## Also still owed
 
-Operator's no-engine-behaviour-change attestation (the D-03 gate — a person must write it), 15.3
-plan 09's two operator checkpoints (now testable against run `7dcf51d5`), the D-L elapsed clock
-check, and the five standing deploy debts — headed by **rotating `Nestor_Claude_Temp`**, which
-transited a chat in plaintext on 2026-07-27 and is still live on both Tribunal services.
+Operator's no-engine-behaviour-change attestation (the D-03 gate — a person must write it), 15.3 plan
+09's two operator checkpoints, the D-L elapsed clock check, and the five standing deploy debts — headed
+by **rotating `Nestor_Claude_Temp`**, which transited a chat in plaintext on 2026-07-27 and is still
+live on both Tribunal services. Art. 12 audit-trail deadline: **2026-08-02**.
