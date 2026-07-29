@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: completed
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T16:53:44.743Z"
+last_updated: "2026-07-29T17:12:15.174Z"
 last_activity: "2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)"
 progress:
   total_phases: 12
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.4 (research-engine-redesign-extraction-repair-wave-1) — NOT PLANNED
-Plan: 10 of 11 plans EXECUTED and gate-verified (01,02,03,04,05,06,08,09,10 + 07 deferred). Engine gate 1030 passed / 32 of 32; gates build 182 passed. ONLY 15.4-11 (deploy + one live run) remains.
-Status: Phase 15.4 CODE-COMPLETE — awaiting deploy (15.4-11)
+Plan: Waves 1 code COMPLETE + gate-verified (10 plans; 07 deferred). 15.4-11 deploy plan is PARKED — operator ruled 2026-07-29: NO deploy, NO live run until the whole redesign (spec Waves 2-5) is built. Next: Wave 2 = claim attribution (D-R3), the hard prerequisite for Wave 3 grouping.
+Status: Phase 15.4 code-complete, NOT deploying — building Waves 2-5 before any measurement
   20-26 close them. Phase verification deliberately NOT run; phase NOT marked complete.
   Next: /gsd:execute-phase 15.2 --gaps-only  (waves 1/2/3/4; 22 and 26 are non-autonomous)
 
@@ -71,7 +71,7 @@ BEFORE V-01, verify by hand:
     Blocking, not advisory.
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
-Next: /gsd-execute-phase 15.4  (Wave 1 of ENGINE-REDESIGN-SPEC.md; ships ALONE, measured by one live run before waves 2-5). ROTATE Nestor_Claude_Temp before plan 15.4-11 s live run. Then: 15.2 gap remainder -> 15.3 plan 09 checkpoints -> 19 -> 20.
+Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
 Last activity: 2026-07-29 -- V-01 run 7dcf51d5 executed and forensically analysed: cross-stream corroboration never operated (8 defects recorded in docs/tribunal-run-reports/run-20260728-7dcf51d5-V01-FINDINGS.md)
 
 Progress: [██████████] 100%

@@ -77,6 +77,15 @@ discovery bracket it does what Co-Scientist's tournament does: choose among genu
 
 ## 2. Wave 1 — extraction repair
 
+> **⚠ SEQUENCING OVERRIDDEN BY THE OPERATOR, 2026-07-29.** The "ship this alone" instruction below is
+> **no longer in force**. The operator ruled: *"I don't want to measure anything unless we finish all
+> changes."* Wave 1 is built and gate-verified but **NOT deployed**; Waves 2-5 are built on top of it
+> and the whole redesign ships in ONE deploy with ONE measuring run at the end.
+>
+> The trade-off was stated and accepted: with several waves landing together, an unexpected result in
+> that run cannot be attributed to a single change. Recorded here because the paragraph immediately
+> below argues the opposite and would otherwise read as current guidance.
+
 **Ship this alone, first, and let one run measure it.** Everything downstream is judged through the
 extraction funnel; shipping the redesign on top of a broken meter would attribute the parser bug to
 the redesign.
