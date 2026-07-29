@@ -74,6 +74,30 @@ ALLOW_DEEP_RESEARCH_OWN = _flag("ALLOW_DEEP_RESEARCH_OWN")
 #: Every peer research stream this engine knows about. The ONE place the number
 #: four is written down — `InsufficientProvidersError` and `research_division`
 #: both read it rather than re-typing a literal list that then drifts.
+#:
+#: ACCEPTED KNOWN GAP — A DELIBERATE WAVE 3 BOUNDARY. NOT AN OVERSIGHT.
+#:
+#: Phase 15.6 removed `own` from `research_division._D6_STREAMS` per D-W3-3, on the
+#: evidence that 2 of its 4 angles failed outright on run 7dcf51d5, that it
+#: reported English in a Dutch run, and that it contributed 2 unique URLs across
+#: the whole run. THIS TUPLE STILL LISTS IT, on purpose.
+#:
+#: The consequence, stated plainly rather than left to be discovered: this module
+#: is LIVE AND REACHABLE — it is imported by `pipeline.py`, by
+#: `research_division.py` and by `orchestrator.py` — so a DEGRADED BROADCAST run
+#: can still route research to the provider the main rotation just dropped. The
+#: operator was shown the wider option (removing `own` here too) and chose
+#: rotation-only, because the split-the-work angle path is where the V-01 evidence
+#: was gathered and the broadcast path is a different, rarely-taken contract.
+#:
+#: Phase 15.8's measuring run MUST know this: if `own` output appears in a run
+#: whose rotation is three streams, the run took a degraded broadcast path, and
+#: that is information about the path rather than a bug in the rotation.
+#:
+#: THIS IS NOT AN OVERSIGHT AND MUST NOT BE "FIXED" AS ONE. Changing this tuple
+#: also changes `InsufficientProvidersError`'s arithmetic (it counts this tuple)
+#: and `MIN_SUCCESSES`'s 2-of-N contract, neither of which Wave 3 has any remit
+#: over. Closing the gap is explicitly out of scope: comment it, do not fix it.
 ALL_PROVIDERS = ("gemini", "claude", "openai", "own")
 
 PROVIDER_TIMEOUT_S = 35 * 60  # CLAUDE.md Critical rules section 4
