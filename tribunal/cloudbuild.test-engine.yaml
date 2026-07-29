@@ -168,6 +168,42 @@
 #                RECORDED V-01 distiller responses -- 141 + 137 =
 #                278 recovered, 43 and 143 unchanged.)
 #
+#     15.5-01 -> test_claim_attribution.py (alembic 0017: the three
+#                nullable `claim` columns D-R3 needs -- sub_question,
+#                corroboration_key and as_of. It PROVES the
+#                0016 -> 0017 chain and its single head, the
+#                ADDITIVE-ONLY body as an ALLOWLIST read off the
+#                UNPARSED source (a grep passes on a comment that
+#                merely mentions a column name, and this migration
+#                names all three in prose repeatedly), the ORM/DDL
+#                agreement, and the `as_of` date grammar -- whose
+#                REJECTIONS are asserted as hard as its acceptances,
+#                because a wrong date turns a real contradiction into
+#                a fake time series. It carries a NEGATIVE CONTROL,
+#                test_the_scan_bites_on_a_deliberately_bad_migration,
+#                so a green result here is not a scan that never bit.
+#
+#                WHAT IT CANNOT PROVE: that the migration RAN. That
+#                proof is the literal deploy-log line
+#                `Running upgrade 0016 -> 0017`, and phase 15.5
+#                deploys NOTHING -- the whole engine redesign lands in
+#                git and there is ONE deploy at the end of phase 15.8.
+#                The proof is OWED THERE, alongside 0016 own still
+#                unpaid `Running upgrade 0015 -> 0016`. Exit code 0 is
+#                not a substitute.
+#
+#                It is PURE: it parses the migration with ast and
+#                builds the Claim table metadata in memory, and
+#                extract_as_of is a stdlib-only function over a
+#                string. upgrade() is NEVER CALLED, so no DDL is
+#                emitted and no Postgres is involved. It deliberately
+#                carries NO RLS test -- a row-level POLICY is a
+#                TABLE-level object so a new column is covered by
+#                construction, and this gate provisions no database,
+#                so a role-less DB test would run as SUPERUSER and
+#                pass vacuously. The reasoning is written in the file
+#                so nobody adds one later thinking it was forgotten.
+#
 # test_distiller_separators.py carries the ONLY assertion in the
 # repo that pins the distiller prompt contract. The docstring at
 # steps.py `_build_distiller_prompt` used to claim that
@@ -276,13 +312,14 @@ steps:
                     nestor_pulse_sdk/tests/test_run_events_api.py \
                     nestor_pulse_sdk/tests/test_run_event_emit.py \
                     nestor_pulse_sdk/tests/test_source_resolution.py \
-                    nestor_pulse_sdk/tests/test_distiller_separators.py"
+                    nestor_pulse_sdk/tests/test_distiller_separators.py \
+                    nestor_pulse_sdk/tests/test_claim_attribution.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=32
+            EXPECTED_FILES=33
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
