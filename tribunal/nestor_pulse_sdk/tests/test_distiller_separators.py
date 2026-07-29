@@ -43,6 +43,12 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
     _parse_distiller_response,
     _split_distiller_line,
 )
+from nestor_pulse_sdk.tests.fixtures.run_7dcf51d5.loader import (
+    COFFEE_EXPECTED_CLAIMS,
+    DISTILLER_CALLS,
+    load_all,
+    load_distiller_response,
+)
 
 # ---------------------------------------------------------------------------
 # ONE canonical claim line, rendered five ways.
@@ -373,3 +379,177 @@ class TestDistillerPromptContract:
         assert all(c["facet"] == FACET for c in claims)
         assert all(len(c["text"]) >= 10 for c in claims)
         assert claims[0]["text"].startswith("Cronos holds")
+
+
+# ---------------------------------------------------------------------------
+# 5. The replay -- V-01's REAL responses: 278 recovered, 43 and 143 preserved
+# ---------------------------------------------------------------------------
+
+def _parse_with_old_tab_only_splitter(
+    text: str, focus_area_labels: list[str], *, provider: str = ""
+) -> list[dict]:
+    """The PRE-15.4-03 parser, reproduced here as the regression oracle.
+
+    Verbatim reproduction of the loop `_parse_distiller_response` used to run:
+    a bare `if "\\t" not in line` drop, then `line.split("\\t", 2)`, then the
+    same downstream rules. It lives in the test rather than in production
+    because dead code kept alive for a test's benefit is how the next reader
+    ends up unsure which branch is real.
+
+    Do not "improve" it. Its only job is to reproduce the behaviour that put a
+    false statement in a client report, so the fix can be shown to change
+    exactly the two calls it should and neither of the other two.
+    """
+    valid_facets = set(focus_area_labels) if focus_area_labels else set()
+    claims: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "\t" not in line:  # <- THE DEFECT
+            continue
+        parts = line.split("\t", 2)
+        facet = parts[0].strip()
+        claim_text = parts[1].strip() if len(parts) > 1 else ""
+        evidence = parts[2].strip() if len(parts) > 2 else ""
+        if not claim_text or len(claim_text) < 10:
+            continue
+        if not facet:
+            facet = "general"
+        elif valid_facets and facet not in valid_facets:
+            pass
+        claims.append({
+            "text": claim_text,
+            "facet": facet,
+            "evidence": evidence,
+            "found_by": [provider] if provider else [],
+        })
+    return claims
+
+
+#: The two calls whose claims V-01 lost, and the two that already worked.
+COFFEE_CALLS = tuple(c for c in DISTILLER_CALLS if c.separator == "<TAB>")
+CONTROL_CALLS = tuple(c for c in DISTILLER_CALLS if c.separator == "\t")
+
+
+def _replay(call) -> list[dict]:
+    return _parse_distiller_response(
+        load_distiller_response(call.audit_prefix), [], provider="gemini"
+    )
+
+
+class TestV01Replay:
+    """The four RECORDED distiller responses from run 7dcf51d5, 2026-07-28.
+
+    Real model output, pulled from the per-call audit bucket and committed by
+    plan 15.4-01. The counts below are RECORDED FACTS reconciled against
+    `docs/tribunal-run-reports/run-20260728-7dcf51d5-DIAGNOSTICS.md` at pull
+    time. THEY ARE NOT TARGETS. If a parser change makes one of them
+    unreachable, the parser is wrong -- never the manifest and never the
+    fixture.
+    """
+
+    def test_the_fixture_still_holds_all_four_calls(self):
+        """A short fixture must FAIL the replay, not pass it vacuously.
+
+        `load_all` raises on a miscount; this asserts the corpus size directly
+        as well, so a replay that iterates nothing cannot report green.
+        """
+        assert len(load_all()) == 4
+        assert len(DISTILLER_CALLS) == 4
+        assert len(COFFEE_CALLS) == 2
+        assert len(CONTROL_CALLS) == 2
+
+    @pytest.mark.parametrize("call", DISTILLER_CALLS, ids=lambda c: c.audit_prefix)
+    def test_recorded_call_yields_its_recorded_claim_count(self, call):
+        """141, 137, 43, 143 -- four numbers, asserted individually."""
+        claims = _replay(call)
+        assert len(claims) == call.expected_claims, (
+            f"{call.audit_prefix} (idx {call.report_idx}, separator "
+            f"{call.separator!r}) must replay to {call.expected_claims} claims, "
+            f"got {len(claims)}"
+        )
+
+    def test_the_two_coffee_calls_sum_to_the_278_the_client_never_saw(self):
+        counts = [len(_replay(c)) for c in COFFEE_CALLS]
+        assert counts == [141, 137], f"expected [141, 137], got {counts}"
+        assert sum(counts) == COFFEE_EXPECTED_CLAIMS == 278, (
+            f"the recovered coffee total must be {COFFEE_EXPECTED_CLAIMS}, "
+            f"got {sum(counts)}"
+        )
+
+    @pytest.mark.parametrize("call", DISTILLER_CALLS, ids=lambda c: c.audit_prefix)
+    def test_every_recovered_claim_carries_evidence(self, call):
+        """A count alone can be satisfied by garbage.
+
+        All 278 were three-column and evidence-bearing, which is why they would
+        have passed every downstream filter had they ever been parsed.
+        """
+        empty = [c for c in _replay(call) if not c["evidence"]]
+        assert not empty, (
+            f"{call.audit_prefix}: {len(empty)} claim(s) recovered with no "
+            f"evidence column; first: {empty[:1]}"
+        )
+
+    @pytest.mark.parametrize("call", DISTILLER_CALLS, ids=lambda c: c.audit_prefix)
+    def test_every_recovered_claim_passes_the_production_length_filter(self, call):
+        short = [c for c in _replay(call) if len(c["text"]) < 10]
+        assert not short, (
+            f"{call.audit_prefix}: {len(short)} claim(s) under 10 chars; "
+            f"first: {short[:1]}"
+        )
+
+    @pytest.mark.parametrize("call", CONTROL_CALLS, ids=lambda c: c.audit_prefix)
+    def test_the_already_working_calls_are_unchanged_by_the_fix(self, call):
+        """THE NON-REGRESSION HALF, and it is not optional.
+
+        A separator fix that recovers 278 while quietly changing 43 or 143 is a
+        regression, not a fix, and only this control pair can show it. Compared
+        against the verbatim old parser, claim list to claim list -- not counts.
+        """
+        new = _replay(call)
+        old = _parse_with_old_tab_only_splitter(
+            load_distiller_response(call.audit_prefix), [], provider="gemini"
+        )
+        assert new == old, (
+            f"{call.audit_prefix}: the tolerant splitter changed a response that "
+            f"already parsed correctly. {len(old)} claims before, {len(new)} after."
+        )
+        assert len(new) == call.expected_claims
+
+    @pytest.mark.parametrize("call", COFFEE_CALLS, ids=lambda c: c.audit_prefix)
+    def test_the_old_parser_recovered_nothing_from_the_coffee_calls(self, call):
+        """The defect itself, reproduced against the real response.
+
+        This is what makes the assertions above a regression proof rather than
+        a description: under the parser that shipped, these two responses --
+        141 and 137 well-formed claims of real Benelux coffee material --
+        yielded ZERO, and the delivered report then told the client the data
+        gave no complete picture.
+        """
+        old = _parse_with_old_tab_only_splitter(
+            load_distiller_response(call.audit_prefix), [], provider="gemini"
+        )
+        assert old == [], (
+            f"{call.audit_prefix} is only a regression fixture if the OLD parser "
+            f"dropped it entirely; it returned {len(old)} claims"
+        )
+
+    @pytest.mark.parametrize("call", DISTILLER_CALLS, ids=lambda c: c.audit_prefix)
+    def test_focus_area_labels_never_gate_the_claim_list(self, call):
+        """`focus_area_labels` drives a log line, never a drop -- asserted, not assumed.
+
+        Worth pinning here because the facet column in these RECORDED responses
+        is a research question truncated to ~120 chars, and one call even
+        misspells its own echo of it ("en/or" for "en/of"). If an unknown facet
+        could gate a claim, that typo alone would silently cost two claims.
+        """
+        text = load_distiller_response(call.audit_prefix)
+        no_labels = _parse_distiller_response(text, [], provider="gemini")
+        wrong_labels = _parse_distiller_response(
+            text, ["convenience", "general"], provider="gemini"
+        )
+        assert no_labels == wrong_labels, (
+            f"{call.audit_prefix}: the focus-area label list changed the parsed "
+            f"claims ({len(no_labels)} vs {len(wrong_labels)})"
+        )
