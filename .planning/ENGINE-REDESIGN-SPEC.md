@@ -399,15 +399,23 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 > Wave 3's grouping ambiguity survived a full planning pass and was only caught mid-review. These are
 > the same shape. **A planner must not resolve any of them silently — route them to the operator.**
 >
-> 1. **§ 5 argues with D-R9, a locked decision.** D-R9 says *"keep the tournament and make it real."*
->    "Fix the arithmetic" below then offers replacing pairwise Elo with **a ranked list in one call plus
->    a run-off**, and calls that *"better at our size."* Replacing the tournament is not obviously
->    keeping it. **Two defensible readings, no ruling.** This is the closest match to the Wave 3 defect
->    in the whole document.
-> 2. **Dropping the tournament may destroy the measuring run's control.** § 8 nominates
->    `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false` as the A/B control that proves the loop earned its
->    cost. If the tournament becomes a ranked list, that switch may no longer mean anything — and there
->    is only ONE measuring run.
+> 1. **✅ RULED 2026-07-29 — THE TOURNAMENT STAYS. Operator: *"we are not killing tournament".***
+>    D-R9 stands unchanged and **pairwise Elo is retained**. The "Fix the arithmetic" paragraph below
+>    offers two remedies for the Elo-1200.0 ties — raise the rounds, **or** replace pairwise Elo with a
+>    ranked list plus a run-off — and calls the second *"better at our size"* without deciding. **That
+>    option is now REJECTED.** The ties are fixed by **raising the rounds** so every candidate plays
+>    ≥5–6 matches. Read that paragraph accordingly; on its face it still reads as an open choice.
+>    **This is affordable to the point of being free:** the whole 4-round tournament measured 6 ×
+>    gemini-flash, 8.4k in / 400 out, **~$0.00**. Six to eight rounds is a handful more flash calls.
+>    *Still open (a number, not a direction):* the exact round count. The requirement is ≥5–6 matches
+>    per candidate, which at ~17 candidates is roughly 6–8 rounds. **Prefer deriving it from the
+>    candidate count over hardcoding**, so it cannot silently under-separate again as the population
+>    grows each round — under-separation is exactly what produced ranks 8/9/10 finishing where they
+>    started and taking research slots by tie order.
+> 2. **✅ RESOLVED BY (1).** The A/B control survives. § 8 nominates
+>    `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT=false` (ranks by index, zero LLM calls) as the control that
+>    proves the loop earned its cost, and keeping pairwise Elo keeps that switch meaningful. There is
+>    only ONE measuring run, so this mattered.
 > 3. **The exit rule and the cost estimate contradict each other.** Exit needs **all three** criteria,
 >    one being *"no `WEAK` question remains in the winner set"*. V-01 had **9 of 10 winners `WEAK`**. If
 >    that is typical the loop runs all 10 rounds EVERY run — yet this section says *"the cap is a
