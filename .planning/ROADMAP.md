@@ -149,7 +149,12 @@ reasons, a meta-review, a **10-round cap** with a saturation exit and a spend ce
 kept and made real (Q1 resolved) — it earns its cost only because Wave 3's discovery bracket gives it
 genuinely different ideas to rank, instead of narrower rewordings of questions the client already asked.
 **Depends on:** Phase 15.6 (the discovery bracket is what makes the tournament worth running).
-**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 5 (D-R6, D-R9).
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 5 (D-R6, D-R9, **D-R10, D-R11**).
+**⚠ READ FIRST — `15.7-OPEN-ITEMS.md` in this phase directory.** Three rulings taken 2026-07-29 that
+§ 5 does not read like on its face (the tournament STAYS — the ranked-list option is rejected; the loop
+must DISCOVER, not only sharpen; Elo carries with median seeding for newcomers), plus **four open items
+that need an operator ruling before planning** — chief among them an exit rule that as written fires
+never, making the 10-round cap the normal cost rather than the ceiling.
 **Affordable because thinking is cents and research is fifty dollars:** the whole workshop measured
 $0.54 / 63 s on V-01, of which the entire 4-round tournament was ~$0.00.
 **Requirements**: none
