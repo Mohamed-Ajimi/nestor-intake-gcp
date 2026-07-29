@@ -7,6 +7,8 @@ Provides:
   - force_emit_verdict()              -> tool_choice dict that forces emit_verdict
   - EMIT_ORIENTATION_TOOL             -> client-side tool schema (question workshop, 15.2-10)
   - force_emit_orientation()          -> tool_choice dict that forces emit_orientation
+  - EMIT_QUESTION_GROUPS_TOOL         -> client-side tool schema (D-R4 grouping, 15.6-01)
+  - force_emit_question_groups()      -> tool_choice dict that forces emit_question_groups
 
 CRITICAL INVARIANTS (ADR-006 §GOTCHA):
   - web_search and web_fetch are SERVER-SIDE tools: the API resolves them within the
@@ -332,6 +334,135 @@ def force_emit_orientation() -> dict[str, Any]:
         {"type": "tool", "name": "emit_orientation"}
     """
     return {"type": "tool", "name": "emit_orientation"}
+
+
+# ---------------------------------------------------------------------------
+# Client-side tool: emit_question_groups (Phase 15.6 plan 01 — D-R4 grouping)
+# ---------------------------------------------------------------------------
+
+#: The cross-question sentence the grouping description carries, as the FIRST of
+#: two engine-authored options. D-W3-5 makes THIS ONE the rule: a mandate group
+#: holds members from exactly ONE client question.
+GROUP_RULE_SINGLE_PARENT_ONLY = (
+    "Every group must contain questions from ONE client question only -- the "
+    "bracketed label at the start of each line. Never mix two labels in one group."
+)
+
+#: The SECOND option, which is spec § 4's original permissive wording. It is NOT
+#: an alternative policy and NOT an operator knob. D-W3-5 overrode the sentence it
+#: comes from, so it survives for exactly one situation: when single-parent
+#: grouping is ARITHMETICALLY IMPOSSIBLE because there are more client questions
+#: than groups available. Telling a model to do the impossible guarantees an
+#: unusable answer, so in that case, and only that case, the permissive rule ships.
+GROUP_RULE_CROSS_QUESTION_ALLOWED = (
+    "A group MAY span two client questions -- the bracketed labels at the start of "
+    "each line -- where those questions genuinely need the same research "
+    "groundwork. Prefer a single label per group; mix only where the overlap is real."
+)
+
+#: WHICH RULE SHIPS IS DERIVED, NEVER PASSED. `question_grouping.group_winners`
+#: computes it as:
+#:
+#:     GROUP_RULE_SINGLE_PARENT_ONLY
+#:         if len(client_questions) <= max_groups
+#:         else GROUP_RULE_CROSS_QUESTION_ALLOWED
+#:
+#: Deterministic, no flag, and no call-site decision — a caller cannot select the
+#: permissive rule, it can only present arithmetic that forces it.
+
+#: Forced client tool for the workshop's GROUPING turn (D-R4, phase 15.6 wave 3).
+#: One call per run: the winners arrive as a NUMBERED LIST and the model returns
+#: which numbers belong together, so shared research groundwork is searched once
+#: per topic instead of once per sub-question.
+#:
+#: THE SCHEMA IS INDEX-ADDRESSED, AND THAT IS THE SECURITY CONTROL, NOT A
+#: CONVENIENCE. Winner text reaches three third-party research providers VERBATIM,
+#: so a schema with a text field would let the grouping model REWRITE a question on
+#: its way into a paid provider prompt — a second model handed a channel into the
+#: research query (T-15.2-60). There is therefore no text, question, label or title
+#: property anywhere below: the model's entire question-identifying surface is
+#: integers, and `question_grouping.build_groups` stamps every string a consumer
+#: reads (`parent`, `parents`, `group_id`) in Python from the winners list.
+#: `gates.py` addresses untrusted claims by INDEX for exactly this reason.
+#:
+#: The `description` is a FORMAT STRING with two slots the caller fills:
+#:   {max_groups}          — the ceiling moves when the discovery bracket takes a slot
+#:   {cross_question_rule} — GROUP_RULE_SINGLE_PARENT_ONLY or the permissive twin
+EMIT_QUESTION_GROUPS_TOOL: dict[str, Any] = {
+    "name": "emit_question_groups",
+    "description": (
+        "Group the numbered research questions above by the RESEARCH GROUNDWORK "
+        "they share -- the same sources, the same market, the same regulatory "
+        "regime, the same body of evidence a researcher would have to assemble "
+        "before answering any of them. Do NOT group by surface wording: two "
+        "questions that read alike but need different sources belong apart, and "
+        "two worded differently that need the same sources belong together. "
+        "{cross_question_rule} "
+        "One client question MAY split across two groups when it is really two "
+        "topics. "
+        "Return AT MOST {max_groups} groups. Return FEWER when the material has "
+        "fewer real topics -- fewer is a correct answer and never padded: do not "
+        "invent or split groups to reach the maximum. "
+        "Every number in the list must appear in exactly one group: use each "
+        "number once, leave none out."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "groups": {
+                "type": "array",
+                "description": (
+                    "The groups you chose, best-supported first. At most the "
+                    "maximum stated above, and fewer when the material warrants."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "member_numbers": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": (
+                                "The numbers of the questions that belong in this "
+                                "group, taken from the numbered list above. Use "
+                                "each number at most once, across all groups."
+                            ),
+                        },
+                        "why_grouped": {
+                            "type": "string",
+                            "description": (
+                                "One short sentence on the shared research "
+                                "groundwork these questions need. Used for the run "
+                                "log only."
+                            ),
+                        },
+                    },
+                    # why_grouped is deliberately NOT in `required`, for the reason
+                    # this file states twice above (source_url on
+                    # EMIT_ORIENTATION_TOOL, superseded_note on
+                    # EMIT_GROUP_VERDICT_TOOL): requiring a field the model does not
+                    # actually have produces a fabricated value. A group with no
+                    # stated reason still dispatches correctly; a group with an
+                    # invented reason pollutes the run log an operator reads.
+                    "required": ["member_numbers"],
+                },
+            },
+        },
+        "required": ["groups"],
+    },
+}
+
+
+def force_emit_question_groups() -> dict[str, Any]:
+    """tool_choice that forces emit_question_groups on the final grouping turn.
+
+    Pass as tool_choice=force_emit_question_groups() on the grouping call, so the
+    turn terminates with a structured membership answer rather than prose this
+    module would then have to parse out of model text.
+
+    Returns:
+        {"type": "tool", "name": "emit_question_groups"}
+    """
+    return {"type": "tool", "name": "emit_question_groups"}
 
 
 # ---------------------------------------------------------------------------
