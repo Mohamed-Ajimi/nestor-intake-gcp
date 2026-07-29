@@ -48,7 +48,12 @@ WHAT THIS MODULE DOES NOT DO
   * No quality-tier table of its own — `citations/numbering.py::derive_quality_tier`
     is reused.
   * No second `[cite: N]` stripper — `audit/audited_llm_client.py::
-    strip_unresolved_cite_markers` is reused.
+    strip_unresolved_cite_markers` is reused. `_CITE_CELL_RE` below is NOT a second
+    stripper: it strips nothing and removes nothing from any text. It RECOGNISES a
+    SOURCE_URL cell that is only a citation marker, and captures the numbers so they
+    can be looked up — which the stripper's regex cannot do, because it deliberately
+    matches any marker content and captures none of it. Spelled `cite[:_]` to stay in
+    step with that one regex if it ever changes.
   * No persistence. Writing `certainty` / `provider_quality` to the D-13 columns is
     plan 15.2-15; appending the prompt block to the provider prompts is 15.2-14.
 """
@@ -127,7 +132,26 @@ _MD_LINK_RE = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^\s)]{1,2048})\)")
 #: model-supplied label is untrusted text like everything else.
 _DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,252}\.[a-z]{2,24}$", re.IGNORECASE)
 
-#: Upper bound on the url -> label map built from one report (DoS guard).
+#: A numbered bibliography entry: ``44. [hnsenergygroup.com](https://…)``. The
+#: citation NUMBER and the URL sit on the SAME line in every recorded deep-research
+#: report, which is the whole reason a cite index is derivable from the report alone.
+#: Bounded quantifiers, and matched per LINE — never as a multiline regex over an
+#: 88 KB body.
+_CITE_ENTRY_RE = re.compile(r"^\s{0,20}(\d{1,4})[.)]\s{1,20}")
+
+#: A SOURCE_URL cell that is ONLY a citation marker — ``[cite: 25, 26]``, the shape
+#: gemini wrote in the SOURCE_URL column of all 20 fact lines of one report on run
+#: 7dcf51d5, where the facts survived and every one of their sources was rejected.
+#: Spelled ``cite[:_]`` to match `audit/audited_llm_client.py::_CITE_MARKER_RE`, the
+#: ONE cite-marker regex in this codebase, and bounded exactly as `_MD_LINK_RE` is so
+#: a hostile cell cannot make it backtrack.
+_CITE_CELL_RE = re.compile(
+    r"\[cite[:_]\s{0,4}(\d{1,4}(?:\s{0,4},\s{0,4}\d{1,4}){0,49})\s{0,4}\]",
+    re.IGNORECASE,
+)
+
+#: Upper bound on the url -> label map built from one report (DoS guard). The
+#: number -> url cite index is capped at the same figure, for the same reason.
 _MAX_LABEL_INDEX = 2000
 
 #: Column NAMES a model may echo into the front of every fact line, pushing every
@@ -379,7 +403,8 @@ class FactListResult:
     rejected_urls:
         SOURCE_URL cells dropped for a non-http(s) scheme, excess length, or a
         named placeholder. For the first two the statement SURVIVES — losing the
-        link must not lose the fact.
+        link must not lose the fact. A ``[cite: N]`` cell that RESOLVED against the
+        report's own bibliography is not counted here: nothing was rejected.
     placeholder_urls:
         The subset of ``rejected_urls`` whose cell was a NAMED placeholder
         (`N/A`, `none`, `-`, `unknown`, …). These are counted separately and the
@@ -394,6 +419,15 @@ class FactListResult:
         None when facts exist; otherwise a plain-English sentence naming the provider
         and the cause. Consumed verbatim by 15.2-14 for the feed and the verification
         report — a reader must understand it without reading this module.
+    unresolved_cite_markers:
+        SOURCE_URL cells that were a ``[cite: N]`` marker instead of a URL and whose
+        numbers are named nowhere in the report's own numbered bibliography. THE FACT
+        SURVIVES — a citation written where a URL belongs is a badly-written source,
+        not a stated absence of one — so what is lost here is the SOURCE, and that
+        loss is named rather than left as a bare `rejected_urls` tick. A marker that
+        DID resolve is not counted: nothing was lost. Observed on run 7dcf51d5, where
+        one gemini report put ``[cite: 25, 26]`` in the SOURCE_URL column of all 20 of
+        its fact lines. APPENDED LAST so every positional construction stays valid.
     """
 
     facts: list[dict] = field(default_factory=list)
@@ -405,6 +439,7 @@ class FactListResult:
     dropped_over_cap: int = 0
     needs_distiller_fallback: bool = True
     fallback_reason: str | None = None
+    unresolved_cite_markers: int = 0
 
 
 def build_label_index(text: str | None) -> dict[str, str]:
@@ -453,6 +488,109 @@ def _is_placeholder_label(label: str) -> bool:
     if candidate.startswith("www."):
         candidate = candidate[4:]
     return candidate == VERTEX_REDIRECT_HOST
+
+
+def build_cite_index(text: str | None) -> dict[int, str]:
+    """Map every numbered bibliography entry in ``text`` to its URL.
+
+    The companion of `build_label_index`, reading the same trailing numbered source
+    list from the other side: that one answers "what domain is this URL", this one
+    answers "what URL is citation 25". Both are possible only because the report puts
+    the number and the link on ONE line —
+    ``44. [hnsenergygroup.com](https://vertexaisearch.cloud.google.com/…)``.
+
+    It exists because a provider may write the CITATION rather than the URL into the
+    SOURCE_URL column of its fact list. On run 7dcf51d5 gemini did exactly that on
+    every line of one report — 20 × ``rejecting non-http(s) SOURCE_URL
+    '[cite: 25, 26]'``. The facts survived and their sources did not, even though the
+    same report named every one of those sources a few hundred lines further down.
+
+    http(s) ONLY, and that is a SECURITY CONTROL rather than a formatting nicety
+    (T-15.4-10): a URL recovered here is persisted and later rendered as a CLICKABLE
+    LINK in the superadmin citation panel, so a ``javascript:`` or ``data:`` URL
+    written into a bibliography by an ingested web page would be an elevation-of-
+    privilege path into the operator's own tool. The discipline is the one
+    `_parse_url_cell` states, applied to the same class of untrusted text.
+
+    RESOLUTION RULE — FIRST number wins. A report that re-uses a citation number does
+    not get to overwrite the source it already named.
+
+    Scanned line by line (never a multiline regex over the body), bounded at
+    ``_MAX_LABEL_INDEX`` entries. Never raises.
+    """
+    out: dict[int, str] = {}
+    if not text:
+        return out
+    for line in text.splitlines():
+        if len(out) >= _MAX_LABEL_INDEX:
+            break
+        entry = _CITE_ENTRY_RE.match(line)
+        if not entry:
+            continue
+        try:
+            number = int(entry.group(1))
+        except ValueError:  # pragma: no cover — \d matches decimal digits only
+            continue
+        if number in out:
+            continue  # First number wins.
+        link = _MD_LINK_RE.search(line, entry.end())
+        if not link:
+            continue
+        url = (link.group(2) or "").strip()
+        if not url or len(url) > _MAX_URL_CHARS:
+            continue
+        try:
+            scheme = urlparse(url).scheme.lower()
+        except Exception:  # noqa: BLE001 — unparseable is skipped, not fatal
+            continue
+        if scheme not in ("http", "https"):
+            continue
+        out[number] = url
+    return out
+
+
+def _is_cite_cell(cell: str) -> bool:
+    """True when a SOURCE_URL cell is ONLY a ``[cite: N]`` marker and nothing else.
+
+    Deliberately a FULL match: a cell that merely CONTAINS a marker alongside other
+    text is not a citation the report can resolve, it is a malformed URL, and it keeps
+    the malformed-URL treatment.
+    """
+    if not cell:
+        return False
+    return _CITE_CELL_RE.fullmatch(cell.strip()) is not None
+
+
+def _resolve_cite_cell(cell: str, cite_index: "Mapping[int, str] | None") -> list[str]:
+    """Resolve a ``[cite: 25, 26]`` SOURCE_URL cell to the URLs its numbers name.
+
+    Returns the resolved URLs in the order the cell wrote them, deduped, or ``[]``
+    when the cell is not a citation-only marker or nothing in it resolves. A cell
+    whose numbers resolve only PARTLY still returns what it found: one number that
+    names a source is a source, and the numbers that named nothing were never a
+    citation this report could honour.
+
+    Never raises — a hostile index costs the citation, not the run.
+    """
+    if not cell or not cite_index:
+        return []
+    match = _CITE_CELL_RE.fullmatch(cell.strip())
+    if not match:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in match.group(1).split(","):
+        token = raw.strip()
+        if not token.isdecimal():
+            continue
+        try:
+            url = cite_index.get(int(token))
+        except Exception:  # noqa: BLE001 — a hostile mapping must not break parsing
+            return out
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
 
 
 def display_domain(
@@ -607,6 +745,14 @@ def _strip_uniform_leading_column(region: list[str]) -> tuple[list[str], str | N
       * the first tab-column of every non-empty line, stripped and uppercased, is the
         SAME token, and that token is in ``_LEADING_COLUMN_TOKENS``.
 
+    A SECOND, STRUCTURAL GUARANTEE falls out of those bounds and is worth naming,
+    because it is what makes this change safe against every fact list that already
+    works: the longest token here is 9 characters and ``_MIN_STATEMENT_CHARS`` is 10,
+    so a line whose first column IS one of these tokens can never be a line that
+    parses as a fact today — it is already discarded, either by the echoed-header
+    guard or by the minimum-length rule. Normalisation can therefore only ever change
+    the outcome of lines that are currently being thrown away. Pinned by a test.
+
     Blank lines pass through untouched. Pure, and never raises.
     """
     non_empty = [line for line in region if line.strip()]
@@ -638,6 +784,7 @@ def parse_fact_list(
     provider: str,
     facet: str,
     label_index: "Mapping[str, str] | None" = None,
+    cite_index: "Mapping[int, str] | None" = None,
 ) -> FactListResult:
     """Parse a provider's D8 fact block into pipeline-shaped claim dicts.
 
@@ -661,7 +808,9 @@ def parse_fact_list(
 
     Two observed provider format deviations are repaired before the loss is accepted,
     both recorded on run 7dcf51d5: a block whose every line repeats the same non-claim
-    leading column is un-shifted by `_strip_uniform_leading_column` (idx 8).
+    leading column is un-shifted by `_strip_uniform_leading_column` (idx 8), and a
+    SOURCE_URL cell holding nothing but a ``[cite: N]`` marker is resolved against the
+    report's own numbered bibliography by `_resolve_cite_cell` (idx 4).
     """
     facts: list[dict] = []
     not_found: list[str] = []
@@ -669,6 +818,8 @@ def parse_fact_list(
     rejected_urls = 0
     placeholder_urls = 0
     dropped_over_cap = 0
+    resolved_cite_markers = 0
+    unresolved_cite_markers = 0
 
     body = text or ""
     lines = body.splitlines()
@@ -677,6 +828,11 @@ def parse_fact_list(
         # Derive from the report itself so a bare redirect URL on a fact line can
         # still resolve against the report's own trailing source list.
         label_index = build_label_index(body)
+    if cite_index is None:
+        # Same source, read the other way round: the report's numbered bibliography
+        # is the only place a `[cite: N]` written into a SOURCE_URL cell can be
+        # resolved from. Built ONCE per call, like `label_index`.
+        cite_index = build_cite_index(body)
 
     region, had_block, extra_blocks = _extract_region(lines, FACTS_START, FACTS_END)
     parse_errors += extra_blocks
@@ -720,7 +876,19 @@ def parse_fact_list(
 
         url_cell = parts[1].strip() if len(parts) > 1 else ""
         url, link_label, rejected, placeholder = _parse_url_cell(url_cell)
-        if rejected:
+
+        # V-01 idx 4: the cell holds the CITATION rather than the URL. The fact
+        # already survives that — a malformed source never costs a fact — but the
+        # source itself was being lost while the same report named it a few hundred
+        # lines further down. Resolve the marker before accepting the loss.
+        cite_urls: list[str] = []
+        if rejected and not placeholder and _is_cite_cell(url_cell):
+            cite_urls = _resolve_cite_cell(url_cell, cite_index)
+            if cite_urls:
+                resolved_cite_markers += 1
+            else:
+                unresolved_cite_markers += 1
+        if rejected and not cite_urls:
             rejected_urls += 1
         if placeholder:
             # The model said it had no source. Drop the FACT, not just the link,
@@ -729,7 +897,17 @@ def parse_fact_list(
             placeholder_urls += 1
             continue
 
-        domain = display_domain(url, label=link_label, label_index=label_index) if url else ""
+        # A recovered citation is a source like any other and lands in the same
+        # list — the ONE place it can survive, because `_normalise_fact_claim`
+        # (steps.py:1719) builds each claim from a fixed key set and would silently
+        # drop anything smuggled onto the fact dict under a new key.
+        source_urls = cite_urls or ([url] if url else [])
+        primary_url = source_urls[0] if source_urls else ""
+        domain = (
+            display_domain(primary_url, label=link_label, label_index=label_index)
+            if primary_url
+            else ""
+        )
 
         # EVIDENCE stays BYTE-VERBATIM: only surrounding whitespace is removed. No
         # cite-marker stripping, no truncation, no normalisation — `scrub_research`
@@ -743,7 +921,7 @@ def parse_fact_list(
             "facet": facet,
             "evidence": evidence or statement,
             "found_by": [provider] if provider else [],
-            "source_urls": [url] if url else [],
+            "source_urls": source_urls,
             "certainty": _clamp(
                 parts[3] if len(parts) > 3 else "",
                 CERTAINTY_VALUES,
@@ -766,6 +944,27 @@ def parse_fact_list(
             "rather than a source — those facts were dropped. A stated absence of "
             "a source is not a source (D-M).",
             provider or "provider", placeholder_urls,
+        )
+
+    if resolved_cite_markers:
+        # ONE line per report, not one per cell. `_parse_url_cell` has already logged
+        # each of these as `rejecting non-http(s) SOURCE_URL '[cite: 25, 26]'`, and a
+        # trail that stopped there would tell the operator the sources were lost when
+        # they were not. Saying so is the same duty this phase exists to discharge.
+        log.warning(
+            "facts: %s wrote a [cite: N] marker instead of a URL in %d SOURCE_URL "
+            "cell(s) — those citations WERE recovered from the report's own numbered "
+            "bibliography, so the facts kept their sources despite the rejection "
+            "warnings above",
+            provider or "provider", resolved_cite_markers,
+        )
+
+    if unresolved_cite_markers:
+        log.warning(
+            "facts: %s wrote a [cite: N] marker in %d SOURCE_URL cell(s) that its own "
+            "report's bibliography does not name — the facts were kept, their sources "
+            "were not. A citation that resolves to nothing is a lost source.",
+            provider or "provider", unresolved_cite_markers,
         )
 
     if dropped_over_cap:
@@ -821,6 +1020,7 @@ def parse_fact_list(
         dropped_over_cap=dropped_over_cap,
         needs_distiller_fallback=needs_distiller_fallback,
         fallback_reason=fallback_reason,
+        unresolved_cite_markers=unresolved_cite_markers,
     )
 
 
