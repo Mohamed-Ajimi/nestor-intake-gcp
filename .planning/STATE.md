@@ -25,7 +25,14 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — EXECUTED, awaiting phase verification
+Phase: 15.5 (research-engine-redesign-claim-attribution-wave-2) — COMPLETE, GATE-VERIFIED, NOT DEPLOYED
+Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build 3f57de7a =
+  **1118 passed / 0 failed / 13 skipped**, `collecting: 33 of 33 expected files`, 1131 collected
+  (reconciles: 1118 + 13). Gates `cloudbuild.test-gates.yaml` build e9e75413 = **187 passed**,
+  2 deselected. Both counts ROSE from the Wave 1 baseline (1030 / 182), so the ~93 new tests ran
+  rather than being silently skipped.
+  The FIRST engine run (bdf1ec84) FAILED — see the cross-plan regression note below. That failure is
+  the argument for running gates per phase rather than batching them to 15.8.
 Plan: 3/3 plans executed and merged to master. Wave 1 = 15.5-01 (columns + alembic 0017 + extract_as_of).
   Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), run in parallel, merged clean, zero conflicts.
   Plus the D-W2-4 follow-up (241d9d5). All worktrees merged, removed, branches deleted; tree clean.
@@ -52,6 +59,27 @@ Status: Phase 15.4 code-complete + gate-verified, deliberately NOT deployed. Pha
             both resolve to 2021-03-01, not 2021-01-01/None. As built, the bare-year convention was
             overwriting March with January, which collapses `maart 2021` and `december 2021` onto one
             instant — the exact D-V01-4 rollout-vs-contradiction failure as_of exists to prevent.
+
+  THE CROSS-PLAN REGRESSION THE GATE CAUGHT (fix 9064e76) — the lesson of this phase:
+    Three green verifications missed it. The plan-checker passed, the phase verifier passed 7/7, and
+    all three executors reported success. Only EXECUTING the merged tree found it.
+    15.5-01 wrote `test_the_extractor_module_stays_stdlib_pure` as an exact allowlist of the four
+    modules `claim_attribution.py` imported at the time. 15.5-02 (cc5088c) then added
+    parent_index/resolved_facet to that same module with type annotations, bringing in `typing` and —
+    under `if TYPE_CHECKING:`, so never at runtime — `collections.abc`. Neither plan could have
+    caught it: they ran in isolated worktrees and neither could execute the other's tests.
+    THE MODULE WAS NEVER BROKEN. Both names are stdlib, collections.abc is not imported at runtime,
+    and the merged module still lifts and runs under the bundled interpreter (verified before any
+    edit). The test was measuring a proxy, too narrowly. So it was TIGHTENED, not loosened: the
+    allowlist widened to the stdlib names in real use, PLUS the two things its docstring actually
+    promises are now asserted directly — no SDK import, and liftability proved by DOING it with
+    runpy. The second cannot rot whatever the allowlist says.
+    GENERALISED: parallel executors in isolated worktrees cannot see each other's assertions. Any
+    test that pins an EXACT set over a file a sibling plan also edits is a scheduled failure.
+
+  ALSO: `gcloud builds submit ... | tail` returns the PIPE's exit code, so a FAILED build reports
+  exit 0 to the shell. Read the build text or `gcloud builds list`, never the shell status. Same
+  class as the `ls || true` trap.
 
   OWED AT 15.8 — carried forward from every plan in this phase, never claimed here:
     - `Running upgrade 0016 -> 0017` (alembic 0017 has NEVER run), alongside 0016's still-unpaid

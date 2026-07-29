@@ -187,13 +187,21 @@ mixed group has no single parent. Stamp the sub-question and a `corroboration_ke
 correct without it.
 **Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 3 (D-R3).
 **Requirements**: none
-**Plans:** 3 plans in 2 waves
+**Plans:** 3 plans in 2 waves — COMPLETE, gate-verified (engine 1118/0, gates 187), NOT deployed
 
 Plans:
 - [x] 15.5-01-PLAN.md — wave 1: the three nullable `claim` columns, alembic 0017 on 0016, and the pure bounded `extract_as_of`
 - [x] 15.5-02-PLAN.md — wave 2: thread `_sub_question` / `_corroboration_key` from dispatch onto every claim dict, attach `as_of`, pin the invariant-2 no-op
 - [x] 15.5-03-PLAN.md — wave 2: `_insert_claim` writes the three columns (typed, clamped, absent-means-NULL) and the write path is proven with a fake session
 - [x] D-W2-4 follow-up (241d9d5) — month precision keeps its month; `maart 2021` / `2021-03` → 2021-03-01
+- [x] Gate fix (9064e76) — the stdlib-purity test asserted an exact 4-module allowlist over a file a
+      sibling plan also edited; caught only by executing the merged tree. Tightened, not loosened.
+
+**Gates (merged tree):** engine build `3f57de7a` = 1118 passed / 0 failed / 13 skipped,
+`collecting: 33 of 33 expected files`, 1131 collected. Gates build `e9e75413` = 187 passed.
+Both counts rose from the Wave 1 baseline (1030 / 182).
+**OWED AT 15.8:** `Running upgrade 0016 -> 0017` — alembic 0017 has never touched a database, and
+0016's `Running upgrade 0015 -> 0016` is still unpaid too.
 
 ### Phase 15.4: Research Engine Redesign — Extraction Repair (Wave 1) (INSERTED 2026-07-29)
 
