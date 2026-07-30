@@ -68,6 +68,13 @@ from nestor_pulse_sdk.pipeline.tribunal import workshop as _workshop_mod
 from nestor_pulse_sdk.pipeline.tribunal import workshop_rank as _rank_mod
 from nestor_pulse_sdk.pipeline.tribunal import budget as _budget_mod
 from nestor_pulse_sdk.pipeline.tribunal import pipeline as _pipeline_mod
+#: WAVE 3's three new modules, imported for the SAME coupling reason as the rest of
+#: this block: the grouping tool name, the grouping fallback's D-12 sentence and the
+#: discovery frame are all read from production here rather than retyped, so a
+#: rename breaks the script loudly instead of turning an assertion vacuous.
+from nestor_pulse_sdk.pipeline.tribunal import question_grouping as _grouping_mod_qg
+from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket as _discovery_mod
+from nestor_pulse_sdk.pipeline.tribunal import tools as _tools_mod
 from nestor_pulse_sdk.pipeline.deep_researchers import degraded_parallel as _degraded_mod
 from nestor_pulse_sdk.pipeline.tribunal.facts import (
     CERTAINTY_VALUES,
@@ -91,6 +98,17 @@ _COULD_NOT_H = _SECTION_STRINGS["english"]["gaps_h"]
 _SUB_CONTRADICTIONS = _SECTION_STRINGS["english"]["sub_contradictions"]
 _SUB_SUPERSEDED = _SECTION_STRINGS["english"]["sub_superseded"]
 _SUB_BRIEF = _SECTION_STRINGS["english"]["sub_brief"]
+#: D-W3-4's provenance clause, appended to the conflict a discovered question came
+#: from. Read from production so a retranslation cannot leave the discovery test
+#: green against a string nobody renders any more.
+_BRIEF_RAISED = _SECTION_STRINGS["english"]["brief_raised_question"]
+
+#: The grouping tool's own name, and the D-12 sentence `fallback_groups` returns.
+#: Both come out of production. `fallback_groups` is PURE and NEVER RAISES, and its
+#: reason string is returned regardless of input, so calling it with two empty lists
+#: is a read of the sentence rather than a second copy of it.
+_GROUPING_TOOL_NAME = str(_tools_mod.EMIT_QUESTION_GROUPS_TOOL["name"])
+_GROUPING_FALLBACK_REASON = _grouping_mod_qg.fallback_groups([], [])[1]
 
 #: Written by `_verification_appendix` / `_extract_sources_section`, which emit
 #: English headings on every run regardless of run language (their own docstrings
@@ -351,6 +369,32 @@ def _indexed_items(prompt: str, header_marker: str) -> list[tuple[str, str]]:
     return out
 
 
+#: The grouping prompt's item-block header and its line shape. Keyed on production
+#: (`question_grouping._build_group_prompt` / `_winner_lines`) for the same reason
+#: every other marker in this file is: if the format moves, the fake stops finding
+#: the questions and the grouping route answers an EMPTY partition, which
+#: `validate_groups` refuses — so the run degrades visibly instead of quietly
+#: proving that the script agrees with itself.
+_M_GROUPING_BLOCK = "RESEARCH QUESTIONS TO GROUP:"
+_GROUPING_LINE_RE = re.compile(r"^\s*(\d+)\.\s*\[(.*?)\]\s*(.*)$")
+
+
+def _grouping_items(prompt: str) -> list[tuple[str, str, str]]:
+    """Every `N. [PARENT] TEXT` line of the grouping prompt's question block.
+
+    Split on the header first, exactly like `_indexed_items`: the instruction
+    paragraph above it and the ignore-instructions line below it are engine-authored
+    prose, and a number inside either of them is not a question number.
+    """
+    _, _, block = prompt.rpartition(_M_GROUPING_BLOCK)
+    out: list[tuple[str, str, str]] = []
+    for raw in block.splitlines():
+        match = _GROUPING_LINE_RE.match(raw)
+        if match:
+            out.append((match.group(1), match.group(2).strip(), match.group(3).strip()))
+    return out
+
+
 class _FakeTextResponse:
     """A Gemini-shaped completion: `.text` is what every reader here looks at."""
 
@@ -445,6 +489,13 @@ class _ScriptedProvidersAudited:
         #: Searching the whole prompt for a claim would therefore match in EVERY
         #: session and turn the shared-session assertion into a tautology.
         self.group_claim_blocks: list[list[str]] = []
+        #: One entry per GROUPING call: the prompt it was sent, and the 1-based
+        #: partition this fake answered with. Recorded so the totality assertion can
+        #: compare what the fake PROPOSED against what dispatch actually bought —
+        #: without that comparison, "every question survived" could hold because the
+        #: fake never proposed a question in the first place.
+        self.group_prompts: list[str] = []
+        self.group_partitions: list[list[list[int]]] = []
         self._own_turns = 0
         #: Route names whose FIRST call raises a transient error and whose second
         #: succeeds — D-12's recovered-retry carve-out, driven without a mocking
@@ -660,6 +711,16 @@ class _ScriptedProvidersAudited:
         if "emit_orientation" in tool_names:
             self._book("workshop_orientation")
             return _FakeMessage([_FakeToolUseBlock("emit_orientation", _ORIENTATION_INPUT)])
+        if _GROUPING_TOOL_NAME in tool_names:
+            # WAVE 3'S NEW AUDITED CALL. It is on the critical path of every run, so
+            # a fake that does not answer it does not merely lose coverage: the
+            # grouping step falls back, adds a D-12 degradation reason, and every
+            # "a clean run named no degradation" assertion in this file moves. The
+            # answer is BUILT FROM THE PROMPT the engine actually sent, so it stays
+            # a real answer to a real question rather than a fixed script that
+            # happens to fit today's winner count.
+            self._book("workshop_grouping")
+            return self._question_groups_turn(prompt)
         if "emit_group_verdict" in tool_names:
             self._book("group_skeptic")
             block_texts = _group_block_texts(prompt)
@@ -694,6 +755,43 @@ class _ScriptedProvidersAudited:
         self._book("anthropic_unrouted")
         self._unexpected("anthropic", prompt)
         return _FakeMessage([], stop_reason="end_turn")
+
+    def _question_groups_turn(self, prompt: str):
+        """Answer the grouping call with ONE group holding every numbered question.
+
+        WHY ONE GROUP AND NOT A CLEVER PARTITION. This brief carries exactly one
+        client question (`_CLIENT_QUESTION`), and D-W3-5.1 says a mandate group
+        holds members from exactly ONE client question — so on this brief the
+        semantically correct answer IS one group. It is also the only DETERMINISTIC
+        one: `_engine_run` bounds dispatch to `_D6_MAX_WINNERS = 1`, and
+        `research_division._bound_groups_to_winners` drops a group that loses every
+        member to that bound, so a partition across two groups would make the
+        surviving group depend on which winner the tournament ranked first.
+
+        The numbers are read out of the prompt, 1-BASED, exactly as
+        `question_grouping.validate_groups` will read them back. Nothing is
+        hard-coded to a winner count: the tournament's output size is not this
+        file's business.
+        """
+        numbers = [int(index) for index, _parent, _text in _grouping_items(prompt)]
+        self.group_prompts.append(prompt)
+        partition = self._group_partition(numbers)
+        self.group_partitions.append([list(group) for group in partition])
+        return _FakeMessage([_FakeToolUseBlock(_GROUPING_TOOL_NAME, {
+            "groups": [
+                {
+                    "member_numbers": list(group),
+                    "why_grouped": (
+                        "One market, one regulator, one body of trade reporting."
+                    ),
+                }
+                for group in partition
+            ],
+        })])
+
+    def _group_partition(self, numbers: list[int]) -> list[list[int]]:
+        """The partition this fake proposes. The ONE hook the subclasses override."""
+        return [list(numbers)] if numbers else []
 
     def _answer_candidates(self) -> str:
         lines = [_workshop_mod._CANDIDATES_START]
@@ -912,6 +1010,61 @@ class _LostStreamProvidersAudited(_ScriptedProvidersAudited):
         return _CLAUDE_PROSE_ONLY_REPORT
 
 
+class _UngroupedProvidersAudited(_ScriptedProvidersAudited):
+    """The same run, with the grouping turn returning NO tool_use block at all.
+
+    The first of `group_winners`' four named fallback triggers, and the one a real
+    provider hits most often: a forced-tool turn that came back as prose. Everything
+    else is inherited, so any difference in the outcome is attributable to grouping
+    alone — the same one-hook discipline `_LostStreamProvidersAudited` uses.
+    """
+
+    def _question_groups_turn(self, prompt: str):
+        self.group_prompts.append(prompt)
+        self.group_partitions.append([])
+        return _FakeMessage([_FakeTextBlock("I have grouped them.")],
+                            stop_reason="end_turn")
+
+
+class _SplitGroupingProvidersAudited(_ScriptedProvidersAudited):
+    """The grouping turn SPLITS the questions into two groups instead of one.
+
+    THIS SHAPE IS THE ONLY ONE THAT CAN PROVE DISPATCH FOLLOWS STAGE B. The D-W3-2
+    fallback groups ONE GROUP PER CLIENT QUESTION, and this brief has exactly one
+    client question — so a fake that answers with one group produces a partition the
+    fallback would have produced anyway, and a run that ignored the grouping entirely
+    would be INDISTINGUISHABLE from one that honoured it. Splitting one client
+    question across two groups is explicitly legal (`EMIT_QUESTION_GROUPS_TOOL`: "One
+    client question MAY split across two groups when it is really two topics") and it
+    is something the fallback can never produce, so the angle count alone then
+    separates the two.
+    """
+
+    def _group_partition(self, numbers: list[int]) -> list[list[int]]:
+        if len(numbers) < 2:
+            return [list(numbers)] if numbers else []
+        half = len(numbers) // 2
+        return [list(numbers[:half]), list(numbers[half:])]
+
+
+class _PartialGroupingProvidersAudited(_ScriptedProvidersAudited):
+    """The grouping turn answers with an INCOMPLETE partition — one number missing.
+
+    This is the failure D4 exists for and the one the § 8 coverage requirement is
+    written against: an LLM deciding grouping is an LLM that can DROP a question.
+    `validate_groups`' totality post-condition must refuse the whole answer rather
+    than dispatch a partial one, because a partial assignment loses a client's
+    question silently — and silence around dropped material is how V-01 lost 278
+    claims with nobody noticing.
+    """
+
+    def _group_partition(self, numbers: list[int]) -> list[list[int]]:
+        # Drop the LAST number. Dropping the first would also change which question
+        # ranks highest inside the group, so the last one isolates the totality
+        # breach from every other variable.
+        return [list(numbers[:-1])] if len(numbers) > 1 else [list(numbers)]
+
+
 def _anthropic_prompt_text(kwargs: dict) -> str:
     """Flatten a messages payload plus the system prompt into one string.
 
@@ -1076,7 +1229,14 @@ def _no_db_sessionmaker(log: list[tuple[str, Any]]):
 # ===========================================================================
 
 
-async def _engine_run(audited, *, monkeypatch, serpapi_key: Optional[str] = "scripted-key"):
+async def _engine_run(
+    audited,
+    *,
+    monkeypatch,
+    serpapi_key: Optional[str] = "scripted-key",
+    max_winners: int = 1,
+    max_group_size: Optional[int] = None,
+):
     """Drive the real pipeline against `audited`. Returns (result, statements).
 
     EVERY SEAM THIS INSTALLS, AND WHAT IS THEREFORE NOT UNDER TEST:
@@ -1161,9 +1321,27 @@ async def _engine_run(audited, *, monkeypatch, serpapi_key: Optional[str] = "scr
     monkeypatch.setattr(_rank_mod, "_TOURNAMENT_ROUNDS", 1)
     monkeypatch.setattr(_rank_mod, "_RANK_BACKOFF_S", 0.0)
     monkeypatch.setattr(_workshop_mod, "_CANDIDATES_PER_QUESTION", len(_CANDIDATES))
-    # ONE winner -> one corroboration group -> exactly one angle per stream, so
-    # all four streams run and each contributes its own scripted report once.
-    monkeypatch.setattr(_division_mod, "_D6_MAX_WINNERS", 1)
+    # ONE winner -> one research group -> exactly one angle per stream in
+    # `_D6_STREAMS`, so every stream in the rotation runs once and contributes its
+    # own scripted report once. Since D-W3-3 the rotation is THREE streams
+    # (gemini, openai, claude); `own` keeps its runner, timeout and report label but
+    # is no longer dispatched, so it contributes nothing to these runs.
+    #
+    # `max_winners` DEFAULTS TO 1 so every test written before Wave 3 sees exactly
+    # the run it was written against. The one caller that raises it needs the
+    # tournament's whole winner set to survive the bound, because what it asserts is
+    # a per-MEMBER property of a group — and `_bound_groups_to_winners` drops a
+    # mandate member that is not among the N strongest winners.
+    monkeypatch.setattr(_division_mod, "_D6_MAX_WINNERS", int(max_winners))
+    # `max_group_size` is left ALONE unless a caller asks, so the production default
+    # is what every other test sees. The one caller that lowers it needs the size cap
+    # to BITE, and D-W3-4 says discovery is what yields when prompt space runs out —
+    # a winner is never shed. Set as a module attribute for the reason the block above
+    # gives: the constant is resolved at import time from the environment.
+    if max_group_size is not None:
+        monkeypatch.setattr(
+            _grouping_mod_qg, "_D6_MAX_GROUP_SIZE", int(max_group_size)
+        )
     monkeypatch.setattr(_budget_mod, "TRIBUNAL_UNCAPPED", True)
     monkeypatch.setattr(_gates_mod, "_GATE_BACKOFF_S", 0.0)
 
@@ -1250,6 +1428,45 @@ def _stage_detail_entries(statements: list[tuple[str, Any]], stage_key: str) -> 
     ]
 
 
+def _division_items(statements: list[tuple[str, Any]]) -> list[dict]:
+    """The research-division feed rows, parsed out of the LAST `set_stage` write.
+
+    THIS IS THE OPERATOR'S OWN SURFACE, not a log line and not the claim table.
+    `set_stage` binds `{stage_key: detail}` as JSONB, so these rows are literally
+    what the database would have been told and what the run page then renders. Wave 3
+    puts the group count, the uniform-dispatch clause, the discovery count and every
+    angle's provider label and real query in here, which makes it the right place to
+    judge dispatch from.
+
+    Returns `[]` when the stage wrote nothing, so a caller asserting on the rows
+    fails on an empty list rather than on a KeyError.
+    """
+    import json
+
+    entries = _stage_detail_entries(statements, "research_division")
+    for raw in reversed(entries):
+        try:
+            body = json.loads(raw)
+        except Exception:  # noqa: BLE001 — an unparseable entry is a real failure
+            continue
+        items = ((body or {}).get("research_division") or {}).get("items")
+        if isinstance(items, list) and items:
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def _disputed_section(text: str) -> str:
+    """Just the D-08 "Disputed & changed" section of the delivered report.
+
+    Bounded to the region between its own heading and the next one, so a discovery
+    assertion cannot pass because the question text happens to appear in the prose
+    the writing model wrote — the section is where D-W3-4's provenance is owed.
+    """
+    _, _, tail = text.partition(_DISPUTED_H)
+    body, _, _ = tail.partition(_COULD_NOT_H)
+    return body
+
+
 def _terminal_state_of(result: dict) -> str:
     """`terminal_state()` fed the run's OWN D-17 facts, exactly as the worker does."""
     return terminal_state(**result["terminal_inputs"])
@@ -1311,12 +1528,25 @@ async def test_clean_four_stream_run_completes_end_to_end(monkeypatch):
         "report does not show it — D4's `brief_conflicts` are not reaching the "
         "renderer"
     )
-    for line in _NOT_FOUND_CLAUDE + _NOT_FOUND_OWN:
+    # ONLY THE CLAUDE LINES, since D-W3-3. `_D6_STREAMS` no longer contains `own`,
+    # so no angle is dispatched to the own-researcher and it contributes neither
+    # facts nor gap lines to this run. The RULE this loop protects is unchanged and
+    # still proved — a provider's own "I could not establish this" line reaches the
+    # delivered report — and the own half is now asserted in the OTHER direction
+    # just below, so the rotation change is pinned rather than quietly absorbed.
+    for line in _NOT_FOUND_CLAUDE:
         assert line in text, (
             "a provider said out loud that it could not establish something and "
             f"the report does not repeat it: {line!r}. The `research_gap` rows "
             "are the only record of an absent fact; losing them turns a stated "
             "gap into a silent omission."
+        )
+    for line in _NOT_FOUND_OWN:
+        assert line not in text, (
+            f"the own-researcher's gap line reached the report: {line!r}. D-W3-3 "
+            "took `own` out of `_D6_STREAMS`, so nothing should have dispatched to "
+            "it — if it ran, the rotation change has come undone and this run paid "
+            "for a fourth stream the operator was told was retired."
         )
 
     # -- citations ----------------------------------------------------------
@@ -1467,11 +1697,16 @@ async def test_clean_four_stream_run_completes_end_to_end(monkeypatch):
 
     gaps = _research_gap_inserts(statements)
     gap_texts = {p["text"] for p in gaps}
-    for line in _NOT_FOUND_CLAUDE + _NOT_FOUND_OWN:
+    for line in _NOT_FOUND_CLAUDE:
         assert line in gap_texts, (
             f"the provider's own 'could not establish' line was never written to "
             f"research_gap: {line!r}"
         )
+    assert _FACT_OWN not in by_text, (
+        "a claim from the own-researcher reached persistence. Under D-W3-3 `own` is "
+        "out of `_D6_STREAMS` and nothing dispatches to it, so a claim of its is "
+        "evidence that a retired stream was paid for."
+    )
 
     # -- the contradiction reached ONE session ------------------------------
     assert audited.group_claim_blocks, "no group-skeptic session ran at all"
@@ -1566,8 +1801,12 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
     for route in (
         "workshop_orientation", "workshop_candidates", "workshop_critique",
         "workshop_tournament", "workshop_evolve",
+        # WAVE 3: grouping is a NEW audited call on the critical path of every run.
+        # Naming it here is what stops it silently reverting to the D-W3-2 fallback,
+        # which is a real outcome that costs the whole saving and is only visible in
+        # a degradation reason nobody reads on a green build.
+        "workshop_grouping",
         "deep_research_gemini", "deep_research_openai", "deep_research_claude",
-        "own_research_search", "own_research_facts", "serpapi_search",
         "merge_tag", "merge_cluster",
         "gate_materiality", "gate_stability",
         "group_skeptic", "conflict_detector", "scrub_research",
@@ -1576,6 +1815,19 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
         assert audited.routes.get(route, 0) > 0, (
             f"the {route!r} route was never exercised, so this run did not drive "
             f"the stage it belongs to. Routes seen: {sorted(audited.routes)}"
+        )
+    # THE THREE ROUTES D-W3-3 RETIRED, asserted in the other direction. They were in
+    # the list above until Wave 3 took `own` out of `_D6_STREAMS`; leaving them there
+    # would have failed the build, and DELETING them silently would have left nothing
+    # recording that the fourth stream stopped being dispatched. `own_research_search`
+    # and `serpapi_search` are the own-researcher's two turns and `serpapi_search` is
+    # its search seam — none of the three can fire when no angle prefers `own`.
+    for route in ("own_research_search", "own_research_facts", "serpapi_search"):
+        assert audited.routes.get(route, 0) == 0, (
+            f"the {route!r} route fired on a run where D-W3-3 removed `own` from "
+            f"`_D6_STREAMS`. Either the rotation change has come undone, or a "
+            f"provider fell back onto `own` — and either way this run bought a "
+            f"stream the operator was told was retired."
         )
 
     assert audited.calls == sum(audited.routes.values()), (
@@ -1589,12 +1841,37 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
         "hangs the fast gate rather than failing it."
     )
 
-    # The SerpApi seam. The real `serpapi.search` is a tripwire that raises, so
-    # reaching it would already have failed the run; asserting the SCRIPTED seam
-    # recorded traffic is what makes that non-vacuous.
-    assert audited.serpapi_searches, (
-        "the own-researcher never asked for a search, so 'the real search was "
-        "never entered' holds for the wrong reason"
+    # THE SERPAPI SEAM, AND THE HONEST STATEMENT OF WHAT IT NOW PROVES.
+    #
+    # This used to assert `audited.serpapi_searches` was non-empty, precisely so
+    # that "the real `serpapi.search` was never entered" could not hold for the
+    # wrong reason. Under D-W3-3 it now DOES hold for that reason: `own` is out of
+    # `_D6_STREAMS`, nothing dispatches to it, and no search is asked for on this
+    # path at all. Saying so out loud is the only honest option — quietly deleting
+    # the assertion would leave a tripwire nobody knows is untested, which is the
+    # `ls || true` silent-skip trap in another costume.
+    #
+    # The tripwire is still INSTALLED by `_engine_run` (it raises on entry), so it
+    # still protects any future path that reaches it. What is asserted here is the
+    # narrower, true thing: the seam recorded nothing because nothing searched.
+    # `test_lost_stream_and_fallback_run_completes_degraded` still exercises the
+    # own-stream REFUSAL path, which is the behaviour D-W3-3 kept.
+    assert audited.serpapi_searches == [], (
+        f"a search was recorded on a run where no angle is dispatched to the "
+        f"own-researcher: {audited.serpapi_searches}. Something reached the search "
+        f"seam that Wave 3 removed from the rotation."
+    )
+    assert "own" in _division_mod._PROVIDER_RUNNERS, (
+        "`_PROVIDER_RUNNERS['own']` is gone. D-W3-3 removed `own` from the ROTATION "
+        "and ONLY from the rotation: the runner, its timeout and its report label "
+        "stay so that reinstating the stream is a one-line change. Deleting the "
+        "runner turns that promise into a rewrite."
+    )
+    assert "own" in _degraded_mod.ALL_PROVIDERS, (
+        "`degraded_parallel.ALL_PROVIDERS` no longer lists `own`. That list is the "
+        "ACCEPTED KNOWN GAP of D-W3-3, recorded deliberately rather than closed: a "
+        "degraded run can still route research to the stream the main rotation "
+        "dropped. If it was closed on purpose, close the deferred item with it."
     )
 
     # Deep-research adapters must still write their audit rows on the stubbed
@@ -1615,8 +1892,8 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
     # fallback that fires on the healthy path is a paid re-read of data the
     # provider already handed over structured.
     assert audited.routes.get("distiller_fallback", 0) == 0, (
-        "the fallback distiller ran on a run where all four streams returned a "
-        "usable fact list — D-03's unwiring has come undone and every stream's "
+        "the fallback distiller ran on a run where every DISPATCHED stream returned "
+        "a usable fact list — D-03's unwiring has come undone and every stream's "
         "prose is being re-shredded at full cost"
     )
 
@@ -1630,14 +1907,19 @@ async def test_own_research_is_a_declared_stage_that_nothing_writes(monkeypatch)
 
     15.2-03 declared the key up front (WR-03: declare BEFORE any plan writes it,
     so the UI never renders a bare unlabelled key), and 15.2-12/13 were to wire
-    the writer. They wired the fourth stream itself — it researches, it emits
-    facts, its claims reach the merge — but `set_stage(..., "own_research", ...)`
+    the writer. They wired the fourth stream itself — it researched, it emitted
+    facts, its claims reached the merge — but `set_stage(..., "own_research", ...)`
     was never added. `grep -rn 'own_research"' --include=*.py` outside the tests
     returns exactly one hit: the declaration.
 
+    SINCE D-W3-3 THE GAP HAS TWO HALVES. `own` left `_D6_STREAMS`, so no angle is
+    dispatched to it and the stream no longer runs either — while its runner, its
+    timeout and its report label were kept on purpose so reinstating it is one line.
+    So the declared stage is now unwritten AND unreachable, and both halves are
+    asserted below.
+
     THE OPERATOR CONSEQUENCE: the run feed shows a stage that never leaves
-    `pending`, on every run, including runs where the own-researcher did its work
-    perfectly. A permanently-pending stage reads as a stage that hung.
+    `pending`, on every run. A permanently-pending stage reads as a stage that hung.
 
     THIS TEST IS SELF-RETIRING. The moment someone writes the key, it fails and
     forces the deferred item closed rather than letting the gap age quietly."""
@@ -1655,10 +1937,24 @@ async def test_own_research_is_a_declared_stage_that_nothing_writes(monkeypatch)
         "test_clean_four_stream_run_completes_end_to_end, and close the deferred "
         "item that records it."
     )
-    # The stream itself really did run: the gap is the REPORTING, not the work.
-    assert audited.routes.get("own_research_facts", 0) > 0, (
-        "the own-researcher did not run at all, so this test is pinning the wrong "
-        "thing — it is meant to record a missing stage WRITE, not a missing stream"
+    # WHAT THIS GUARD USED TO SAY, AND WHY IT HAD TO CHANGE.
+    #
+    # It used to assert `own_research_facts > 0` — "the stream really did run, so the
+    # gap being pinned is the REPORTING, not the work". D-W3-3 took `own` out of
+    # `_D6_STREAMS`, so the stream no longer runs at all and that guard can never
+    # hold again. The gap it protected is now DOUBLE: the stage key is declared, no
+    # code writes it, AND nothing dispatches to the stream it names. Both halves are
+    # asserted, so the test still fails the moment either is closed rather than
+    # ageing quietly.
+    assert audited.routes.get("own_research_facts", 0) == 0, (
+        "the own-researcher ran. Under D-W3-3 no angle prefers `own`, so this is "
+        "the rotation change coming undone — not the stage gap this test pins."
+    )
+    assert "own" in _division_mod._PROVIDER_RUNNERS, (
+        "the own runner itself was deleted. D-W3-3 kept it deliberately: the stage "
+        "key, the runner, the timeout and the report label all stay so reinstating "
+        "the stream is one line. If the whole stream was removed, remove the "
+        "declared stage key and delete this test with it."
     )
 
 
@@ -1698,9 +1994,30 @@ async def test_lost_stream_and_fallback_run_completes_degraded(monkeypatch):
         f"lost one of four research streams. `completed` would hide the loss; "
         f"`parked` would overstate it. inputs={result['terminal_inputs']}"
     )
-    assert result["terminal_inputs"]["streams_lost"] == 1, (
-        f"exactly one stream (the own-researcher) should be recorded as lost: "
+    # WHAT `streams_lost` COUNTS, AND WHY IT IS NOW 0 ON THIS RUN.
+    #
+    # `streams_total` is the ANGLE count and `streams_lost` is how many angles
+    # produced nothing (`pipeline.py`'s D-17 block says so). Until Wave 3 the
+    # own-researcher WAS one of four angles, so refusing it for want of a credential
+    # showed up here as one lost angle. D-W3-3 took `own` out of `_D6_STREAMS`, so it
+    # is no longer an angle at all — its refusal can no longer be an angle loss, and
+    # all three dispatched angles do come back.
+    #
+    # THE RULE THIS ASSERTION PROTECTS IS UNCHANGED and is still proved, one line
+    # above: the run is `completed_degraded`, and it is degraded because the loss is
+    # NAMED in `degradation_reasons` — the D-17 path that does not depend on the
+    # angle arithmetic. Asserting the count in both directions is what stops the
+    # rotation change from being absorbed silently here.
+    assert result["terminal_inputs"]["streams_total"] == len(_division_mod._D6_STREAMS), (
+        f"`streams_total` is the angle count, and one group over "
+        f"{len(_division_mod._D6_STREAMS)} stream(s) is that many angles: "
         f"{result['terminal_inputs']}"
+    )
+    assert result["terminal_inputs"]["streams_lost"] == 0, (
+        f"an angle produced nothing on this run: {result['terminal_inputs']}. The "
+        f"own-researcher is refused BEFORE dispatch and is not an angle since "
+        f"D-W3-3, and the factless stream still returns a report — so a non-zero "
+        f"count here is a third, unexplained loss."
     )
 
     # -- the loss is stated in WORDS a human reads --------------------------
@@ -1888,4 +2205,508 @@ async def test_recovered_retry_and_cost_pending_do_not_degrade(monkeypatch):
     assert report["verification_degraded"] is False, (
         "a run whose only anomalies were a recovered retry and a pending cost "
         "raised the verification-degraded marker"
+    )
+
+
+# ===========================================================================
+# 5. WAVE 3 — dispatch by topic, and the question the evidence raised
+#
+# Every assertion in this block is judged from a surface the DATABASE was told
+# about: the `research_division` stage detail (the operator's own feed rows) or
+# the delivered report string. Never from a log line, and never from the claim
+# table — the standing caution.
+# ===========================================================================
+
+
+async def test_the_stubbed_run_dispatches_by_group_not_by_position(monkeypatch):
+    """D-R4/D-W3-1 end to end: every group goes to every stream, one angle each.
+
+    WHAT BREAKS IN PRODUCTION IF THIS FIRES. The pre-15.6 dispatch sent the top-3
+    winners to all four streams and dealt the remainder ROUND ROBIN, one angle each.
+    That is why V-01's coffee question got three sub-questions at one provider each,
+    and why two of them hitting the `<TAB>` parser bug left the client's entire
+    coffee question standing on 8 claims from a single stream. If this test fails,
+    that behaviour is back and the whole phase bought nothing.
+
+    THE FAKE SPLITS THE QUESTIONS INTO TWO GROUPS, and that choice is load-bearing —
+    see `_SplitGroupingProvidersAudited`. The D-W3-2 fallback produces one group per
+    client question, this brief has one client question, so a one-group answer would
+    be a partition the fallback also produces: the test would pass whether or not
+    `divide()` was ever handed stage B's grouping. Two groups over one client question
+    is a shape only the grouping step can produce, so the angle count separates them.
+    """
+    audited = _SplitGroupingProvidersAudited()
+    _result, statements = await _engine_run(
+        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES)
+    )
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert audited.routes.get("workshop_grouping", 0) == 1, (
+        f"grouping is ONE audited call per run and this run made "
+        f"{audited.routes.get('workshop_grouping', 0)}. More than one is unbudgeted "
+        f"spend on the critical path; zero means the step was never reached."
+    )
+    partition = audited.group_partitions[0]
+    assert len(partition) == 2 and all(partition), (
+        f"the fake did not propose two non-empty groups ({partition}), so a run that "
+        f"ignored the grouping would be indistinguishable from one that used it"
+    )
+
+    items = _division_items(statements)
+    assert items, (
+        "the research-division stage wrote no feed rows, so the operator cannot see "
+        "what the engine decided to buy"
+    )
+    header, angle_rows = items[0], items[1:]
+    name = str(header.get("name") or "")
+
+    # THE GROUPS STAGE B DECIDED ARE THE GROUPS RESEARCH IS BOUGHT ON.
+    n_streams = len(_division_mod._D6_STREAMS)
+    n_groups = len(partition)
+    assert f"{n_groups} research group(s)" in name, (
+        f"the feed header does not report the {n_groups} groups the grouping step "
+        f"decided: {name!r}. One group here means dispatch fell back to "
+        f"one-group-per-client-question and the paid grouping call was thrown away."
+    )
+    assert f"went to all {n_streams} research streams" in name, (
+        f"the header does not state that every group went to every stream: {name!r}. "
+        f"That clause is the operator's only sight of uniform allocation, and its "
+        f"absence means the count of corroboration keys did not match the group "
+        f"count — i.e. dispatch was NOT uniform."
+    )
+    assert len(angle_rows) == n_groups * n_streams, (
+        f"{len(angle_rows)} angle row(s) for {n_groups} group(s) over {n_streams} "
+        f"stream(s). Anything else means a group was not sent to every stream, which "
+        f"is the failure-independence the redesign was bought for."
+    )
+
+    # EVERY angle is a corroboration copy sharing ONE key, read off the feed row
+    # `_angle_copies` builds. A key shared by fewer than `n_streams` angles means
+    # `corroboration_key` is not the group id any more, and `corroboration_key` is
+    # what phase 15.5 stamps on the claim row.
+    for row in angle_rows:
+        row_name = str(row.get("name") or "")
+        assert (
+            f"corroboration copy ({n_streams} streams on the same sub-question)"
+            in row_name
+        ), (
+            f"an angle is not a corroboration copy of a {n_streams}-stream group: "
+            f"{row_name!r}. Under group dispatch every angle is one, which is why "
+            f"`corroboration_key` finally populates for every claim."
+        )
+        assert (row.get("prompt") or "").strip(), (
+            f"an angle row carries no query at all: {row_name!r}. The prompt is the "
+            f"self-contained assignment actually sent to a third-party provider; an "
+            f"empty one is a paid call that asks nothing."
+        )
+
+    providers = sorted(
+        _pipeline_mod._dr_model_display(stream)
+        for stream in _division_mod._D6_STREAMS
+    ) * n_groups
+    seen = sorted(
+        str(row.get("name") or "").split(" → ", 1)[-1].split(" · ", 1)[0]
+        for row in angle_rows
+    )
+    assert seen == sorted(providers), (
+        f"the groups did not reach every distinct stream exactly once each: {seen} "
+        f"vs {sorted(providers)}. Two copies of ONE group on one provider is double "
+        f"spend with zero corroboration gain, and if both come back alike it is a "
+        f"FALSE agreement signal in the merge."
+    )
+
+
+async def test_every_client_question_survives_the_stubbed_run_into_a_group(monkeypatch):
+    """The § 8 coverage requirement, end to end: no client question is dropped.
+
+    An LLM deciding grouping is an LLM that can drop a question, which is why
+    `enforce_group_coverage` re-asserts D4 in Python after the model has spoken. This
+    test watches the guarantee from the far end — the operator's dispatch feed — so a
+    question lost anywhere between the tournament and the angle list fails HERE
+    rather than surfacing as a client question with zero claims.
+    """
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert audited.group_partitions, (
+        "the grouping fake never proposed a partition, so 'every question survived' "
+        "would hold because nothing was ever grouped"
+    )
+    proposed = sorted(n for group in audited.group_partitions[0] for n in group)
+    offered = sorted(int(i) for i, _p, _t in _grouping_items(audited.group_prompts[0]))
+    assert proposed == offered and offered, (
+        f"the fake's own partition was not TOTAL over the questions it was shown "
+        f"({proposed} vs {offered}); this test would then be pinning the fake, not "
+        f"the engine"
+    )
+
+    items = _division_items(statements)
+    angle_rows = items[1:]
+    assert angle_rows, "no angle reached the feed at all"
+    labels = [str(row.get("name") or "").split(" → ", 1)[0] for row in angle_rows]
+    # The feed row shows the angle's `focus_area` truncated to 48 characters, and
+    # `focus_area` is the PARENT CLIENT-QUESTION LABEL (never the winner text) —
+    # `_propagate_stakes` matches `claim["facet"]` against it.
+    assert any(label.startswith(_CLIENT_QUESTION[:48]) for label in labels), (
+        f"the client's own question is not the focus area of any dispatched angle: "
+        f"{labels}. A group that does not carry the client's question means the "
+        f"client asked something this run never researched."
+    )
+    assert result["verification_summary"]["distilled"] > 0, (
+        "the covered question produced no claim at all, so coverage held on paper "
+        "and the deliverable is still empty"
+    )
+
+
+async def test_a_grouping_failure_degrades_the_stubbed_run_and_does_not_break_it(
+    monkeypatch,
+):
+    """D-W3-2: a forced-tool turn that came back as prose degrades, never raises.
+
+    Grouping is a paid LLM call on the critical path, and an LLM that groups is an
+    LLM that can return nothing usable. The run must still research every client
+    question — the deterministic one-group-per-client-question fallback — and must
+    say so in words the client reads, because the saving the phase was bought for is
+    exactly what was lost.
+    """
+    audited = _UngroupedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert audited.routes.get("workshop_grouping", 0) == 1, (
+        "the grouping call was never made, so this test is not driving the fallback"
+    )
+    assert "park" not in result, (
+        f"a grouping failure PARKED the run. Grouping is a refinement of dispatch, "
+        f"not a precondition for it: the deterministic fallback covers every client "
+        f"question. {result.get('park')}"
+    )
+    text = result.get("output_text") or ""
+    assert text.strip(), "a run whose grouping failed shipped no report at all"
+
+    reasons = result["verification_summary"]["degradation_reasons"]
+    # MATCHED AS A PREFIX, NOT BY EQUALITY, AND ON PURPOSE.
+    # `_normalise_degradation_reasons` truncates every reason to
+    # `_DEGRADATION_REASON_CHARS` before publishing it on either surface, so the
+    # published string is the production sentence's opening rather than the whole of
+    # it. A `==` here would fail on a sentence that IS correct, and "fix" itself the
+    # moment someone shortened the sentence — the assertion has to be about
+    # PROVENANCE (this is the sentence `fallback_groups` returns) rather than about
+    # a length the reporting layer owns.
+    grouping_reasons = [
+        r for r in reasons if r and _GROUPING_FALLBACK_REASON.startswith(r)
+    ]
+    assert len(grouping_reasons) == 1, (
+        f"the grouping fallback is named {len(grouping_reasons)} time(s) in "
+        f"{reasons}. Zero means a FULL fallback of a paid step was silent — the "
+        f"client is told the run was clean when shared groundwork was searched once "
+        f"per question instead of once per topic. Two means the same loss is "
+        f"reported twice, which is the alarm fatigue D-12 rejects."
+    )
+    assert len(grouping_reasons[0]) > 40 and "group" in grouping_reasons[0].lower(), (
+        f"the reason must be a sentence a human reads, not a code: "
+        f"{grouping_reasons[0]!r}"
+    )
+
+    # AND IT STILL RESEARCHED EVERY CLIENT QUESTION. That is the half of D-W3-2 that
+    # makes the degradation acceptable rather than a loss of scope.
+    items = _division_items(statements)
+    angle_rows = items[1:]
+    n_streams = len(_division_mod._D6_STREAMS)
+    assert len(angle_rows) == n_streams, (
+        f"the fallback dispatched {len(angle_rows)} angle(s) rather than one group "
+        f"per client question over {n_streams} streams. One client question means "
+        f"one group means {n_streams} angles."
+    )
+    labels = [str(row.get("name") or "").split(" → ", 1)[0] for row in angle_rows]
+    assert any(label.startswith(_CLIENT_QUESTION[:48]) for label in labels), (
+        f"the degraded dispatch lost the client's own question: {labels}"
+    )
+    assert result["verification_summary"]["distilled"] > 0, (
+        "the degraded run researched nothing — the fallback covered the questions "
+        "on paper and produced no evidence"
+    )
+
+
+async def test_an_incomplete_grouping_partition_is_repaired_not_dropped(monkeypatch):
+    """`validate_groups`' totality repair, driven end to end.
+
+    The model leaves ONE number out of its answer. **The question is placed
+    deterministically rather than dropped** — an LLM deciding grouping is an LLM that
+    can drop a question, and a dropped winner is a client question that silently goes
+    unresearched. This test watches the consequence from the far end: the omitted
+    question's own text still reaches the query that a third-party provider is sent.
+
+    AND IT MUST NOT DEGRADE THE RUN. D-12's distinction, restated by
+    `workshop_rank`: a PARTIAL repair is a NOTE because the output is still complete;
+    only a FULL fallback of the step degrades. Promoting a repair to a degradation
+    would mark almost every real run degraded and drain `completed_degraded` of the
+    meaning it has — which is why the fallback sentence is asserted ABSENT here and
+    PRESENT in the test above.
+
+    `max_winners` is raised for this run alone: what is asserted is a per-MEMBER
+    property of a group, and the default 1-winner bound would drop the omitted
+    question for an unrelated reason (`_bound_groups_to_winners`) and make the
+    assertion pass without the repair ever happening.
+    """
+    audited = _PartialGroupingProvidersAudited()
+    result, statements = await _engine_run(
+        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES)
+    )
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert audited.group_prompts, "the grouping call was never made"
+    offered = [(int(i), text) for i, _p, text in _grouping_items(audited.group_prompts[0])]
+    numbers = sorted(n for n, _t in offered)
+    proposed = sorted(n for group in audited.group_partitions[0] for n in group)
+    assert len(numbers) >= 2, (
+        f"the grouping prompt offered fewer than two questions, so an INCOMPLETE "
+        f"partition cannot be scripted: {numbers}. A silently vacuous test is the "
+        f"trap this whole file exists to avoid — raise the candidate count or the "
+        f"tournament's winner count rather than deleting the assertion."
+    )
+    assert proposed != numbers, (
+        f"the fake proposed a TOTAL partition ({proposed}), so nothing incomplete "
+        f"was ever sent and this test proves nothing"
+    )
+    omitted = [text for n, text in offered if n not in proposed]
+    assert len(omitted) == 1, f"expected exactly one omitted question: {omitted}"
+
+    reasons = result["verification_summary"]["degradation_reasons"]
+    assert not [r for r in reasons if r and _GROUPING_FALLBACK_REASON.startswith(r)], (
+        f"a REPAIRED partition was reported as a full grouping fallback: {reasons}. "
+        f"The output is still complete — every question was placed — so this is a "
+        f"note, not a degradation, and conflating the two is the alarm fatigue D-12 "
+        f"rejects."
+    )
+
+    # THE REPAIR ITSELF, seen in the query a provider was actually sent. The angle
+    # row's `prompt` is the self-contained assignment, and a group's members are
+    # listed in it — so the omitted question reaching a prompt is the omitted
+    # question reaching paid research.
+    items = _division_items(statements)
+    angle_rows = items[1:]
+    assert angle_rows, "no angle reached the feed at all"
+    prompts = " ".join((row.get("prompt") or "") for row in angle_rows)
+    assert omitted[0][:60] in prompts, (
+        f"the question the grouping step left out never reached a research query: "
+        f"{omitted[0][:60]!r}. It was dropped rather than placed, which is a client "
+        f"question silently going unresearched — the one outcome the totality rule "
+        f"exists to prevent."
+    )
+    labels = [str(row.get("name") or "").split(" → ", 1)[0] for row in angle_rows]
+    assert any(label.startswith(_CLIENT_QUESTION[:48]) for label in labels), (
+        f"the client's own question is not the focus area of any angle: {labels}"
+    )
+
+
+async def test_a_discovery_question_reaches_the_delivered_report_in_the_stubbed_run(
+    monkeypatch,
+):
+    """D-W3-4/D-W3-5: the evidence raised a question, and the client is told so.
+
+    JUDGED FROM THE RENDERED REPORT STRING — never from the claim table and never
+    from the logs. The orientation pass flags one SOURCED brief-vs-world conflict, so
+    the discovery bracket frames one question, parents it to the client question that
+    provoked it (a RIDER, D-W3-5.2), and rides it along inside that question's own
+    mandate group at no extra research call. The conflict then renders with the
+    provenance clause appended to it.
+
+    Governance context, because it is why this matters: D5/D-01 makes the workshop
+    fully automatic, so a discovered question CANNOT be gated on an operator click.
+    Transparency in the delivered document is the control that replaces the gate, and
+    it is also the Art. 12 audit trail.
+    """
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    text = result.get("output_text") or ""
+    section = _disputed_section(text)
+    assert section.strip(), (
+        "the D-08 'Disputed & changed' section is empty, so there is nowhere for a "
+        "discovered question's provenance to land"
+    )
+
+    conflict = _ORIENTATION_INPUT["brief_conflicts"][0]
+    assert conflict["assumption"] in section, (
+        f"the orientation's brief-vs-world flag is not in the section at all: "
+        f"{section!r}. Wave 3 must not have cost D4 its existing rendering."
+    )
+    assert _BRIEF_RAISED in section, (
+        f"the report does not say that the evidence raised a question the client did "
+        f"not ask. The clause is `researched_as` reaching the renderer; without it a "
+        f"discovered question was researched, paid for, and never disclosed — which "
+        f"D5/D-01 makes the report's own job to prevent. Section: {section!r}"
+    )
+
+    # ANNOTATE, NEVER APPEND. The clause must be attached to the conflict it came
+    # from, on ONE bullet. A second bullet would print the same conflict twice, once
+    # with the clause and once without, and a client reading both cannot tell which
+    # reading is true.
+    bullets = [
+        line for line in section.splitlines()
+        if line.strip().startswith("*") and conflict["assumption"] in line
+    ]
+    assert len(bullets) == 1, (
+        f"the conflict is rendered on {len(bullets)} bullet(s); exactly one is "
+        f"required. Two is `annotate_conflicts` having appended instead of "
+        f"annotated. Bullets: {bullets}"
+    )
+    assert _BRIEF_RAISED in bullets[0], (
+        f"the provenance clause is in the section but not on the conflict it belongs "
+        f"to: {bullets[0]!r}"
+    )
+    # The framed question itself begins with `discovery_bracket`'s own engine-authored
+    # opening. Only its OPENING is asserted: the composed sentence exceeds
+    # `steps._SECTION_ITEM_CHARS`, and production truncation winning over the clause
+    # is the documented order of precedence — asserting the whole text would be
+    # asserting that the bound does NOT hold.
+    framed = _discovery_mod.discovery_question_text(conflict)
+    assert framed, (
+        "the discovery frame produced no question from a conflict that has both "
+        "halves and an http(s) source — `no source, no slot` has become `no slot`"
+    )
+    assert framed[:40] in bullets[0], (
+        f"the clause names no question: {bullets[0]!r} does not contain "
+        f"{framed[:40]!r}"
+    )
+
+    # AT NO EXTRA COST. The rider travelled inside the client question's own group,
+    # so the run still bought exactly one group's worth of research (D-W3-5.3's
+    # stated saving: a run with no CROSS-CUTTING discovery consumes no group slot).
+    items = _division_items(statements)
+    n_streams = len(_division_mod._D6_STREAMS)
+    assert len(items) - 1 == n_streams, (
+        f"the discovered question cost extra research calls: "
+        f"{len(items) - 1} angle(s) rather than {n_streams}. A rider is supposed to "
+        f"be free — that is the whole reason D-W3-5 was chosen over a discovery "
+        f"group of its own."
+    )
+    header = str(items[0].get("name") or "")
+    assert "the evidence raised that the client did not ask" in header, (
+        f"the operator's feed does not mention the discovered question: {header!r}. "
+        f"The operator should be able to see on the page that the engine asked "
+        f"something the client did not."
+    )
+    # THE COUNT, and it is counted per GROUP. `discovery_riders` is stamped on all
+    # three of a group's angles, so a per-ANGLE sum would report three ride-alongs
+    # where there was one — a number the 15.8 run reads as the saving D-W3-5 bought.
+    assert "1 discovered question(s) rode along inside a client question" in header, (
+        f"the feed does not report exactly one ride-along: {header!r}. The saving "
+        f"D-W3-5 was chosen for is either invisible or triple-counted."
+    )
+    assert "two different client questions" not in header, (
+        f"the mixed-group warning fired for a group holding one client question plus "
+        f"a discovery rider: {header!r}. Under D-W3-5.2 that is the INTENDED shape, "
+        f"and flagging it is the crying-wolf warning D-W3-5 forbids — the same class "
+        f"of always-on alarm that is half of why V-01's 278 lost claims went "
+        f"unnoticed."
+    )
+
+
+async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_researched(
+    monkeypatch,
+):
+    """The other half of `annotate_conflicts`' contract, end to end.
+
+    The size cap is lowered so the ride-along has no room. D-W3-4: discovery NEVER
+    borrows from the mandate, so DISCOVERY is what yields — a winner is never shed and
+    a rider never displaces a client question's sub-question. The question still
+    reaches the client, because a conflict with no `researched_as` renders as a plain
+    brief-vs-world flag, which is the honest statement: the evidence raised it and
+    this run did not research it.
+
+    ANNOTATING IT ANYWAY WOULD BE THE LIE. It would tell the client a question was
+    researched when no provider was ever asked it — and that document is the Art. 12
+    audit trail.
+    """
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(
+        audited,
+        monkeypatch=monkeypatch,
+        max_winners=len(_CANDIDATES),
+        max_group_size=len(_CANDIDATES),
+    )
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    conflict = _ORIENTATION_INPUT["brief_conflicts"][0]
+    section = _disputed_section(result.get("output_text") or "")
+    bullets = [
+        line for line in section.splitlines()
+        if line.strip().startswith("*") and conflict["assumption"] in line
+    ]
+    assert len(bullets) == 1, (
+        f"the conflict is rendered on {len(bullets)} bullet(s) rather than one: "
+        f"{bullets}"
+    )
+    assert _BRIEF_RAISED not in bullets[0], (
+        f"a discovery question that was SHED for prompt space is reported to the "
+        f"client as researched: {bullets[0]!r}. No provider was ever asked it."
+    )
+    # AND THE CLIENT'S OWN QUESTIONS WERE ALL KEPT — the half of D-W3-4 that makes
+    # shedding the rider the correct trade rather than a loss.
+    items = _division_items(statements)
+    header = str(items[0].get("name") or "")
+    assert "rode along" not in header, (
+        f"the feed reports a ride-along on a run where the rider was shed: {header!r}"
+    )
+    prompts = " ".join((row.get("prompt") or "") for row in items[1:])
+    for candidate in _CANDIDATES:
+        assert candidate[:60] in prompts, (
+            f"a client sub-question was shed to make room for a discovered one: "
+            f"{candidate[:60]!r}. D-W3-4 says discovery never borrows from the "
+            f"mandate, so the mandate member must be the one that stays."
+        )
+
+
+async def test_no_angle_is_dispatched_to_own(monkeypatch):
+    """D-W3-3, seen end to end: `own` left the rotation and ONLY the rotation.
+
+    Two facts that coexist BY DESIGN, and the accepted gap between them:
+
+      * no angle is dispatched to `own`, because `_D6_STREAMS` no longer names it —
+        2 of its 4 V-01 angles failed outright, it reported English in a Dutch run,
+        and it contributed 2 unique URLs across the entire run;
+      * its runner, its timeout and its report label are all KEPT, so reinstating it
+        as a targeted fact-lookup tool stays a one-line change;
+      * `degraded_parallel.ALL_PROVIDERS` STILL lists it, which is the ACCEPTED KNOWN
+        GAP of D-W3-3: a degraded run can still route research to it. The operator
+        was shown the wider option and chose rotation-only, so this is recorded here
+        rather than closed.
+    """
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert "own" not in _division_mod._D6_STREAMS, (
+        f"`own` is back in `_D6_STREAMS` ({_division_mod._D6_STREAMS}). That tuple "
+        f"is the single source of stream ordering, so this one change is the whole "
+        f"rotation — and the stream it re-admits is the one V-01 measured at 2 "
+        f"unique URLs for a whole run."
+    )
+    own_label = _pipeline_mod._dr_model_display("own")
+    for row in _division_items(statements)[1:]:
+        assert own_label not in str(row.get("name") or ""), (
+            f"an angle was dispatched to the own-researcher: {row.get('name')!r}"
+        )
+    for route in ("own_research_search", "own_research_facts", "serpapi_search"):
+        assert audited.routes.get(route, 0) == 0, (
+            f"the own-researcher ran its {route!r} turn on a run where no angle "
+            f"prefers it"
+        )
+
+    # The three things D-W3-3 KEPT, asserted so a later cleanup cannot quietly turn
+    # "out of the rotation" into "deleted".
+    assert "own" in _division_mod._PROVIDER_RUNNERS, "the own runner was deleted"
+    assert "own" in _division_mod._PROVIDER_TIMEOUTS, "the own timeout was deleted"
+    assert own_label and own_label != "own", (
+        f"the own report label was deleted — `_dr_model_display('own')` fell back "
+        f"to the raw key {own_label!r}, which is what the operator would then see"
+    )
+    assert "own" in _degraded_mod.ALL_PROVIDERS, (
+        "`degraded_parallel.ALL_PROVIDERS` no longer lists `own`. That is the "
+        "accepted known gap of D-W3-3, recorded on purpose: if it was closed, close "
+        "the deferred item that records it too."
     )
