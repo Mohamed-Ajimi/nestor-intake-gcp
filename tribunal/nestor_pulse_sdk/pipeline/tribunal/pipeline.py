@@ -89,7 +89,19 @@ from nestor_pulse_sdk.pipeline.tribunal.research_division import (
     run_angles,
     divide,
     build_mission_brief_from_winners,
+    # THE SINGLE SOURCE OF STREAM ORDERING, imported for its LENGTH only. The feed
+    # header has to be able to say "all three streams" without retyping 3, and
+    # `_D6_STREAMS` is documented as the one place that number lives. Only `len()`
+    # is read — never the member names — so this stays a PROPERTY assertion and not
+    # the exact-set trap that turned phase 15.5's merged tree red.
+    _D6_STREAMS,
 )
+# Imported AS A MODULE at file scope, deliberately. `discovery_bracket` imports only
+# `logging`, `os` and `typing`, so there is no cycle to dodge and none of the
+# function-local import idiom this file uses for `strip_unresolved_cite_markers` is
+# needed. Module form (not `from ... import annotate_conflicts`) keeps the call site
+# readable as "the discovery bracket decided this", which is what it is.
+from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket
 from nestor_pulse_sdk.pipeline.deep_researchers.degraded_parallel import (
     own_stream_unavailable_reason,
     # F6 (plan 15.2-16): the "no angle produced a usable result" signal. It is
@@ -1725,6 +1737,20 @@ class TribunalPipeline:
                     list((workshop_result or {}).get("winners") or [])
                     if isinstance(workshop_result, dict) else []
                 ),
+                # (f) THE TWO NUMBERS WAVE 3 ADDS, in the same register and read the
+                # same way: how many research groups the workshop decided, and how
+                # many questions the EVIDENCE raised that this run is going to buy.
+                # Nothing is computed for the log — both are the length of a list
+                # stage B already returned, read with `.get()` so a pre-Wave-3
+                # result shape logs 0 rather than raising on the exit line.
+                groups_out=len(
+                    list((workshop_result or {}).get("groups") or [])
+                    if isinstance(workshop_result, dict) else []
+                ),
+                discovery_out=len(
+                    list((workshop_result or {}).get("discovery") or [])
+                    if isinstance(workshop_result, dict) else []
+                ),
             )
 
         # Read the result TOLERANTLY (phase rule 4): every key below is optional
@@ -1740,6 +1766,42 @@ class TribunalPipeline:
             if str(q or "").strip()
         ]
         brief_conflicts = list(workshop_result.get("brief_conflicts") or [])
+        # WAVE 3'S TWO NEW KEYS, READ EXACTLY LIKE EVERY LINE ABOVE THEM: `.get()`
+        # and `or []`, never a subscript. This is not defensive style for its own
+        # sake — T-15.6-25. A run RESTORED from a checkpoint written before Wave 3
+        # carries NEITHER key, and a subscript would raise at precisely the moment
+        # the resume exists to avoid: after the workshop has been paid for and
+        # before the angles have. The tolerant read makes that resume dispatch by
+        # the deterministic one-group-per-client-question fallback instead, which
+        # `_divide_from_winners` already logs once.
+        groups = list(workshop_result.get("groups") or [])
+        discovery = list(workshop_result.get("discovery") or [])
+        discovery_not_researched = list(
+            workshop_result.get("discovery_not_researched") or []
+        )
+        # THE SET THAT WAS ACTUALLY DISPATCHED — the only set `annotate_conflicts`
+        # may be handed. Stage B already returns `discovery` as the dispatched half
+        # and `discovery_not_researched` as its complement, so on every path this
+        # engine writes the subtraction below removes nothing. It is here because
+        # the OTHER shapes are real: a checkpoint restored from a build whose stage
+        # B partitioned differently, or a hand-built result in a test, can carry a
+        # question in both lists. Annotating such a question would tell the client
+        # a question was researched when no provider was ever asked — the one thing
+        # `annotate_conflicts`' docstring says must not happen. A question shed as a
+        # rider, or whose cross-cutting group was dropped to free a coverage slot,
+        # still reaches the report: with no `researched_as` clause it renders as a
+        # plain brief-vs-world conflict, which is the honest statement.
+        _shed_discovery_texts = {
+            str((q or {}).get("text") or "").strip()
+            for q in discovery_not_researched
+            if isinstance(q, dict)
+        } - {""}
+        discovery_dispatched = [
+            q
+            for q in discovery
+            if isinstance(q, dict)
+            and str(q.get("text") or "").strip() not in _shed_discovery_texts
+        ]
 
         if not client_questions:
             # The workshop normally cannot return an empty list, so reaching this
@@ -1890,7 +1952,34 @@ class TribunalPipeline:
         # Stage 2: Hybrid research division
         # ------------------------------------------------------------------
         _trims: list[dict[str, Any]] = []
-        angles = divide(mission_brief, winners=winners, trim_out=_trims)
+        # THE WIRE THIS PHASE EXISTS TO CLOSE. `groups=` is what makes the groups the
+        # workshop decided the groups research is BOUGHT on: without it `divide()`
+        # still ran, still produced angles, and still grouped one-per-client-question
+        # — the fallback — so the whole grouping call was paid for and thrown away.
+        #
+        # `winners=` stays, and stays first, because it alone still chooses between
+        # `divide()`'s two paths (D-03, no feature flag): truthy winners take the
+        # group-dispatch branch, falsy winners take the ORIGINAL focus-area path,
+        # which is the workshop-fallback and is out of scope for this phase. `groups`
+        # only refines the first branch; it never selects a branch.
+        #
+        # NO SECOND FALLBACK IS ADDED HERE. When `winners` is truthy and `groups` is
+        # empty — a pre-Wave-3 checkpoint, or a stage B that crashed before grouping
+        # — `_divide_from_winners` already falls back to one group per client
+        # question and logs it exactly once. A guard here would log it twice and give
+        # the operator two different accounts of one decision.
+        angles = divide(mission_brief, winners=winners, groups=groups, trim_out=_trims)
+        # THE OVER-CEILING ALARM IS NOT RAISED HERE, AND THAT IS DELIBERATE.
+        # D-W3-2 accepted the fallback's paid-call overshoot ON CONDITION that it is
+        # logged loudly (T-15.6-26), and it already is: `_divide_from_winners` calls
+        # `question_grouping.warn_if_over_ceiling(len(resolved), len(_D6_STREAMS))`
+        # immediately after dispatch, and that sentence names the group count, the
+        # call count, the ceiling, and the T-15.2-61 fact that the budget governor is
+        # inert under NESTOR_TRIBUNAL_UNCAPPED=1 so the group count is the only real
+        # spend control this engine has left. Every run of this pipeline goes through
+        # that call. A second warning here would double-log the one alarm the 15.8
+        # measuring run reads as its cost signal, and an alarm that fires twice is an
+        # alarm an operator learns to discount.
 
         # R3: the angle list is CHECKPOINTED but never restored, on purpose.
         # `divide()` is pure, deterministic and free, so re-running it costs
@@ -1944,13 +2033,66 @@ class TribunalPipeline:
             if parsed.source == "structured"
             else ", detected from a free-prose brief (no question list was supplied)"
         )
+        # --- the three Wave 3 clauses, each computed off the ANGLES ---------------
+        #
+        # 1. MIXED GROUPS — counted by GROUP, not by angle. Every group produces one
+        #    angle per stream, so summing a per-angle flag would report three times
+        #    the truth. `mixed_parents` is set by `_divide_from_winners` ONLY when a
+        #    group holds two different CLIENT questions, never for a client question
+        #    plus a discovery rider: under D-W3-5.2 that ride-along IS the intended
+        #    shape, and saying so on the operator's page would be exactly the
+        #    crying-wolf warning D-W3-5 forbids. This clause is the one place the run
+        #    admits that some claims' per-question attribution is an approximation.
+        _mixed_groups = len({
+            str(a.get("corroboration_key") or "")
+            for a in angles
+            if a.get("mixed_parents")
+        } - {""})
+        # 2. RIDE-ALONGS — the saving D-W3-5 was chosen for, and therefore the number
+        #    that shows whether it was collected. Also per GROUP: `discovery_riders`
+        #    is the same count on all three of a group's angles, so the maximum per
+        #    corroboration key is taken and the keys are then summed. Read as an int
+        #    with `bool` excluded, because `isinstance(True, int)` is True and a
+        #    truthy non-count must not be added to a total.
+        _riders_by_group: dict[str, int] = {}
+        for _a in angles:
+            _key = str(_a.get("corroboration_key") or "")
+            _riders = _a.get("discovery_riders")
+            if not _key or isinstance(_riders, bool) or not isinstance(_riders, int):
+                continue
+            if _riders > 0:
+                _riders_by_group[_key] = max(_riders_by_group.get(_key, 0), _riders)
+        _rider_questions = sum(_riders_by_group.values())
+        # 3. UNIFORM DISPATCH — the headline of D-R4/D-W3-1. When the number of
+        #    corroboration keys equals the number of groups stage B decided, every
+        #    single group went to every stream and the operator can be told so
+        #    plainly. Any other arithmetic (a trim removed a copy, or `groups` was
+        #    empty because a pre-Wave-3 checkpoint was restored and dispatch fell
+        #    back) keeps the OLD, weaker wording rather than overclaiming.
+        _uniform_dispatch = bool(groups) and _corroborated == len(groups)
+        _corroboration_clause = (
+            f", and every one of those {len(groups)} group(s) went to all "
+            f"{len(_D6_STREAMS)} research streams"
+            if _uniform_dispatch
+            else (f", {_corroborated} of them checked by several streams"
+                  if _corroborated else "")
+        )
         _division_items = [{
             "name": (
                 f"{len(client_questions)} client question(s) → "
                 f"{len(winners)} workshop question(s) → "
+                f"{len(groups)} research group(s) → "
                 f"{len(angles)} research angle(s)"
-                + (f", {_corroborated} of them checked by several streams"
-                   if _corroborated else "")
+                + _corroboration_clause
+                + (f", plus {len(discovery_dispatched)} question(s) the evidence "
+                   f"raised that the client did not ask"
+                   if discovery_dispatched else "")
+                + (f", {_mixed_groups} group(s) covering two different client "
+                   f"questions (their per-question attribution is an approximation)"
+                   if _mixed_groups else "")
+                + (f", {_rider_questions} discovered question(s) rode along inside a "
+                   f"client question's own group at no extra research call"
+                   if _rider_questions else "")
                 + _question_source_clause
             ),
             "status": "done",
@@ -3286,10 +3428,32 @@ class TribunalPipeline:
             #    `_write_final_report` reads `research_gap` directly, so the
             #    section works on the resume path and needs no wiring hand-off
             #    from 15.2-15 (which owns the WRITE path) beyond the rows.
+            # 5. WAVE 3 ANNOTATES THOSE FLAGS ON THE WAY PAST, and this is the only
+            #    place it happens. A discovered question is written ONTO the conflict
+            #    that provoked it — `annotate_conflicts` returns a new list of the
+            #    same length and order, adding `researched_as` to the matching
+            #    entries — and is NEVER appended as an extra row. Appending would
+            #    print the same conflict twice in "Where the brief did not match what
+            #    the research found", once with the clause and once without, and a
+            #    client reading it twice cannot tell which reading is true.
+            #
+            #    ONLY `discovery_dispatched` is passed, never the whole allocation:
+            #    a question that was shed for prompt space or lost its group to a
+            #    coverage repair must render as a plain brief-vs-world conflict with
+            #    no clause, because no provider was ever asked it.
+            #
+            #    This is also what carries Art. 12 provenance into a CLIENT-FACING
+            #    document. D5/D-01 forbids gating the workshop on an operator click,
+            #    so transparency in the delivered report is the control that replaces
+            #    the gate — which is why the annotation belongs on the bundle (it
+            #    travels to the interactive-report resume path) and not in the
+            #    renderer.
             "report_sections": {
                 "group_reconciliations": group_reconciliations,
                 "superseded_notes": _deduped_superseded,
-                "brief_conflicts": brief_conflicts,
+                "brief_conflicts": discovery_bracket.annotate_conflicts(
+                    brief_conflicts, discovery_dispatched
+                ),
             },
             "verification": {
                 "per_claim_verdicts": per_claim_verdicts,
