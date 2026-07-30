@@ -176,7 +176,7 @@ unique URLs). 5 x 3 = 15 calls against V-01's 19.
 be a superset of the client questions), not a ceiling. The "never invent" half was only ever two prompt
 sentences — and the same file says a prompt sentence is not a control.
 **Requirements**: none
-**Plans:** 6/7 plans executed
+**Plans:** 7/7 plans complete
 
 Plans:
 - [x] 15.6-01-PLAN.md — wave 1: the `emit_question_groups` index-only tool, the group record, and the pure validator / clamp / one-group-per-client-question fallback
@@ -185,7 +185,7 @@ Plans:
 - [x] 15.6-04-PLAN.md — wave 2: `enforce_group_coverage` (the same repair ladder, one level up) plus the grouping + discovery wiring into `run_workshop_stage_b`
 - [x] 15.6-05-PLAN.md — wave 2: the `researched_as` provenance clause in the brief-vs-world report section, in four languages
 - [x] 15.6-06-PLAN.md — wave 3: pipeline wiring — groups into `divide()`, discovery into the report, the over-ceiling warning, and end-to-end coverage
-- [ ] 15.6-07-PLAN.md — wave 4: register the two new test files (33 -> 35), run BOTH builds, and close the PENDING ledger
+- [x] 15.6-07-PLAN.md — wave 4: register the two new test files (33 -> 35), run BOTH builds, and close the PENDING ledger
 
 ### Phase 15.5: Research Engine Redesign — Claim Attribution (Wave 2) (INSERTED)
 
