@@ -138,6 +138,22 @@ DISCOVERY_PARENT = "__discovery__"
 # If the two ever need to move together, move them together on purpose.
 _DISCOVERY_TEXT_CHARS = 600
 
+# The bound on `source_url` INSIDE THE QUESTION FRAME. Separate from
+# `_DISCOVERY_TEXT_CHARS` and deliberately tighter, because the two fields are not
+# the same kind of thing: 600 is a budget sized for a SENTENCE of model prose, and
+# a URL is a TOKEN. A token that needs a sentence's worth of room is not a
+# citation, and every character of slack is a character an injection prefixed with
+# `https://` gets to spend. 300 clears any realistic fetched URL — including one
+# carrying tracking parameters — while being far too small to hold the instruction
+# paragraph an injection needs to restate an assignment.
+#
+# A BARE LITERAL, like `_DISCOVERY_TEXT_CHARS` and `_DISCOVERY_MAX_NOTES` and
+# unlike `_DISCOVERY_MAX_SLOTS` / `_DISCOVERY_PER_PARENT_CAP`. The env-backed
+# constants in this module are OPERATOR SPEND DIALS. This one is a
+# prompt-injection control, and a security bound an environment variable can widen
+# is not a bound.
+_DISCOVERY_URL_CHARS = 300
+
 # How many individual drop/cap notes `allocate_discovery` will name before it stops
 # naming them and emits one aggregate note instead. A note per conflict on a brief
 # with fifty unsourced flags is a log flood, and a flood is how the V-01 losses
@@ -166,6 +182,34 @@ def _norm(value: Any) -> str:
     question frame; truncation is the T-15.2-60 bound. NEVER RAISES.
     """
     return " ".join(_text(value).split())[:_DISCOVERY_TEXT_CHARS]
+
+
+def _norm_url(value: Any) -> str:
+    """An http(s) URL fit to interpolate into a provider prompt, else `""`. NEVER RAISES.
+
+    `source_url` IS MODEL-AUTHORED — it is a field of the `emit_orientation` tool
+    input — and since Wave 3 it travels inside the dispatched question to three
+    third-party providers. It therefore gets the same two controls `_norm` gives the
+    other two model-authored fields, for the same T-15.2-60 reason: **collapse**, so
+    a newline cannot restructure the question frame, and a **bound**, so injected
+    prose cannot grow. It gets them HERE and not from its producer:
+    `workshop._parse_orientation` checks this field's SCHEME and nothing else, and
+    scheme-checking is not content-bounding.
+
+    A URL whose collapsed form still contains a space is REJECTED, not trimmed.
+    Whitespace inside a URL is never legitimate, so such a value is not a long URL —
+    it is a URL followed by something else, and that something else is the payload
+    this function exists to refuse. Rejecting costs nothing that matters: the
+    caller's parenthesised clause simply disappears, the conflict is still
+    researched, and `provenance["source_url"]` still carries the value verbatim for
+    the report, which is a different surface with a different reader.
+    """
+    url = " ".join(_text(value).split())
+    if " " in url:
+        return ""
+    if not url.lower().startswith(("http://", "https://")):
+        return ""
+    return url[:_DISCOVERY_URL_CHARS]
 
 
 def _conflict_key(item: Any) -> tuple[str, str, str]:
@@ -206,23 +250,34 @@ def discovery_question_text(conflict: Any) -> str:
        says in as many words.
 
     3. **The URL is included in the question text** because the client will see it
-       in the report anyway, and because it has already been allowlisted to
-       http(s) upstream in `workshop._parse_orientation` before it can get here.
+       in the report anyway — but it is bounded HERE, by `_norm_url`, and is NOT
+       trusted to have been bounded upstream. `workshop._parse_orientation`
+       scheme-checks `source_url` and does nothing else to it: it neither collapses
+       the field nor caps its length, and a scheme check is not a content bound.
+       `source_url` is model-authored, so before this it was the one field on the
+       dispatched path that could carry attacker-chosen newlines at
+       attacker-chosen length onto three paid providers' prompts. This is rule
+       T-15.6-06 — stated a few dozen lines below, about the scheme check — applied
+       to itself: a rule that depends on a caller keeping its promise is not a rule.
 
-    The two model-authored fields are collapsed to single spaces and truncated to
+    ALL THREE MODEL-AUTHORED FIELDS ARE BOUNDED, none of them by the producer. The
+    two text fields are collapsed to single spaces and truncated to
     `_DISCOVERY_TEXT_CHARS` **each, separately** — separately, so a 5,000-character
     `assumption` cannot consume the budget that would otherwise have carried the
-    `world_says` half that contradicts it. The frame's own closing instruction is
-    emitted AFTER both of them, and `_angle_query` still appends its
-    ignore-instructions line and the language paragraph after that.
+    `world_says` half that contradicts it. The URL is collapsed and bounded by
+    `_norm_url`, on the same principle but with its own tighter cap and a
+    reject-rather-than-trim rule, because a URL is a token and not prose; see there.
+    The frame's own closing instruction is emitted AFTER all of them, and
+    `_angle_query` still appends its ignore-instructions line and the language
+    paragraph after that.
     """
     try:
         assumption = _norm(conflict.get("assumption") if isinstance(conflict, dict) else None)
         world_says = _norm(conflict.get("world_says") if isinstance(conflict, dict) else None)
         if not assumption or not world_says:
             return ""
-        url = _text(conflict.get("source_url")) if isinstance(conflict, dict) else ""
-        cited = f" ({url})" if url.lower().startswith(("http://", "https://")) else ""
+        url = _norm_url(conflict.get("source_url")) if isinstance(conflict, dict) else ""
+        cited = f" ({url})" if url else ""
         return (
             f"The brief assumes: {assumption}. "
             f"A source read during orientation says instead: {world_says}{cited}. "
