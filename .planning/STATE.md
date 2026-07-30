@@ -25,25 +25,76 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 15.7
-Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build 3f57de7a =
-  **1118 passed / 0 failed / 13 skipped**, `collecting: 33 of 33 expected files`, 1131 collected
-  (reconciles: 1118 + 13). Gates `cloudbuild.test-gates.yaml` build e9e75413 = **187 passed**,
-  2 deselected. Both counts ROSE from the Wave 1 baseline (1030 / 182), so the ~93 new tests ran
-  rather than being silently skipped.
-  The FIRST engine run (bdf1ec84) FAILED — see the cross-plan regression note below. That failure is
-  the argument for running gates per phase rather than batching them to 15.8.
-Plan: Not started
-  Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), run in parallel, merged clean, zero conflicts.
-  Plus the D-W2-4 follow-up (241d9d5). All worktrees merged, removed, branches deleted; tree clean.
-  Integration check the isolated executors could NOT do, run centrally after merge: the three
-  claim-dict key names match exactly across the 02→03 seam (steps.py produces, extractor.py:1010-1012
-  consumes), and the length cap 02 handed forward IS implemented once, at the DB boundary in
-  `_insert_claim` (_SUB_QUESTION_MAX_CHARS=500, _CORROBORATION_KEY_MAX_CHARS=32).
-Status: Ready to plan
-  NO deploy and NO live run until the whole redesign (spec Waves 2-5) is built — operator ruling
-  2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from "Wave 1 alone" to the
-  whole redesign before it ever runs.
+Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — NOT STARTED
+  ⚠ READ FIRST before planning 15.7: `.planning/phases/15.7-*/15.7-OPEN-ITEMS.md` — three rulings that
+  ENGINE-REDESIGN-SPEC § 5 does not read like on its face (the tournament STAYS; the loop must DISCOVER,
+  not only sharpen; Elo carries with median seeding for newcomers), plus four open items needing an
+  operator ruling — chief among them an exit rule that as written fires NEVER, making the 10-round cap
+  the normal cost rather than the ceiling.
+
+Gates (15.6, current — these SUPERSEDE the 15.5 numbers a previous entry carried here):
+  Engine `cloudbuild.test-engine.yaml` build **dfdcae3d** = **1293 passed / 0 failed / 13 skipped**,
+  `collecting: 35 of 35 expected files`. Gates `cloudbuild.test-gates.yaml` build **2eae97e6** =
+  **187 passed**, 2 deselected.
+  The engine count rose 1118 → 1293 (+175: +165 from the seven plans, +10 from the critical-fix pass)
+  and EXPECTED_FILES 33 → 35, so the new tests RAN rather than being silently skipped.
+  The gates count did NOT rise and that is CORRECT, not a skip: that config runs a fixed set of 13
+  files, none of which 15.6 touched. NOTE it has **no `EXPECTED_FILES` assertion at all** — a mistyped
+  path there is a silent skip with no red build. Same defect class the engine config was hardened
+  against, still live one file over. Worth closing in 15.8.
+  Statuses were read from `gcloud builds describe`, never a shell exit code (`builds submit | tail`
+  returns the PIPE's status, so a FAILED build reports exit 0).
+
+Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verification 42/42 must-haves,
+  44 commits, base 34bf790 → 8c2f3e9. Research is dispatched BY TOPIC: ≤5 LLM-decided groups, each to
+  all three providers; `corroboration_key` populates on EVERY angle (was NULL for ~12 of 15 after Wave
+  2 — the specific thing this wave existed to fix); `_D6_TOP_K` and `NESTOR_TRIBUNAL_D6_TOP_K` deleted;
+  `own` left the rotation only (its runner, timeout and report label survive, so reinstatement is one
+  line). The discovery bracket may raise questions the client did not ask — max 5 global slots,
+  per-parent cap 3, no fetched http(s) source means no slot, unused slots roll back to the mandate, and
+  each dispatched question is traceable in the report to the quote and URL that provoked it, in all
+  four languages.
+
+  CODE REVIEW FOUND 2 CRITICALS THAT 42/42 VERIFICATION AND 1283 GREEN TESTS BOTH MISSED — because each
+  plan's must_haves were individually satisfied and the defects lived in the SEAMS between them:
+    CR-02 (fixed, efc01a4) — `discovery_bracket.discovery_question_text` bounded `assumption` and
+      `world_says` with `_norm()` but took the model-authored `source_url` through `_text()` only:
+      no whitespace collapse, no length cap, guarded only by `startswith(("http://","https://"))`. A
+      URL carrying `\n\n=== Disregard the assignment above` reached three PAID providers verbatim.
+      Wave 3 is what put that field on a provider prompt; before it, it only rendered into the report.
+      Fix: `_norm_url` — collapse, refuse if a space survives, keep the scheme gate, cap at a new
+      `_DISCOVERY_URL_CHARS = 300`.
+    CR-01 (fixed, 18065fa) — `_normalise_winners` collapses winner text; `_bound_groups_to_winners`
+      compared RAW `member.get("text")` against that collapsed set, and `build_groups` copies member
+      text verbatim while `_verbatim_winner` truncates without collapsing. So a client question typed
+      with an interior newline or double space — ordinary in a form textarea — was injected by the D4
+      coverage guard as a repair group and then SILENTLY DROPPED by dispatch, with the warning blaming
+      "not among the strongest winners". Fix: a `_text_key` join applied to BOTH sides at the
+      comparison site, so every producer is fixed at once.
+  Regression re-gated after the fixes: 1293 passed, 0 failed. 10 new tests, 8 failing on pre-fix source.
+
+  STILL OPEN from that review, deferred to 15.8 (full detail in `15.6-REVIEW.md` § Resolution):
+    - The SAME normalisation hazard exists twice more in `workshop_rank.py` (`_restamp_groups`'
+      `rank_by_text`, `_stamp_discovery_ranks`' `numbered`). A miss there does not drop a question — it
+      silently leaves a STALE `rank`, and rank drives stakes. Fix it with CR-01's class.
+    - WR-01: `room = ceiling - len(work)` is measured before the merge pass, so a model returning 5
+      groups — exactly what the grouping prompt asks for — makes mandate-strict a NO-OP.
+    - WR-06: `_uniform_dispatch` counts distinct corroboration keys, not copies, so a trim shedding 2 of
+      3 still prints "went to all 3 research streams"; the comment at `pipeline.py:2049` claims otherwise.
+    - WR-05: `NESTOR_TRIBUNAL_D6_MAX_GROUPS=1` + a cross-cutting question → `max_groups=0` →
+      `max(1, int(0 or 1))` → 2 groups, 6 paid calls at a dial set to 3.
+    - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
+    - Test-file code review was never run (production files only). 6 test files unreviewed.
+
+Status: Phase 15.6 complete. NO deploy and NO live run until the whole redesign (spec Waves 2-5) is
+  built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
+  "Wave 1 alone" to the whole redesign before it ever runs.
+  OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
+  and `Running upgrade 0016 -> 0017`, never an exit code. Phase 15.6 added NO third migration (asserted:
+  the alembic diff against the phase base is empty).
+  A green engine gate is not a green engine: 1293 passing tests say nothing about what three real
+  providers return, what the grouping LLM actually emits, or whether `corroboration_key` finally
+  populates on a real run.
 
   Phase 15.5 decisions taken in session (recorded in 15.5-CONTEXT.md), all three closing gaps the
   spec left open:
