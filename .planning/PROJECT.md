@@ -173,7 +173,15 @@ through research, human-crafted report delivery, and a client Q&A chat over the 
   as of 2026-06-15).
 
 ---
-*Last updated: 2026-07-22 (Phase 18 complete — human report delivery live: staged upload +
-explicit Deliver verb (`in_research → delivered`), client report page + download, delivery mail;
-api rev 00038-7jp / frontend rev 00018-m6x; verification passed 17/17; replace click-through
-operator-accepted, re-verify at next delivery)
+*Last updated: 2026-07-30 (Phase 15.6 complete — Research Engine Redesign Wave 3 of 5, dispatch +
+discovery bracket: research is now dispatched BY TOPIC (≤5 LLM-decided groups, each to all three
+providers) instead of one angle per question, `corroboration_key` populates on every angle, `own` left
+the rotation, and a discovery bracket may raise questions the client did not ask — each requiring a
+fetched http(s) source ("no source, no slot") and traceable in the report to the quote and URL that
+provoked it. Verification passed 42/42 must-haves; engine gate 1293 passed / 0 failed across 35 files
+(build dfdcae3d), gates 187 passed (build 2eae97e6). Code review found 2 criticals — a prompt-injection
+channel via an unbounded model-authored `source_url`, and a normalisation mismatch that silently dropped
+D4-repaired client questions from dispatch — both FIXED and re-gated; 6 warnings + 3 info deferred to
+15.8. NOT DEPLOYED and no live run: standing operator ruling 2026-07-29 is that nothing measures until
+all 5 waves are built. Previous entry: 2026-07-22, Phase 18 — human report delivery live, api rev
+00038-7jp / frontend rev 00018-m6x, verification 17/17)

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: executing
-stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-29T22:03:44.421Z"
+status: ready_to_plan
+stopped_at: Phase 15.6 complete (8/7) — ready to discuss Phase 15.7
+last_updated: 2026-07-30T07:55:07.096Z
 last_activity: 2026-07-29 -- Phase 15.6 execution started
 progress:
   total_phases: 16
   completed_phases: 9
   total_plans: 100
-  completed_plans: 89
+  completed_plans: 167
   percent: 56
 ---
 
@@ -21,11 +21,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.6 — research-engine-redesign-dispatch-discovery-bracket-wave-3
+**Current focus:** Phase 15.7 — research engine redesign creative workshop loop wave 4
 
 ## Current Position
 
-Phase: 15.6 (research-engine-redesign-dispatch-discovery-bracket-wave-3) — EXECUTING
+Phase: 15.7
 Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build 3f57de7a =
   **1118 passed / 0 failed / 13 skipped**, `collecting: 33 of 33 expected files`, 1131 collected
   (reconciles: 1118 + 13). Gates `cloudbuild.test-gates.yaml` build e9e75413 = **187 passed**,
@@ -33,14 +33,14 @@ Gates: BOTH GREEN on the merged tree. Engine `cloudbuild.test-engine.yaml` build
   rather than being silently skipped.
   The FIRST engine run (bdf1ec84) FAILED — see the cross-plan regression note below. That failure is
   the argument for running gates per phase rather than batching them to 15.8.
-Plan: 1 of 7
+Plan: Not started
   Wave 2 = 15.5-02 (threading) + 15.5-03 (persistence), run in parallel, merged clean, zero conflicts.
   Plus the D-W2-4 follow-up (241d9d5). All worktrees merged, removed, branches deleted; tree clean.
   Integration check the isolated executors could NOT do, run centrally after merge: the three
   claim-dict key names match exactly across the 02→03 seam (steps.py produces, extractor.py:1010-1012
   consumes), and the length cap 02 handed forward IS implemented once, at the DB boundary in
   `_insert_claim` (_SUB_QUESTION_MAX_CHARS=500, _CORROBORATION_KEY_MAX_CHARS=32).
-Status: Executing Phase 15.6
+Status: Ready to plan
   NO deploy and NO live run until the whole redesign (spec Waves 2-5) is built — operator ruling
   2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from "Wave 1 alone" to the
   whole redesign before it ever runs.
@@ -145,7 +145,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-07-29 -- Phase 15.6 execution started
+Last activity: 2026-07-30
 
 Progress: [██████████] 100%
 
@@ -153,7 +153,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 82 (v1.0, shipped)
+- Total plans completed: 90 (v1.0, shipped)
 - Average duration: — min
 - Total execution time: 0.0 hours (v1.1)
 
@@ -175,6 +175,7 @@ Progress: [██████████] 100%
 | 13 | 4 | - | - |
 | 14 | 4 | - | - |
 | 18 | 4 | - | - |
+| 15.6 | 8 | - | - |
 
 **Recent Trend:**
 

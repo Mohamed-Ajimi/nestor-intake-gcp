@@ -176,7 +176,7 @@ unique URLs). 5 x 3 = 15 calls against V-01's 19.
 be a superset of the client questions), not a ceiling. The "never invent" half was only ever two prompt
 sentences — and the same file says a prompt sentence is not a control.
 **Requirements**: none
-**Plans:** 7/7 plans complete
+**Plans:** 8/7 plans complete
 
 Plans:
 - [x] 15.6-01-PLAN.md — wave 1: the `emit_question_groups` index-only tool, the group record, and the pure validator / clamp / one-group-per-client-question fallback
