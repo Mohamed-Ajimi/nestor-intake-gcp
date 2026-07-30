@@ -10,6 +10,7 @@ No real LLM calls — provider runners are monkeypatched.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import uuid
 
@@ -478,6 +479,164 @@ def test_a_discovery_member_is_exempt_from_the_winners_bound():
             "the rider survived a bound computed over winners it was never in"
         )
         assert angle["discovery_riders"] == 1
+
+
+def test_the_d4_coverage_repair_survives_dispatch_when_the_wording_has_a_newline(caplog):
+    """CR-01. THE FAILURE THIS PINS COST PAID RESEARCH AND WAS SILENT.
+
+    `allowed_texts` is built from `_normalise_winners`' output, which collapses
+    whitespace; the group members are the winners as `question_grouping.build_groups`
+    copied them, and that function copies member text VERBATIM by documented design.
+    A raw `in` between the two therefore dropped any winner whose wording carried an
+    interior newline — and the biggest producer of such text is
+    `workshop_rank._verbatim_winner`, which sets `text` to the CLIENT'S OWN question
+    wording straight out of a form textarea. `enforce_group_coverage` mints exactly
+    this shape, as a SINGLE-MEMBER repair group, precisely to guarantee that a client
+    question no mandate group covered still gets researched. So the D4 coverage guard
+    injected Q2 and dispatch deleted it, group and all.
+
+    It was invisible because the only net in `_divide_from_winners` is "did EVERY
+    group die"; a partial loss produced one warning that named the wrong module.
+    """
+    client_wording = "Hoe beweegt de prijs?\n\nEn wat volgt daaruit voor ons?"
+    winners = [_winner("sub-question 1", 1, "Q1"), _winner(client_wording, 2, "Q2")]
+    groups = _groups(winners, [[0], [1]])
+
+    # The fixture's own premise, asserted so it cannot rot: the two sides really do
+    # disagree on the raw string, which is what made the raw join drop the member.
+    assert groups[1]["members"][0]["text"] == client_wording, "build_groups copies verbatim"
+    assert rd._normalise_winners(winners, "Q1")[1]["text"] != client_wording, (
+        "and _normalise_winners collapses — a raw join between them cannot match"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        angles = rd.divide(_wbrief("Q1", "Q2"), winners=winners, groups=groups)
+
+    assert len(angles) == 2 * len(rd._D6_STREAMS) == 6, "both groups dispatched"
+    assert {a["focus_area"] for a in angles} == {"Q1", "Q2"}, (
+        "the client question the coverage guard repaired must still be researched"
+    )
+    researched: set[str] = set()
+    for angle in angles:
+        researched |= set(angle["sub_questions"])
+    assert client_wording in researched, (
+        "the member is compared collapsed but dispatched VERBATIM"
+    )
+    assert not any("strongest winners" in r.message for r in caplog.records), (
+        "nothing was over the bound here, so the spend-control warning must not fire"
+    )
+
+
+def test_a_member_the_tournament_never_chose_is_still_dropped_after_the_collapse(caplog):
+    """THE OTHER DIRECTION OF CR-01, and the one that must not regress.
+
+    Collapsing whitespace equalises formatting; it must not admit strangers. A
+    member whose collapsed text matches no collapsed winner is still dropped, or the
+    fix would have traded a silent-loss bug for a silent-overspend bug — and the
+    winners bound is the only real spend control this engine has left (T-15.2-61).
+
+    The smuggled member carries a newline AND double spaces on purpose: if the fix
+    had been "keep anything that looks whitespace-mangled" rather than "compare
+    collapsed to collapsed", this member would sail through.
+    """
+    winners = [_winner("sub-question 1", 1, "Q1")]
+    groups = _groups(winners, [[0]])
+    groups[0]["members"].append({
+        "text": "a  question   the tournament\nnever chose", "parent": "Q1",
+        "parents": ["Q1"], "rank": 2, "langs": [],
+    })
+
+    with caplog.at_level(logging.WARNING):
+        angles = rd.divide(_wbrief("Q1"), winners=winners, groups=groups)
+
+    researched: set[str] = set()
+    for angle in angles:
+        researched |= set(angle["sub_questions"])
+    assert researched == {"sub-question 1"}, "the stranger bought no paid research"
+    assert not any("never chose" in text for text in researched)
+    assert any("strongest winners" in r.message for r in caplog.records), (
+        "a genuine over-the-bound drop is still named, never dropped silently"
+    )
+    assert any("genuine" in r.message for r in caplog.records), (
+        "and the warning now says which of the two causes it is"
+    )
+
+
+def test_the_winners_join_is_whitespace_insensitive_on_both_sides():
+    """One helper, both sides, by construction — not two producers agreeing.
+
+    Every wording below is the SAME question to a reader and a different string to
+    `in`. Each is kept, and each is kept VERBATIM: the collapse is a comparison
+    rule, never a rewrite of what gets dispatched.
+    """
+    canonical = "how does pricing move across the Benelux market?"
+    allowed = {rd._text_key(canonical)}
+    for wording in (
+        canonical,
+        "how does pricing move\nacross the Benelux market?",
+        "how does pricing move\n\nacross the Benelux market?",
+        "how does pricing move\tacross the Benelux market?",
+        "how does  pricing  move across the Benelux market?",
+        "  how does pricing move across the Benelux market?  ",
+    ):
+        group = {
+            "group_id": "g1", "bracket": "mandate", "why": "one topic",
+            "members": [{"text": wording, "parent": "Q1", "parents": ["Q1"], "rank": 1}],
+            "parents": ["Q1"], "client_parents": ["Q1"], "parent": "Q1",
+            "rank": 1, "riders": 0,
+        }
+        out = rd._bound_groups_to_winners([group], allowed, ["Q1"])
+        assert len(out) == 1, wording
+        assert out[0]["members"][0]["text"] == wording, (
+            "compared collapsed, dispatched verbatim"
+        )
+        assert out[0] is group, "an untouched group is passed through, not rebuilt"
+        assert out[0]["group_id"] == "g1", (
+            "re-deriving group_id would change corroboration_key mid-run"
+        )
+
+
+def test_a_textless_member_is_not_reported_as_a_spend_control_drop(caplog):
+    """The two drop causes are counted and named APART.
+
+    `_normalise_winners` already dropped every empty-text winner, so `allowed_texts`
+    can never hold `""` and a textless member can only ever fail to match. Reporting
+    that as "not among the strongest winners" sent an operator to the winners list
+    and the tournament, which is not where the defect is.
+    """
+    group = {
+        "group_id": "g1", "bracket": "mandate", "why": "w",
+        "members": [{"text": "   \n ", "parent": "Q1", "parents": ["Q1"], "rank": 1}],
+    }
+    with caplog.at_level(logging.WARNING):
+        out = rd._bound_groups_to_winners([group], {"sub-question 1"}, ["Q1"])
+
+    assert out == [], "a group with nothing usable in it is still dropped whole"
+    messages = " ".join(r.message for r in caplog.records)
+    assert "no usable text" in messages
+    assert "NOT a spend control firing" in messages
+    assert "strongest winners" not in messages, (
+        "nothing was over the bound, so the bound must not be blamed"
+    )
+
+
+def test_the_bound_stays_pure_and_does_not_raise_on_an_unhashable_member_text():
+    """`_text_key` coerces to `str`, which is also what makes the operand hashable.
+
+    A member whose `text` is a list used to raise `TypeError: unhashable type` out of
+    the set membership test — between the paid workshop and the paid angles.
+    """
+    winners = [_winner("sub-question 1", 1, "Q1")]
+    groups = _groups(winners, [[0]])
+    before = copy.deepcopy(groups)
+    assert rd._bound_groups_to_winners(groups, {"sub-question 1"}, ["Q1"])
+    assert groups == before, "PURE: the caller's groups are never mutated"
+
+    hostile = {"group_id": "g1", "members": [{"text": ["a", "list"], "parent": "Q1", "rank": 1}]}
+    assert rd._bound_groups_to_winners([hostile], {"x"}, ["Q1"]) == []
+    for empty in (None, [], [None, 3], [{"members": None}], [{"members": [None]}]):
+        assert rd._bound_groups_to_winners(empty, {"x"}, ["Q1"]) == [], repr(empty)
+    assert rd._text_key(None) == "" and rd._text_key(["a", "b"]) == "['a', 'b']"
 
 
 def test_the_high_stakes_boundary_did_not_move_when_the_top_k_knob_died():
