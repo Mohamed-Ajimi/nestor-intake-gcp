@@ -204,6 +204,61 @@
 #                pass vacuously. The reasoning is written in the file
 #                so nobody adds one later thinking it was forgotten.
 #
+# PHASE 15.6 (Wave 3 of the engine redesign) adds TWO files, and
+# both names were registered by ONE plan -- 15.6-07 -- at the END of
+# the phase rather than by their own wave-1 plans. That is a
+# DELIBERATE inversion of the 15.3/15.4/15.5 rule that a plan
+# registers its test file in the same commit that creates it, and the
+# reason is the same rule those phases were honouring: this config has
+# a SINGLE OWNER per phase. With one owner, the only way to also
+# guarantee the `ls ... || true` silent-skip window never opens is to
+# add the names AFTER both files exist. Registering them in wave 1
+# would have named two absent files across three waves -- precisely
+# the gap-phase trap described above. Both names and the 33 -> 35 bump
+# landed in ONE edit.
+#
+#     15.6-01 -> test_question_grouping.py (D-R4 grouping core: the
+#                GROUP RECORD, the HARD CEILING of 5 groups -- a
+#                ceiling and not a target, so fewer is allowed and
+#                there is no floor padding -- the TOTALITY of the
+#                assignment (every winner lands in exactly one group,
+#                none silently dropped), the DETERMINISTIC
+#                one-group-per-client-question FALLBACK that replaces
+#                the deleted top-k plus round-robin machinery and
+#                records a D-12 degradation when it fires, and the
+#                INDEX-ONLY tool schema -- the grouping LLM addresses
+#                winners by index and never by text, so its output
+#                cannot smuggle a rewritten question through to three
+#                third-party providers.
+#
+#                It is PURE: every function under test is a pure
+#                string/list transform, and the ONE async function is
+#                driven through a hand-written duck-typed fake. No
+#                Postgres, no provider key, no network.
+#
+#     15.6-02 -> test_discovery_bracket.py (D-W3-4 discovery bracket:
+#                NO SOURCE NO SLOT -- a candidate without the quote and
+#                source that provoked it is refused -- the GLOBAL POOL
+#                with a PER-PARENT CAP of 3 rather than a per-question
+#                quota, because a quota forces the system to MANUFACTURE
+#                a discovery question to fill it, the ROLL-BACK of
+#                unused slots to the MANDATE (more depth) and never
+#                into more discovery, and the `__discovery__` SENTINEL
+#                that marks a cross-cutting question the coverage
+#                assertion must IGNORE, so the guard neither rejects it
+#                nor silently counts it as covering a client question
+#                it does not answer.
+#
+#                PURE for the same reasons as the file above.
+#
+# WHAT NEITHER FILE CAN PROVE, stated here so it is not mistaken for
+# proven: phase 15.6 DEPLOYS NOTHING and RUNS NOTHING LIVE. Waves 2-5
+# of the redesign land in git only, and there is ONE deploy and ONE
+# measuring run at the end of phase 15.8. This phase adds NO
+# migration, so it adds no third alembic proof -- but the two already
+# owed, the literal lines `Running upgrade 0015 -> 0016` and
+# `Running upgrade 0016 -> 0017`, remain UNPAID and are owed at 15.8.
+#
 # test_distiller_separators.py carries the ONLY assertion in the
 # repo that pins the distiller prompt contract. The docstring at
 # steps.py `_build_distiller_prompt` used to claim that
@@ -313,13 +368,15 @@ steps:
                     nestor_pulse_sdk/tests/test_run_event_emit.py \
                     nestor_pulse_sdk/tests/test_source_resolution.py \
                     nestor_pulse_sdk/tests/test_distiller_separators.py \
-                    nestor_pulse_sdk/tests/test_claim_attribution.py"
+                    nestor_pulse_sdk/tests/test_claim_attribution.py \
+                    nestor_pulse_sdk/tests/test_question_grouping.py \
+                    nestor_pulse_sdk/tests/test_discovery_bracket.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=33
+            EXPECTED_FILES=35
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
