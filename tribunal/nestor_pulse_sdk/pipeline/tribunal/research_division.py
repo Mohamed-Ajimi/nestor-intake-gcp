@@ -975,6 +975,27 @@ def _member_rank(member: Any) -> int:
     return rank if rank >= 1 else 10 ** 9
 
 
+def _text_key(value: Any) -> str:
+    """The JOIN KEY for member <-> winner identity. PURE, NEVER RAISES.
+
+    EXACTLY the collapse `_normalise_winners` applies to a winner's text
+    (`" ".join(str(...).split())`) and deliberately nothing more: no case folding,
+    no truncation, no punctuation stripping. Anything more would start MERGING
+    winners the tournament ranked apart; anything less leaves the two sides of
+    `_bound_groups_to_winners`' join disagreeing, which is the defect this helper
+    exists to close. If `_normalise_winners` ever changes how it rewrites text,
+    change it here in the same commit — one rule, spelled once, is the whole point.
+
+    Returning a `str` also makes the value HASHABLE, so a member whose `text` is a
+    list or a dict can no longer raise `TypeError: unhashable type` out of the set
+    membership test below.
+    """
+    try:
+        return " ".join(str(value or "").split())
+    except Exception:  # noqa: BLE001 — a hostile __str__ is untrusted input, not an error
+        return ""
+
+
 def _bound_groups_to_winners(
     groups: Any, allowed_texts: set, labels: list[str]
 ) -> list[dict[str, Any]]:
@@ -985,6 +1006,32 @@ def _bound_groups_to_winners(
     whole. Without this, a caller that grouped the UNTRUNCATED winners list could
     buy paid research for a winner the bound already excluded — and the bound is
     the only real spend control this engine has left (T-15.2-61).
+
+    THE JOIN IS WHITESPACE-INSENSITIVE, ON BOTH SIDES, VIA `_text_key`. It has to
+    be. `allowed_texts` is built from `_normalise_winners`' output, which rewrites
+    every winner's text as `" ".join(text.split())`, while the members are the
+    winners as `question_grouping.build_groups` copied them — and that function
+    copies member text VERBATIM by documented design. A raw `in` therefore dropped
+    any winner carrying an interior newline, tab or double space. The largest
+    producer of exactly that text is `workshop_rank._verbatim_winner`, which sets
+    `text` to the CLIENT'S OWN question wording out of a form textarea, truncated
+    but never collapsed; and `enforce_group_coverage` mints that same shape
+    deliberately, as a single-member repair group, precisely to guarantee that a
+    client question no mandate group covered still gets researched. So the raw join
+    deleted the D4 coverage repair and its group, and the only net below is "did
+    EVERY group die" — a partial loss was invisible. Both sides now normalise
+    identically BY CONSTRUCTION rather than by two producers happening to agree.
+
+    THE COMPARISON SITE IS THE RIGHT PLACE FOR THAT RULE, not the producers.
+    `build_groups` copies verbatim on purpose and several producers feed these
+    groups, so a collapse pushed back into any one of them would leave the rest
+    broken. One join, one rule, one place.
+
+    THE BOUND STILL BITES, WHICH IS THE OTHER HALF OF THE CONTRACT. Collapsing
+    equalises whitespace; it does not admit strangers. A member whose collapsed
+    text matches no collapsed winner is still dropped, so a caller that grouped a
+    winners list wider than `_D6_MAX_WINNERS` still cannot buy research for the
+    winners the bound excluded (T-15.2-61).
 
     DISCOVERY MEMBERS ARE EXEMPT, and that is not an oversight. They are not
     tournament winners, they never appeared in the winners list this bound is
@@ -1001,6 +1048,7 @@ def _bound_groups_to_winners(
     """
     out: list[dict[str, Any]] = []
     dropped_members = 0
+    dropped_unusable = 0
     dropped_groups: list[str] = []
     for group in list(groups or []):
         if not isinstance(group, dict):
@@ -1009,7 +1057,17 @@ def _bound_groups_to_winners(
         for member in list(group.get("members") or []):
             if not isinstance(member, dict):
                 continue
-            if _is_discovery_member(member) or member.get("text") in allowed_texts:
+            if _is_discovery_member(member):
+                kept.append(member)
+                continue
+            key = _text_key(member.get("text"))
+            if not key:
+                # NOT the winners bound: `_normalise_winners` already dropped every
+                # empty-text winner, so `allowed_texts` can never contain `""` and a
+                # textless member could only ever match by accident. Counted apart so
+                # the warning cannot blame the spend control for a data defect.
+                dropped_unusable += 1
+            elif key in allowed_texts:
                 kept.append(member)
             else:
                 dropped_members += 1
@@ -1045,14 +1103,28 @@ def _bound_groups_to_winners(
         log.warning(
             "research_division.divide: %d grouped mandate member(s) were not among "
             "the %d strongest winners and were dropped before dispatch — the caller "
-            "grouped a winners list wider than the bound. Discovery members are "
-            "exempt from this bound by design.",
+            "grouped a winners list wider than the bound. The join is "
+            "whitespace-insensitive on both sides, so this IS a genuine "
+            "over-the-bound member and not the normalisation mismatch this same "
+            "sentence used to be printed for. Discovery members are exempt from "
+            "this bound by design.",
             dropped_members, _D6_MAX_WINNERS,
+        )
+    if dropped_unusable:
+        log.warning(
+            "research_division.divide: %d grouped mandate member(s) carried no "
+            "usable text and were dropped before dispatch. This is NOT the "
+            "%d-winner bound and NOT a spend control firing — such a member matches "
+            "no winner because every empty-text winner was already dropped upstream. "
+            "Look at whatever built the group, not at the winners list.",
+            dropped_unusable, _D6_MAX_WINNERS,
         )
     if dropped_groups:
         log.warning(
             "research_division.divide: group(s) %s lost every member to the "
-            "%d-winner bound and were dropped whole",
+            "%d-winner bound (or to unusable member text) and were dropped whole — "
+            "whatever client question(s) they carried are researched this run only "
+            "if some other surviving group also covers them",
             ", ".join(dropped_groups), _D6_MAX_WINNERS,
         )
     return out
@@ -1150,8 +1222,12 @@ def _divide_from_winners(
             len(resolved), len(labels), len(resolved) * len(_D6_STREAMS),
         )
 
+    # `_text_key` on BOTH sides of the join. It is redundant on this side today —
+    # `_normalise_winners` already collapsed `w["text"]` — and it is written anyway,
+    # so that the bound cannot start silently dropping winners again the moment
+    # either producer's normalisation moves. See `_bound_groups_to_winners`.
     resolved = _bound_groups_to_winners(
-        resolved, {w["text"] for w in ordered}, labels
+        resolved, {_text_key(w["text"]) for w in ordered}, labels
     )
     if not resolved:
         log.warning(
