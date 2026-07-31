@@ -289,8 +289,16 @@ async def test_unusable_line_keeps_the_tournament_text():
 
 
 async def test_evolve_prompt_carries_the_run_language_and_the_injection_rule():
-    """9. The run language, the ISO rule, the ignore line, and truncation."""
-    long_text = "A" * 240 + "ZQZ"
+    """9. The run language, the ISO rule, the ignore line, and truncation.
+
+    The truncation width is READ from `workshop_rank._CANDIDATE_PROMPT_CHARS`, not
+    written as a literal: `_winners_block` renders through that same constant, and
+    phase 15.7 raised it. A literal would have kept asserting the retired width
+    while `ZQZ` — the marker for "one character past the bound" — quietly stopped
+    being past anything.
+    """
+    cap = workshop_rank._CANDIDATE_PROMPT_CHARS
+    long_text = "A" * cap + "ZQZ"
     audited = replying(fenced("0 | a sharpened question about tolling fees | LANGS: de"))
 
     await evolve(
@@ -301,8 +309,8 @@ async def test_evolve_prompt_carries_the_run_language_and_the_injection_rule():
     assert "Nederlands" in prompt
     assert "ISO 639-1" in prompt
     assert workshop_rank._IGNORE_INSTRUCTIONS in prompt
-    assert "A" * 240 in prompt
-    assert "ZQZ" not in prompt, "the 241st character reached the model"
+    assert "A" * cap in prompt
+    assert "ZQZ" not in prompt, "the character past the bound reached the model"
     assert "\n0 | " in prompt, "winners are addressed by INDEX"
 
 

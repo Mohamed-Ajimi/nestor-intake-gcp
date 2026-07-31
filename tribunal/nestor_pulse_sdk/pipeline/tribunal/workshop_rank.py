@@ -142,10 +142,65 @@ log = logging.getLogger(__name__)
 #                            expensive unit.
 #   _RANK_RETRIES            EXTRA attempts after the first, handed to with_retry.
 #   _RANK_BACKOFF_S          base backoff, handed to with_retry.
-#   _CANDIDATE_PROMPT_CHARS  candidate text kept inside ANY prompt. This is the
-#                            same width gates._gate_batch uses and it is a
-#                            SECURITY CONTROL, not formatting.
-#   _FLAW_MAX_CHARS          critique flaw text kept inside any prompt.
+#   _CANDIDATE_PROMPT_CHARS  candidate text kept inside ANY prompt — the critique
+#                            block, BOTH sides of every tournament match, and the
+#                            evolve winners block. IT IS A SECURITY CONTROL, NOT
+#                            FORMATTING: it bounds how much attacker-influenced
+#                            text reaches the model at all, so a candidate
+#                            carrying an injected payload cannot forge another
+#                            candidate's output line. That is the same channel
+#                            Wave 3's CR-02 closed on `source_url`. IT NEEDS *A*
+#                            BOUND; IT DID NOT NEED 240 — RAISE IT, NEVER DELETE
+#                            IT.
+#
+#                            What 240 cost, measured on the real candidates of
+#                            run V-01: they are 245-373 characters, so 17 of 18
+#                            reached the critic CUT OFF MID-WORD — 920 characters
+#                            discarded, no ellipsis, and not one surviving
+#                            question mark — while the critique prompt asks
+#                            whether each question is sharp and answerable AS IT
+#                            STANDS. The critic answered honestly about the text
+#                            it was shown; it was never shown the questions. The
+#                            result was KEEP=1 / WEAK=17 with just TWO distinct
+#                            flaw clauses, sixteen of them the identical "two
+#                            questions in one". Two flaw clauses across seventeen
+#                            rejections is itself the tell. Raised, the same
+#                            prompt over the same candidates gives KEEP=9 /
+#                            WEAK=9 with specific flaws.
+#
+#                            The second-order effect is worse and less obvious:
+#                            `_match_block` truncates BOTH sides of a match to
+#                            this same width and then hands the judge the
+#                            critique's flaw under "a flaw counts AGAINST that
+#                            side". When the truncation gives both sides the SAME
+#                            flaw, that signal cancels to zero — so truncation
+#                            was poisoning the tournament's judgements, not only
+#                            the critique's, and the ranking reshuffles hard once
+#                            it is lifted.
+#
+#                            600 is the width `workshop._CANDIDATE_MAX_CHARS`
+#                            stores a candidate at and the width
+#                            `research_division._SUBQ_CHARS` already sends the
+#                            same text to three paid third-party providers at, so
+#                            this raise does not widen the attacker surface
+#                            beyond a boundary the text already crosses.
+#
+#                            NOT the cause, so that nobody re-inherits the wrong
+#                            diagnosis: thinking being disabled. `_make_config`
+#                            gives the critique and the judge `temperature=0.0`
+#                            and `thinking_budget=0`, and ENABLING THINKING SWINGS
+#                            THE CRITIC TO 17-18 KEEP — a critic that rejects
+#                            nothing, which breaks the KILL path and the whole
+#                            rejected register. Full text with reasoning still off
+#                            is what works. DO NOT "FIX" THIS BY ENABLING
+#                            THINKING.
+#   _FLAW_MAX_CHARS          critique flaw text kept inside any prompt. DELIBERATELY
+#                            LEFT AT 160 while the candidate width was raised: the
+#                            judge's blindness is cured by passing it the parent
+#                            client question in full plus that question's
+#                            orientation findings, not by widening a one-clause
+#                            flaw. Widening the clause would spend prompt on a
+#                            summary of the problem instead of on the problem.
 #   _CRITIQUE_ENABLED        the A/B off-switch (grouping._CLUSTER_ENABLED's
 #                            idiom). Off => every candidate is KEEP, zero calls.
 # ---------------------------------------------------------------------------
@@ -166,7 +221,7 @@ _RANK_BACKOFF_S = float(
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_RANK_BACKOFF_S", "2.0")
 )
 _CANDIDATE_PROMPT_CHARS = int(
-    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_PROMPT_CANDIDATE_CHARS", "240")
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_PROMPT_CANDIDATE_CHARS", "600")
 )
 _FLAW_MAX_CHARS = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_FLAW_CHARS", "160"))
 _CRITIQUE_ENABLED = (
@@ -1563,7 +1618,16 @@ async def run_tournament(
 #   _EVOLVE_MAX_TOKENS  max_tokens on the single evolve call.
 #   _EVOLVE_ENABLED     off => winners keep their tournament text and get their
 #                       languages from the Python fallback only, zero calls.
-#   _WINNER_MAX_CHARS   characters kept per evolved winner.
+#   _WINNER_MAX_CHARS   characters kept per evolved winner. RAISED 400 -> 600 in
+#                       phase 15.7, the same defect one stage down: real
+#                       candidates already run to 373 characters BEFORE evolve
+#                       adds the entity, geography and timeframe that make them
+#                       researchable, so 400 clipped precisely the specificity
+#                       the evolve call had just been paid to add. 600 keeps it
+#                       at or below `_CANDIDATE_PROMPT_CHARS`, so an evolved
+#                       winner is never wider than the prompt that will show it
+#                       on the next pass — asserted with the rest of the ladder
+#                       in `test_workshop_tournament.py`.
 #   _LANGS_MAX          languages per winner. A DENIAL-OF-WALLET bound as much as
 #                       an editorial one: each extra language widens every
 #                       provider's search surface downstream.
@@ -1577,7 +1641,7 @@ _EVOLVE_ENABLED = (
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_EVOLVE", "true").lower() == "true"
 )
 _WINNER_MAX_CHARS = int(
-    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNER_CHARS", "400")
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_WINNER_CHARS", "600")
 )
 _LANGS_MAX = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_LANGS_MAX", "3"))
 _DEFAULT_LANGS = os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_DEFAULT_LANGS", "en")
