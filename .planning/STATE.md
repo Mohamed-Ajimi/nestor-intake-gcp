@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-31T09:19:15.562Z"
-last_activity: 2026-07-31 -- Phase 15.7 planning complete
+last_updated: "2026-07-31T09:28:45.173Z"
+last_activity: 2026-07-31 -- Phase 15.7 execution started
 progress:
   total_phases: 16
   completed_phases: 10
@@ -21,11 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.7 — research engine redesign creative workshop loop wave 4
+**Current focus:** Phase 15.7 — research-engine-redesign-creative-workshop-loop-wave-4
 
 ## Current Position
 
-Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — NOT STARTED
+Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — EXECUTING
+Plan: 1 of 9
   ⚠ READ FIRST before planning 15.7: `.planning/phases/15.7-*/15.7-OPEN-ITEMS.md` — three rulings that
   ENGINE-REDESIGN-SPEC § 5 does not read like on its face (the tournament STAYS; the loop must DISCOVER,
   not only sharpen; Elo carries with median seeding for newcomers), plus four open items needing an
@@ -91,7 +92,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Ready to execute
+Status: Executing Phase 15.7
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -201,7 +202,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-07-31 -- Phase 15.7 planning complete
+Last activity: 2026-07-31 -- Phase 15.7 execution started
 
 Progress: [██████████] 100%
 
