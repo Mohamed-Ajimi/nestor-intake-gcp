@@ -85,30 +85,93 @@ log = logging.getLogger(__name__)
 # `research_division.py:126-172` style.
 # ---------------------------------------------------------------------------
 
-# How many groups a run may dispatch. D-W3-1 makes 5 a HARD CEILING TAKEN BY THE
-# OPERATOR, so the env knob may only ever LOWER it — that is what the `min(5, ...)`
-# is for, and it is not defensive tidiness. There is no rule that lets the ceiling
-# rise for a complex brief; spec § 4 asked for a rising dial and the operator
-# overrode that half in session on 2026-07-29.
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var, falling back to `default` on anything unreadable.
+
+    A bare `int(os.environ.get(...))` RAISES AT IMPORT TIME on a typo, which takes the
+    whole worker process down before a single run can start — and the operator sees a
+    stack trace from a module they never edited. This reads the same value and falls
+    back loudly instead.
+
+    It decides only what the floor/ceiling arithmetic wrapping each call gets to work
+    on; it applies no bound of its own.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        log.warning(
+            "question_grouping: %s=%r is not an integer, so the default %d is used "
+            "instead — an unreadable knob must not take the process down at import",
+            name,
+            raw,
+            default,
+        )
+        return default
+
+
+# How many groups a run may dispatch.
 #
-# THE CONSEQUENCE THE OPERATOR ACCEPTED, recorded so nobody "fixes" it later: a brief
-# with 7 genuinely distinct topics gets ONE GRAB-BAG GROUP. Fewer than 5 groups is
-# also a normal, unremarked outcome — there is no floor and nothing pads.
-_D6_MAX_GROUPS = min(5, max(1, int(os.environ.get("NESTOR_TRIBUNAL_D6_MAX_GROUPS", "5"))))
+# ~~D-W3-1 makes 5 a HARD CEILING TAKEN BY THE OPERATOR, so the env knob may only ever
+# LOWER it — that is what the `min(5, ...)` is for, and it is not defensive tidiness.
+# There is no rule that lets the ceiling rise for a complex brief; spec § 4 asked for a
+# rising dial and the operator overrode that half in session on 2026-07-29.~~
+#
+# SUPERSEDED IN PLACE by operator decision D-W4-4a (2026-07-30, homed in phase 15.7).
+# The argument above is kept verbatim rather than deleted because it records a real
+# ruling and the reasoning that produced it; it is simply no longer the ruling in
+# force. D-W3-1 made 5 an operator ceiling for TOPIC grouping. D-W4-4a makes
+# ONE GROUP PER CLIENT QUESTION the PRIMARY path (see `_GROUPING_MODE` below) and
+# REMOVES THE CLAMP so THE NUMBER FOLLOWS THE CLIENT. 5 stays the DEFAULT; what changed
+# is that the knob now raises as well as lowers.
+#
+# NAME THE TRAP, because it is the reason this line was found at all: `min(5, ...)`
+# made `NESTOR_TRIBUNAL_D6_MAX_GROUPS=7` silently still mean 5. A KNOB THAT LOOKS LIKE
+# THE CONTROL AND IS NOT is the same defect class as `_CANDIDATE_PROMPT_CHARS = 240`
+# in `workshop_rank.py`, which read as a formatting detail and was in fact the root
+# cause of an entire epidemic of WEAK critiques. Do not reintroduce either shape.
+#
+# THE CONSEQUENCE THE OPERATOR ACCEPTED, recorded so nobody "fixes" it later: fewer
+# than 5 groups is a normal, unremarked outcome — there is no floor and nothing pads.
+# Going ABOVE 5 is now reachable and is not free: the paid-call count is
+# `groups x providers`, so the caller must still pass the final group count to
+# `warn_if_over_ceiling` and log the overshoot LOUDLY. `fallback_groups`' docstring
+# already records that exact spend consequence as accepted.
+_D6_MAX_GROUPS = max(1, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUPS", 5))
 
 # How many questions one group may carry — § 4 requirement 2, whose risk is a provider
 # writing six thin paragraphs instead of one deep report.
 #
-# THE ARITHMETIC: `research_division._D6_MAX_WINNERS` is 15 and the ceiling above is 5
-# groups, so 15 / 5 = 3 is the INFEASIBILITY FLOOR (a cap below 3 cannot be satisfied
-# at all) and 4 leaves slack. Hence `max(3, ...)`.
+# ~~THE ARITHMETIC: `research_division._D6_MAX_WINNERS` is 15 and the ceiling above is
+# 5 groups, so 15 / 5 = 3 is the INFEASIBILITY FLOOR (a cap below 3 cannot be satisfied
+# at all) and 4 leaves slack. Hence `max(3, ...)`.~~
 #
-# THE PRECEDENCE, STATED EXPLICITLY BECAUSE THE TWO COLLIDE: the ceiling is an
-# OPERATOR decision and this size cap is the engine's own. WHEN THEY COLLIDE THE
-# CEILING WINS — an oversized group is ACCEPTED and logged loudly, never split into a
-# sixth group. Every question is still researched, so that is a note, not a
-# degradation.
-_D6_MAX_GROUP_SIZE = max(3, int(os.environ.get("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", "4")))
+# THE ARITHMETIC, RE-DERIVED AGAINST D-W4-5 (phase 15.7) rather than swapped: the
+# validated configuration selects a FLOOR OF 5 WINNERS PER CLIENT QUESTION plus 2
+# cross-cutting, and under `_GROUPING_MODE = "per-question"` those 5 land in ONE
+# mandate group. That group then also hosts up to 2 discovery riders (D-W3-5.2), so
+#
+#     7 = 5 winners + 2 riders
+#
+# and a cap of 4 would SHED EVERY RIDER ON ARRIVAL — silently deleting the discovery
+# bracket Wave 3 built, at the one function (`attach_discovery_riders`) that reads this
+# number. The old 4 was correct for the arithmetic it was derived from and is wrong for
+# this one; that is why the derivation is restated rather than the number edited.
+#
+# The INFEASIBILITY FLOOR is unchanged in meaning and kept at 3: a cap below 3 could
+# not be satisfied under the old 15-winner / 5-group arithmetic, and a cap that low is
+# still nonsense for a group that must hold a client question's whole sub-question set.
+# Hence `max(3, ...)`.
+#
+# THE PRECEDENCE, STATED EXPLICITLY BECAUSE THE TWO COLLIDE, AND UNCHANGED BY D-W4-4a:
+# the ceiling is an OPERATOR decision and this size cap is the engine's own. WHEN THEY
+# COLLIDE THE CEILING WINS — an oversized group is ACCEPTED and logged loudly, never
+# split into an extra group. Every question is still researched, so that is a note, not
+# a degradation.
+_D6_MAX_GROUP_SIZE = max(3, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", 7))
 
 #: The two bracket values, EXPORTED because four other modules test against them and
 #: none of them may retype a string literal.

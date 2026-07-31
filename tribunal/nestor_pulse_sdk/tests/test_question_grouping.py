@@ -220,37 +220,90 @@ def test_an_llm_proposing_two_groups_yields_two_because_there_is_no_floor_paddin
     assert len(clamped) == 2, "fewer groups is a correct answer, never padded to 5"
 
 
-def test_the_env_knob_may_only_lower_the_ceiling_never_raise_it(monkeypatch):
-    """D-W3-1 makes 5 a HARD ceiling taken by the operator, not a default dial."""
+def test_the_env_knob_raises_the_ceiling_as_well_as_lowers_it(monkeypatch):
+    """D-W4-4a DECLAMPED this knob — the number now FOLLOWS THE CLIENT.
+
+    THIS TEST INVERTED. Until phase 15.7 it asserted `9 must NOT raise the ceiling`,
+    because D-W3-1 had made 5 a hard operator ceiling for TOPIC grouping and the
+    `min(5, ...)` enforced it. Operator decision D-W4-4a (2026-07-30) makes one group
+    per client question the PRIMARY path and removes the clamp. The DEFAULT is
+    unchanged at 5; what changed is that setting the knob to 9 now MEANS 9 instead of
+    silently still meaning 5.
+
+    The two negative arms are here because the clamp is what used to absorb them: a
+    zero must still floor at 1, and a NON-INTEGER must not raise at import time and
+    take the whole worker process down over a typo.
+    """
     import importlib
 
     monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", raising=False)
-    assert importlib.reload(qg)._D6_MAX_GROUPS == 5
+    assert importlib.reload(qg)._D6_MAX_GROUPS == 5, "the default is unchanged"
 
     monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", "3")
-    assert importlib.reload(qg)._D6_MAX_GROUPS == 3, "the knob may lower it"
+    assert importlib.reload(qg)._D6_MAX_GROUPS == 3, "the knob still lowers it"
 
     monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", "9")
-    assert importlib.reload(qg)._D6_MAX_GROUPS == 5, "9 must NOT raise the ceiling"
+    assert importlib.reload(qg)._D6_MAX_GROUPS == 9, "and 9 now RAISES it (D-W4-4a)"
+
+    monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", "0")
+    assert importlib.reload(qg)._D6_MAX_GROUPS == 1, "zero groups is not a run"
+
+    monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", "five")
+    assert importlib.reload(qg)._D6_MAX_GROUPS == 5, (
+        "a non-integer falls back to the default and NEVER raises at import"
+    )
 
     monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_GROUPS", raising=False)
     importlib.reload(qg)
 
 
-def test_the_group_size_cap_defaults_to_four_and_cannot_go_below_the_feasibility_floor(
+def test_the_group_size_cap_defaults_to_seven_and_cannot_go_below_the_feasibility_floor(
     monkeypatch,
 ):
-    """15 winners / 5 groups = 3, so a cap below 3 cannot be satisfied at all."""
+    """7 = D-W4-5's floor of 5 winners per client question + 2 discovery riders.
+
+    The old default of 4 came from `_D6_MAX_WINNERS / _D6_MAX_GROUPS` = 15 / 5 = 3
+    plus slack. Under D-W4-5 a mandate group carries a whole client question's five
+    winners, so 4 would shed EVERY rider on arrival and silently delete the discovery
+    bracket. The floor of 3 is unchanged in meaning: a cap that low cannot hold a
+    client question's sub-question set at all.
+    """
     import importlib
 
     monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", raising=False)
-    assert importlib.reload(qg)._D6_MAX_GROUP_SIZE == 4
+    assert importlib.reload(qg)._D6_MAX_GROUP_SIZE == 7
 
     monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", "1")
     assert importlib.reload(qg)._D6_MAX_GROUP_SIZE == 3
 
     monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", raising=False)
     importlib.reload(qg)
+
+
+def test_a_mandate_group_holding_five_winners_still_accepts_a_discovery_rider():
+    """D-W4-5's shape meeting D-W3-5.2's rider, at the real production size cap.
+
+    THE REGRESSION THIS PINS: at the old cap of 4 this group is already over the cap
+    with its five winners alone, so `attach_discovery_riders` sheds the rider the
+    moment it arrives — the discovery bracket deletes itself, silently, with a note
+    nobody reads as an alarm. Driven through the REAL `build_groups` +
+    `attach_discovery_riders` at the REAL `_D6_MAX_GROUP_SIZE`, never a hand-typed
+    group record, so a change to either function's contract fails here too.
+    """
+    pool = [win(i, "Q1", rank=i + 1) for i in range(5)]
+    groups = qg.build_groups([[0, 1, 2, 3, 4]], pool)
+    assert len(groups[0]["members"]) == 5, "the fixture's own premise"
+
+    rider = ride("Q1", 9)
+    attached, shed, _notes = qg.attach_discovery_riders(
+        groups, [rider], max_size=qg._D6_MAX_GROUP_SIZE
+    )
+
+    texts = [member["text"] for member in attached[0]["members"]]
+    assert rider["text"] in texts, "5 winners + 1 rider fits under a cap of 7"
+    assert shed == [], "nothing was shed to make room"
+    assert attached[0]["riders"] == 1
+    assert len([m for m in attached[0]["members"] if m["source"] != "discovery"]) == 5
 
 
 # ===========================================================================
@@ -377,9 +430,25 @@ def test_merging_to_the_ceiling_also_reports_the_group_it_left_oversized():
 def test_fifteen_winners_in_one_group_do_fit_the_size_cap_within_the_ceiling():
     """THE ARITHMETIC, so nobody asserts a yield that cannot happen.
 
-    `_D6_MAX_WINNERS` is 15 and the cap is 4, so ceil(15/4) = 4 groups — one UNDER
+    ~~`_D6_MAX_WINNERS` is 15 and the cap is 4, so ceil(15/4) = 4 groups — one UNDER
     the ceiling of 5. On the production numbers the size cap is fully satisfiable and
-    nothing has to yield. See the SUMMARY's Deviation 2.
+    nothing has to yield. See the SUMMARY's Deviation 2.~~
+
+    THAT JUSTIFICATION WENT STALE IN PHASE 15.7 and is struck rather than deleted,
+    because it reads correct — which is exactly what makes a stale justification
+    dangerous. Both of its inputs moved: `_D6_MAX_WINNERS` is now 32 (D-W4-5) and
+    `_D6_MAX_GROUP_SIZE` is now 7 (7 = 5 winners + 2 riders). On today's production
+    numbers this scenario cannot arise at all — 15 winners at a cap of 7 need
+    ceil(15/7) = 3 groups, not 4.
+
+    THE TEST STILL PASSES, AND FOR A DIFFERENT REASON, NAMED HERE rather than left to
+    look like the old one: it passes `max_size=4` and `max_groups=5` as LITERAL
+    ARGUMENTS. `clamp_groups` is a PURE function of its arguments and reads neither
+    module constant, so what this test pins is the SPLITTING ARITHMETIC ITSELF — a
+    15-member group at a cap of 4 splits into exactly ceil(15/4) = 4 parts, no more
+    and no fewer, and no part yields. That property is independent of whatever the
+    production constants happen to be, which is why the test is kept as written
+    instead of being re-parameterised to 32/7 and quietly losing the boundary case.
     """
     pool = winners(15)
 
