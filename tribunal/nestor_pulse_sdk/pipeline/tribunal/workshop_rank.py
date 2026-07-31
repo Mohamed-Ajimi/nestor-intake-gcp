@@ -1061,20 +1061,104 @@ Decide on these criteria, in this order:
   3. which is less already-known.
 A flaw named under FLAW_A: or FLAW_B: counts AGAINST that side.
 
+Each match also shows CLIENT_QUESTION — the client's own question these two
+candidates were written to deepen — and FINDINGS, what a first look at the web
+already turned up for it. Judge each pair FOR THAT QUESTION: prefer the candidate
+that goes further past what FINDINGS already say.
+
 {ignore_instructions}
 
 Output EXACTLY one line per match, in input order, in this format (no extra
 text):
-MATCH_INDEX | A
+MATCH_INDEX | A | <one clause saying why>
 or
-MATCH_INDEX | B
+MATCH_INDEX | B | <one clause saying why>
 
 Matches:
 {matches_block}
 """
 
 
-def _match_block(batch: Sequence[tuple[dict[str, Any], dict[str, Any]]], offset: int) -> str:
+def _question_and_findings(
+    side_a: dict[str, Any],
+    side_b: dict[str, Any],
+    parent_texts: Optional[dict[str, Any]],
+    findings_by_label: Optional[dict[str, Any]],
+) -> list[str]:
+    """The CLIENT_QUESTION and FINDINGS lines for one match. D-R6.
+
+    WITHOUT THIS THE JUDGE IS JUDGING BLIND. Before D-R6 it saw two question
+    texts, a short decision blurb and a 160-character flaw clause — and was asked
+    which of the two matters more for a client decision it could not read. Fixing
+    that buys three things: better judgements, an audit trail of why 7 beat 9, and
+    material for the meta-review.
+
+    Both renderers are SECURITY CONTROLS. The client question is client-authored
+    text and the findings are FETCHED WEB PAGES, i.e. attacker-controllable, and
+    both land in a prompt whose records are one per LINE with `|` separators. So:
+
+      * the question is `_flatten`-collapsed and bounded by
+        `workshop._QUESTION_MAX_CHARS`;
+      * every finding is `_flatten`-collapsed and bounded by
+        `workshop._FINDING_PROMPT_CHARS` BEFORE `workshop._findings_block` indexes
+        it. The block is reused rather than reimplemented (one renderer, one
+        truncation rule) but it truncates without collapsing, so a finding
+        carrying a newline would otherwise be able to open a line of its own and
+        forge a `1 | A | ...` verdict for a match that is not its own.
+
+    Only the FIRST parent label of the pair is rendered. A candidate covers one
+    client question in the overwhelming majority of cases, and rendering the union
+    for a cross-cutting pair would let a single match carry an unbounded number of
+    question blocks — a cost and an injection surface at once.
+    """
+    labels = _parents_of(side_a) or _parents_of(side_b)
+    if not labels:
+        return []
+    label = labels[0]
+    lines: list[str] = []
+
+    raw_question = parent_texts.get(label) if isinstance(parent_texts, dict) else None
+    # NO FALLBACK TO THE LABEL. A label is an identifier, not the client's
+    # question, and rendering `CLIENT_QUESTION: Q0` would tell the judge nothing
+    # while advertising that it had been told something. Absent a real text the
+    # block degrades to its exact pre-D-R6 shape, which is what every caller with
+    # no orientation data relies on.
+    question = _flatten(raw_question, workshop._QUESTION_MAX_CHARS) if raw_question else ""
+    if question:
+        lines.append(f"    CLIENT_QUESTION: {question}")
+
+    raw_findings = (
+        (findings_by_label or {}).get(label) if isinstance(findings_by_label, dict) else None
+    )
+    findings: list[str] = []
+    if isinstance(raw_findings, (list, tuple)):
+        for item in raw_findings:
+            flat = _flatten(item, workshop._FINDING_PROMPT_CHARS)
+            if not flat:
+                continue
+            if flat.upper() in ("A", "B"):
+                # `_findings_block` renders `{i} | {text}`, which is EXACTLY the
+                # shape of a verdict line. A finding whose whole text is a bare
+                # "A" or "B" would therefore parse as a verdict for match `i`.
+                # Flattening cannot catch this one — there is no newline and no
+                # pipe to collapse — so it is dropped. A one-letter finding
+                # carries no information anyway; the trade is free.
+                continue
+            findings.append(flat)
+    if findings:
+        lines.append("    FINDINGS:")
+        for rendered in workshop._findings_block(findings).splitlines():
+            lines.append(f"      {rendered}")
+    return lines
+
+
+def _match_block(
+    batch: Sequence[tuple[dict[str, Any], dict[str, Any]]],
+    offset: int,
+    *,
+    parent_texts: Optional[dict[str, Any]] = None,
+    findings_by_label: Optional[dict[str, Any]] = None,
+) -> str:
     """Render one batch of match-ups, indexed and truncated.
 
     The same two security controls as `_candidate_block` (`gates.py:296-301`):
@@ -1086,6 +1170,12 @@ def _match_block(batch: Sequence[tuple[dict[str, Any], dict[str, Any]]], offset:
 
     THIS IS WHERE THE CRITIQUE'S WEAK FLAWS REACH THE TOURNAMENT — the
     ENGINE-05 -> tournament link 15.2-RESEARCH's stage table specifies.
+
+    `parent_texts` and `findings_by_label` are OPTIONAL (D-R6). Supplied, each
+    match also carries the parent client question in full and that question's
+    orientation findings — see `_question_and_findings`. Absent, the block
+    degrades to exactly the shape it had before D-R6 and nothing raises, which is
+    what lets every caller that has no orientation data keep working unchanged.
     """
     lines: list[str] = []
     for position, (side_a, side_b) in enumerate(batch):
@@ -1100,11 +1190,14 @@ def _match_block(batch: Sequence[tuple[dict[str, Any], dict[str, Any]]], offset:
         flaw_b = _flatten(side_b.get("flaw"), _FLAW_MAX_CHARS)
         if flaw_b:
             lines.append(f"    FLAW_B: {flaw_b}")
+        lines.extend(
+            _question_and_findings(side_a, side_b, parent_texts, findings_by_label)
+        )
     return "\n".join(lines)
 
 
-def _parse_match_lines(text: str, offset: int, n: int) -> dict[int, str]:
-    """Parse `MATCH_INDEX | A|B` lines into `{local_index: "A"|"B"}`.
+def _parse_match_lines(text: str, offset: int, n: int) -> dict[int, tuple[str, str]]:
+    """Parse `MATCH_INDEX | A|B [| why]` into `{local_index: (side, reason)}`.
 
     The ASVS V5 discipline in `grouping._parse_cluster_lines`' register: the
     index is regex-extracted, rebased by `offset` and bounds-checked against `n`,
@@ -1115,8 +1208,24 @@ def _parse_match_lines(text: str, offset: int, n: int) -> dict[int, str]:
     A missing entry is simply ABSENT rather than defaulted here — the caller owns
     the never-drop default, because only the caller knows the pair's original
     indices.
+
+    A MISSING REASON MUST NEVER COST A JUDGEMENT (D-R6). A two-field line still
+    yields its side, with an empty reason. The asymmetry is deliberate and it is
+    the whole reason the third field is optional: failing toward a judged match
+    with no reason costs an audit sentence, while failing toward an UNJUDGED match
+    awards it to the lower original index — which is the exact defect D-R9 exists
+    to remove. Every pre-D-R6 fake, script and stub emits two fields, so treating
+    the third as mandatory would silently un-judge whole rounds.
+
+    THE REASON IS BOUNDED BY `_FLAW_MAX_CHARS` AS A SECURITY CONTROL, NOT AS
+    FORMATTING. It is model output that a later stage renders into the
+    meta-review prompt, so it is prompt input on its second hop; `_flatten` also
+    collapses its newlines and pipes, so a reason cannot forge a fourth record or
+    a further match verdict. Any field past the third is DISCARDED for the same
+    reason — the record is three fields wide and a wider line is a garbled line,
+    not an invitation.
     """
-    out: dict[int, str] = {}
+    out: dict[int, tuple[str, str]] = {}
     for raw in (text or "").splitlines():
         line = raw.strip()
         if not line or "|" not in line:
@@ -1133,7 +1242,8 @@ def _parse_match_lines(text: str, offset: int, n: int) -> dict[int, str]:
         side = parts[1].strip().upper()
         if side not in ("A", "B"):
             continue
-        out[local] = side
+        reason = _flatten(parts[2], _FLAW_MAX_CHARS) if len(parts) > 2 else ""
+        out[local] = (side, reason)
     return out
 
 
@@ -1149,7 +1259,9 @@ async def _judge_batch(
     breaker: Any | None = None,
     acc: Optional[dict[str, Any]] = None,
     on_retry: Any = None,
-) -> dict[int, str]:
+    parent_texts: Optional[dict[str, Any]] = None,
+    findings_by_label: Optional[dict[str, Any]] = None,
+) -> dict[int, tuple[str, str]]:
     """Judge one batch of match-ups. Best-effort: on failure it returns nothing.
 
     Same shape as `_critique_batch` — `gates._gate_batch`'s per-batch structure
@@ -1165,7 +1277,12 @@ async def _judge_batch(
     prompt = _TOURNAMENT_PROMPT.format(
         decision_context=_render_decision(decision_context),
         ignore_instructions=_IGNORE_INSTRUCTIONS,
-        matches_block=_match_block(batch, offset),
+        matches_block=_match_block(
+            batch,
+            offset,
+            parent_texts=parent_texts,
+            findings_by_label=findings_by_label,
+        ),
     )
     config = gates._make_config()
     kwargs: dict[str, Any] = {"config": config} if config is not None else {}
@@ -1232,8 +1349,10 @@ async def _judge_round(
     breaker: Any | None = None,
     acc: Optional[dict[str, Any]] = None,
     on_retry: Any = None,
-) -> dict[int, int]:
-    """Judge one whole round; return `{match_index: winning_candidate_index}`.
+    parent_texts: Optional[dict[str, Any]] = None,
+    findings_by_label: Optional[dict[str, Any]] = None,
+) -> tuple[dict[int, int], dict[int, str]]:
+    """Judge one whole round; return `({match_index: winner}, {match_index: why})`.
 
     Fan-out cloned from `gates._classify` a second time: fixed batches of
     `_MATCHES_PER_CALL`, an `asyncio.Semaphore` bounding in-flight calls,
@@ -1247,6 +1366,12 @@ async def _judge_round(
     change when that knob is flipped — determinism broken by a tuning knob.
     Defaulting by original index is stable under every knob setting and loses
     nothing (`grouping.py:66-68`'s never-drop rule).
+
+    THE SECOND RETURN VALUE IS THE JUDGE'S REASONS (D-R6), one clause per JUDGED
+    match, absent for a defaulted one. It is returned rather than logged because
+    the meta-review needs it as material and an operator needs it to see why 7
+    beat 9. A defaulted match deliberately carries NO reason: inventing one for a
+    match nobody judged would put a fabricated justification into the audit trail.
     """
     size = max(1, _MATCHES_PER_CALL)
     slices = [
@@ -1268,6 +1393,8 @@ async def _judge_round(
                 breaker=breaker,
                 acc=acc,
                 on_retry=on_retry,
+                parent_texts=parent_texts,
+                findings_by_label=findings_by_label,
             )
         return start, verdicts
 
@@ -1278,13 +1405,16 @@ async def _judge_round(
         results = []
 
     winners: dict[int, int] = {}
+    why: dict[int, str] = {}
     for start, verdicts in results:
-        for local, side in verdicts.items():
+        for local, (side, reason) in verdicts.items():
             match_index = start + local
             if match_index >= len(presented):
                 continue
             side_a, side_b = presented[match_index]
             winners[match_index] = side_a if side == "A" else side_b
+            if reason:
+                why[match_index] = reason
 
     unjudged = 0
     for match_index, pair in enumerate(pairs):
@@ -1293,7 +1423,7 @@ async def _judge_round(
             unjudged += 1
     if isinstance(acc, dict):
         acc["unjudged"] = int(acc.get("unjudged") or 0) + unjudged
-    return winners
+    return winners, why
 
 
 # ---------------------------------------------------------------------------
@@ -1416,6 +1546,8 @@ async def run_tournament(
     feed: "Optional[StageFeed]" = None,
     breaker: Any | None = None,
     stats: Optional[dict[str, Any]] = None,
+    parent_texts: Optional[dict[str, Any]] = None,
+    findings_by_label: Optional[dict[str, Any]] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Rank EVERY candidate through a fixed 4-round Swiss tournament.
 
@@ -1437,7 +1569,19 @@ async def run_tournament(
     nothing is randomised.
 
     `stats` is an OPTIONAL caller-owned out-dict gaining `calls` (int),
-    `cost_usd` (str) and `unjudged` (int).
+    `cost_usd` (str), `unjudged` (int) and — D-R6 — `judge_reasons`, a dict keyed
+    `"r{round}:{low}v{high}"` carrying the judge's own clause for every JUDGED
+    match. The reasons ride in `stats` rather than widening the return tuple ON
+    PURPOSE: this is the additive out-dict idiom the module already uses for
+    `calls`, `cost_usd` and `unjudged`, and every existing caller of
+    `(ranked, reasons)` keeps working untouched. The key carries the ROUND because
+    the Swiss schedule allows a rematch when nothing unplayed remains, and a
+    pair-only key would silently overwrite the first verdict's reason.
+
+    `parent_texts` and `findings_by_label` are OPTIONAL (D-R6) and map a parent
+    client-question LABEL to that question's full text and to its orientation
+    findings. Supplied, the judge can finally see the question it is judging FOR;
+    absent, the prompt degrades to its pre-D-R6 shape.
 
     NEVER RAISES.
     """
@@ -1446,6 +1590,7 @@ async def run_tournament(
         stats.setdefault("calls", 0)
         stats.setdefault("cost_usd", "0")
         stats.setdefault("unjudged", 0)
+        stats.setdefault("judge_reasons", {})
     if not items:
         return [], []
 
@@ -1493,6 +1638,7 @@ async def run_tournament(
     total_unjudged = 0
     total_matches = 0
     first_failure: Optional[str] = None
+    judge_reasons: dict[str, str] = {}
 
     for round_no in range(1, rounds + 1):
         handle = _handle_at(handles, round_no - 1)
@@ -1522,7 +1668,7 @@ async def run_tournament(
             )
 
         acc: dict[str, Any] = {"calls": 0, "cost": Decimal("0"), "unjudged": 0}
-        verdicts = await _judge_round(
+        verdicts, why = await _judge_round(
             pairs,
             presented,
             by_index=by_index,
@@ -1533,10 +1679,15 @@ async def run_tournament(
             breaker=breaker,
             acc=acc,
             on_retry=_on_retry if (feed is not None and handle is not None) else None,
+            parent_texts=parent_texts,
+            findings_by_label=findings_by_label,
         )
 
         # Elo is order-dependent, so the application order IS the pair-list order.
         for match_index, pair in enumerate(pairs):
+            reason = why.get(match_index)
+            if reason:
+                judge_reasons[f"r{round_no}:{pair[0]}v{pair[1]}"] = reason
             seen.add(pair)
             low, high = pair
             winner = verdicts.get(match_index, low)
@@ -1594,6 +1745,7 @@ async def run_tournament(
         stats["calls"] = total_calls
         stats["cost_usd"] = str(total_cost)
         stats["unjudged"] = total_unjudged
+        stats["judge_reasons"] = judge_reasons
 
     log.info(
         "workshop_rank: tournament done — %d candidate(s) over %d round(s), %d "
@@ -3022,6 +3174,20 @@ async def run_workshop_stage_b(
     conflicts = list(source.get("brief_conflicts") or [])
     upstream = list(source.get("degradation_reasons") or [])
 
+    # D-R6: the judge must see the client question it is judging FOR, and what a
+    # first look at the web already said about it. Stage A already carries both —
+    # `texts` above is label -> the client's own wording, and stage A's
+    # `orientation` records are label -> findings, the same shape
+    # `workshop.run_candidates` reads. Not wiring these here would leave the whole
+    # of D-R6 built and inert, which is worse than not building it: the prompt
+    # would advertise a CLIENT_QUESTION section that no production call ever fills.
+    findings_by_label: dict[str, list[str]] = {}
+    for entry in list(source.get("orientation") or []):
+        if isinstance(entry, dict) and entry.get("label"):
+            findings_by_label[str(entry["label"])] = [
+                str(f) for f in (entry.get("findings") or [])
+            ]
+
     try:
         candidates_in = list(source.get("candidates") or [])
         critique_stats: dict[str, Any] = {}
@@ -3046,6 +3212,8 @@ async def run_workshop_stage_b(
             feed=feed,
             breaker=breaker,
             stats=tourney_stats,
+            parent_texts=texts,
+            findings_by_label=findings_by_label,
         )
 
         cut = winner_count(len(ranked))
