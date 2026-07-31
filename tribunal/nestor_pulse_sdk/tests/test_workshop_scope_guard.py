@@ -56,6 +56,7 @@ from typing import Any, Optional
 from nestor_pulse_sdk.pipeline.tribunal import (
     discovery_bracket,
     question_grouping,
+    workshop_loop,
     workshop_rank,
 )
 from nestor_pulse_sdk.tests.test_workshop_tournament import (
@@ -1403,4 +1404,162 @@ async def test_every_group_member_is_a_winner_or_a_discovered_question():
     )
     assert result["counts"]["group_coverage_injected"] == 0, (
         "the guard finds nothing to repair when the partition is total"
+    )
+
+
+# ===========================================================================
+# SECTION (phase 15.7, plan 08) — D-W4-6: GUARD 2 MARKS WHAT IT RESCUES.
+#
+# Both critique guards are COVERAGE FALLBACKS, NOT QUALITY PASSES. Guard 1
+# already marked; Guard 2 — the one that rewrites EVERY candidate to KEEP when
+# critique kills the whole population — did not. Without the mark, the one case
+# where quality most needs to read as FAILED read as a PERFECT PASS.
+#
+# The exemption targets CRITERION 2 — QUALITY. Until 2026-07-31 three separate
+# documents said criterion 1; that inverted the rule's own purpose, because
+# criterion 1 is COVERAGE and excluding a resurrected candidate from coverage
+# would break the exact guarantee resurrection exists to provide.
+# ===========================================================================
+
+
+def _verdict_for_every_indexed_line(prompt: str, verdict: str) -> str:
+    """Answer every `INDEX | text` line the critique block rendered."""
+    lines = []
+    for physical in prompt.splitlines():
+        stripped = physical.strip()
+        head = stripped.split("|")[0].strip()
+        if "|" in stripped and head.isdigit():
+            lines.append(f"{head} | {verdict} | a clause")
+    return "\n".join(lines)
+
+
+def critique_responder(verdict: str):
+    """A judge that gives every candidate the same critique verdict."""
+
+    def _respond(prompt: str) -> str:
+        if MATCH_MARKER in prompt:
+            return flash_responder()(prompt)
+        return _verdict_for_every_indexed_line(prompt, verdict)
+
+    return _respond
+
+
+#: Present in a TOURNAMENT prompt and in no other flash prompt this module makes.
+MATCH_MARKER = " | A: "
+
+
+def bare_candidates(total: int, *, parented: bool) -> list[dict[str, Any]]:
+    """GUARD 2 IS ONLY REACHABLE WHEN NO CANDIDATE CARRIES A PARENT LABEL.
+
+    Guard 1 runs first and rescues the lowest-index candidate of EVERY parent
+    label, so a PARENTED population can never reach the empty-survivor state
+    Guard 2 exists for. That is Guard 1 doing its job — but it also means a
+    Guard 2 test built on parented candidates silently tests Guard 1 instead,
+    which is why this helper takes the flag explicitly rather than defaulting.
+    """
+    out = []
+    for i in range(total):
+        entry: dict[str, Any] = {
+            "index": i,
+            "text": f"candidate {i:02d} about topic {i:02d}",
+            "source": "model",
+        }
+        if parented:
+            entry["parent"] = "Q0"
+            entry["parents"] = ["Q0"]
+        out.append(entry)
+    return out
+
+
+async def _critique(verdict: str, candidates: list[dict[str, Any]]):
+    return await workshop_rank.critique_candidates(
+        candidates=candidates,
+        audited=JudgeAudited(critique_responder(verdict)),
+        run_id=RUN_ID,
+        tenant_id=TENANT_ID,
+    )
+
+
+async def test_guard_two_marks_every_candidate_it_rescues():
+    """50. A critique that kills EVERYTHING yields survivors that ALL carry the mark."""
+    survivors, reasons = await _critique("KILL", bare_candidates(6, parented=False))
+
+    assert len(survivors) == 6, "Guard 2 did not fire"
+    assert all(s["critique"] == "KEEP" for s in survivors)
+    assert all(s.get("resurrected") is True for s in survivors), (
+        "Guard 2 rescued without marking — the blanket rescue reads as a clean pass"
+    )
+    assert reasons
+
+
+async def test_an_honest_survivor_is_never_marked():
+    """51. The negative arm. A candidate that survived on merit carries no mark."""
+    survivors, _ = await _critique("KEEP", bare_candidates(6, parented=True))
+
+    assert survivors
+    assert not any(s.get("resurrected") is True for s in survivors), survivors
+
+
+async def _resurrected_through_the_pipeline():
+    survivors, _ = await _critique("KILL", bare_candidates(6, parented=False))
+    assert all(s.get("resurrected") is True for s in survivors)
+
+    ranked, _ = await workshop_rank.run_tournament(
+        candidates=survivors,
+        audited=JudgeAudited(flash_responder()),
+        run_id=RUN_ID,
+        tenant_id=TENANT_ID,
+    )
+    assert all(w.get("resurrected") is True for w in ranked), "lost at run_tournament"
+
+    evolved, _ = await workshop_rank.evolve_winners(
+        winners=ranked,
+        audited=JudgeAudited(flash_responder()),
+        run_id=RUN_ID,
+        tenant_id=TENANT_ID,
+    )
+    assert all(w.get("resurrected") is True for w in evolved), "lost at evolve_winners"
+
+    guarded, _notes, _injected = workshop_rank.enforce_scope_guard(
+        winners=evolved, client_questions=["Q0"], all_ranked=ranked
+    )
+    assert [w for w in guarded if w.get("resurrected") is True], (
+        "lost at enforce_scope_guard"
+    )
+    return guarded
+
+
+async def test_the_resurrection_mark_survives_all_four_stages():
+    """52. Asserted at EACH stage, not only at the end.
+
+    A mark that is set and then dropped two stages later is WORSE than no mark,
+    because a dropped mark reads as a clean pass — the precise failure this
+    whole decision exists to prevent.
+    """
+    await _resurrected_through_the_pipeline()
+
+
+async def test_the_exit_check_reads_a_blanket_rescue_as_a_quality_failure():
+    """53. THE SEAM between this plan and 15.7-03, closed and asserted.
+
+    `workshop_loop.exit_verdict` READS the flag and never infers it, so this is
+    the only place the two halves meet. The second half of this test is the
+    MUTANT COLUMN: strip the mark and the very same winner set reads as a
+    perfect quality pass — the exact lie the mark exists to prevent.
+    """
+    guarded = await _resurrected_through_the_pipeline()
+
+    verdict = workshop_loop.exit_verdict(
+        winners=guarded, client_questions=["Q0"], round_no=1
+    )
+    assert verdict["resurrected_winners"] > 0, verdict
+    assert verdict["quality_ok"] is False, verdict
+    assert verdict["should_exit"] is False, verdict
+
+    stripped = [{k: v for k, v in w.items() if k != "resurrected"} for w in guarded]
+    lie = workshop_loop.exit_verdict(
+        winners=stripped, client_questions=["Q0"], round_no=1
+    )
+    assert lie["quality_ok"] is True, (
+        "removing the mark did not change the verdict, so this test proves nothing"
     )

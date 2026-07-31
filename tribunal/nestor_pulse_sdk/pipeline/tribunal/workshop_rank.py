@@ -761,7 +761,24 @@ async def critique_candidates(
             "always a critique failure and never a correct answer",
             len(items),
         )
-        survivors = [_with_critique(c, _KEEP, "") for c in items]
+        # D-W4-6: MARK WHAT THIS RESCUES, exactly as Guard 1 does at the top of
+        # this block. BOTH GUARDS ARE COVERAGE FALLBACKS, NOT QUALITY PASSES, and
+        # Guard 2 is the starker of the two: it rewrites EVERY candidate to KEEP,
+        # so without the mark the one case where quality most needs to read as
+        # FAILED reads as a PERFECT PASS. `workshop_loop.exit_verdict` READS this
+        # flag and never infers it, so marking here is the only fix.
+        #
+        # The exit check excludes a resurrected candidate from CRITERION 2 —
+        # QUALITY. Until 2026-07-31 three separate documents said criterion 1.
+        # That was wrong in a way that inverted its own purpose: criterion 1 is
+        # COVERAGE, and excluding a resurrected candidate from coverage would
+        # break the exact guarantee resurrection exists to provide.
+        rescued: list[dict[str, Any]] = []
+        for candidate in items:
+            entry = _with_critique(candidate, _KEEP, "")
+            entry["resurrected"] = True
+            rescued.append(entry)
+        survivors = rescued
         killed = 0
         reasons.append(_reason_critique_population())
 
