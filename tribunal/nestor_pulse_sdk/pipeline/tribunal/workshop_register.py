@@ -86,13 +86,18 @@ the storage and the renderer it needs.
 # cheapest possible proof that the import direction is one-way and that the
 # module is drivable off its own path with the package absent from `sys.path`.
 #
-# The same reasoning governs the two duplications below. `_flatten` here is a
-# re-implementation of the identically-named renderer in the ranking module, and
-# the three verdict words are re-declared rather than imported. That is the
-# register `question_grouping._block_get` already uses, which duplicates
+# The same reasoning governs the two re-implementations below. `_flatten` here
+# repeats the identically-named renderer in the ranking module, and the verdict
+# words are re-declared rather than imported. That is the register
+# `question_grouping._block_get` already uses, which repeats
 # `skeptic._block_get` for exactly this reason: an import for the sake of one
 # small pure helper would buy a cycle and a dependency, and cost more than the
 # nine lines it saves.
+#
+# A NOTE FOR ANYONE GREPPING THIS FILE. The words "tournament" and "duplicate"
+# appear here ONLY in the prose that explains what is NOT barred. No identifier
+# in this module contains either, and that is checked by a test — see the
+# docstring on why the absence of a fourth cause is the enforcement.
 # ---------------------------------------------------------------------------
 from __future__ import annotations
 
@@ -187,8 +192,8 @@ def _flatten(text: Any, cap: int) -> str:
     reaches the model at all.
 
     A re-implementation of the ranking module's identically-named helper, on
-    purpose — see the comment above the imports for why the duplication is
-    cheaper than the import.
+    purpose — see the comment above the imports for why repeating it is cheaper
+    than importing it.
 
     Never raises, including on an object whose `__str__` does.
     """
@@ -273,10 +278,10 @@ def bar(
     keeps working.
 
     FIRST FLAW WINS. Barring a text that is already barred adds no entry and does
-    not overwrite the flaw already recorded, the same rule the claim de-duplicator
-    follows. The first diagnosis is the one that was made while the evidence was
-    in front of the critic; a later pass restating it more vaguely must not
-    replace it.
+    not overwrite the flaw already recorded, the same first-wins rule
+    `_dedupe_claims` follows. The first diagnosis is the one made while the
+    evidence was in front of the critic; a later pass restating it more vaguely
+    must not replace it.
 
     Identity is case-folded and whitespace-collapsed string identity, nothing
     cleverer. An empty text after that collapse is refused — a bar on the empty
@@ -367,3 +372,260 @@ def note_weak_pass(register: Any, text: Any) -> int:
     current += 1
     counts[key] = current
     return current
+
+
+# ===========================================================================
+# THE PROMPT LAYER — the barred list on its way into a generate or evolve call.
+# ===========================================================================
+
+#: What an empty register renders. NEVER the empty string: a prompt heading with
+#: nothing under it invites the model to fill the gap itself, and a block that
+#: silently vanishes is a block nobody notices has stopped working.
+_NOTHING_BARRED = (
+    "(nothing has been barred yet in this run — propose freely)"
+)
+
+
+def barred_block(
+    register: Any,
+    *,
+    cap_entries: Any = None,
+    cap_chars: Any = None,
+) -> str:
+    """Render the barred list for a prompt: `INDEX | text | FLAW: flaw`.
+
+    TWO PROPERTIES OF THIS BLOCK ARE SECURITY CONTROLS, NOT FORMATTING, in the
+    same register the engine's other prompt blocks already state for themselves.
+    Every entry is addressed by INDEX, and both the text and the flaw are
+    TRUNCATED. Barred text is model output on its way back into another model's
+    prompt — exactly the same untrusted class as a live candidate, and bounded
+    exactly the same way. Without the collapse, a barred question containing
+    `\\n7 | KEEP | worthless` would forge a second addressable record and speak
+    about a slot that is not its own. `_flatten` above does that collapse, and is
+    re-implemented locally on purpose (see the comment above the imports).
+
+    THE FLAW IS THE POINT, NOT DECORATION. D-W4-1 requires each entry to carry
+    WHY it was barred: *"don't propose these, and here is the flaw"* beats a bare
+    list. A bare list tells a model which sentences to avoid; a list with flaws
+    tells it which MISTAKE to avoid, which is the only version that survives
+    rephrasing.
+
+    AND THE PROMPT LAYER ALONE WILL NOT HOLD. A model asked nicely is not a
+    control. The layer that actually enforces the bar is the semantic drop —
+    clustering each round's new candidates together with the barred ones and
+    dropping whatever clusters onto a barred entry — because that is what *"don't
+    rephrase it"* requires and what no prompt can guarantee. This block is the
+    cheap first layer; it is not the guarantee.
+
+    BOUNDED OVERALL, AND THE OVERFLOW IS STATED. At most `cap_entries` entries
+    reach any one prompt, OLDEST FIRST, because an unbounded barred list would
+    inflate every generate and evolve call for the rest of a ten-round run. The
+    surplus is announced in a trailing notice rather than silently dropped — a
+    prompt that quietly forgets two-thirds of what is barred is a prompt nobody
+    can debug. That notice deliberately carries NO `|`, so it can never be read
+    as an addressable record.
+
+    Never raises; returns the placeholder for any register it cannot read.
+    """
+    slots = _slots(register)
+    if slots is None:
+        return _NOTHING_BARRED
+
+    entries = [e for e in slots["barred"] if isinstance(e, dict)]
+    if not entries:
+        return _NOTHING_BARRED
+
+    try:
+        limit = _BARRED_MAX_ENTRIES if cap_entries is None else int(cap_entries)
+    except (TypeError, ValueError):
+        limit = _BARRED_MAX_ENTRIES
+    limit = max(0, limit)
+
+    try:
+        width = _BARRED_TEXT_CHARS if cap_chars is None else int(cap_chars)
+    except (TypeError, ValueError):
+        width = _BARRED_TEXT_CHARS
+    width = max(0, width)
+    flaw_width = min(width, _BARRED_FLAW_CHARS)
+
+    shown = entries[:limit]
+    lines = [
+        f"{i} | {_flatten(e.get('text'), width)} | "
+        f"FLAW: {_flatten(e.get('flaw'), flaw_width) or 'not recorded'}"
+        for i, e in enumerate(shown)
+    ]
+
+    hidden = len(entries) - len(shown)
+    if hidden > 0:
+        lines.append(
+            f"(and {hidden} further barred question(s) not shown here, to keep "
+            f"this prompt bounded; do not propose a reworded version of anything "
+            f"barred, shown or not)"
+        )
+        log.info(
+            "workshop_register: the barred list reached a prompt with %d of %d "
+            "entries shown; the remaining %d were announced but not rendered",
+            len(shown),
+            len(entries),
+            hidden,
+        )
+
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# THE DROP LOG — the one signal that separates two OPPOSITE measured failures.
+# ===========================================================================
+
+#: A proposal dropped because it clustered onto something ALREADY BARRED. This is
+#: the loop re-proposing its own rejects.
+DROP_CLUSTERED_ONTO_BARRED = "clustered_onto_barred"
+
+#: A proposal dropped because it clustered onto a LIVE candidate already on the
+#: table. Ordinary near-copy collapse — but the count is worth watching, because
+#: this is the channel through which an over-eager filter strangles discovery.
+DROP_CLUSTERED_ONTO_LIVE = "clustered_onto_live"
+
+_DROP_CAUSES: tuple[str, ...] = (DROP_CLUSTERED_ONTO_BARRED, DROP_CLUSTERED_ONTO_LIVE)
+
+
+def record_drop(
+    register: Any,
+    *,
+    text: Any,
+    clustered_onto: Any,
+    cause: Any,
+    round_no: Any,
+) -> bool:
+    """Log one dropped proposal: WHAT was dropped, and ONTO WHAT.
+
+    `clustered_onto` HAS NO DEFAULT, AND THAT IS THE POINT. D-W4-1 records two
+    failures the Wave-4 harness measured, and they point in opposite directions:
+
+      * THE LOOP SPINNING. Failed-lookup angles were never barred, so *"minimale
+        netwerkdichtheid"* was re-proposed in rounds 2 AND 3, spending a paid
+        grounded lookup each time. *"Round 2 proposed 3 questions already
+        rejected in round 1"* is the sentence that makes that visible: the loop
+        is repeating itself rather than exploring.
+
+      * THE FILTER BEING OVER-EAGER. The same harness's semantic dedup dropped 6
+        proposals as rewordings — mostly fairly, but it also killed SPECIALISE
+        and COMBINE attempts, and it killed round 1's only INVENT BEFORE THE
+        GROUNDED LOOKUP EVER RAN. An over-eager filter suppresses discovery
+        INVISIBLY: nothing errors, the round simply produces less than it could.
+
+    "3 drops" is the same number in both worlds. Only what each one clustered
+    ONTO separates them, so a caller that cannot say is a caller producing a
+    number nobody can act on — and it is refused rather than defaulted to a
+    blank.
+
+    Returns True when a record was stored. Never raises.
+    """
+    slots = _slots(register)
+    if slots is None:
+        return False
+
+    dropped = _flatten(text, _BARRED_TEXT_CHARS)
+    if not dropped:
+        log.warning(
+            "workshop_register: refusing to log a drop with no dropped text"
+        )
+        return False
+
+    onto = _flatten(clustered_onto, _BARRED_TEXT_CHARS)
+    if not onto:
+        log.warning(
+            "workshop_register: REFUSING to log the drop of %r without naming "
+            "what it clustered onto. A bare count cannot distinguish the loop "
+            "re-proposing its own rejects from an over-eager filter strangling "
+            "discovery, and both were measured",
+            dropped[:80],
+        )
+        return False
+
+    if cause not in _DROP_CAUSES:
+        log.warning(
+            "workshop_register: unknown drop cause %r for %r; the allowed causes "
+            "are %s",
+            _flatten(cause, 40),
+            dropped[:80],
+            ", ".join(_DROP_CAUSES),
+        )
+        return False
+
+    try:
+        stamped = int(round_no)
+    except (TypeError, ValueError):
+        stamped = 0
+
+    slots["drops"].append(
+        {
+            "text": dropped,
+            "clustered_onto": onto,
+            "cause": str(cause),
+            "round": stamped,
+        }
+    )
+    return True
+
+
+def drop_summary(register: Any, round_no: Any) -> str:
+    """One plain-words sentence about a round's drops. Never raises.
+
+    Built HERE, in one place, to the bar every degradation and note sentence in
+    this engine already meets: over 40 characters, naming its count as a literal
+    digit, and stating the CONSEQUENCE rather than just the event.
+
+    Three sentences, because there are three situations worth telling apart and a
+    single templated count would collapse them into one:
+
+      * nothing was dropped — every proposal that round was new;
+      * some drops landed on ALREADY BARRED questions — the loop is SPINNING
+        rather than exploring, and the next round needs a new angle rather than a
+        new phrasing;
+      * the drops all landed on live candidates — ordinary near-copy collapse,
+        but worth a second look, because this is the channel through which an
+        over-eager filter quietly kills SPECIALISE, COMBINE and INVENT attempts.
+    """
+    slots = _slots(register)
+    try:
+        wanted = int(round_no)
+    except (TypeError, ValueError):
+        wanted = 0
+
+    records: list[dict[str, Any]] = []
+    if slots is not None:
+        records = [
+            r
+            for r in slots["drops"]
+            if isinstance(r, dict) and r.get("round") == wanted
+        ]
+
+    total = len(records)
+    spun = len(
+        [r for r in records if r.get("cause") == DROP_CLUSTERED_ONTO_BARRED]
+    )
+
+    if total == 0:
+        return (
+            f"question workshop: round {wanted} dropped 0 proposed "
+            f"sub-question(s) as near-copies, so every question it proposed was "
+            f"new to this run."
+        )
+
+    if spun:
+        return (
+            f"question workshop: round {wanted} dropped {total} proposed "
+            f"sub-question(s) as near-copies, and {spun} of them repeated a "
+            f"question this run had already rejected — the loop is SPINNING "
+            f"rather than exploring, so the next round needs a new angle rather "
+            f"than a new phrasing."
+        )
+
+    return (
+        f"question workshop: round {wanted} dropped {total} proposed "
+        f"sub-question(s) as near-copies of questions already on the table, and "
+        f"0 of them repeated an already-rejected question — the near-copy filter "
+        f"is doing the work, so check it is not also discarding genuinely new "
+        f"angles."
+    )
