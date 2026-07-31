@@ -13,7 +13,9 @@ must_haves:
   truths:
     - "A reader of § 5 can see which Wave 4 diagnoses were disproved, by what measurement, and what replaced each one."
     - "No superseded claim is deleted — each is marked superseded and carries its measured replacement beside it."
-    - "Every number written into § 5 traces to a measurement stated in this plan; no figure is invented."
+    - "Every number written into either document traces to a measurement stated in this plan AND names the run (exp7c / exp10 / exp11) that produced it; no figure is invented and no two runs are blended into a range."
+    - "exp11 reads as THE validated configuration; exp10 reads as a superseded run with a named generation defect, never as an alternative result or as the cost of this design."
+    - "The causal finding — the lever is the SELECTION RATIO, not the slot count — is stated explicitly, with exp10-vs-exp11 as its before/after evidence."
     - "§ 5 no longer contradicts the rulings in 15.7-OPEN-ITEMS.md (tournament stays, loop must DISCOVER, losers never barred)."
     - "§ 0's cost baseline, § 1's decision table, § 8's Wave-4 verification row and § 9's knob list agree with the rewritten § 5."
     - "The honest limits of the measurement (n=1, temperature variance, harness-implemented stages) are stated in the document, not omitted."
@@ -22,8 +24,8 @@ must_haves:
     - "Nothing outside .planning/ changed — no tribunal/, backend/, frontend/ or infra/ file is touched."
   artifacts:
     - path: ".planning/ENGINE-REDESIGN-SPEC.md"
-      provides: "Corrected Wave 4 section with measured diagnoses and the validated configuration"
-      contains: "_CANDIDATE_PROMPT_CHARS"
+      provides: "Corrected Wave 4 section with the three-config measurement table and the validated configuration"
+      contains: "exp11"
     - path: ".planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md"
       provides: "Ruling ledger with the criterion-2 fix and open items 1-2 marked answered by measurement"
       contains: "exit criterion 2"
@@ -34,11 +36,11 @@ must_haves:
       pattern: "D-R9|D-R10|D-R11"
     - from: ".planning/ENGINE-REDESIGN-SPEC.md § 5"
       to: ".planning/ENGINE-REDESIGN-SPEC.md § 0 / § 8 / § 9"
-      via: "shared cost and verification figures"
-      pattern: "SUPERSEDED"
-    - from: ".planning/phases/15.7-*/15.7-OPEN-ITEMS.md open items 1-2"
-      to: ".planning/ENGINE-REDESIGN-SPEC.md § 5"
-      via: "answered-by-measurement pointer rather than a duplicated number set"
+      via: "shared cost and verification figures, all attributed to exp11"
+      pattern: "exp11|SUPERSEDED"
+    - from: ".planning/phases/15.7-*/15.7-OPEN-ITEMS.md open item 2"
+      to: ".planning/ENGINE-REDESIGN-SPEC.md § 5 three-config table"
+      via: "ledger cites the validated run's figures only; § 5 holds the full table"
       pattern: "ANSWERED BY MEASUREMENT"
 ---
 
@@ -92,6 +94,41 @@ Section map of the ledger (140 lines total):
 - `## Still owed at 15.8` — 136 — **read-only in this plan**
 </context>
 
+<measurement_ledger>
+**This is the authoritative figure set for the whole plan. Every number below is attributed to the run
+that produced it. Do not blend two runs into a range anywhere in either document.**
+
+| run | config | generated per client question | slots | exits | cost | population |
+|---|---|---|---|---|---|---|
+| exp7c | global, no floor | 6 | 10 | round 6 | **$0.18** | peak **23** |
+| exp10 | global + floor 5/question + 2 cross | 6 (**generation defect**) | 17 | round 9 | **$0.48** | peak **32** |
+| **exp11** | **global + floor 5/question + 2 cross** | **12** | **17** | **round 4** | **$0.24** | **34–41, flat** |
+
+**exp11 is THE VALIDATED CONFIGURATION.** Its figures are the primary ones everywhere.
+
+**exp10 is a SUPERSEDED run with a named defect, not an alternative result.** It ran the same
+architecture, but the real generation prompt states the candidate count **twice** — `Output EXACTLY 6
+lines` and `<your 6 lines go here>` — and **only the first was patched**, so it still produced 6 per
+client question. That made 5 slots a 5-of-6 choice — no selection at all — and the loop needed 9 rounds
+and $0.48 to grind out a clean winner set. With 12 generated it is a real 5-of-12 choice, prefer-KEEP
+always has KEEP candidates available, the winner set is clean from round 1, and it exits in round 4 for
+$0.24.
+
+**THE FINDING: the lever is the SELECTION RATIO, not the slot count.** Fixing the generation count
+**halved the cost AND more than halved the rounds**. exp10-vs-exp11 is the evidence, and it only reads
+as evidence if the two are presented as before/after, never as a range. A range hides the causal point.
+
+**Population, stated honestly:** across all three global configs the population stays **between 23 and
+41** and the largest prompt is **~9k chars** — against the section's feared *"round-9 prompt carrying 60
+candidates"*. Per-client-question brackets **did** reach **122**, so the explosion is
+**architecture-dependent, not inherent**.
+
+**Do not conflate two different "round 4" statements.** The temperature-variance note in Task 1 (three
+runs of the same configuration exiting at rounds 4, 6 and 6) is about **repeat runs of one config**;
+exp11's round 4 is a **different-config** result. Both are true; write them so a reader cannot read one
+as the other.
+</measurement_ledger>
+
 <house_rules>
 These apply to all three tasks. Violating any one of them fails the plan.
 
@@ -108,13 +145,14 @@ These apply to all three tasks. Violating any one of them fails the plan.
    DISCOVER, not only sharpen) and the rejected-register table — including *"losers must NEVER be
    barred"* — stay. In the ledger this is stricter still: the entire `## RULED` section and the
    `## Still owed at 15.8` section are **read-only**. Correct diagnoses and numbers, not rulings.
-4. **No invented figures.** Every number written into either document must be one stated in this plan.
-   If a number is needed that is not here, write the qualitative claim without a number instead.
+4. **No invented figures, and every figure carries its run.** Every number written into either document
+   must come from `<measurement_ledger>` above and must name the run it came from (exp7c / exp10 /
+   exp11). If a number is needed that is not there, write the qualitative claim without a number.
 5. **`.planning/` is gitignored** in this repo. Both edited files need `git add -f`, as does this plan
    directory.
-6. **Do not duplicate a number set across the two files.** Where the ledger needs to cite a measured
-   result, it points at the rewritten § 5 rather than restating the figures. Two copies of a number
-   drift; a pointer cannot.
+6. **One number set per file, no ranges across runs.** § 5 carries the full three-config table; the
+   ledger cites **exp11's figures only** and points at § 5's table for the rest. Never write
+   `$0.18–$0.48` or any other span that merges two runs — the span is the thing that hides the finding.
 </house_rules>
 
 <tasks>
@@ -135,8 +173,10 @@ below are marked inline and that the operator rulings in 15.7-OPEN-ITEMS.md are 
 **(b) In that same new subsection, add a clearly-headed `**Honest limits of this measurement**`
 paragraph** — this must not be buried or softened. It states all three limits:
   - every result is **n=1**: one client, three client questions, Dutch, 18 candidates;
-  - Sonnet's evolve runs at **temperature 1.0**, so single runs vary — three runs of the same
-    configuration exited at **rounds 4, 6 and 6**;
+  - Sonnet's evolve runs at **temperature 1.0**, so single runs vary — three runs of **the same
+    configuration** exited at **rounds 4, 6 and 6**. Word this so it cannot be misread as the
+    three-config comparison Task 2 adds: this is run-to-run variance, that is a config-to-config
+    difference;
   - the loop stages that do not exist in the codebase yet — generative evolve, meta-review, the
     grounded lookup, judge reasons, carried Elo, the catch-up schedule, the exit checks — were
     **implemented by the harness author**, so those results test the **DESIGN, not any
@@ -163,57 +203,80 @@ reflect that items 3 and 4 are now closed by measurement (Task 2 rewrites their 
 1, 2, 5 and 6 as they stand in this task.
   </action>
   <verify>
-    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "_CANDIDATE_PROMPT_CHARS = 240" "KEEP=1/WEAK=17" "KEEP=9/WEAK=9" "245–373" "n=1" "temperature 1.0" "rounds 4, 6 and 6" "DESIGN, not any" "_match_block" "SUPERSEDED"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
+    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "_CANDIDATE_PROMPT_CHARS = 240" "KEEP=1/WEAK=17" "KEEP=9/WEAK=9" "n=1" "temperature 1.0" "rounds 4, 6 and 6" "DESIGN, not any" "_match_block" "SUPERSEDED"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && { grep -qE "245[–-]373" "$F" || { echo "MISSING: 245-373 candidate length"; exit 1; }; } && git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
   </verify>
-  <done>§ 5 opens with a dated measurement-provenance subsection carrying the three honest limits verbatim; the "9 of 10 winners WEAK" line is marked superseded and explained as a cap-240 truncation artefact with both measured critique splits recorded; no file outside `.planning/` is modified.</done>
+  <done>§ 5 opens with a dated measurement-provenance subsection carrying the three honest limits verbatim, with the temperature-variance note worded so it cannot be confused with the config comparison; the "9 of 10 winners WEAK" line is marked superseded and explained as a cap-240 truncation artefact with both measured critique splits recorded; no file outside `.planning/` is modified.</done>
 </task>
 
 <task type="auto">
-  <name>Task 2: Correct the exit rule, the cost/population estimate, the validated configuration, and the criterion-1/2 off-by-one in BOTH files</name>
+  <name>Task 2: Correct the exit rule and the cost/population estimate, record the validated configuration and the selection-ratio finding, and fix the criterion-1/2 off-by-one in BOTH files</name>
   <files>.planning/ENGINE-REDESIGN-SPEC.md, .planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md</files>
   <action>
 In the spec, edit the boxed items 3 and 4, `### Exit criteria` (584-606) including its boxed trap
 warning, `### Why 10 rounds is affordable` (608-624), and `### Freeze and hand-off` (626-628). Then
-apply parts (g) and (h) to the ledger.
+apply parts (g) and (h) to the ledger. All figures come from `<measurement_ledger>`; house rules 4 and
+6 govern how they are written.
 
 **(a) The exit rule fires; it needs NO change.** Boxed item 3 and open item 1 of 15.7-OPEN-ITEMS.md
 both assume the loop hits the 10-round cap every run because criterion 2 can never be satisfied. Mark
-that **resolved by measurement**: with the cap fixed, the implemented loop exits on all three criteria
-in **round 6** (10-slot config) and **round 9** (17-slot config). WEAK winners went **3 → 3 → 0 → 0**;
-the three criteria genuinely gate each other in turn. Record explicitly: **keep all three exit criteria
-exactly as written** — the *"the cap is a ceiling, not a target"* sentence at line 619-620 is
-**confirmed**, not contradicted.
+that **resolved by measurement**: with the truncation cap fixed, **all three** global configurations
+exit on all three criteria well inside the 10-round cap — **exp7c in round 6, exp10 in round 9, exp11
+in round 4**. WEAK winners went **3 → 3 → 0 → 0**; the three criteria genuinely gate each other in
+turn. Record explicitly: **keep all three exit criteria exactly as written** — the *"the cap is a
+ceiling, not a target"* sentence at line 619-620 is **confirmed**, not contradicted.
 
 **(b) Add a fourth exit-criteria action — the single highest-leverage rule found: PREFER KEEP OVER WEAK
 WHEN FILLING A SLOT.** Explain why it matters: exit criterion 2 *checks* for WEAK winners but nothing
 in the design ever *prevented* them. Adding the action took WEAK winners to **0** and made criterion 2
-satisfiable by construction.
+satisfiable by construction. Add the dependency exp10-vs-exp11 exposed: **prefer-KEEP only works if
+there are KEEP candidates left to prefer**, which is a property of the selection ratio (part (e)), not
+of the rule itself.
 
 **(c) Add the compound-question exemption to criterion 2.** A cross-cutting question is **compound by
 construction** — it joins two topics — so *"two questions in one"* must **not** count against it in the
 exit check. Without the exemption, criterion 2 structurally penalises the highest-value questions.
 
-**(d) The population does not balloon and the cost estimate is ~30× too high.** Mark the
-`Why 10 rounds is affordable` table's **~$3.00 for 10 rounds** superseded. Measured in the global
-design: population peaks at **23–32**, largest prompt **~9k chars**, total cost **$0.18–$0.48**. The
-WEAK-after-two-passes pruning removes candidates faster than evolve adds them. Conclude that **the
-spend ceiling and a population cap are not binding at this scale** — replace them with
-**instrumentation** (log population and spend per round) rather than enforced caps, and rewrite boxed
-item 4 accordingly.
+**(d) The population does not balloon and the cost estimate is far too high.** Mark the
+`Why 10 rounds is affordable` table's **~$3.00 for 10 rounds** superseded: the validated configuration
+(exp11) costs **$0.24**. State the population result honestly and with its contrast: across **all three
+global configs** the population stays **between 23 and 41** and the largest prompt is **~9k chars**,
+against this section's feared *"round-9 prompt carrying 60 candidates"*. Conclude that **the spend
+ceiling and a population cap are not binding at this scale** — replace them with **instrumentation**
+(log population and spend per round) rather than enforced caps, and rewrite boxed item 4 accordingly.
 
 **IMPORTANT NUANCE that must survive the edit:** the feared 60-candidate explosion **IS real**, but
-only under **per-client-question brackets**, where the population peaks at **122**. It is
-architecture-dependent, not inherent. Do not delete the warning — scope it.
+only under **per-client-question brackets**, where the population reached **122**. It is
+**architecture-dependent, not inherent**. Do not delete the warning — scope it.
 
-**(e) Record the VALIDATED CONFIGURATION** as a new subsection before `### Freeze and hand-off`:
-  - **ONE global loop**, NOT per-client-question brackets. Per-client-question brackets were tested and
-    fail on four counts: they never converge, they hit the 10-round cap, they cost **3–4×** more, the
-    population reaches **122**, and — the structural reason — inside one bracket evolve cannot
-    **COMBINE across client questions**, which is where the best output came from.
+**(e) Record the VALIDATED CONFIGURATION** as a new subsection before `### Freeze and hand-off`. It has
+three parts and the ordering matters — the table, then the defect, then the finding:
+
+  1. **Reproduce the three-config table from `<measurement_ledger>` verbatim**, with exp11's row marked
+     as the validated configuration and **exp10's row explicitly labelled `SUPERSEDED — generation
+     defect`**. A future reader must not be able to take $0.48 / round 9 as the cost of this design.
+  2. **Name exp10's defect precisely.** The generation prompt states the candidate count **twice** —
+     `Output EXACTLY 6 lines` and `<your 6 lines go here>` — and **only the first was patched**, so it
+     still produced 6 per client question. 5 slots over 6 candidates is a 5-of-6 choice, i.e. **no
+     selection at all**; the loop then needed 9 rounds and $0.48 to grind out a clean winner set. Add
+     this as a **Wave-4 implementation requirement**: when the generation count is raised in the real
+     prompt, **both statements must be changed** — and note it is the same defect class as CR-01 in
+     Wave 3, where one value was normalised in one place and compared in another.
+  3. **State the finding explicitly: the lever is the SELECTION RATIO, not the slot count.** With 12
+     generated per client question it is a real 5-of-12 choice, prefer-KEEP always has KEEP candidates
+     available, the winner set is clean from round 1, and the loop exits in **round 4** for **$0.24**.
+     **Fixing the generation count halved the cost AND more than halved the rounds.** Present exp10 and
+     exp11 as before/after, never as a range.
+
+  The configuration itself, recorded as the thing Wave 4 builds:
+  - **ONE global loop**, NOT per-client-question brackets. Brackets were tested and fail on four
+    counts: they never converge, they hit the 10-round cap, they cost **3–4×** more, the population
+    reaches **122**, and — the structural reason — inside one bracket evolve cannot **COMBINE across
+    client questions**, which is where the best output came from.
+  - **12 candidates generated per client question** (the selection ratio, from (e)(3)).
   - Winners = a **floor of 5 per client question + 2 cross-cutting**, applied at the **CUT** rather than
     by splitting the pool.
   - Prefer KEEP over WEAK when filling a slot (from (b)).
-  - Measured result of that configuration: **17 questions, none weak, converges in round 9, $0.48**.
+  - Measured result: **17 questions, none weak, converges in round 4, $0.24** (exp11).
 
 **(f) Fix the two spec-internal defects while editing:**
   - The boxed trap warning at 593-599 ends *"Mark resurrected candidates and exclude them from
@@ -227,14 +290,13 @@ architecture-dependent, not inherent. Do not delete the warning — scope it.
     where quality most needs to read as failed reads as a perfect pass. Record this as a Wave-4
     implementation requirement.
 
-**(g) Correct the SAME off-by-one in the ledger.** In
-`15.7-OPEN-ITEMS.md`, `## Traps this phase inherits`, the `WEAK`-winner coverage lie bullet (lines
-118-121), the final sentence reads *"Mark resurrected candidates and exclude them from exit criterion
-1."* Change `exit criterion 1` to `exit criterion 2` and append a short parenthetical stating why —
-criterion 1 is coverage, criterion 2 is quality, and excluding a resurrected candidate from coverage
-would break the guarantee resurrection exists to provide. **This is a criterion-number fix and nothing
-more.** Do not touch D-R9, D-R10, D-R11, the rejected-register rules, the other trap bullets, or the
-`Still owed at 15.8` section.
+**(g) Correct the SAME off-by-one in the ledger.** In `15.7-OPEN-ITEMS.md`, `## Traps this phase
+inherits`, the `WEAK`-winner coverage lie bullet (lines 118-121), the final sentence reads *"Mark
+resurrected candidates and exclude them from exit criterion 1."* Change `exit criterion 1` to
+`exit criterion 2` and append a short parenthetical stating why — criterion 1 is coverage, criterion 2
+is quality, and excluding a resurrected candidate from coverage would break the guarantee resurrection
+exists to provide. **This is a criterion-number fix and nothing more.** Do not touch D-R9, D-R10,
+D-R11, the rejected-register rules, the other trap bullets, or the `Still owed at 15.8` section.
 
 **(h) Mark ledger open items 1 and 2 ANSWERED BY MEASUREMENT.** Keep both items and all their existing
 reasoning in place (house rule 2) and prefix each with a bold `**✅ ANSWERED BY MEASUREMENT
@@ -242,21 +304,22 @@ reasoning in place (house rule 2) and prefix each with a bold `**✅ ANSWERED BY
   - **Item 1** (*"the exit rule probably never fires — the expensive one"*): **void, because its
     premise was the cap-240 truncation artefact.** Its entire argument rests on *"V-01 had 9 of 10
     winners WEAK"*, which Task 1 established is a truncation artefact rather than a quality signal.
-    With the cap fixed the loop exits in **rounds 4–9** across the measured configurations, so the
-    10-round cap is not the normal cost. No operator ruling is required.
+    With the cap fixed, the validated configuration (**exp11**) exits in **round 4**, so the 10-round
+    cap is not the normal cost. No operator ruling is required.
   - **Item 2** (*"two unset numbers — decide together"*): **not binding at the measured scale.**
-    Neither the spend ceiling nor the per-round grounded-lookup cap needs a value — the whole loop
-    lands under **$0.48** against the ~$3 budget the section assumed, and the population stays flat
-    rather than growing. Per house rule 6, cite the § 5 subsection for the measured peaks instead of
-    restating them here. Note that the correct replacement is instrumentation, not an enforced cap.
+    Neither the spend ceiling nor the per-round grounded-lookup cap needs a value — the validated
+    configuration costs **$0.24** against the ~$3 budget this section assumed, with the population
+    **flat at 34–41**. Per house rule 6 cite **exp11's figures only** and point at § 5's three-config
+    table for the rest; do not restate exp7c's or exp10's numbers here. Note that the correct
+    replacement is instrumentation, not an enforced cap.
   - **Items 3 and 4 remain genuinely OPEN** — say so explicitly, so the next planner does not read the
     two ticks above and assume the whole section is closed. Retitle the section heading to reflect
     that two of the four are answered.
   </action>
   <verify>
-    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && L=".planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md" && for s in "round 6" "round 9" "3 → 3 → 0 → 0" "23–32" "9k chars" "0.18" "0.48" "122" "PREFER KEEP OVER WEAK" "compound by construction" "floor of 5 per client question" "criterion 2" "workshop_rank.py:708" "instrumentation"; do grep -qF "$s" "$F" || { echo "MISSING in spec: $s"; exit 1; }; done && for s in "exit criterion 2" "ANSWERED BY MEASUREMENT" "rounds 4–9" "ENGINE-REDESIGN-SPEC § 5"; do grep -qF "$s" "$L" || { echo "MISSING in ledger: $s"; exit 1; }; done && for s in "D-R9 reaffirmed" "NEVER be barred" "must DISCOVER" "Still owed at 15.8"; do grep -qF "$s" "$L" || { echo "FAIL: a read-only ledger ruling was damaged: $s"; exit 1; }; done && if grep -rniE "exclude (them|resurrected candidates) from (exit )?criterion 1" .planning/ --exclude-dir=quick; then echo "FAIL: off-by-one still present"; exit 1; fi && git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
+    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && L=".planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md" && for s in "exp7c" "exp10" "exp11" "round 4" "round 6" "round 9" "0.18" "0.24" "0.48" "122" "9k chars" "SELECTION RATIO" "generation defect" "Output EXACTLY 6 lines" "PREFER KEEP OVER WEAK" "compound by construction" "floor of 5 per client question" "criterion 2" "workshop_rank.py:708" "instrumentation"; do grep -qF "$s" "$F" || { echo "MISSING in spec: $s"; exit 1; }; done && { grep -qF "between 23 and 41" "$F" || { echo "MISSING in spec: population 23-41 statement"; exit 1; }; } && { grep -qE "34[–-]41" "$F" || { echo "MISSING in spec: exp11 population"; exit 1; }; } && { if grep -qE '0\.18[^0-9]{1,3}0\.48' "$F"; then echo "FAIL: a cross-run cost RANGE was written (house rule 6)"; exit 1; fi; } && for s in "exit criterion 2" "ANSWERED BY MEASUREMENT" "exp11" "round 4" "0.24" "ENGINE-REDESIGN-SPEC § 5"; do grep -qF "$s" "$L" || { echo "MISSING in ledger: $s"; exit 1; }; done && { grep -qE "34[–-]41" "$L" || { echo "MISSING in ledger: flat population"; exit 1; }; } && { if grep -qE '0\.18|0\.48|exp7c|exp10' "$L"; then echo "FAIL: ledger restates a non-exp11 run (house rule 6)"; exit 1; fi; } && for s in "D-R9 reaffirmed" "NEVER be barred" "must DISCOVER" "Still owed at 15.8"; do grep -qF "$s" "$L" || { echo "FAIL: a read-only ledger ruling was damaged: $s"; exit 1; }; done && { if grep -rniE "exclude (them|resurrected candidates) from (exit )?criterion 1" .planning/ --exclude-dir=quick; then echo "FAIL: off-by-one still present"; exit 1; fi; } && git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
   </verify>
-  <done>Boxed items 3 and 4 are marked resolved by measurement; all three exit criteria are retained and joined by the prefer-KEEP action and the compound-question exemption; the ~$3.00 estimate is superseded by $0.18–$0.48 with the 122-peak bracket nuance preserved; the validated configuration is recorded; the Guard-2 marking gap is written down; and the criterion-1/criterion-2 off-by-one no longer exists anywhere under `.planning/` outside this plan directory, with ledger items 1-2 marked answered, 3-4 still open, and every ledger ruling intact.</done>
+  <done>All three configs are recorded with their own figures and none are merged into a range; exp11 reads as validated and exp10 as superseded with its named generation defect; the selection-ratio finding is stated with exp10-vs-exp11 as before/after evidence; the population claim is the honest 23-to-41 span across global configs with the 122 bracket contrast preserved; exit criteria are retained and joined by prefer-KEEP and the compound-question exemption; the Guard-2 marking gap is recorded; the criterion-1/criterion-2 off-by-one no longer exists anywhere under `.planning/` outside this plan directory; ledger items 1-2 are answered citing exp11 only, 3-4 remain open, and every ledger ruling is intact.</done>
 </task>
 
 <task type="auto">
@@ -308,20 +371,21 @@ search result (`groundingChunks`)**, never from the model's own output line. A l
 its own entities exist.
 
 **(d) Reconcile the sections that cite the same numbers.** Each edit is a short superseding note, not a
-rewrite:
+rewrite. House rules 4 and 6 apply — name the run, never write a cross-run range:
   - **§ 0 cost baseline (31-44)** — the workshop-cost framing there predates the loop measurement. Add
-    a line pointing to § 5's measured loop total of **$0.18–$0.48** so a reader does not carry the
-    ~$3.00 loop estimate forward. Do not alter the V-01 per-stage measurements themselves — they are
-    audit-log facts.
+    a line pointing to § 5's validated loop total of **$0.24 (exp11)** and to the three-config table,
+    so a reader does not carry the ~$3.00 loop estimate forward. Do not alter the V-01 per-stage
+    measurements themselves — they are audit-log facts.
   - **§ 1 decision table (50-62)** — amend the **D-R11** row so it reads as the catch-up schedule with
     median-seeding marked superseded, and annotate **D-R10** with the premise-real admission test. Do
     not change their `agreed (operator)` status.
   - **§ 8 Wave-4 verification row (693)** — it currently says *"a resurrected candidate does not satisfy
     coverage"*. That is the same off-by-one Task 2 fixed: it must be **quality**, not coverage. Also add
-    the catch-up-schedule newcomer test and the prefer-KEEP check to that row.
+    the catch-up-schedule newcomer test, the prefer-KEEP check, and an assertion that the generation
+    count is raised in **both** places the prompt states it (Task 2 (e)(2)).
   - **§ 9 knobs (720-731)** — the new-knob list names a *"loop spend ceiling"*. Per Task 2 that becomes
-    instrumentation rather than an enforced cap; adjust the entry and add a knob for the catch-up
-    schedule's match budget.
+    instrumentation rather than an enforced cap; adjust the entry, add a knob for the catch-up
+    schedule's match budget, and add one for **candidates generated per client question (default 12)**.
 
 **(e) Commit.** `.planning/` is gitignored, so `git add -f` **all three paths**: the spec, the ledger
 (`15.7-OPEN-ITEMS.md`, edited in Task 2), and this plan directory. Commit message:
@@ -330,17 +394,17 @@ Verify before committing that `git status --porcelain -- tribunal backend fronte
 after committing that the commit contains both edited documents and no source file.
   </action>
   <verify>
-    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "catch-up schedule" "byte-identical" "1.5%" "93.8%" "95.5%" "99.8%" "29.5%" "1.8%" "3.76" "5 Swiss rounds" "groundingChunks" "PREMISE" "workshop_rank.py:878" "workshop_rank.py:1524"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && grep -qF "a resurrected candidate does **not** satisfy coverage" "$F" && { echo "FAIL: stale wave-4 verification row"; exit 1; }; git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; C=$(git log -1 --name-only --format=) && echo "$C" | grep -q "ENGINE-REDESIGN-SPEC" && echo "$C" | grep -q "15.7-OPEN-ITEMS" && ! echo "$C" | grep -qE "^(tribunal|backend|frontend|infra)/" && echo OK</automated>
+    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "catch-up schedule" "byte-identical" "1.5%" "93.8%" "95.5%" "99.8%" "29.5%" "1.8%" "3.76" "5 Swiss rounds" "groundingChunks" "PREMISE" "workshop_rank.py:878" "workshop_rank.py:1524" "exp11"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && grep -qF "a resurrected candidate does **not** satisfy coverage" "$F" && { echo "FAIL: stale wave-4 verification row"; exit 1; }; git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; C=$(git log -1 --name-only --format=) && echo "$C" | grep -q "ENGINE-REDESIGN-SPEC" && echo "$C" | grep -q "15.7-OPEN-ITEMS" && ! echo "$C" | grep -qE "^(tribunal|backend|frontend|infra)/" && echo OK</automated>
   </verify>
-  <done>D-R11 is replaced by the catch-up schedule with the inertness proof and all six measured percentages recorded; D-R9 is confirmed with the 3.76-matches figure and the D-R9/D-R11 interaction noted; D-R10's admission test tests the premise and mandates `groundingChunks` evidence; §§ 0/1/8/9 no longer contradict § 5; one commit contains both edited documents, force-added, and no source file.</done>
+  <done>D-R11 is replaced by the catch-up schedule with the inertness proof and all six measured percentages recorded; D-R9 is confirmed with the 3.76-matches figure and the D-R9/D-R11 interaction noted; D-R10's admission test tests the premise and mandates `groundingChunks` evidence; §§ 0/1/8/9 no longer contradict § 5 and § 0 cites exp11's $0.24 rather than a range; one commit contains both edited documents, force-added, and no source file.</done>
 </task>
 
 </tasks>
 
 <gate_integrity_note>
-Every literal these gates grep for was checked against the files **as they exist today**, because two
-gate-integrity traps were found while writing this plan and both would have read green while being
-useless:
+Every literal these gates grep for was either checked against the files **as they exist today**, or is a
+string this plan explicitly instructs the executor to write. Three gate defects were found and fixed
+while writing this plan; all three would have read green while being useless.
 
 1. **A vacuous negative gate.** An earlier draft gated on `exclude resurrected candidates from
    criterion 1` — a phrasing that appears in **neither** file. The real strings are spec line 598
@@ -355,6 +419,13 @@ useless:
    edit would have failed the task. Corrected, and all four ruling-preservation literals
    (`D-R9 reaffirmed`, `NEVER be barred`, `must DISCOVER`, `Still owed at 15.8`) were confirmed present
    before being used as gates.
+3. **Number-literal gates are the same shape, so they are hardened two ways.** Every dashed numeric
+   pair is matched with `grep -E` accepting **either** an en dash or a hyphen (`245[–-]373`,
+   `34[–-]41`), because a typographic slip would otherwise fail a correct edit. And house-rule-6
+   violations are gated **negatively**, not only positively: Task 2 fails if a blended cost range
+   (`0.18` near `0.48`) appears in the spec, and fails if the ledger mentions `exp7c`, `exp10`, `0.18`
+   or `0.48` at all. A positive gate on `0.24` alone would have happily passed a document that still
+   carried the blended range beside it — which is the exact failure being corrected.
 </gate_integrity_note>
 
 <threat_model>
@@ -362,18 +433,18 @@ useless:
 
 | Boundary | Description |
 |----------|-------------|
-| planning docs → 15.7 planner | Both files are input prompts to `/gsd-plan-phase 15.7`; a wrong number or a wrong criterion index here becomes built code |
+| planning docs → 15.7 planner | Both files are input prompts to `/gsd-plan-phase 15.7`; a wrong number, a blended range or a wrong criterion index here becomes built code |
 | none (runtime) | Doc-only change — no code, no request path, no new dependency, no package install |
 
 ## STRIDE Threat Register
 
 | Threat ID | Category | Component | Disposition | Mitigation Plan |
 |-----------|----------|-----------|-------------|-----------------|
-| T-QDBO-01 | Tampering | spec + ledger content | mitigate | House rule 4 forbids invented figures; each task's `<automated>` gate greps for the exact measured literals so a paraphrased or drifted number fails the gate |
+| T-QDBO-01 | Tampering | spec + ledger content | mitigate | House rule 4 forbids invented figures and requires each number to name its run; each task's `<automated>` gate greps for the exact measured literals so a paraphrased or drifted number fails the gate |
 | T-QDBO-02 | Repudiation | superseded claims | mitigate | House rule 2 forbids silent deletion — the original claim stays visible beside its replacement, so the change is auditable |
 | T-QDBO-03 | Elevation of Privilege | scope creep into `tribunal/` source | mitigate | Every task's gate asserts `git status --porcelain -- tribunal backend frontend infra` is empty; cited source line numbers are evidence, not edit targets |
 | T-QDBO-04 | Tampering | operator rulings in the ledger | mitigate | House rule 3 marks `## RULED` and `## Still owed at 15.8` read-only; the Task 2 gate positively asserts four ruling strings still exist, so an over-broad ledger rewrite fails |
-| T-QDBO-05 | Information Disclosure | duplicated number sets drifting apart | mitigate | House rule 6 — the ledger points at § 5 rather than restating measured figures |
+| T-QDBO-05 | Spoofing | a defective run passing as a valid result | mitigate | exp10 must carry the literal label `generation defect` and its named cause; Task 2's gate asserts both that literal and `SELECTION RATIO`, and negatively asserts no blended cost range survives |
 | T-QDBO-SC | Tampering | npm/pip/cargo installs | accept | No package-manager install occurs in this plan — the legitimacy gate is not applicable |
 </threat_model>
 
@@ -384,15 +455,21 @@ useless:
    returns nothing — the off-by-one is gone from both locations.
 4. The rulings survive in both files: `we are not killing tournament`, `NEVER be barred`,
    `must DISCOVER` still match — corrections changed diagnoses, not rulings.
-5. Spot-read § 5 end to end: a reader who knows nothing of the harness can tell, for each of the five
-   headline diagnoses, whether it survived, what measurement decided it, and what replaced it.
-6. Spot-read the ledger: items 1-2 read as answered with their reasoning intact, items 3-4 read as
-   open, and a planner following its "read this first" instruction is no longer misdirected.
+5. Read the validated-configuration subsection cold: a reader who has never seen this plan can tell
+   which run is validated, which is superseded and why, and that the causal lever is the selection
+   ratio rather than the slot count.
+6. Spot-read the ledger: items 1-2 read as answered citing exp11 only, items 3-4 read as open, and a
+   planner following its "read this first" instruction is no longer misdirected.
 </verification>
 
 <success_criteria>
 - `.planning/ENGINE-REDESIGN-SPEC.md` § 5 states its measurement provenance, its three honest limits,
-  and the validated configuration (one global loop, 5+2 floor at the cut, prefer KEEP over WEAK).
+  the three-config table, and the validated configuration (one global loop, 12 generated per client
+  question, 5+2 floor at the cut, prefer KEEP over WEAK).
+- exp11 (**round 4, $0.24, 17 questions, none weak**) is the primary figure set everywhere; exp10 is
+  labelled `SUPERSEDED — generation defect` with its cause named; no cross-run range appears.
+- The selection-ratio finding is explicit, with exp10-vs-exp11 as before/after evidence, and the
+  double-statement prompt defect is recorded as a Wave-4 implementation requirement.
 - The four disproved diagnoses — WEAK-winner quality signal, the never-firing exit rule, the balloon
   population/$3.00 cost, and median Elo seeding — are each marked superseded with their measured
   replacement, and D-R9 is marked confirmed.
@@ -400,7 +477,7 @@ useless:
 - The criterion-1/criterion-2 off-by-one is fixed in all three places it exists: § 5's boxed warning,
   § 8's Wave-4 row, and `15.7-OPEN-ITEMS.md`'s trap bullet. The Guard-2 (`workshop_rank.py:708`)
   unmarked-resurrection gap is recorded.
-- `15.7-OPEN-ITEMS.md` open items 1 and 2 are marked answered by measurement with a pointer to § 5 and
+- `15.7-OPEN-ITEMS.md` open items 1 and 2 are marked answered by measurement citing exp11 only, with
   their original reasoning preserved; items 3 and 4 remain open; every ruling in that file is untouched.
 - §§ 0, 1, 8, 9 agree with the rewritten § 5.
 - One commit, force-added, containing both edited documents and only `.planning/` files.
