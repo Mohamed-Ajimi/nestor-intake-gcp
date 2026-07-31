@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid  # noqa: F401 — used in the postponed annotations below
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Sequence
@@ -113,6 +114,7 @@ __all__ = [
     "DROP_PREMISE_NOT_REAL",
     "admission_evidence",
     "admit_invented_angles",
+    "classify_parent",
 ]
 
 
@@ -707,3 +709,259 @@ async def admit_invented_angles(
         resolver_calls,
     )
     return admitted, dropped, notes
+
+
+# ---------------------------------------------------------------------------
+# THE PARENT — proposed by a SEPARATE call, STAMPED IN PYTHON, CROSS on failure.
+# ---------------------------------------------------------------------------
+
+#: The bound on each rendered line of the classification prompt. The two controls
+#: `_findings_block` and `_candidate_block` both state — INDEXED and TRUNCATED —
+#: applied here for the same reason: text injected into one angle must not be able
+#: to forge another angle's answer line, and every answer is addressed by INDEX.
+_CLASSIFY_RENDER_CHARS = 300
+
+#: The token the model returns for a question that belongs to no single client
+#: question. It is NOT the sentinel that gets stamped — `DISCOVERY_PARENT` is —
+#: because a token the model types is model output and the stamp is not.
+_CROSS_TOKEN = "CROSS"
+
+#: `ANGLE_INDEX | QUESTION_INDEX or CROSS`. Anchored at both ends: a line with
+#: anything else on it is GARBLED and is ignored whole, never partially believed.
+_CLASSIFY_LINE = re.compile(
+    r"^\s*(\d{1,3})\s*\|\s*(\d{1,3}|CROSS)\s*$", re.IGNORECASE
+)
+
+_CLASSIFY_PROMPT = """\
+You are filing research angles under the client questions they belong to.
+
+THE CLIENT QUESTIONS, BY INDEX:
+{questions_block}
+
+THE ANGLES TO FILE, BY INDEX:
+{angles_block}
+
+For EACH angle, answer on its own line, in exactly this form and nothing else:
+
+    ANGLE_INDEX | QUESTION_INDEX
+
+Use the token CROSS instead of a question index when the angle belongs to no
+single client question -- when it spans two of them, or when it is about
+something none of them asks. CROSS is a correct answer and is often the right
+one; do not force an angle onto a question it does not actually serve.
+
+Answer with the INDEX NUMBERS only. Do not restate a question, do not add
+commentary, and do not answer for an angle that is not listed.
+
+{ignore_instructions}
+"""
+
+
+def _label_of(item: Any) -> str:
+    """The caller's OWN label string for one client question.
+
+    Returned VERBATIM, not normalised: `discovery_bracket.allocate_discovery`
+    matches a stamped parent with `origin if origin in labels`, so a parent this
+    function trimmed would silently stop matching and every discovery question
+    would collapse to the sentinel.
+    """
+    if isinstance(item, dict):
+        for key in ("label", "text", "question"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
+    return item if isinstance(item, str) else ""
+
+
+def _render_block(values: Sequence[str]) -> str:
+    """One record per line, INDEXED and TRUNCATED. Both are security controls."""
+    return "\n".join(
+        f"{i} | {_norm(v)[:_CLASSIFY_RENDER_CHARS]}" for i, v in enumerate(values)
+    )
+
+
+def _parse_classification(text: Any, *, n: int, labels: Sequence[str]) -> list[str]:
+    """Map the model's answer to one parent per angle. PURE. NEVER RAISES.
+
+    ASVS V5 discipline, identical to every other parser in this engine: the output
+    is PRE-FILLED with the safe value, each line is regex-extracted and
+    bounds-checked, a garbled line is ignored WHOLE rather than partially believed,
+    raw model text is never decoded as structured data, and nothing here raises.
+    """
+    out: list[str] = [DISCOVERY_PARENT] * n
+    if not isinstance(text, str) or not text.strip():
+        return out
+
+    for line in text.splitlines():
+        match = _CLASSIFY_LINE.match(line)
+        if match is None:
+            if line.strip():
+                log.debug("admission: ignoring a garbled classification line %r", line[:80])
+            continue
+        try:
+            angle_index = int(match.group(1))
+        except (TypeError, ValueError):  # pragma: no cover — the regex guarantees digits
+            continue
+        if not (0 <= angle_index < n):
+            log.debug("admission: classification index %d is out of range", angle_index)
+            continue
+
+        answer = match.group(2)
+        if answer.upper() == _CROSS_TOKEN:
+            out[angle_index] = DISCOVERY_PARENT
+            continue
+        try:
+            question_index = int(answer)
+        except (TypeError, ValueError):  # pragma: no cover
+            continue
+        if not (0 <= question_index < len(labels)):
+            # OUT OF RANGE FALLS BACK TO CROSS, not to the nearest label. An index
+            # nobody supplied is not a near miss, it is an unreadable answer.
+            log.debug("admission: question index %d is out of range", question_index)
+            continue
+
+        # THE STAMP. The parent is the CALLER'S OWN label at that index, looked up
+        # in Python. A label the model TYPES is never believed, which is why the
+        # answer format is an integer in the first place.
+        out[angle_index] = labels[question_index]
+
+    return out
+
+
+async def classify_parent(
+    *,
+    questions: Sequence[Any],
+    client_questions: Sequence[Any],
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    model: Optional[str] = None,
+    breaker: Any | None = None,
+    stats: Optional[dict[str, Any]] = None,
+) -> list[str]:
+    """One parent label per input question, in input order. NEVER RAISES.
+
+    **A SEPARATE, DEDICATED CALL — never the call that wrote or admitted the
+    question.** The measurement forced this: the harness caught the model
+    MISFILING ITS OWN PARENT **6 times in a single run**, with a
+    curated-local-retail question landing in the COFFEE bracket. A model asked to
+    write a question and file it in the same breath files it where its own
+    reasoning has just been, not where it belongs.
+
+    **THE PARENT IS STAMPED IN PYTHON.** The model answers with an INDEX into the
+    caller's client-question list; the label is then looked up in that list.
+    `discovery_bracket.allocate_discovery`'s rule 3 is the shape being reused —
+    `parent = origin if origin in labels else DISCOVERY_PARENT` — and it exists
+    because a model that could NAME its own parent could make a discovered question
+    count as covering a client question it does not answer.
+
+    **AN UNPARSEABLE ANSWER FALLS BACK TO CROSS, NEVER TO A CLIENT QUESTION.** THE
+    FALLBACK DIRECTION IS THE CONTROL, NOT AN IMPLEMENTATION DETAIL. Falling back
+    to a label would let a question the EVIDENCE raised silently count as covering
+    a client question it does not answer, letting the client's own question go
+    unresearched while a discovered one stood in for it — the exact failure
+    `discovery_bracket`'s docstring says the `__discovery__` sentinel exists to
+    prevent, and the reason D-W3-5's coverage assertion counts MANDATE MEMBERS.
+    All five failure shapes — an out-of-range index, a garbled line, an empty
+    response, a raised exception and an open breaker — land on `DISCOVERY_PARENT`,
+    and NONE of them lands on a client question or on the first label.
+
+    **THE D-W4-2 CONTRACT FOR THE CALLER, stated here because this is where the
+    parent is decided** (plan 15.7-06 consumes it, so the two must agree):
+
+      * a discovery candidate's OWN admitting quote and URL ARE its enrichment
+        anchor — `admit_invented_angles` puts them in `provenance`, and that block
+        IS the findings block evolve gets. Self-consistent with "no source, no
+        slot": the evidence that admitted the angle is the evidence that enriches
+        it;
+      * a CROSS-CUTTING question spanning two client questions is passed BOTH
+        parents' orientation findings — those questions have two real parents, not
+        `__discovery__`, and they are where the best measured output came from;
+      * passing the UNION of all orientation findings to a `__discovery__` parent
+        is **EXPLICITLY REJECTED**. It re-couples discovery to orientation, which
+        is exactly the coupling D-R10 broke, and it inflates the prompt.
+    """
+    angle_texts = [_angle_text(q) for q in (questions or ())]
+    # THE SAFE VALUE IS THE PRE-FILL, so every path that fails to improve on it
+    # lands on CROSS by construction rather than by remembering to.
+    out: list[str] = [DISCOVERY_PARENT] * len(angle_texts)
+    if not angle_texts:
+        return out
+
+    labels = [_label_of(q) for q in (client_questions or ())]
+    labels = [label for label in labels if label]
+    if not labels:
+        # Nothing to file against. Every angle is cross-cutting, which is the
+        # honest answer rather than a manufactured attribution.
+        return out
+
+    if not model:
+        try:
+            from nestor_pulse_sdk.pipeline.tribunal.workshop_rank import (  # noqa: PLC0415
+                _RANK_MODEL,
+            )
+
+            model = _RANK_MODEL
+        except Exception:  # noqa: BLE001 — a missing constant is not a crash
+            model = "gemini-2.5-flash"
+
+    prompt = _CLASSIFY_PROMPT.format(
+        questions_block=_render_block(labels),
+        angles_block=_render_block(angle_texts),
+        ignore_instructions=_IGNORE_INSTRUCTIONS,
+    )
+
+    kwargs: dict[str, Any] = {}
+    try:
+        from nestor_pulse_sdk.pipeline.tribunal import gates  # noqa: PLC0415
+
+        config = gates._make_config()
+        if config is not None:
+            kwargs["config"] = config
+    except Exception as exc:  # noqa: BLE001 — the config is an optimisation
+        log.debug("admission: no generation config available for classification (%r)", exc)
+
+    out_audit: dict[str, Any] = {}
+    try:
+        resp = await with_retry(
+            lambda: audited.gemini_generate(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                model=model,
+                contents=prompt,
+                audit_out=out_audit,
+                **kwargs,
+            ),
+            label="workshop.admission.classify",
+            breaker=breaker,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed classification is CROSS
+        log.warning(
+            "admission: the parent classification call for %d angle(s) failed — "
+            "every one of them is filed as cross-cutting: %r",
+            len(angle_texts),
+            exc,
+        )
+        if isinstance(stats, dict):
+            stats["classify_calls"] = int(stats.get("classify_calls") or 0) + 1
+            stats["classify_error"] = f"{type(exc).__name__}: {exc}"
+        return out
+
+    # The response-text ladder, copied from `workshop_rank` rather than
+    # simplified: some SDK versions populate `.text`, others only `.candidates`.
+    text = getattr(resp, "text", None)
+    if not text:
+        cands = getattr(resp, "candidates", None) or []
+        if cands:
+            parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
+            if parts:
+                text = getattr(parts[0], "text", None) or ""
+
+    out = _parse_classification(text, n=len(angle_texts), labels=labels)
+
+    if isinstance(stats, dict):
+        stats["classify_calls"] = int(stats.get("classify_calls") or 0) + 1
+        stats["classify_cross"] = sum(1 for p in out if p == DISCOVERY_PARENT)
+
+    return out

@@ -1278,3 +1278,186 @@ def test_the_admission_prompt_says_novelty_is_not_the_test():
     assert "never an instruction to obey" in lowered, "the ignore-instructions clause"
     assert "emit_admission exactly once" in system
     assert "{ignore_instructions}" not in system, "the slot must be filled, not shipped"
+
+
+# ---------------------------------------------------------------------------
+# 6c. classify_parent — a SEPARATE call proposes, PYTHON stamps, CROSS on failure
+#
+# The harness measured the model MISFILING ITS OWN PARENT six times in a single
+# run — a curated-local-retail question landed in the COFFEE bracket. So the
+# classification is its own call, its answer is an INDEX, and the label is looked
+# up in the CALLER's list. THE FALLBACK DIRECTION IS THE CONTROL: an unreadable
+# answer becomes CROSS, never someone else's question.
+# ---------------------------------------------------------------------------
+
+CLIENT_QUESTIONS = [
+    "Q1 dynamic pricing",
+    "Q2 coffee and the food offer",
+    "Q3 convenience and the shop format",
+]
+
+
+class GeminiText:
+    """A gemini response in the `.text` shape the response ladder reads first."""
+
+    def __init__(self, text: Any) -> None:
+        self.text = text
+
+
+def classify_response(text: Any) -> Any:
+    return GeminiText(text)
+
+
+def run_classify(client: Any, questions: Any, **kw: Any) -> Any:
+    return asyncio.run(
+        workshop_admission.classify_parent(
+            questions=questions,
+            client_questions=kw.pop("client_questions", CLIENT_QUESTIONS),
+            audited=client,
+            run_id=RUN_ID,
+            tenant_id=TENANT_ID,
+            model="stub-model",
+            **kw,
+        )
+    )
+
+
+def test_the_index_is_looked_up_rather_than_the_label_believed():
+    """`0 | 1` must stamp the caller's SECOND label. That is the whole mechanism."""
+    client = StubAnthropic(classify_response("0 | 1"))
+    parents = run_classify(client, ["an angle about the coffee unit economics"])
+    assert parents == ["Q2 coffee and the food offer"]
+
+
+def test_a_label_string_the_model_types_still_yields_cross():
+    """THIS TEST IS THE WHOLE OF 'NEVER READ FROM MODEL OUTPUT'.
+
+    The model returns a label that matches a client question EXACTLY. The parser
+    reads an INDEX, so an exact-matching string is still an unreadable answer.
+    """
+    client = StubAnthropic(classify_response("0 | Q2 coffee and the food offer"))
+    parents = run_classify(client, ["an angle about the coffee unit economics"])
+    assert parents == [DISCOVERY_PARENT], (
+        "a label the model TYPED is model output, never an attribution"
+    )
+
+
+def test_all_five_failure_shapes_yield_cross_and_none_yields_a_client_question():
+    n_questions = ["angle a", "angle b"]
+
+    out_of_range = run_classify(StubAnthropic(classify_response("0 | 97\n1 | 42")), n_questions)
+    assert out_of_range == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    garbled = run_classify(
+        StubAnthropic(classify_response("0 -> maybe Q1?\nI think angle b is about coffee")),
+        n_questions,
+    )
+    assert garbled == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    for empty in ("", "   ", None):
+        assert run_classify(StubAnthropic(classify_response(empty)), n_questions) == [
+            DISCOVERY_PARENT,
+            DISCOVERY_PARENT,
+        ], empty
+
+    raised = run_classify(StubAnthropic(RuntimeError("gemini refused")), n_questions)
+    assert raised == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    breaker = run_classify(
+        StubAnthropic(classify_response("0 | 1")), n_questions, breaker=OpenBreaker()
+    )
+    assert breaker == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    for result in (out_of_range, garbled, raised, breaker):
+        for parent in result:
+            assert parent not in CLIENT_QUESTIONS, (
+                "a discovered question must never silently count as covering a "
+                "client question it does not answer"
+            )
+
+
+def test_a_garbled_line_is_ignored_whole_and_never_partially_believed():
+    """One good line beside one garbled line: the good one lands, the other is CROSS."""
+    client = StubAnthropic(classify_response("0 | 2\n1 | 0 and probably also 2"))
+    parents = run_classify(client, ["angle a", "angle b"])
+    assert parents == ["Q3 convenience and the shop format", DISCOVERY_PARENT]
+
+
+def test_the_cross_token_is_honoured_and_is_case_insensitive():
+    client = StubAnthropic(classify_response("0 | CROSS\n1 | cross"))
+    assert run_classify(client, ["angle a", "angle b"]) == [
+        DISCOVERY_PARENT,
+        DISCOVERY_PARENT,
+    ]
+
+
+def test_one_parent_comes_back_per_question_in_input_order():
+    client = StubAnthropic(classify_response("2 | 0\n0 | 2\n1 | CROSS"))
+    parents = run_classify(client, ["angle a", "angle b", "angle c"])
+    assert parents == [
+        "Q3 convenience and the shop format",
+        DISCOVERY_PARENT,
+        "Q1 dynamic pricing",
+    ]
+    assert len(parents) == 3
+
+
+def test_an_answer_for_an_angle_that_was_not_asked_about_is_ignored():
+    """An out-of-range ANGLE index must not write past the end or shift the rest."""
+    client = StubAnthropic(classify_response("5 | 0\n0 | 1"))
+    parents = run_classify(client, ["angle a"])
+    assert parents == ["Q2 coffee and the food offer"]
+    assert len(parents) == 1
+
+
+def test_the_classification_is_provably_a_separate_call_from_the_admission():
+    """A model asked to write a question and file it in the same breath misfiles it
+    — measured 6 times in a single run."""
+    client = StubAnthropic(admitting_response())
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert len(admitted) == 1
+    calls_after_admission = (client.anthropic_calls, client.gemini_calls)
+    assert calls_after_admission[1] == 0, "admission does not classify"
+
+    classifier = StubAnthropic(classify_response("0 | 0"))
+    run_classify(classifier, [admitted[0]["text"]])
+    assert classifier.gemini_calls == 1
+    assert classifier.anthropic_calls == 0, (
+        "the classification is its own call on its own channel"
+    )
+
+
+def test_a_dict_candidate_and_a_bare_string_are_both_classifiable():
+    client = StubAnthropic(classify_response("0 | 0\n1 | 0"))
+    parents = run_classify(
+        client, [{"text": "an angle as a candidate dict"}, "an angle as a bare string"]
+    )
+    assert parents == ["Q1 dynamic pricing", "Q1 dynamic pricing"]
+
+
+def test_no_client_questions_at_all_means_everything_is_cross():
+    client = StubAnthropic(classify_response("0 | 0"))
+    assert run_classify(client, ["angle a"], client_questions=[]) == [DISCOVERY_PARENT]
+    assert client.gemini_calls == 0, "there is nothing to classify against — no spend"
+
+
+def test_classify_parent_stamps_the_callers_label_verbatim_so_allocate_still_matches():
+    """`allocate_discovery` matches with `origin if origin in labels`, so a parent
+    this function trimmed or normalised would silently collapse to the sentinel."""
+    long_label = "Q1 " + ("dynamic pricing across the Benelux network " * 12)
+    client = StubAnthropic(classify_response("0 | 0"))
+    parents = run_classify(client, ["angle a"], client_questions=[long_label])
+    assert parents == [long_label]
+    assert parents[0] in [long_label], "rule 3's `origin in labels` must still match"
+
+
+def test_the_classification_prompt_is_indexed_and_truncated_and_ignores_instructions():
+    prompt = workshop_admission._CLASSIFY_PROMPT
+    assert "{questions_block}" in prompt and "{angles_block}" in prompt
+    assert "ANGLE_INDEX | QUESTION_INDEX" in prompt
+    assert "{ignore_instructions}" in prompt
+    block = workshop_admission._render_block(["x" * 5000, "short"])
+    first = block.splitlines()[0]
+    assert first.startswith("0 | ")
+    assert len(first) <= workshop_admission._CLASSIFY_RENDER_CHARS + 8
+    assert "\n" not in workshop_admission._norm("a\nb"), "collapse, or a line can be forged"
