@@ -2335,3 +2335,270 @@ def test_the_renderer_and_the_drop_log_are_total_over_the_hostile_battery():
         assert isinstance(workshop_register.drop_summary(reg, shape), str)
         assert isinstance(workshop_register.drop_summary(shape, 1), str)
         json.dumps(reg)
+
+
+# ===========================================================================
+# PLAN 15.7-07 TASK 1 — ASPECT DECOMPOSITION AND THE COVERAGE ASSERTION (D-W4-4b)
+#
+# The measurement this section exists because of, on the REAL
+# `claude-sonnet-4-6` generator with the deployed parameters, 3 runs per arm:
+#
+#     deployed prompt ........................ 16 of 18 compound (89%)
+#     coverage rule ADDED to the prompt ...... 12 of 18 compound (67%)
+#     the same rule on flash .................  0 of 6  compound
+#
+# A prompt tweak is proven insufficient, and the "stronger model" escape INVERTS.
+# So what is tested here is the PYTHON CONTROL, not the prompt wording — the
+# prompt tests below only pin that both rules are PRESENT, which is the cheap
+# first layer and explicitly not the guarantee.
+# ===========================================================================
+
+
+def _asks_response(*asks: str) -> FakeTextResponse:
+    """A decomposition reply in the fenced `ASKS_START` / `ASKS_END` contract."""
+    body = "\n".join(f"ASK: {i} | {text}" for i, text in enumerate(asks, start=1))
+    return FakeTextResponse(
+        f"{workshop._ASPECTS_START}\n{body}\n{workshop._ASPECTS_END}"
+    )
+
+
+def _candidate_response(*rows: tuple) -> FakeTextResponse:
+    """A candidate reply; each row is `(text, ask_number_or_None)`."""
+    lines = []
+    for text, ask in rows:
+        line = f"CANDIDATE: {text} | PARENT: Q1"
+        if ask is not None:
+            line += f" | ASK: {ask}"
+        lines.append(line)
+    return FakeTextResponse(
+        f"{workshop._CANDIDATES_START}\n"
+        + "\n".join(lines)
+        + f"\n{workshop._CANDIDATES_END}"
+    )
+
+
+def _generate(questions, script, **kw):
+    """Drive the REAL `generate_candidates` with a scripted client."""
+    audited = ScriptedWorkshopAudited(anthropic_script=script)
+    stats: dict[str, Any] = {}
+    candidates, reasons = asyncio.run(
+        workshop.generate_candidates(
+            questions=questions,
+            orientations=[],
+            brief_context="brief",
+            audited=audited,
+            run_id=RUN_ID,
+            tenant_id=TENANT_ID,
+            stats=stats,
+            **kw,
+        )
+    )
+    return candidates, reasons, stats, audited
+
+
+_THREE_ASKS = (
+    "How large is the Belgian fuel-retail market for fresh food?",
+    "How do fuel retailers in other countries sell fresh food?",
+    "What margin do those formats achieve?",
+)
+
+
+def test_a_two_of_three_coverage_gap_is_repaired_and_carries_its_siblings_parent():
+    """THE CENTRAL TEST. Two asks covered, the third is repaired — not raised."""
+    candidates, reasons, stats, _ = _generate(
+        [_question("Q1", "a compound question asking three things at once")],
+        [
+            _asks_response(*_THREE_ASKS),
+            _candidate_response(
+                ("How big is the Belgian market in EUR?", 1),
+                ("Which formats does Carrefour use in Belgium?", 2),
+            ),
+        ],
+    )
+
+    texts = [c["text"] for c in candidates]
+    repairs = [c for c in candidates if c.get("source") == "aspect_repair"]
+
+    assert len(repairs) == 1, texts
+    # The UNCOVERED ask — the third — is the one carried forward, verbatim.
+    assert repairs[0]["text"] == _THREE_ASKS[2]
+    # ... stamped with the SAME parent as its siblings.
+    assert repairs[0]["parent"] == "Q1"
+    assert repairs[0]["parents"] == ["Q1"]
+    assert {c["parent"] for c in candidates} == {"Q1"}
+    # A repair is a NOTE, never a degradation: the output is COMPLETE.
+    assert reasons == [], reasons
+    assert len(stats["notes"]) == 1
+    assert "1" in stats["notes"][0] and len(stats["notes"][0]) > 40
+
+
+def test_full_coverage_adds_no_repair_and_no_note():
+    candidates, reasons, stats, _ = _generate(
+        [_question("Q1", "a compound question asking three things at once")],
+        [
+            _asks_response(*_THREE_ASKS),
+            _candidate_response(
+                ("aaaaaaaaaaaaaaaa", 1), ("bbbbbbbbbbbbbbbb", 2), ("cccccccccccccccc", 3)
+            ),
+        ],
+    )
+    assert [c["source"] for c in candidates] == ["model"] * 3
+    assert stats["notes"] == []
+    assert reasons == []
+
+
+def test_a_single_ask_question_yields_one_aspect_and_unchanged_candidate_output():
+    """BEHAVIOUR-PRESERVATION GUARD, named as such.
+
+    A question with ONE ask must come out of this stage exactly as it did at the
+    phase base: three model candidates, no repair, no note, no degradation. The
+    ONLY thing D-W4-4b may change for a simple question is the prompt.
+    """
+    candidates, reasons, stats, _ = _generate(
+        [_question("Q1", "one simple ask")],
+        [
+            _asks_response("How large is the Belgian market?"),
+            _candidate_response(
+                ("aaaaaaaaaaaaaaaa", 1), ("bbbbbbbbbbbbbbbb", None), ("cccccccccccccccc", None)
+            ),
+        ],
+    )
+    assert [c["text"] for c in candidates] == [
+        "aaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbb",
+        "cccccccccccccccc",
+    ]
+    assert [c["source"] for c in candidates] == ["model"] * 3
+    assert [c["parents"] for c in candidates] == [["Q1"]] * 3
+    assert [c["index"] for c in candidates] == [0, 1, 2]
+    assert reasons == [] and stats["notes"] == []
+
+
+def test_a_total_decomposition_failure_still_produces_candidates_and_degrades():
+    """Decomposition dies -> undivided generation, a DEGRADATION, nothing lost."""
+    candidates, reasons, stats, _ = _generate(
+        [_question("Q1", "a compound question")],
+        [
+            FakeTextResponse("the model refused to decompose anything"),
+            _candidate_response(("aaaaaaaaaaaaaaaa", None), ("bbbbbbbbbbbbbbbb", None)),
+        ],
+    )
+    assert len(candidates) == 2
+    assert all(c["source"] == "model" for c in candidates)
+    # A real loss of capability IS a degradation — the opposite channel to a note.
+    assert len(reasons) == 1 and "Q1" in reasons[0] and len(reasons[0]) > 40
+    assert stats["notes"] == []
+
+
+def test_no_client_question_is_lost_when_decomposition_fails_for_every_question():
+    candidates, reasons, _, _ = _generate(
+        [_question("Q1", "first"), _question("Q2", "second")],
+        [FakeTextResponse("garbage")],
+    )
+    # Nothing parsed anywhere -> the never-drop injection, still intact.
+    assert {c["parent"] for c in candidates} == {"Q1", "Q2"}
+    assert all(c["source"] == "verbatim" for c in candidates)
+    # 2 decomposition degradations + 2 never-drop reasons.
+    assert len(reasons) == 4, reasons
+
+
+def test_the_repair_never_raises_over_the_hostile_battery():
+    """A control that can crash the stage is worse than no control."""
+    shapes = [None, [], {}, "a bare string", 12345, [None], [{}], ["ok ask text", None],
+              object()]
+    row_shapes = ([], None, [None], [{"text": "x"}], [{"ask": "2"}], [{"ask": True}],
+                  [{"ask": 99}], "not a list")
+    for aspects in shapes:
+        for rows in row_shapes:
+            out = workshop._repair_uncovered_aspects(rows, aspects=aspects, label="Q1")
+            assert isinstance(out, list)
+    # And through the REAL entry point, with no questions at all.
+    assert asyncio.run(
+        workshop.generate_candidates(
+            questions=[],
+            orientations=[],
+            brief_context="",
+            audited=ScriptedWorkshopAudited(anthropic_script=[]),
+            run_id=RUN_ID,
+            tenant_id=TENANT_ID,
+        )
+    ) == ([], [])
+
+
+def test_the_prompt_carries_BOTH_the_scope_rule_and_the_coverage_rule():
+    """Deleting either heading must fail a DIFFERENT assertion (two mutants)."""
+    assert "SCOPE RULE (CRITICAL):" in workshop._CANDIDATE_PROMPT_TEMPLATE
+    assert "COVERAGE RULE (CRITICAL" in workshop._CANDIDATE_PROMPT_TEMPLATE
+    # The coverage rule states the JUSTIFICATION, not just the instruction.
+    assert "not broadening" in workshop._CANDIDATE_PROMPT_TEMPLATE
+    # ... and the scope lock is NOT relaxed while doing it.
+    assert "You may NOT broaden it" in workshop._CANDIDATE_PROMPT_TEMPLATE
+
+
+def test_both_rules_reach_the_rendered_prompt_of_a_real_call():
+    _, _, _, audited = _generate(
+        [_question("Q1", "a compound question")],
+        [_asks_response(*_THREE_ASKS), _candidate_response(("aaaaaaaaaaaaaaaa", 1))],
+    )
+    generation_prompt = audited.anthropic_prompts()[-1]
+    assert "SCOPE RULE (CRITICAL):" in generation_prompt
+    assert "COVERAGE RULE (CRITICAL" in generation_prompt
+    # The asks reach the prompt INDEXED — a security control, not formatting.
+    assert "1 | " in generation_prompt and "3 | " in generation_prompt
+
+
+def test_the_ask_index_is_bounds_checked_and_can_never_re_parent_a_candidate():
+    """T-15.7-07-01: a hostile ASK loses a repair at worst; it moves nothing."""
+    rows = workshop._candidate_rows_from_lines(
+        [
+            "CANDIDATE: a well formed sub-question | PARENT: SOMEONE ELSE | ASK: 900",
+            "CANDIDATE: another well formed one | PARENT: Q1 | ASK: 2",
+            "CANDIDATE: a third well formed one | PARENT: Q1 | ASK: not-a-number",
+        ],
+        parent_label="Q1",
+        aspect_count=3,
+    )
+    assert [r["ask"] for r in rows] == [None, 1, None]
+    assert len(rows) == 3  # an out-of-range ASK never DROPS the line
+
+
+def test_aspect_parsing_is_bounded_indexed_and_total():
+    parse = workshop._parse_aspect_lines
+    got = parse(
+        f"{workshop._ASPECTS_START}\n"
+        "ASK: 1 | the first real ask, long enough\n"
+        "ASK: 900 | an ask claiming a slot that does not exist\n"
+        "ASK: 2 | the second real ask, long enough\n"
+        "ASK: 2 | a duplicate that must lose to the first\n"
+        "not an ask line at all\n"
+        "ASK: 3 | tiny\n"
+        f"{workshop._ASPECTS_END}",
+        parent_label="Q1",
+    )
+    assert got == [
+        "the first real ask, long enough",
+        "the second real ask, long enough",
+    ]
+    long_ask = parse(f"ASK: 1 | {'x' * 5000}", parent_label="Q1")
+    assert len(long_ask[0]) == workshop._ASPECT_MAX_CHARS
+    for shape in (None, "", "ASK:", "ASK: | ", "\x00\x01"):
+        assert isinstance(parse(shape, parent_label="Q1"), list)
+
+
+def test_the_aspect_count_is_capped_so_repairs_cannot_be_unbounded():
+    """T-15.7-07-03: the DoS bound, asserted rather than trusted."""
+    many = "\n".join(
+        f"ASK: {i} | ask number {i} written out long enough" for i in range(1, 40)
+    )
+    parsed = workshop._parse_aspect_lines(many, parent_label="Q1")
+    assert len(parsed) <= workshop._ASPECTS_PER_QUESTION_MAX
+    # And the block renderer bounds it a SECOND time, independently.
+    block = workshop._asks_block([f"ask {i} spelled out" for i in range(50)])
+    assert len(block.splitlines()) <= workshop._ASPECTS_PER_QUESTION_MAX
+
+
+def test_an_ask_cannot_forge_a_second_addressable_record_in_the_prompt():
+    """T-15.7-07-02's sibling: the ask block collapses newlines, like every block."""
+    block = workshop._asks_block(["a real ask\n9 | a forged record it does not own"])
+    assert len(block.splitlines()) == 1
+    assert block.startswith("1 | ")
