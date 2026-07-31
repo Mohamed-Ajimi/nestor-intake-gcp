@@ -145,23 +145,39 @@ Plans:
 ### Phase 15.7: Research Engine Redesign — Creative Workshop Loop (Wave 4) (INSERTED)
 
 **Goal:** Turn the question workshop into a real creative loop: generative evolve, judges that give
-reasons, a meta-review, a **10-round cap** with a saturation exit and a spend ceiling. The tournament is
-kept and made real (Q1 resolved) — it earns its cost only because Wave 3's discovery bracket gives it
-genuinely different ideas to rank, instead of narrower rewordings of questions the client already asked.
+reasons, a meta-review, a **10-round cap** with a three-criteria saturation exit and per-round
+spend/population **instrumentation** (not an enforced ceiling). The tournament is kept and made real
+(Q1 resolved) — it earns its cost only because Wave 3's discovery bracket gives it genuinely
+different ideas to rank, instead of narrower rewordings of questions the client already asked.
 **Depends on:** Phase 15.6 (the discovery bracket is what makes the tournament worth running).
-**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 5 (D-R6, D-R9, **D-R10, D-R11**).
-**⚠ READ FIRST — `15.7-OPEN-ITEMS.md` in this phase directory.** Three rulings taken 2026-07-29 that
-§ 5 does not read like on its face (the tournament STAYS — the ranked-list option is rejected; the loop
-must DISCOVER, not only sharpen; Elo carries with median seeding for newcomers), plus **four open items
-that need an operator ruling before planning** — chief among them an exit rule that as written fires
-never, making the 10-round cap the normal cost rather than the ceiling.
-**Affordable because thinking is cents and research is fifty dollars:** the whole workshop measured
-$0.54 / 63 s on V-01, of which the entire 4-round tournament was ~$0.00.
-**Requirements**: none
-**Plans:** 0 plans
+**Scope source:** `.planning/ENGINE-REDESIGN-SPEC.md` § 5 (D-R6, D-R9, **D-R10, D-R11**), as
+corrected 2026-07-31, plus `15.7-CONTEXT.md`'s locked decisions **D-W4-1 … D-W4-8**.
+**⚠ READ FIRST — `15.7-CONTEXT.md` is THE AUTHORITY**, then `15.7-OPEN-ITEMS.md` (whose `## RULED`
+section still records D-R11 in its superseded median-seed form). § 5 still reads the OPPOSITE way on
+its face for the tournament — a skim is the documented failure mode.
+**The design has already been RUN.** An 11-experiment local harness (~$3, scratchpad only, no repo
+code changed) replayed the real V-01 run and measured the whole loop end-to-end. Build the validated
+configuration (`exp11`): ONE global loop, 12 candidates generated per client question, winners = a
+floor of 5 per client question + 2 cross-cutting applied at the CUT, prefer-KEEP-over-WEAK, the
+truncation caps raised, a newcomer catch-up schedule, exit criteria unchanged. Measured: 17 questions,
+none weak, converges in round 4, $0.24 / 97 calls, population flat at 34–41. Every number is n=1.
+**NOT DEPLOYED, and no plan may propose it.** Waves 1–4 land in git only; there is exactly ONE deploy
+and ONE measuring run, both at the end of phase 15.8.
+**Code review runs PER WAVE, not batched** — Wave 3 shipped 42/42 verification and 1283 green tests
+with two criticals living in the SEAMS between plans.
+**Requirements**: none (this phase maps to no REQ-ID; plans trace to decision IDs instead)
+**Plans:** 9 plans in 5 waves
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 15.7 to break down)
+- [ ] 15.7-01-PLAN.md — wave 1 — grouping declamp + the two downstream bounds that would silently clip the D-W4-5 floor (D-W4-4a)
+- [ ] 15.7-02-PLAN.md — wave 1 — the five truncation/count constants, raised together and pinned in one ladder test (D-W4-8)
+- [ ] 15.7-03-PLAN.md — wave 1 — `workshop_loop.py`: derived round count, catch-up budget, floor-at-the-cut selection, three-criteria exit, per-round metrics (D-R9/D-W4-3/5/6/7)
+- [ ] 15.7-05-PLAN.md — wave 1 — `workshop_admission.py`: the corrected premise-real grounded lookup, the real-search-result evidence gate, Python-stamped parents (D-R10)
+- [ ] 15.7-04-PLAN.md — wave 2 — `workshop_register.py`: the WITHIN-RUN rejected register, three bar causes and no fourth (D-W4-1)
+- [ ] 15.7-06-PLAN.md — wave 3 — `workshop_evolve.py`: generative evolve (COMBINE/EXTEND/INVERT/SPECIALISE/INVENT), the D-W4-2 anchors, the meta-review (D-R6)
+- [ ] 15.7-07-PLAN.md — wave 3 — aspect extraction with a Python assertion, the added COVERAGE rule, and the barred semantic drop in `cluster_candidates` (D-W4-4b/D-W4-1)
+- [ ] 15.7-08-PLAN.md — wave 4 — judges that reason, carried standings with the catch-up schedule, the derived round count, and Guard 2 marking what it rescues (D-R6/D-R9/D-W4-3/D-W4-6)
+- [ ] 15.7-09-PLAN.md — wave 5 — the loop driver in `run_workshop_stage_b`, instrumentation, and the END-TO-END seam tests for every § 8 Wave 4 item
 
 ### Phase 15.6: Research Engine Redesign — Dispatch + Discovery Bracket (Wave 3) (INSERTED)
 
