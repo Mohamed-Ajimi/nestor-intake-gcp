@@ -610,6 +610,33 @@ def test_candidates_are_deduped_truncated_and_bounded():
     assert len({p.casefold() for p in parsed}) == len(parsed)
 
 
+def test_asking_for_n_candidates_actually_yields_n():
+    """D-W4-8's CR-01 defect class, asserted at the generation seam itself.
+
+    `_CANDIDATES_PER_QUESTION` decides how many lines are ASKED for and
+    `_CANDIDATES_PER_QUESTION_MAX` decides how many the parser KEEPS — one logical
+    value with two authorities. Raising the ask to twelve while the parse-side
+    bound stayed at ten silently yielded TEN, and that ratio between what is
+    generated and what is selected is the whole lever of the measured workshop
+    configuration. So the round trip is asserted here, at the parser, rather than
+    inferred from the two constants looking compatible.
+    """
+    asked = workshop._CANDIDATES_PER_QUESTION
+    lines = [
+        _candidate_line(f"a distinct sub-question number {i} about pricing")
+        for i in range(asked)
+    ]
+
+    parsed = workshop._parse_candidate_lines(_fenced(*lines), parent_label="Q1")
+
+    assert len(parsed) == asked, (
+        "the parse-side bound clipped what candidate generation asked for"
+    )
+    assert workshop._CANDIDATES_PER_QUESTION_MAX > asked, (
+        "the parse-side hard bound must stay strictly ABOVE the generation count"
+    )
+
+
 async def test_global_cap_trims_round_robin_and_starves_no_parent(monkeypatch):
     """F5's defect class: simple truncation would silently starve the last questions."""
     monkeypatch.setattr(workshop, "_MAX_CANDIDATES", 20)
@@ -641,8 +668,16 @@ async def test_clustering_reuses_the_15_1_clusterer():
     """B-04 PROOF: the prompt is byte-identical because it IS the 15.1 clusterer.
 
     Nothing in `workshop.py` renders a clustering prompt — the whole collapse runs
-    through `grouping`'s own entry point, so its 240-character truncation, its
+    through `grouping`'s own entry point, so its own candidate truncation, its
     index addressing and its never-drop sentinel all come free.
+
+    The expected block carries NO slice. `grouping._cluster_block` applies its own
+    width, which is `grouping`'s to own and is NOT part of the workshop candidate
+    ladder phase 15.7 raised; writing that width here as a literal would have made
+    this assertion rot the next time either side moved. The candidates below are a
+    few dozen characters, far under any width either module applies, so the
+    unsliced block is byte-identical to the sliced one and this test keeps proving
+    exactly what it says it proves — that the prompt IS the 15.1 clusterer's.
     """
     candidates = _candidates(3)
     audited = ScriptedWorkshopAudited(
@@ -652,8 +687,11 @@ async def test_clustering_reuses_the_15_1_clusterer():
     reps, _reasons = await _cluster(audited, candidates)
 
     assert len(audited.gemini_calls) == 1
+    assert all(len(c["text"]) < 120 for c in candidates), (
+        "this test's no-slice shortcut only holds while the fixtures stay short"
+    )
     expected_block = "\n".join(
-        f"{i} | {c['text'][:240]}" for i, c in enumerate(candidates)
+        f"{i} | {c['text']}" for i, c in enumerate(candidates)
     )
     assert audited.gemini_calls[0]["contents"] == grouping._CLUSTER_PROMPT.format(
         claims_block=expected_block
@@ -1272,16 +1310,22 @@ async def test_kill_never_empties_the_population(caplog):
 
 
 async def test_critique_prompt_truncates_and_addresses_by_index():
-    """37. Truncation plus index addressing — a security control, not formatting."""
-    long_text = "A" * 240 + "ZQZ" + "B" * 660
+    """37. Truncation plus index addressing — a security control, not formatting.
+
+    The width is READ from `workshop_rank._CANDIDATE_PROMPT_CHARS` rather than
+    written as a literal. Phase 15.7 raised it, and a literal here would have gone
+    on asserting the old number while the bound it claims to test moved.
+    """
+    cap = workshop_rank._CANDIDATE_PROMPT_CHARS
+    long_text = "A" * cap + "ZQZ" + "B" * 660
     candidates = _cands((long_text, "Q1"), ("a second sub-question", "Q2"))
     audited = _reply("0 | KEEP | -", "1 | KEEP | -")
 
     await _critique(audited, candidates)
 
     prompt = audited.gemini_calls[0]["contents"]
-    assert "A" * 240 in prompt
-    assert "ZQZ" not in prompt, "the 241st character reached the model"
+    assert "A" * cap in prompt
+    assert "ZQZ" not in prompt, "the character past the bound reached the model"
     assert "\n0 | " in prompt
     assert "\n1 | " in prompt
     assert workshop_rank._IGNORE_INSTRUCTIONS in prompt
