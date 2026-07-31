@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
-status: ready_to_plan
-stopped_at: Phase 15.6 complete (8/7) — ready to discuss Phase 15.7
-last_updated: 2026-07-30T07:55:07.096Z
-last_activity: 2026-07-29 -- Phase 15.6 execution started
+status: executing
+stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
+last_updated: "2026-07-31T09:19:15.562Z"
+last_activity: 2026-07-31 -- Phase 15.7 planning complete
 progress:
   total_phases: 16
-  completed_phases: 9
-  total_plans: 100
-  completed_plans: 167
-  percent: 56
+  completed_phases: 10
+  total_plans: 109
+  completed_plans: 97
+  percent: 63
 ---
 
 # Project State
@@ -74,19 +74,24 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
   Regression re-gated after the fixes: 1293 passed, 0 failed. 10 new tests, 8 failing on pre-fix source.
 
   STILL OPEN from that review, deferred to 15.8 (full detail in `15.6-REVIEW.md` § Resolution):
+
     - The SAME normalisation hazard exists twice more in `workshop_rank.py` (`_restamp_groups`'
       `rank_by_text`, `_stamp_discovery_ranks`' `numbered`). A miss there does not drop a question — it
       silently leaves a STALE `rank`, and rank drives stakes. Fix it with CR-01's class.
+
     - WR-01: `room = ceiling - len(work)` is measured before the merge pass, so a model returning 5
       groups — exactly what the grouping prompt asks for — makes mandate-strict a NO-OP.
+
     - WR-06: `_uniform_dispatch` counts distinct corroboration keys, not copies, so a trim shedding 2 of
       3 still prints "went to all 3 research streams"; the comment at `pipeline.py:2049` claims otherwise.
+
     - WR-05: `NESTOR_TRIBUNAL_D6_MAX_GROUPS=1` + a cross-cutting question → `max_groups=0` →
       `max(1, int(0 or 1))` → 2 groups, 6 paid calls at a dial set to 3.
+
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Phase 15.6 complete. NO deploy and NO live run until the whole redesign (spec Waves 2-5) is
+Status: Ready to execute
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -196,7 +201,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-07-30
+Last activity: 2026-07-31 -- Phase 15.7 planning complete
 
 Progress: [██████████] 100%
 
