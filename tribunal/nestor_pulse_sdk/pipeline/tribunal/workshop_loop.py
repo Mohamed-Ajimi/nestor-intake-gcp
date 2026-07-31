@@ -43,7 +43,7 @@ phase exists to stop repeating. Likewise the env knob
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 # ---------------------------------------------------------------------------
 # The critique verdict vocabulary, RE-DECLARED rather than imported.
