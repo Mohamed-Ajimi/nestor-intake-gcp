@@ -43,6 +43,13 @@ hygiene, not the report-writer rewrite the findings doc proposed.
 workshop" decision below. It also reframes the tournament complaint: it is not underpowered because
 it is expensive — six flash calls at ~30 output tokens each is what **$0.00** buys.
 
+> **Loop cost — added 2026-07-31.** The table above is V-01's **single-pass** workshop and its per-stage
+> figures are audit-log facts, unchanged. What has changed is § 5's *loop* estimate: it projected
+> **~$3.00 for 10 rounds**, and that estimate is **SUPERSEDED**. Measured end-to-end, the validated
+> Wave 4 configuration runs the entire loop for **$0.24 (exp11)** and exits in round 4 rather than at
+> the cap. **Do not carry the ~$3.00 figure forward.** The three-configuration comparison is in § 5
+> `### The validated configuration`; it is deliberately not repeated here as a range.
+
 ---
 
 ## 1. Decisions taken
@@ -58,8 +65,8 @@ it is expensive — six flash calls at ~30 output tokens each is what **$0.00** 
 | **D-R7** | A **discovery bracket** — evidence-anchored questions the client did not ask | agreed (operator) |
 | **D-R8** | Record yield per assignment so routing can later be evidence-based | agreed |
 | **D-R9** | **Q1 resolved: keep the tournament and make it real.** It earns its cost only because D-R7 gives it genuinely different ideas to rank | agreed · **reaffirmed 2026-07-29** ("we are not killing tournament"); pairwise Elo RETAINED, ties fixed by raising rounds |
-| **D-R10** | **The loop DISCOVERS, it does not only sharpen. Evolve may invent an angle; a grounded lookup decides whether it earns a slot** — source found, it becomes a discovery candidate; nothing found, dropped and logged | agreed (operator) **2026-07-29** |
-| **D-R11** | **Elo CARRIES across loop rounds, and a newly evolved candidate is seeded at the field MEDIAN**, never at a fixed 1200 | agreed (operator) **2026-07-29** |
+| **D-R10** | **The loop DISCOVERS, it does not only sharpen. Evolve may invent an angle; a grounded lookup decides whether it earns a slot** — source found, it becomes a discovery candidate; nothing found, dropped and logged. **Admission test CORRECTED 2026-07-31:** the lookup verifies the **PREMISE is real** (do the named entities, markets, mechanisms and metrics exist, and could desk research settle it) — **not** that a published answer already exists, which rejected all 4 invented angles. Evidence must be a real `groundingChunks` search result, never the model's own output line | agreed (operator) **2026-07-29** |
+| **D-R11** | **Elo CARRIES across loop rounds** (stands), and ~~a newly evolved candidate is seeded at the field MEDIAN, never at a fixed 1200~~ **SUPERSEDED 2026-07-31 — the seed is INERT (`wins` is the primary sort key, Elo only the tie-break; median-seed and flat-1200 are byte-identical). Replaced by a CATCH-UP SCHEDULE: a newcomer plays up to the field's median match count on entry** | agreed (operator) **2026-07-29** · seed mechanism superseded by measurement, ruling intent preserved |
 
 ### The two premises that changed, and why they hold
 
@@ -394,7 +401,52 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 
 ## 5. Wave 4 — the creative workshop loop (D-R6, D-R9)
 
-> ### ⚠️ SIX OPEN AMBIGUITIES — settle these BEFORE planning 15.7
+### What was measured on 2026-07-31, and what it overturns
+
+**A local harness ran 11 experiments for ~$3, entirely in a scratchpad. NO REPO CODE WAS CHANGED.** It
+replayed the real V-01 run (`7dcf51d5`) out of the GCS audit log, lifted the stages that already exist
+verbatim out of `workshop_rank.py`, and then implemented the Wave 4 loop end-to-end — so this design
+could be *run* rather than argued about.
+
+**Four of the five headline diagnoses in this section were disproved.** Each is corrected inline below;
+no superseded claim is deleted. The original text is kept, struck through and marked
+`**SUPERSEDED (measured 2026-07-31)**`, with its measured replacement beside it, so a future reader can
+see what was believed and why it was wrong.
+
+| # | The diagnosis as this section wrote it | What measurement showed |
+|---|---|---|
+| 1 | *"9 of 10 winners flagged `WEAK` by our own critic"* is a quality signal | **DISPROVED** — it is a truncation artefact of `_CANDIDATE_PROMPT_CHARS = 240`; see below |
+| 2 | The exit rule can never fire, so the loop hits the 10-round cap every run | **DISPROVED** — every measured configuration exits on all three criteria, well inside the cap |
+| 3 | The population balloons (*"a round-9 prompt carrying 60 candidates"*) and 10 rounds costs ~$3.00 | **DISPROVED for one global loop** — population stays between 23 and 41 and the validated configuration costs **$0.24 (exp11)**. Still **TRUE** under per-client-question brackets |
+| 4 | A newcomer must seed at the field median (D-R11) or a late angle is structurally last | **DISPROVED** — the seed value is inert; it changes no output at all. Replaced by a catch-up schedule |
+| 5 | D-R9 — the Elo-1200.0 ties are real and the round count is the fix | **CONFIRMED** — reproduced exactly, and the fix works |
+
+**The operator rulings in `15.7-OPEN-ITEMS.md` are unchanged.** The tournament stays, the loop must
+DISCOVER, and losers are never barred. What follows corrects **diagnoses and numbers, never a ruling**.
+
+**Honest limits of this measurement**
+
+These results are real, but they are not large. All three limits apply to every figure in this section
+and none of them is a reason to ignore the figures — they are the reason to read them as *direction*
+rather than as *constants*.
+
+- **Every result is n=1.** One client, three client questions, Dutch, 18 candidates. Nothing here is a
+  distribution; it is one brief, measured carefully.
+- **Sonnet's evolve call runs at temperature 1.0, so a single run varies.** Three runs of **the same
+  configuration** exited at **rounds 4, 6 and 6**. Read that as run-to-run variance *within one
+  configuration*. It is **NOT** the config-to-config comparison in `### The validated configuration`
+  below, where exp7c, exp10 and exp11 are three *different* configurations — those differences are
+  causal, this one is noise. Any round number quoted for a configuration is one draw from a spread of
+  roughly this width.
+- **The stages that do not exist in the codebase yet were implemented by the harness author** —
+  generative evolve, meta-review, the grounded lookup, judge reasons, carried Elo, the catch-up
+  schedule and the exit checks. Those results test the **DESIGN, not any implementation**: they say the
+  design converges, not that Wave 4's code will. The stages lifted verbatim from `workshop_rank.py` —
+  the critique and tournament prompts, both parsers, Swiss pairing, Elo, `winner_count` and the
+  renderers — **do** transfer directly, and any result resting on those is a statement about the real
+  code.
+
+> ### ⚠️ SIX OPEN AMBIGUITIES — items 3 and 4 are now CLOSED BY MEASUREMENT (2026-07-31); settle the rest BEFORE planning 15.7
 >
 > Recorded 2026-07-29 by an audit of this document for the defect class that nearly shipped in Wave 3:
 > **the spec saying two different things in two places, where each reading looks complete on its own.**
@@ -427,14 +479,28 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 > rating between rounds — Elo carries, and newcomers seed at the field median so a late genuine angle is
 > not structurally last.
 >
-> 3. **The exit rule and the cost estimate contradict each other.** Exit needs **all three** criteria,
->    one being *"no `WEAK` question remains in the winner set"*. V-01 had **9 of 10 winners `WEAK`**. If
->    that is typical the loop runs all 10 rounds EVERY run — yet this section says *"the cap is a
->    ceiling, not a target, and you will rarely reach it."* Both cannot hold. Cost of being wrong:
->    ~$3 and +5–7 min on every run rather than occasionally.
-> 4. **The spend ceiling has no value.** Named as the second backstop and never set — the same omission
->    as the group-size cap, which Wave 3 had to choose for itself. This section itself names the shape
->    it must bound: a round-9 prompt carrying 60 candidates, which a round-count cap does not catch.
+> 3. **✅ CLOSED BY MEASUREMENT 2026-07-31 — the exit rule FIRES, and needs no change at all.** The
+>    ambiguity as originally recorded, kept for the record: ~~*"The exit rule and the cost estimate
+>    contradict each other. Exit needs all three criteria, one being 'no `WEAK` question remains in the
+>    winner set'. V-01 had 9 of 10 winners `WEAK`. If that is typical the loop runs all 10 rounds EVERY
+>    run — yet this section says 'the cap is a ceiling, not a target, and you will rarely reach it.'
+>    Both cannot hold. Cost of being wrong: ~$3 and +5–7 min on every run rather than occasionally."*~~
+>    **Its premise was the cap-240 truncation artefact.** With the truncation fixed, all three measured
+>    global configurations exit on all three criteria well inside the cap — **exp7c in round 6, exp10 in
+>    round 9, exp11 in round 4**. The *"ceiling, not a target"* sentence is therefore **CONFIRMED**, not
+>    contradicted, and **no operator ruling is required.** See `### Exit criteria — all three, or the
+>    cap` below.
+> 4. **✅ CLOSED BY MEASUREMENT 2026-07-31 — nothing binds at this scale; the ceiling becomes
+>    instrumentation.** The ambiguity as originally recorded, kept for the record: ~~*"The spend ceiling
+>    has no value. Named as the second backstop and never set — the same omission as the group-size cap,
+>    which Wave 3 had to choose for itself. This section itself names the shape it must bound: a round-9
+>    prompt carrying 60 candidates, which a round-count cap does not catch."*~~ Under **one global
+>    loop** the population stays **between 23 and 41** across all three measured configurations and the
+>    largest prompt the loop ever builds is **~9k chars**; the validated configuration (**exp11**) costs
+>    **$0.24** in total. Replace the enforced ceiling with **instrumentation** — log population and
+>    spend per round. **The 60-candidate explosion IS real, but only under per-client-question
+>    brackets**, where the population reached **122**: it is architecture-dependent, not inherent, so
+>    the warning is **scoped rather than deleted.** See `### Why 10 rounds is affordable` below.
 > 5. **"Barred this run, kept for the next" describes storage that does not exist.** Nothing persists
 >    workshop state across runs. Either that is a new table (a **fourth** unpaid migration) or the
 >    phrase means something narrower.
@@ -452,9 +518,37 @@ asked and which the evidence raised. Provenance is also required for the Art. 12
 | Feedback | meta-review → generation | **none** |
 | Iterations | many | **one** |
 
-And the measured symptoms: **9 of 10 winners flagged `WEAK` by our own critic, 0 killed**; ranks 8, 9
+And the measured symptoms: ~~**9 of 10 winners flagged `WEAK` by our own critic, 0 killed**~~
+**SUPERSEDED (measured 2026-07-31) — that is a TRUNCATION ARTEFACT, not a quality signal**; ranks 8, 9
 and 10 tied at **Elo exactly 1200.0** with 2 wins each — they finished where they started and took their
-research slots by tie order.
+research slots by tie order (**this second half is CONFIRMED** — reproduced exactly; see
+`### Fix the arithmetic`).
+
+**Why the `WEAK` flood is an artefact.** `workshop_rank.py:168` sets `_CANDIDATE_PROMPT_CHARS = 240`.
+The real V-01 candidates are **245–373 characters** long, so **17 of 18 reached the critic cut off
+mid-word** — 920 characters discarded, with no ellipsis and no question mark surviving — while the
+critic was being asked whether each question is *"sharp and answerable AS IT STANDS"*. It answered
+honestly about the text it was shown. It was never shown the questions.
+
+Measured on the real critique prompt against the real V-01 candidates:
+
+| candidate cap | critique result | distinct flaw clauses |
+|---|---|---|
+| `240` (as shipped) | **`KEEP=1/WEAK=17`** | **2** — 16 of them the identical *"two questions in one"* |
+| raised | **`KEEP=9/WEAK=9`** | many, and specific |
+
+Two distinct flaw clauses across seventeen rejections is itself the tell: a critic finding real,
+varied faults does not repeat one sentence sixteen times. It was describing the cut, not the question.
+
+End-to-end (critique → tournament, rounds held at 4): **"9 of 10 winners `WEAK`" reproduces exactly at
+cap 240, and becomes 2 of 10 with the cap raised.** The symptom this entire section was built on is the
+cap.
+
+**The truncation is a real security control and must NOT simply be deleted.** It bounds
+attacker-influenced text so an injected candidate cannot forge another candidate's output line — the
+same channel Wave 3's CR-02 closed on `source_url`. It needs *a* bound; it does not need **240**. Note
+also that the same cap truncates **both sides** in `_match_block`, so the tournament was judging
+mutilated text too — the critic was not the only stage reading half a question.
 
 ### The loop
 
@@ -496,10 +590,27 @@ the orientation findings for it. Today the judge sees two question texts, a shor
 160-char flaw clause (`_FLAW_MAX_CHARS`) — it is judging blind. Three effects: better judgements (the
 model reasons before answering), an audit trail of *why* 7 beat 9, and material for the meta-review.
 
-**Fix the arithmetic.** `_TOURNAMENT_ROUNDS = 4` over 17 candidates cannot separate them — hence the
-1200.0 ties. Either raise rounds so every candidate plays ≥5–6 matches, **or** — better at our size —
-replace pairwise Elo with a **ranked list with reasons in one call**, then a run-off among the top group.
-Cheaper, more consistent, no ties.
+**Fix the arithmetic — D-R9 CONFIRMED by measurement (2026-07-31).** `_TOURNAMENT_ROUNDS = 4` over 17
+candidates cannot separate them — hence the 1200.0 ties. **The harness reproduced V-01's exact
+symptom:** three candidates finishing at **Elo exactly 1200.00 with 2 wins each**, straddling the
+top-10 cut, so one of them lost its research slot to index order. The arithmetic is simply short —
+**4 rounds over 17 candidates gives each candidate only 3.76 matches.**
+
+Raise the rounds so every candidate plays ≥5–6 matches. Measured: **carried Elo + 5 Swiss rounds + the
+catch-up schedule eliminated the ties entirely — zero candidates sitting at exactly 1200 in any
+round.**
+
+~~**or** — better at our size — replace pairwise Elo with a **ranked list with reasons in one call**,
+then a run-off among the top group. Cheaper, more consistent, no ties.~~ **REJECTED — operator,
+2026-07-29: *"we are not killing tournament".*** Pairwise Elo is retained (D-R9); the ties are fixed by
+the round count, which measurement now confirms actually works.
+
+> **An interaction nobody had noticed: D-R9 makes D-R11's problem WORSE.** More rounds give incumbents
+> more matches, and therefore more **wins** — and wins are the *primary* sort key
+> (`workshop_rank.py:1524`), with Elo only the tie-break. So every round added to cure the ties deepens
+> the incumbency advantage a late-arriving candidate has to overcome. The two decisions have to be read
+> together, and this is precisely why the catch-up schedule below matters: fixing D-R9 alone would
+> quietly worsen the newcomer problem D-R11 exists to solve.
 
 **Meta-review.** One call that reads every critique flaw and judge reason for the round and writes short
 guidance, fed into the next generation round.
@@ -530,14 +641,94 @@ always for. New angles become reachable at **every** round instead of only the f
 Unchanged: D-W3-4's allocation still bounds what is *dispatched* — **≤5 discovery slots, per-parent cap
 3, never borrows from the mandate**. D-R10 widens where candidates may *come from*, not how many run.
 
+> ### ⚠️ MEASURED 2026-07-31 — the admission test as specified INVERTS its own purpose and must change
+>
+> Read as *"is there a published answer to this?"*, **"no source, no slot"** rejected **all 4 invented
+> angles** in the harness run. **Zero survived.** Among the rejected was *"what minimum network density
+> is required for algorithmic pricing to pay off"* — exactly the question a mid-sized player weighing
+> expansion needs answered, and exactly the kind of angle D-R10 exists to admit.
+>
+> The rule as written admits angles that are **already documented** (already known, therefore low
+> research value) and rejects **novel** ones (nobody has published it, therefore high research value).
+> It is a novelty filter pointed backwards: it screens out precisely what the loop is for.
+>
+> **The corrected test: verify the PREMISE is real, not that an answer already exists.** Ask whether
+> the named entities, markets, mechanisms and metrics **exist**, and whether desk research could
+> plausibly settle the question — not whether someone has already settled it. A well-posed question
+> about a real market that nobody has yet answered is the **best** possible research target, not a
+> failure to admit.
+>
+> **The operator ruling is UNCHANGED.** The loop must DISCOVER; only the admission test changes — from
+> *"only evidence may admit one, evidenced by an existing answer"* to *"only evidence may admit one,
+> evidenced by a real premise"*. Nothing here loosens the requirement that evidence, not the model's
+> say-so, does the admitting. The next paragraph tightens that considerably.
+>
+> **CRITICAL implementation note, measured.** The admission evidence must come from a **real search
+> result — `groundingChunks`** — and **never** from the model's own output line. A looser check that
+> accepted the model's self-reported evidence admitted **2 of 3** angles carrying a literal `-` as the
+> URL: the model "evidenced" its own angle by tautologically restating that its own entities exist.
+> Read the `groundingChunks` of the grounded lookup, require an http(s) URL, and treat an absent or
+> non-URL source as **not found**. Without this the grounded lookup is theatre and *"no source, no
+> slot"* is enforced by nothing at all.
+
 **Open (a number, not a direction):** a ceiling on grounded lookups per round, so an evolve call that
 invents twenty angles cannot spend twenty lookups. Same family as the unset spend ceiling below; decide
-both together.
+both together. **Measured 2026-07-31: no ceiling binds at this scale — see `### Why 10 rounds is
+affordable`; instrument it rather than enforcing a guessed value.**
 
 **This also raises the stakes on the rejected register:** with invention allowed every round, the barred
 list and the `cluster_candidates` semantic drop are what stop the loop re-proposing its own rejects.
 
-### D-R11 — Elo carries, newcomers seed at the field median (operator, 2026-07-29)
+### D-R11 — Elo carries; newcomers get a CATCH-UP SCHEDULE, not a median seed
+
+> **The "Elo carries" half STANDS unchanged.** The reasoning below for why a reset is wrong is
+> untouched, and so is the ruling's intent: a late genuine angle must not be structurally last.
+>
+> **SUPERSEDED (measured 2026-07-31) — the MEDIAN SEED is INERT.** It is not wrong, it is a **no-op**,
+> which is worse: it reads as a solved problem. The operator's intent is preserved and, for the first
+> time, actually delivered — by a catch-up schedule instead of a seed value. The original rule is kept
+> struck through below.
+>
+> **Note on the ledger.** `15.7-OPEN-ITEMS.md`'s `## RULED` section still records D-R11 in its
+> median-seed form, and was deliberately left verbatim: a factual-correction pass does not edit
+> operator rulings. Read **this** section as the current engineering form, and route the substitution
+> to the operator when 15.7 is planned.
+
+**Why the seed value cannot matter.** `workshop_rank.py:1524` sorts candidates by `(-wins, -elo,
+index)` — **wins first, rating only as a tie-break** — and `_apply_elo`'s own docstring at
+`workshop_rank.py:878` says so in as many words: **"ELO IS THE TIE-BREAK, NOT THE PRIMARY KEY"**. A
+newcomer's disadvantage is that it has played fewer **matches** and therefore has fewer **wins**; its
+*rating* is not what holds it down. Measured directly: median-seed and flat-1200 produce
+**byte-identical** results. The rule as ruled changes no output whatsoever.
+
+**How bad the newcomer problem actually is.** Measured with a perfect judge, 8 rounds, a newcomer
+entering in round 6: a **best-in-field** newcomer reaches the top N only **1.5%** of the time. The
+obvious repair — rank by raw win-*rate* instead of win-count — over-corrects hard: it admits a
+**mediocre** newcomer **93.8%** of the time against a **strong** one **95.5%**, which is to say it
+stops discriminating at all. Both failure modes are silent.
+
+**The replacement rule: a new candidate plays up to the field's MEDIAN MATCH COUNT on entry.** Give the
+newcomer the matches it missed, then let the existing ranking do its job unmodified. Measured, **with
+the ranking code completely unchanged**:
+
+| newcomer | reaches top N |
+|---|---|
+| strong | **99.8%** |
+| median | **29.5%** |
+| weak | **1.8%** |
+
+That is the shape the ruling wanted: a strong late angle almost always gets in, a weak one almost never
+does. Cost: about **5 extra flash judgements** — at the measured tournament price of ~$0.00 for six
+flash calls, effectively free.
+
+This is also **Co-Scientist's own approach**: *"newer and top-ranking hypotheses are prioritized for
+participation in tournament matches."* The catch-up schedule is that prioritisation made explicit.
+
+**Required test — KEPT EXACTLY AS RULED:** a strong newcomer introduced in a late round **can still
+reach the top N**. **The catch-up schedule is what makes that test passable** — under median-seeding it
+fails 98.5% of the time, which is the whole point of keeping the test.
+
+#### The original D-R11 write-up (operator, 2026-07-29)
 
 **Also previously unstated.** Today the tournament runs **once**. In this loop `rank` sits **inside** the
 cycle, so it runs up to **ten times** over a population that grows every round — and nothing said what
@@ -547,8 +738,10 @@ makes every newly evolved candidate enter *below* an incumbent field that has ha
 the genuinely novel angle is systematically the lowest-rated at exactly the moment slots are allocated,
 which would defeat D-R10.
 
-**The rule:** ratings **carry** across loop rounds, and a new candidate enters at the **current field
-median**, not at 1200. Neither punished for being new nor handed an advantage.
+**The rule:** ratings **carry** across loop rounds, and ~~a new candidate enters at the **current field
+median**, not at 1200. Neither punished for being new nor handed an advantage.~~
+**SUPERSEDED (measured 2026-07-31) — the seed is inert; replaced by the catch-up schedule above. The
+"ratings carry" half stands.**
 
 **Required test:** a strong newcomer introduced in a late round **can still reach the top N**. Without
 that assertion this is unfalsifiable, and the failure it guards against is silent — the same shape as
@@ -583,20 +776,63 @@ Enforcement is two layers, because the prompt layer will not hold:
 
 ### Exit criteria — all three, or the cap
 
+> **MEASURED 2026-07-31: THE EXIT RULE FIRES. KEEP ALL THREE CRITERIA EXACTLY AS WRITTEN.** Boxed item
+> 3 above and open item 1 of `15.7-OPEN-ITEMS.md` both assumed the loop would hit the 10-round cap on
+> every run, because criterion 2 could never be satisfied. That rested entirely on *"V-01 had 9 of 10
+> winners `WEAK`"* — the cap-240 truncation artefact. With the truncation fixed, **all three global
+> configurations exit on all three criteria well inside the cap: exp7c in round 6, exp10 in round 9,
+> exp11 in round 4.** `WEAK` winners fell **3 → 3 → 0 → 0** across the rounds, and the three criteria
+> were observed to gate each other in turn rather than one of them being permanently unreachable.
+> **No criterion is removed, weakened or reordered.**
+
 1. **Coverage** — every client question has ≥1 winner rated `KEEP`
 2. **Quality** — no `WEAK` question remains in the winner set (sharpened to `KEEP`, or below the cut).
-   *V-01 would have failed this: 9 of 10 winners were `WEAK` and it shipped anyway.*
+   ~~*V-01 would have failed this: 9 of 10 winners were `WEAK` and it shipped anyway.*~~
+   **SUPERSEDED (measured 2026-07-31)** — V-01's 9-of-10 was the truncation artefact: it reproduces
+   exactly at cap 240 and becomes 2 of 10 with the cap raised. The criterion itself stands.
+   **Exemption — a cross-cutting question is compound by construction.** It joins two topics *on
+   purpose*, so the flaw clause *"two questions in one"* must **NOT** count against it in this check.
+   Without the exemption, criterion 2 structurally penalises exactly the highest-value questions the
+   discovery bracket exists to produce — the loop would be built to reject its own best output.
 3. **Saturation** — the last round's newly-evolved questions produced **no new entrant into the top N**.
    This is the real "are we still learning?" test and it is what makes a 10-round cap safe.
-4. **Hard cap: 10 rounds** (operator decision), plus a **spend ceiling**.
+4. **Hard cap: 10 rounds** (operator decision), plus ~~a **spend ceiling**~~ **SUPERSEDED (measured
+   2026-07-31) — per-round population and spend INSTRUMENTATION instead of an enforced ceiling. Nothing
+   binds at the measured scale; see `### Why 10 rounds is affordable`.**
+
+#### The fourth action — PREFER KEEP OVER WEAK WHEN FILLING A SLOT
+
+**The single highest-leverage rule the measurement found, and it is one line of selection logic.** Exit
+criterion 2 *checks* for `WEAK` winners. Nothing anywhere in this design ever *prevented* one from being
+selected in the first place — the criterion was a smoke alarm with no fire door. Adding the preference
+took `WEAK` winners to **0** and made criterion 2 satisfiable **by construction** rather than by luck.
+
+**Its dependency, which exp10-vs-exp11 exposed: prefer-KEEP only works if there are KEEP candidates
+left to prefer.** That is a property of the **selection ratio** — how many candidates are generated per
+slot — not of the rule itself. In exp10, five slots over six generated candidates left nothing to
+prefer and the rule was inert. See `### The validated configuration` below.
 
 > ### ⚠️ The trap the code already contains
 > Two guards keep a candidate alive when critique tries to kill everything: `_reason_critique_resurrected`
 > (never leave a client question with zero sub-questions) and `_reason_critique_population` (never empty
 > the population). Both are **coverage fallbacks, not quality passes.** If a resurrected candidate counts
 > as a `KEEP`, the loop exits believing it met the quality bar when critique actually rejected everything.
-> **Mark resurrected candidates and exclude them from criterion 1.** Otherwise the exit condition silently
+> **Mark resurrected candidates and exclude them from criterion 2.** Otherwise the exit condition silently
 > lies — the same class of bug as the `ls||true` silent skip in `gate-integrity-traps`.
+>
+> **CORRECTED 2026-07-31 — off-by-one.** Until this commit that instruction named criterion **1**
+> instead. It was wrong in a way that inverted its own purpose: criterion 1 is **coverage** and
+> criterion 2 is **quality**, and excluding a resurrected candidate from *coverage* would break the very
+> guarantee resurrection exists to provide — it exists precisely so a client question is never left with
+> zero sub-questions. The identical error existed in `15.7-OPEN-ITEMS.md` — **the first file the 15.7
+> planner is instructed to read** — and is corrected in this same commit.
+>
+> **Half of this guard is already built and half is missing — a Wave 4 implementation requirement.**
+> `workshop_rank.py:688` sets `entry["resurrected"] = True` for Guard 1
+> (`_reason_critique_resurrected`). **Guard 2 does not.** At `workshop_rank.py:708`, when critique kills
+> everything, `_reason_critique_population` rewrites every candidate to `KEEP` **unmarked** — so the one
+> case where quality most needs to read as *failed* reads as a perfect pass. Mark it there too, or the
+> exit check still lies in the worst case it was written for.
 
 **On hitting the cap with `WEAK` winners still present:** ship, but record a degradation reason. That
 matches the engine's existing posture (D-12: degraded means honest, not broken). V-01 would have carried
@@ -607,6 +843,10 @@ first. Untouched.
 
 ### Why 10 rounds is affordable
 
+> **SUPERSEDED (measured 2026-07-31) — the estimate below is far too high, and the population does not
+> balloon.** The loop never reached the cap in any global configuration, and the validated
+> configuration runs end-to-end for **$0.24 (exp11)**. The original estimate is kept for the record:
+
 The loop portion — generate → critique → rank → evolve — is **~$0.07/round** measured. The redesign makes
 each round richer (reasons, generative evolve, meta-review, a growing population), so call it **3–5×**:
 **~$0.25–0.35/round**.
@@ -614,14 +854,90 @@ each round richer (reasons, generative evolve, meta-review, a growing population
 | Cap | Est. cost | % of a $53.48 run | Latency |
 |---|---|---|---|
 | 3 rounds | ~$0.90 | 1.7% | +~2 min |
-| **10 rounds** | **~$3.00** | **~5%** | **+5–7 min** on a 65-min run |
+| ~~**10 rounds**~~ | ~~**~$3.00**~~ | ~~**~5%**~~ | ~~**+5–7 min** on a 65-min run~~ |
 
-**Two guards make 10 safe rather than reckless.** The saturation exit does the real work — the cap is a
-ceiling, not a target, and you will rarely reach it. The **spend ceiling** is the second backstop,
-because the population grows each round: a round-9 carrying 60 candidates in every critique prompt is the
-one shape that could surprise you, and a round-count cap alone does not bound it.
+**What was actually measured.** No global configuration reached ten rounds, and none cost anything near
+$3.00. The validated configuration exits in **round 4** for **$0.24 (exp11)**; the full three-config
+comparison is in `### The validated configuration` below and is not restated here as a range, because a
+range across runs would hide the reason the numbers differ.
+
+**The population does not balloon under one global loop.** Across **all three** global configurations
+the population stays **between 23 and 41**, and the largest prompt the loop ever built is **~9k chars**
+— measured against this section's feared *"round-9 carrying 60 candidates in every critique prompt"*.
+
+**That fear is not wrong, though — it is misplaced. Scope it, do not delete it.** Under
+**per-client-question brackets** the population **did** reach **122**. The explosion is
+**architecture-dependent, not inherent**: it is a property of brackets, which the validated
+configuration rejects for four other reasons anyway. If anyone ever revisits brackets, this warning
+becomes live again exactly as written.
+
+**Consequence: neither the spend ceiling nor a population cap is binding at this scale, so neither
+should be enforced.** Replace both with **instrumentation** — log population and spend per round, which
+Wave 5 already collects (`candidates_in, new_candidates, … round cost`). An enforced ceiling that
+nobody has measured a need for is a knob that will one day truncate a run for no reason; a logged
+number is what tells you whether a ceiling is ever warranted.
+
+**The one guard that does the real work is saturation.** The cap is a ceiling, not a target, and you
+will rarely reach it — **this is now CONFIRMED by measurement rather than assumed**: exp7c exited in
+round 6, exp10 in round 9 and exp11 in round 4, every one of them on the criteria rather than the cap.
 
 **If runs routinely hit 10, that is evidence the cap should go higher — not that money is being wasted.**
+
+### The validated configuration (measured 2026-07-31)
+
+**The three configurations measured, each figure attributed to the run that produced it.** No figure in
+this document blends two runs, and none should: the span between them is not uncertainty, it is the
+finding.
+
+| run | config | generated per client question | slots | exits | cost | population |
+|---|---|---|---|---|---|---|
+| exp7c | global, no floor | 6 | 10 | round 6 | **$0.18** | peak **23** |
+| exp10 — **`SUPERSEDED — generation defect`** | global + floor 5/question + 2 cross | 6 (**defective**) | 17 | round 9 | **$0.48** | peak **32** |
+| **exp11 — ✅ THE VALIDATED CONFIGURATION** | **global + floor 5/question + 2 cross** | **12** | **17** | **round 4** | **$0.24** | **34–41, flat** |
+
+**exp10 is a superseded run with a named defect, not an alternative result.** Its round count and its
+cost are **not** the round count and cost of this design and must never be quoted as such.
+
+**The defect, named precisely.** exp10 ran the same architecture as exp11. But the real generation
+prompt states the candidate count **twice** — `Output EXACTLY 6 lines` and `<your 6 lines go here>` —
+and **only the first was patched.** The prompt therefore still asked for six, and the model still
+produced **6 per client question**. Against a floor of five slots per client question that is a
+**5-of-6 choice: no selection at all.** The loop then needed **9 rounds and $0.48** to grind out a
+clean winner set that exp11 had from round 1.
+
+> **Wave 4 implementation requirement.** When the generation count is raised in the real prompt, **BOTH
+> statements must be changed.** This is the same defect class as **CR-01 in Wave 3**, where one value
+> was normalised in one place and compared in another — a single value with two authorities, only one
+> of which got updated. § 8's Wave 4 verification row asserts it.
+
+**THE FINDING: the lever is the SELECTION RATIO, not the slot count.** exp10 and exp11 differ in
+exactly one thing — six generated per client question versus twelve — and they are the before/after
+evidence for it:
+
+| | exp10 — 6 generated | exp11 — 12 generated |
+|---|---|---|
+| the choice at a 5-slot floor | 5-of-6 — no selection | 5-of-12 — a real choice |
+| prefer-KEEP | inert; no spare KEEP candidates | always has KEEP candidates available |
+| winner set | ground clean over 9 rounds | clean from **round 1** |
+| exits | round 9 | **round 4** |
+| cost | $0.48 | **$0.24** |
+
+**Raising the generation count halved the cost AND more than halved the rounds.** The slot count was
+identical in both. Read as a range the two runs say nothing at all; read as before/after they identify
+the lever — which is why house rule 6 of the correcting pass forbade the range.
+
+**The configuration Wave 4 builds:**
+
+- **ONE global loop, NOT per-client-question brackets.** Brackets were measured and fail on four
+  counts: they never converge, they hit the 10-round cap, they cost **3–4×** more, and their population
+  reaches **122**. The structural reason underneath all four: inside a single bracket, evolve cannot
+  **COMBINE across client questions** — and combining across client questions is where the best output
+  came from.
+- **12 candidates generated per client question** — the selection ratio, the lever above.
+- Winners = a **floor of 5 per client question** + **2 cross-cutting**, applied at the **CUT** rather
+  than by splitting the pool into per-question quotas.
+- **Prefer KEEP over WEAK when filling a slot** — see the exit criteria above.
+- **Measured result: 17 questions, none weak, converges in round 4, $0.24** (exp11).
 
 ### Freeze and hand-off
 
@@ -690,7 +1006,7 @@ Per wave:
 | 1 | replay proof (278 recovered); all four separator forms parse identically; WARNING fires on lines-but-no-claims; all three gemini deviations retried |
 | 2 | ~~a claim from a mixed group carries the sub-question's parent as `facet`~~ **SUPERSEDED — see below**; nullable columns leave legacy rows untouched ✅ |
 | 3 | coverage assertion catches a deliberately dropped client question ✅; group-size cap holds ✅; ~~5×3 = 15 calls issued~~ **now a band of 9–15, see below** |
-| 4 | loop exits on saturation before the cap; a resurrected candidate does **not** satisfy coverage; barred questions do not reappear; losers remain promotable |
+| 4 | loop exits on saturation before the cap *(measured: exp11 exits in round 4)*; **a resurrected candidate does not satisfy QUALITY — criterion 2. CORRECTED 2026-07-31: this row previously said "coverage", the same off-by-one § 5's boxed warning carried. Guard 2 at `workshop_rank.py:708` must MARK resurrected candidates, which today it does not**; barred questions do not reappear; losers remain promotable; **a strong newcomer entering in a late round still reaches the top N under the catch-up schedule**; **zero `WEAK` winners — prefer-KEEP is applied when filling a slot**; **the raised generation count appears in BOTH places the prompt states it (`Output EXACTLY 6 lines` and the `<your N lines go here>` placeholder), asserted in the same test** |
 | 5 | one run produces a complete yield record per assignment and per round |
 
 > ### ⚠️ TWO ROWS ABOVE ARE STALE — read before ticking anything at 15.8
@@ -727,8 +1043,15 @@ Existing: `NESTOR_TRIBUNAL_WORKSHOP_ROUNDS` (4), `NESTOR_TRIBUNAL_WORKSHOP_RANK_
 `NESTOR_TRIBUNAL_WORKSHOP_TOURNAMENT`, `NESTOR_TRIBUNAL_UNCAPPED`.
 
 New: max groups (default **5**), max questions per group, discovery slot cap, discovery per-parent cap,
-loop max rounds (**10**), loop spend ceiling, provider list (default **gemini, openai, claude** — `own`
-excluded per D-R5).
+loop max rounds (**10**), ~~loop spend ceiling~~ **loop spend + population INSTRUMENTATION — measured
+2026-07-31: nothing binds at this scale, so log per-round population and spend instead of enforcing a
+guessed ceiling (§ 5 `### Why 10 rounds is affordable`)**, **candidates generated per client question
+(default 12 — the selection ratio, the lever § 5 identifies; raising it requires changing BOTH places
+the generation prompt states the count)**, **newcomer catch-up match budget (default: up to the
+field's median match count, ≈5 extra flash judgements)**, **candidate prompt-truncation cap (today
+`_CANDIDATE_PROMPT_CHARS = 240`, which truncated 17 of 18 real candidates mid-word — it is a real
+injection bound and must keep *a* value, just not 240)**, provider list (default **gemini, openai,
+claude** — `own` excluded per D-R5).
 
 **Note (Q3):** the question caps are the **wallet**, not a quality setting — the code says so: *"the
 budget governor is inert by decision (`NESTOR_TRIBUNAL_UNCAPPED=1`), so the angle count is the only real
