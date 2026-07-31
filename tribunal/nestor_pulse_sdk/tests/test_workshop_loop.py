@@ -20,11 +20,51 @@ nothing for the gate to run them too.
 
 from __future__ import annotations
 
+import copy
+import random
+from typing import Any
+
 from nestor_pulse_sdk.pipeline.tribunal import workshop_loop
 from nestor_pulse_sdk.pipeline.tribunal.workshop_loop import (
     catch_up_matches,
+    select_winners,
     tournament_rounds,
 )
+
+_KEEP = "KEEP"
+_WEAK = "WEAK"
+
+Q1 = "How do fuel retailers monetise coffee?"
+Q2 = "What does a shop-in-shop rollout cost?"
+Q3 = "Which regulations bind opening hours?"
+
+
+def _cand(
+    index: int,
+    parent: str,
+    critique: str = _KEEP,
+    parents: Any = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """One candidate dict in the shape the ranking stage produces."""
+    entry: dict[str, Any] = {
+        "index": index,
+        "text": f"candidate sub-question number {index}",
+        "parent": parent,
+        "critique": critique,
+        "flaw": "",
+    }
+    if parents is not None:
+        entry["parents"] = parents
+    entry.update(extra)
+    return entry
+
+
+def _labels_covered(winner: dict[str, Any], label: str) -> bool:
+    parents = winner.get("parents") or []
+    if parents:
+        return label in parents
+    return winner.get("parent") == label
 
 
 # ===========================================================================
@@ -187,3 +227,222 @@ def test_workshop_loop_imports_nothing_from_the_engine_package() -> None:
         stripped = line.strip()
         if stripped.startswith("import ") or stripped.startswith("from "):
             assert "nestor_pulse_sdk" not in stripped, f"engine import leaked in: {stripped}"
+
+
+# ===========================================================================
+# select_winners — D-W4-5, the floor at the cut and prefer-KEEP
+# ===========================================================================
+
+
+def _pool_36() -> list[dict[str, Any]]:
+    """The measured shape: 3 client questions, plus a discovery tail.
+
+    Ranks 0-29 are single-parent, round-robin over the three client questions.
+    Ranks 30-35 carry the `__discovery__` sentinel, so they cover NO client
+    question label and the per-label counts below are exact rather than
+    approximate.
+    """
+    pool: list[dict[str, Any]] = []
+    labels = [Q1, Q2, Q3]
+    for i in range(30):
+        pool.append(_cand(i, labels[i % 3]))
+    for i in range(30, 36):
+        pool.append(_cand(i, workshop_loop._DISCOVERY_PARENT))
+    return pool
+
+
+def test_select_winners_returns_seventeen_for_three_client_questions() -> None:
+    """THE VALIDATED CONFIGURATION: 5 + 5 + 5 + 2 = 17. exp11 measured exactly this.
+
+    `default_cut` is deliberately passed as 13 — what `winner_count(36)` actually
+    returns — so this test also pins that THE FLOOR OVERRIDES THE CUT. If a later
+    reader restores the `_WINNERS_MAX` cap of 15, this goes red instead of
+    silently deleting two research questions.
+    """
+    ranked = _pool_36()
+    winners, below = select_winners(
+        ranked, client_questions=[Q1, Q2, Q3], default_cut=13
+    )
+    assert len(winners) == 17, f"expected 17 winners, got {len(winners)}"
+    for label in (Q1, Q2, Q3):
+        covering = [w for w in winners if _labels_covered(w, label)]
+        assert len(covering) == 5, f"{label!r} got {len(covering)} winners, expected 5"
+    cross = [w for w in winners if w.get("cross_cutting") is True]
+    assert len(cross) == 2, f"expected 2 cross-cutting winners, got {len(cross)}"
+    assert len(below) == 19
+
+
+def test_select_winners_honours_the_floor_when_a_question_ranks_badly() -> None:
+    """Every client question gets its 5 even when its best candidate ranks 30th.
+
+    This is the whole reason the floor is applied AT THE CUT rather than by
+    taking the top N and hoping. A globally-ranked pool can legitimately bury one
+    client question, and D4 coverage does not bend to that.
+    """
+    ranked = [_cand(i, Q1 if i % 2 == 0 else Q2) for i in range(30)]
+    ranked += [_cand(i, Q3) for i in range(30, 40)]
+    winners, below = select_winners(
+        ranked, client_questions=[Q1, Q2, Q3], default_cut=13
+    )
+    assert len(winners) == 17
+    q3 = [w for w in winners if _labels_covered(w, Q3)]
+    assert len(q3) == 5
+    assert [w["index"] for w in q3] == [30, 31, 32, 33, 34]
+    assert len(winners) + len(below) == len(ranked)
+
+
+def test_select_winners_shortfall_does_not_steal_another_questions_floor() -> None:
+    """A client question with only 2 candidates gets 2 — and Q1/Q2 still get 5 each."""
+    ranked = [_cand(i, Q1) for i in range(20)]
+    ranked += [_cand(i, Q2) for i in range(20, 40)]
+    ranked += [_cand(i, Q3) for i in range(40, 42)]
+    winners, below = select_winners(
+        ranked, client_questions=[Q1, Q2, Q3], default_cut=13
+    )
+    assert len([w for w in winners if _labels_covered(w, Q3)]) == 2
+    assert len([w for w in winners if _labels_covered(w, Q1)]) >= 5
+    assert len([w for w in winners if _labels_covered(w, Q2)]) >= 5
+    assert len(winners) == 17
+    assert len(winners) + len(below) == len(ranked)
+
+
+def _prefer_keep_pool() -> list[dict[str, Any]]:
+    """Ranks 0-3 KEEP, rank 4 WEAK, ranks 5-8 WEAK, rank 9 KEEP.
+
+    The first four slots go to the four KEEPs at the top. The FIFTH slot is the
+    contested one: a WEAK at rank 4 against a KEEP at rank 9.
+    """
+    critiques = [_KEEP, _KEEP, _KEEP, _KEEP, _WEAK, _WEAK, _WEAK, _WEAK, _WEAK, _KEEP]
+    return [_cand(i, Q1, critiques[i]) for i in range(10)]
+
+
+def test_prefer_keep_takes_the_rank_nine_keep_over_the_rank_four_weak() -> None:
+    """PREFER-KEEP, column A. The single highest-leverage rule the measurement found.
+
+    Exit criterion 2 CHECKS for WEAK winners and nothing anywhere ever PREVENTED
+    one from being selected — a smoke alarm with no fire door. Adding this
+    preference took WEAK winners to 0 and made criterion 2 satisfiable BY
+    CONSTRUCTION rather than by luck.
+    """
+    winners, _ = select_winners(
+        _prefer_keep_pool(),
+        client_questions=[Q1],
+        default_cut=10,
+        cross_cutting_slots=0,
+        prefer_keep=True,
+    )
+    assert [w["index"] for w in winners] == [0, 1, 2, 3, 9]
+    assert all(w["critique"] == _KEEP for w in winners)
+
+
+def test_prefer_keep_disabled_takes_the_rank_four_weak_instead() -> None:
+    """PREFER-KEEP, column B. Without this the rule above is unfalsifiable.
+
+    A test that only ever runs the rule ON cannot tell you the rule is doing
+    anything. Turning it OFF and getting a DIFFERENT answer is the proof.
+    """
+    winners, _ = select_winners(
+        _prefer_keep_pool(),
+        client_questions=[Q1],
+        default_cut=10,
+        cross_cutting_slots=0,
+        prefer_keep=False,
+    )
+    assert [w["index"] for w in winners] == [0, 1, 2, 3, 4]
+    assert winners[4]["critique"] == _WEAK
+
+
+def test_select_winners_falls_back_to_default_cut_with_no_client_questions() -> None:
+    ranked = [_cand(i, "") for i in range(20)]
+    winners, below = select_winners(ranked, client_questions=[], default_cut=10)
+    assert [w["index"] for w in winners] == list(range(10))
+    assert len(below) == 10
+
+
+def test_select_winners_recognises_a_two_label_span_as_cross_cutting() -> None:
+    """The OTHER branch of the cross-cutting definition: parents spanning 2+ labels.
+
+    Cross-cutting mandate questions are where the best measured output came from,
+    and they have two REAL parents rather than the discovery sentinel.
+    """
+    ranked = [_cand(i, Q1 if i % 2 == 0 else Q2) for i in range(20)]
+    ranked += [_cand(i, Q1, parents=[Q1, Q2]) for i in range(20, 24)]
+    winners, _ = select_winners(
+        ranked, client_questions=[Q1, Q2], default_cut=10, floor_per_question=5
+    )
+    cross = [w for w in winners if w.get("cross_cutting") is True]
+    assert len(cross) == 2
+    assert [w["index"] for w in cross] == [20, 21]
+
+
+def test_select_winners_never_bars_anything_over_two_hundred_seeded_pools() -> None:
+    """THE PERMUTATION INVARIANT. Losing the tournament is not a defect.
+
+    `enforce_scope_guard`s documented repair ladder PROMOTES a below-the-cut
+    candidate when a client question ends up with no winner. Bar the losers and
+    that repair path breaks, which is why `below_cut` is returned at all rather
+    than discarded.
+    """
+    labels = [Q1, Q2, Q3]
+    for seed in range(200):
+        rng = random.Random(seed)
+        size = rng.randint(1, 60)
+        ranked = []
+        for i in range(size):
+            choice = rng.random()
+            if choice < 0.12:
+                parent = workshop_loop._DISCOVERY_PARENT
+                parents = None
+            elif choice < 0.22:
+                parent = rng.choice(labels)
+                parents = [labels[0], labels[1]]
+            else:
+                parent = rng.choice(labels)
+                parents = None
+            ranked.append(
+                _cand(i, parent, rng.choice([_KEEP, _WEAK]), parents=parents)
+            )
+        winners, below = select_winners(
+            ranked, client_questions=labels, default_cut=13
+        )
+        won = [w["index"] for w in winners]
+        lost = [w["index"] for w in below]
+        assert len(won) + len(lost) == size, f"seed {seed}: candidates went missing"
+        assert len(set(won)) == len(won), f"seed {seed}: duplicate winner"
+        assert len(set(won) & set(lost)) == 0, f"seed {seed}: a candidate is in both"
+        assert set(won) | set(lost) == set(range(size)), f"seed {seed}: not a permutation"
+        assert won == sorted(won), f"seed {seed}: winners are not in rank order"
+        assert lost == sorted(lost), f"seed {seed}: losers lost their relative order"
+
+
+def test_select_winners_is_deterministic_and_pure() -> None:
+    """Same input, same output — and the caller keeps the list it handed in.
+
+    The purity half is a deep-copy comparison rather than a promise in prose: a
+    function that quietly stamps `cross_cutting` onto the CALLER's dicts would
+    pass every behavioural test above and still be a bug, because the ranked pool
+    is reused by the evolve step.
+    """
+    ranked = _pool_36()
+    pristine = copy.deepcopy(ranked)
+    first = select_winners(ranked, client_questions=[Q1, Q2, Q3], default_cut=13)
+    second = select_winners(ranked, client_questions=[Q1, Q2, Q3], default_cut=13)
+    assert first == second
+    assert ranked == pristine, "select_winners mutated the caller's candidates"
+
+
+def test_select_winners_never_raises_on_hostile_input() -> None:
+    """T-15.7-03-01 again: this function is TOTAL."""
+    batteries: tuple[Any, ...] = (
+        None,
+        "a string",
+        [None, "x", 7],
+        [{}, {"index": "not an int"}],
+        [],
+    )
+    for battery in batteries:
+        winners, below = select_winners(
+            battery, client_questions=[Q1], default_cut=5
+        )
+        assert isinstance(winners, list)
+        assert isinstance(below, list)
