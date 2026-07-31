@@ -44,11 +44,13 @@ Cloud Build gate:
 from __future__ import annotations
 
 import ast
+import asyncio
 import copy
 import pathlib
+import uuid
 from typing import Any
 
-from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket
+from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket, tools, workshop_admission
 from nestor_pulse_sdk.pipeline.tribunal.discovery_bracket import (
     DISCOVERY_PARENT,
     allocate_discovery,
@@ -57,6 +59,9 @@ from nestor_pulse_sdk.pipeline.tribunal.discovery_bracket import (
     partition_discovery,
 )
 from nestor_pulse_sdk.pipeline.tribunal.research_division import _normalise_winners
+from nestor_pulse_sdk.pipeline.tribunal.workshop_admission import (
+    admission_evidence,
+)
 
 #: The module under test, read once. Resolved from the imported module's own
 #: `__file__`, never from a repo root: Cloud Build ships only `tribunal/`, so a
@@ -721,3 +726,738 @@ def test_the_five_documented_exports_exist():
     }
     for name in discovery_bracket.__all__:
         assert hasattr(discovery_bracket, name), name
+
+
+# ===========================================================================
+# 6. THE D-R10 ADMISSION GATE (plan 15.7-05)
+#
+# An angle the loop INVENTED earns a research slot by EVIDENCE, or not at all.
+# Two rules carry the whole section, and both were measured the hard way:
+#
+#   * THE EVIDENCE COMES FROM A REAL SEARCH RESULT, NEVER FROM THE MODEL'S OWN
+#     OUTPUT LINE. A looser guard (`if not url`) admitted 2 of 3 angles carrying a
+#     literal "-" as the URL, because a dash is TRUTHY, and the model had
+#     "evidenced" its own angle by restating that its own entities exist.
+#   * THE PARENT IS STAMPED IN PYTHON. The harness measured the model MISFILING
+#     ITS OWN PARENT six times in a single run, so classification is a SEPARATE
+#     dedicated call whose answer is an INDEX, and an unreadable answer falls back
+#     to CROSS — never to a client question.
+#
+# `groundingChunks` DOES NOT EXIST in this engine. It is a Gemini concept the
+# measurement harness ran on; the deployed workshop orients through ANTHROPIC
+# SERVER-SIDE TOOLS, so the real-search-result channel is
+# `skeptic._collect_citation_urls`. The intent is unchanged; only the vendor noun
+# is. These tests build the three block types that function reads.
+#
+# STILL NO LLM CALL, NO NETWORK, NO MOCKING LIBRARY: the clients below are plain
+# classes returning canned content, and the conftest NO-OUTBOUND-HTTP fixture is
+# respected because nothing here ever reaches the resolver for real.
+# ===========================================================================
+
+_ADMISSION_SRC = pathlib.Path(workshop_admission.__file__).resolve().read_text(
+    encoding="utf-8"
+)
+
+#: A grounding redirect of exactly the class Wave 1's D-V01-11 resolver was built
+#: for. These expire about 30 days after a run, which is why BOTH values are kept.
+REDIRECT_URL = (
+    "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123xyz"
+)
+PUBLISHER_URL = "https://www.bundesregierung.de/ladenschlussgesetz"
+
+#: The six shapes that must ALL read as NOT FOUND. The first one is the bug.
+HOSTILE_URLS = ("-", "", None, "n/a", "javascript:alert(1)", "https://example.org/a b")
+
+
+class Blk:
+    """A content block in OBJECT shape.
+
+    `skeptic._block_get` reads both object and dict blocks, and a test that covers
+    only one of them is half a test — the provider SDK returns objects, the replay
+    fixtures return dicts, and the gate must hold for both.
+    """
+
+    def __init__(self, **kw: Any) -> None:
+        self.__dict__.update(kw)
+
+
+def search_block(*urls: Any, obj: bool = False) -> Any:
+    """A `web_search_tool_result` block: what a REAL search actually returned."""
+    if obj:
+        return Blk(
+            type="web_search_tool_result",
+            content=[Blk(type="web_search_result", url=u) for u in urls],
+        )
+    return {
+        "type": "web_search_tool_result",
+        "content": [{"type": "web_search_result", "url": u} for u in urls],
+    }
+
+
+def fetch_block(url: Any, obj: bool = False) -> Any:
+    """A `web_fetch_tool_result` block: a page the session actually fetched."""
+    if obj:
+        return Blk(type="web_fetch_tool_result", content=Blk(url=url))
+    return {"type": "web_fetch_tool_result", "content": {"url": url}}
+
+
+def cited_text_block(url: Any, obj: bool = False) -> Any:
+    """A `text` block carrying a citation — the third channel."""
+    if obj:
+        return Blk(type="text", text="...", citations=[Blk(url=url)])
+    return {"type": "text", "text": "...", "citations": [{"url": url}]}
+
+
+def admission_block(
+    premise_real: Any = True,
+    quote: str = "the three largest NL operators reprice several times a day",
+    why: str = "the named operators and the mechanism both exist",
+    claimed_url: Any = None,
+    obj: bool = False,
+    raw_input: Any = None,
+) -> Any:
+    """The model's OWN output line.
+
+    `claimed_url` is the model trying to evidence itself. Nothing in this engine
+    may ever read it — `EMIT_ADMISSION_TOOL` has no such field, and this fixture
+    exists only so a test can prove the value is ignored even when present.
+    """
+    inp: Any = {"premise_real": premise_real, "quote": quote, "why": why}
+    if claimed_url is not None:
+        inp["source_url"] = claimed_url
+    if raw_input is not None:
+        inp = raw_input
+    if obj:
+        return Blk(type="tool_use", name="emit_admission", input=inp)
+    return {"type": "tool_use", "name": "emit_admission", "input": inp}
+
+
+# ---------------------------------------------------------------------------
+# 6a. THE EVIDENCE GATE — a dash is not a source
+# ---------------------------------------------------------------------------
+
+
+def test_the_same_url_admits_from_a_search_result_and_never_from_the_tool_input():
+    """THIS PAIR IS THE WHOLE OF D-R10'S CRITICAL NOTE, so it is ONE test.
+
+    Same URL, two places. From a real search result it admits; from the model's own
+    output line it admits nothing, because that line is not evidence — it is the
+    thing the evidence is supposed to check.
+    """
+    url = "https://www.bundeskartellamt.de/marktbeobachtung"
+
+    from_search = admission_evidence([search_block(url), admission_block()])
+    assert from_search["found"] is True
+    assert from_search["source_url"] == url
+
+    from_model = admission_evidence([admission_block(claimed_url=url)])
+    assert from_model["found"] is False, (
+        "a URL the model typed into its own tool input is its own output line, "
+        "never evidence — this is the 2-of-3 admission the harness measured"
+    )
+    assert from_model["source_url"] == ""
+
+
+def test_the_hostile_url_battery_is_not_found_from_either_channel():
+    """A dash is TRUTHY. `if not url` is not a source check, and this is why."""
+    for bad in HOSTILE_URLS:
+        assert admission_evidence([search_block(bad), admission_block()])["found"] is False, (
+            f"{bad!r} must never admit an angle"
+        )
+        assert admission_evidence([admission_block(claimed_url=bad)])["found"] is False, bad
+        assert admission_evidence([fetch_block(bad)])["found"] is False, bad
+        assert admission_evidence([cited_text_block(bad)])["found"] is False, bad
+
+
+def test_all_three_real_search_channels_count_in_both_block_shapes():
+    for obj in (False, True):
+        for block in (
+            search_block("https://example.org/search", obj=obj),
+            fetch_block("https://example.org/fetched", obj=obj),
+            cited_text_block("https://example.org/cited", obj=obj),
+        ):
+            ev = admission_evidence([block])
+            assert ev["found"] is True, (obj, block)
+            assert ev["source_url"].startswith("https://example.org/")
+
+
+def test_a_grounding_redirect_is_kept_and_resolved_and_both_values_survive():
+    ev = admission_evidence(
+        [search_block(REDIRECT_URL)], resolved={REDIRECT_URL: PUBLISHER_URL}
+    )
+    assert ev["found"] is True
+    assert ev["source_url"] == REDIRECT_URL, "D-V01-11 stores BOTH, side by side"
+    assert ev["resolved_url"] == PUBLISHER_URL
+    assert ev["resolution_status"] == workshop_admission.RESOLUTION_RESOLVED
+
+
+def test_an_unresolved_redirect_is_marked_rather_than_discarded():
+    """A transient resolution failure must not silently reject a sourced angle."""
+    ev = admission_evidence([search_block(REDIRECT_URL)], resolved={REDIRECT_URL: None})
+    assert ev["found"] is True, "an unresolved redirect is still a real search result"
+    assert ev["source_url"] == REDIRECT_URL
+    assert ev["resolved_url"] == ""
+    assert ev["resolution_status"] == workshop_admission.RESOLUTION_UNRESOLVED
+
+
+def test_a_plain_url_is_never_attempted_rather_than_reported_unresolved():
+    ev = admission_evidence([search_block("https://example.org/x")], resolved={})
+    assert ev["resolution_status"] == workshop_admission.RESOLUTION_NOT_ATTEMPTED
+    ev_none = admission_evidence([search_block(REDIRECT_URL)])
+    assert ev_none["resolution_status"] == workshop_admission.RESOLUTION_NOT_ATTEMPTED
+
+
+def test_the_admitting_url_is_bounded_by_the_wave_3_norm_url():
+    """Reused, not re-implemented and not widened — T-15.7-05-02."""
+    long_url = "https://example.org/" + ("a" * 500)
+    ev = admission_evidence([search_block(long_url)])
+    assert ev["found"] is True
+    assert len(ev["source_url"]) == discovery_bracket._DISCOVERY_URL_CHARS == 300
+    assert " " not in ev["source_url"]
+
+
+def test_admission_evidence_never_raises_and_is_pure():
+    for hostile in (None, "not a list", 17, [None], ["a string block"], [Hostile()], [{}]):
+        ev = admission_evidence(hostile)
+        assert ev["found"] is False, hostile
+    same = [search_block("https://example.org/x")]
+    assert admission_evidence(same) == admission_evidence(same)
+
+
+def test_the_emit_admission_tool_offers_the_model_no_source_field():
+    """T-15.7-05-01. Offering the field at all is how the harness bug got in."""
+    schema = tools.EMIT_ADMISSION_TOOL["input_schema"]
+    assert tools.EMIT_ADMISSION_TOOL["name"] == "emit_admission"
+    assert set(schema["properties"]) == {"premise_real", "quote", "why"}
+    assert schema["required"] == ["premise_real"]
+    blob = repr(tools.EMIT_ADMISSION_TOOL).lower()
+    assert "url" not in blob, "the schema must not name a source field at all"
+    assert "'" not in tools.EMIT_ADMISSION_TOOL["description"], (
+        "descriptions in this file stay apostrophe-free — a shell-quoted gate reads them"
+    )
+    assert tools.force_emit_admission() == {"type": "tool", "name": "emit_admission"}
+
+
+def test_the_admission_module_never_reads_a_url_out_of_a_tool_input():
+    """A grep-level guard on the SHAPE of the rule, not only on its behaviour.
+
+    `_collect_citation_urls` is the ONLY channel, so no other reader may appear.
+    """
+    assert "_collect_citation_urls" in _ADMISSION_SRC
+    tree = ast.parse(_ADMISSION_SRC)
+    readers = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_collect_citation_urls" in readers
+
+
+def test_neither_seam_literal_appears_in_the_admission_module():
+    """The seam scan in `test_research_division_assignment.py` scans the WHOLE
+    package for these two literals and excludes only `claim_attribution.py` and
+    test files. Phase 15.6 nearly turned it red with an explanatory COMMENT."""
+    for literal in ("resolved_" + "facet", "parent_" + "index"):
+        assert literal not in _ADMISSION_SRC, literal
+
+
+# ---------------------------------------------------------------------------
+# 6b. THE GROUNDED LOOKUP — an angle earns a slot or is dropped with a reason
+#
+# The stub client below is a plain class, not a mocking library: it returns canned
+# content blocks and COUNTS ITS CALLS, which is how "the classification is a
+# separate call" and "the resolver runs once per batch" are proved rather than
+# asserted. Nothing here reaches the network; the conftest NO-OUTBOUND-HTTP
+# fixture is respected because `resolve_redirects` is replaced, never invoked.
+# ---------------------------------------------------------------------------
+
+RUN_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+
+ANGLE = (
+    "what minimum network density is required for algorithmic fuel pricing to pay "
+    "off for a mid-sized operator"
+)
+
+
+class Resp:
+    """A provider response in the only two shapes this loop reads."""
+
+    def __init__(self, content: Any, stop_reason: str = "tool_use") -> None:
+        self.content = content
+        self.stop_reason = stop_reason
+
+
+class StubAnthropic:
+    """Canned responses, in order, with a call counter. Raises what it is told to."""
+
+    def __init__(self, *responses: Any) -> None:
+        self.responses = list(responses)
+        self.anthropic_calls = 0
+        self.gemini_calls = 0
+        self.seen_models: list[str] = []
+
+    async def anthropic_messages(self, **kw: Any) -> Any:
+        self.anthropic_calls += 1
+        self.seen_models.append(kw.get("model"))
+        item = self.responses[min(self.anthropic_calls - 1, len(self.responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def gemini_generate(self, **kw: Any) -> Any:
+        self.gemini_calls += 1
+        item = self.responses[min(self.gemini_calls - 1, len(self.responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class OpenBreaker:
+    """A breaker that refuses outright. `with_retry` consults it BEFORE the first
+    attempt, so an open circuit costs no call and no spend — and must drop the
+    angle rather than propagate."""
+
+    def raise_if_open(self) -> None:
+        from nestor_pulse_sdk.pipeline.tribunal.reliability import CircuitOpenError
+
+        raise CircuitOpenError("the circuit is open for this provider")
+
+    def record_failure(self, *a: Any, **k: Any) -> None:  # pragma: no cover
+        return None
+
+    def record_success(self, *a: Any, **k: Any) -> None:  # pragma: no cover
+        return None
+
+
+def admitting_response(url: str = "https://www.acm.nl/brandstofmarkt", **kw: Any) -> Resp:
+    """A session that searched, found `url`, and confirmed the premise."""
+    return Resp([search_block(url), admission_block(**kw)])
+
+
+def run_admission(client: Any, angles: Any, resolver: Any = None, **kw: Any) -> Any:
+    """Drive `admit_invented_angles` with the resolver replaced. No network."""
+    original = workshop_admission.resolve_redirects
+    workshop_admission.resolve_redirects = resolver or _null_resolver
+    try:
+        return asyncio.run(
+            workshop_admission.admit_invented_angles(
+                angles=angles,
+                decision_context="a mid-sized fuel retailer weighing network expansion",
+                audited=client,
+                run_id=RUN_ID,
+                tenant_id=TENANT_ID,
+                model="stub-model",
+                **kw,
+            )
+        )
+    finally:
+        workshop_admission.resolve_redirects = original
+
+
+class CountingResolver:
+    """Counts how many times the BATCH resolver was invoked. D-V01-11 says once."""
+
+    def __init__(self, mapping: Any = None) -> None:
+        self.calls = 0
+        self.seen: list[Any] = []
+        self.mapping = mapping or {}
+
+    async def __call__(self, urls: Any) -> Any:
+        self.calls += 1
+        self.seen.append(list(urls))
+        return dict(self.mapping)
+
+
+async def _null_resolver(urls: Any) -> Any:
+    return {}
+
+
+def test_an_angle_with_a_real_premise_and_a_real_source_is_admitted():
+    client = StubAnthropic(admitting_response())
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert dropped == []
+    assert len(admitted) == 1
+    entry = admitted[0]
+    assert entry["source"] == "discovery"
+    assert entry["text"] == ANGLE
+    prov = entry["provenance"]
+    assert prov["source_url"] == "https://www.acm.nl/brandstofmarkt"
+    assert prov["quote"], "D-W4-2: the admitting quote IS the enrichment anchor"
+    assert prov["resolution_status"] == workshop_admission.RESOLUTION_NOT_ATTEMPTED
+    assert "resolved_url" in prov
+
+
+def test_the_admitted_source_url_is_the_search_result_and_not_the_tool_input():
+    """T-15.7-05-01, end to end: make the two DIFFER and see which one survives."""
+    client = StubAnthropic(
+        Resp(
+            [
+                search_block("https://real-search-result.example/evidence"),
+                admission_block(claimed_url="https://the-model-typed-this.example/x"),
+            ]
+        )
+    )
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted[0]["provenance"]["source_url"] == (
+        "https://real-search-result.example/evidence"
+    )
+    assert "the-model-typed-this" not in repr(admitted)
+
+
+def test_the_three_drop_paths_carry_three_distinct_machine_readable_reasons():
+    """Plan 15.7-09 turns a drop into a BAR, so the reasons must be tellable apart."""
+    confirmed_no_source = StubAnthropic(Resp([admission_block()]))
+    _a, dropped_no_source, _n = run_admission(confirmed_no_source, [ANGLE])
+    assert dropped_no_source[0]["reason"] == workshop_admission.DROP_NO_ADMITTING_SOURCE
+
+    rejected = StubAnthropic(admitting_response(premise_real=False))
+    _a, dropped_premise, _n = run_admission(rejected, [ANGLE])
+    assert dropped_premise[0]["reason"] == workshop_admission.DROP_PREMISE_NOT_REAL
+
+    broken = StubAnthropic(RuntimeError("provider exploded"))
+    _a, dropped_failed, _n = run_admission(broken, [ANGLE])
+    assert dropped_failed[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+
+    assert len(
+        {
+            dropped_no_source[0]["reason"],
+            dropped_premise[0]["reason"],
+            dropped_failed[0]["reason"],
+        }
+    ) == 3
+    for bundle in (dropped_no_source, dropped_premise, dropped_failed):
+        assert len(bundle[0]["note"]) > 40, "D-12: a plain-words sentence, never a code"
+        assert bundle[0]["text"] == ANGLE, "the loop bars the ANGLE, so it must come back"
+
+
+def test_a_model_that_confirms_the_premise_without_searching_admits_nothing():
+    """The tautology the harness measured: restating that your own entities exist."""
+    client = StubAnthropic(Resp([admission_block(claimed_url="-")]))
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_NO_ADMITTING_SOURCE
+    assert "no source, no slot" in dropped[0]["note"]
+
+
+def test_resolve_redirects_is_called_once_for_the_whole_batch_not_once_per_angle():
+    resolver = CountingResolver({REDIRECT_URL: PUBLISHER_URL})
+    client = StubAnthropic(Resp([search_block(REDIRECT_URL), admission_block()]))
+    admitted, _dropped, _notes = run_admission(
+        client, [ANGLE, ANGLE + " in Germany", ANGLE + " in France"], resolver=resolver
+    )
+    assert resolver.calls == 1, (
+        "deduping at the BATCH is the whole point of D-V01-11 — per angle is the "
+        "642-instances-642-requests defect it fixed"
+    )
+    assert len(admitted) == 3
+    for entry in admitted:
+        assert entry["provenance"]["resolved_url"] == PUBLISHER_URL
+        assert entry["provenance"]["source_url"] == REDIRECT_URL
+
+
+def test_no_urls_at_all_means_the_resolver_is_never_invoked():
+    resolver = CountingResolver()
+    client = StubAnthropic(Resp([admission_block()]))
+    run_admission(client, [ANGLE], resolver=resolver)
+    assert resolver.calls == 0
+
+
+def test_admit_invented_angles_never_raises_across_a_hostile_battery():
+    hostile = [
+        Resp(None),
+        Resp("content that is a string, not a list"),
+        Resp([admission_block(raw_input='{"premise_real": true}')]),
+        Resp([admission_block(raw_input="not json at all")]),
+        Resp([search_block("https://example.org/x")], stop_reason="pause_turn"),
+        RuntimeError("the provider refused"),
+        Resp([], stop_reason="max_tokens"),
+    ]
+    for item in hostile:
+        client = StubAnthropic(item)
+        admitted, dropped, notes = run_admission(client, [ANGLE])
+        assert isinstance(admitted, list) and isinstance(dropped, list), item
+        assert isinstance(notes, list)
+        assert len(admitted) + len(dropped) == 1, item
+    # An angle list that is itself junk yields nothing, spends nothing and never
+    # raises — an unusable angle must not become a paid lookup by accident.
+    for junk in (None, [], [None], [""], [{}], [Hostile()]):
+        client = StubAnthropic(admitting_response())
+        admitted, dropped, notes = run_admission(client, junk)
+        assert (admitted, dropped, notes) == ([], [], []), junk
+        assert client.anthropic_calls == 0, junk
+
+
+def test_a_paused_turn_does_not_throw_away_a_paid_half_finished_session():
+    """F8, and it is the reason `_one_orientation`'s loop is CLONED rather than
+    re-invented: a provider that pauses a long server-tool run would otherwise
+    discard a session the run has already paid for."""
+    client = StubAnthropic(
+        Resp([search_block("https://example.org/partial")], stop_reason="pause_turn"),
+        admitting_response(),
+    )
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert dropped == [], "the paused turn must be continued, not written off"
+    assert len(admitted) == 1
+    assert client.anthropic_calls == 2, "the paused turn does not consume a tool-use turn"
+
+
+def test_a_pause_storm_is_bounded_and_still_never_raises():
+    """T-15.2-04: `stop_reason` is provider-controlled, so the budget is per session."""
+    client = StubAnthropic(
+        Resp([search_block("https://example.org/x")], stop_reason="pause_turn")
+    )
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+    assert client.anthropic_calls <= 8, "an unbounded billed loop is the threat here"
+
+
+def test_a_json_encoded_tool_input_is_still_read():
+    """F-01: the model sometimes emits `input` itself as a JSON STRING."""
+    client = StubAnthropic(
+        Resp(
+            [
+                search_block("https://example.org/evidence"),
+                admission_block(raw_input='{"premise_real": true, "quote": "it exists"}'),
+            ]
+        )
+    )
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert len(admitted) == 1
+    assert admitted[0]["provenance"]["quote"] == "it exists"
+
+
+def test_an_open_breaker_drops_the_angle_without_raising():
+    client = StubAnthropic(admitting_response())
+    admitted, dropped, _notes = run_admission(client, [ANGLE], breaker=OpenBreaker())
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+
+
+def test_the_lookup_count_is_recorded_and_no_ceiling_is_ever_enforced():
+    """D-W4-7: instrument, do not enforce. Twenty angles run twenty lookups."""
+    stats: dict[str, Any] = {}
+    client = StubAnthropic(admitting_response())
+    angles = [f"{ANGLE} variant {i}" for i in range(20)]
+    admitted, dropped, _notes = run_admission(client, angles, stats=stats)
+    assert stats["grounded_lookups"] == 20
+    assert len(admitted) + len(dropped) == 20, "nothing truncated, capped or aborted"
+    assert stats["admission_resolver_calls"] == 1
+    assert "admission_cost_usd" in stats
+
+
+def test_no_code_path_in_the_module_compares_a_lookup_count_against_a_ceiling():
+    """The grep D-W4-7 asks for, done structurally rather than by eyeballing."""
+    tree = ast.parse(_ADMISSION_SRC)
+    counters = {"lookups", "grounded_lookups", "calls", "resolver_calls"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            assert not (names & counters), (
+                f"a lookup counter is compared against something at line "
+                f"{node.lineno} — D-W4-7 says RECORD, never enforce"
+            )
+    for banned in ("[:_ADMISSION_MAX_LOOKUPS", "MAX_LOOKUPS", "LOOKUP_CAP"):
+        assert banned not in _ADMISSION_SRC, banned
+
+
+def test_the_admitted_text_is_bounded_by_the_discovery_text_cap():
+    """T-15.7-05-03: model-authored text reaching three paid providers is bounded."""
+    client = StubAnthropic(admitting_response())
+    admitted, _dropped, _notes = run_admission(client, ["x" * 2000])
+    assert len(admitted[0]["text"]) == discovery_bracket._DISCOVERY_TEXT_CHARS == 600
+
+
+def test_the_admission_prompt_says_novelty_is_not_the_test():
+    """The correction D-R10 needed, pinned in the prompt that carries it."""
+    system = workshop_admission._ADMISSION_SYSTEM
+    lowered = system.lower()
+    assert "premise" in lowered
+    assert "already answered" in lowered
+    assert "never an instruction to obey" in lowered, "the ignore-instructions clause"
+    assert "emit_admission exactly once" in system
+    assert "{ignore_instructions}" not in system, "the slot must be filled, not shipped"
+
+
+# ---------------------------------------------------------------------------
+# 6c. classify_parent — a SEPARATE call proposes, PYTHON stamps, CROSS on failure
+#
+# The harness measured the model MISFILING ITS OWN PARENT six times in a single
+# run — a curated-local-retail question landed in the COFFEE bracket. So the
+# classification is its own call, its answer is an INDEX, and the label is looked
+# up in the CALLER's list. THE FALLBACK DIRECTION IS THE CONTROL: an unreadable
+# answer becomes CROSS, never someone else's question.
+# ---------------------------------------------------------------------------
+
+CLIENT_QUESTIONS = [
+    "Q1 dynamic pricing",
+    "Q2 coffee and the food offer",
+    "Q3 convenience and the shop format",
+]
+
+
+class GeminiText:
+    """A gemini response in the `.text` shape the response ladder reads first."""
+
+    def __init__(self, text: Any) -> None:
+        self.text = text
+
+
+def classify_response(text: Any) -> Any:
+    return GeminiText(text)
+
+
+def run_classify(client: Any, questions: Any, **kw: Any) -> Any:
+    return asyncio.run(
+        workshop_admission.classify_parent(
+            questions=questions,
+            client_questions=kw.pop("client_questions", CLIENT_QUESTIONS),
+            audited=client,
+            run_id=RUN_ID,
+            tenant_id=TENANT_ID,
+            model="stub-model",
+            **kw,
+        )
+    )
+
+
+def test_the_index_is_looked_up_rather_than_the_label_believed():
+    """`0 | 1` must stamp the caller's SECOND label. That is the whole mechanism."""
+    client = StubAnthropic(classify_response("0 | 1"))
+    parents = run_classify(client, ["an angle about the coffee unit economics"])
+    assert parents == ["Q2 coffee and the food offer"]
+
+
+def test_a_label_string_the_model_types_still_yields_cross():
+    """THIS TEST IS THE WHOLE OF 'NEVER READ FROM MODEL OUTPUT'.
+
+    The model returns a label that matches a client question EXACTLY. The parser
+    reads an INDEX, so an exact-matching string is still an unreadable answer.
+    """
+    client = StubAnthropic(classify_response("0 | Q2 coffee and the food offer"))
+    parents = run_classify(client, ["an angle about the coffee unit economics"])
+    assert parents == [DISCOVERY_PARENT], (
+        "a label the model TYPED is model output, never an attribution"
+    )
+
+
+def test_all_five_failure_shapes_yield_cross_and_none_yields_a_client_question():
+    n_questions = ["angle a", "angle b"]
+
+    out_of_range = run_classify(StubAnthropic(classify_response("0 | 97\n1 | 42")), n_questions)
+    assert out_of_range == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    garbled = run_classify(
+        StubAnthropic(classify_response("0 -> maybe Q1?\nI think angle b is about coffee")),
+        n_questions,
+    )
+    assert garbled == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    for empty in ("", "   ", None):
+        assert run_classify(StubAnthropic(classify_response(empty)), n_questions) == [
+            DISCOVERY_PARENT,
+            DISCOVERY_PARENT,
+        ], empty
+
+    raised = run_classify(StubAnthropic(RuntimeError("gemini refused")), n_questions)
+    assert raised == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    breaker = run_classify(
+        StubAnthropic(classify_response("0 | 1")), n_questions, breaker=OpenBreaker()
+    )
+    assert breaker == [DISCOVERY_PARENT, DISCOVERY_PARENT]
+
+    for result in (out_of_range, garbled, raised, breaker):
+        for parent in result:
+            assert parent not in CLIENT_QUESTIONS, (
+                "a discovered question must never silently count as covering a "
+                "client question it does not answer"
+            )
+
+
+def test_a_garbled_line_is_ignored_whole_and_never_partially_believed():
+    """One good line beside one garbled line: the good one lands, the other is CROSS."""
+    client = StubAnthropic(classify_response("0 | 2\n1 | 0 and probably also 2"))
+    parents = run_classify(client, ["angle a", "angle b"])
+    assert parents == ["Q3 convenience and the shop format", DISCOVERY_PARENT]
+
+
+def test_the_cross_token_is_honoured_and_is_case_insensitive():
+    client = StubAnthropic(classify_response("0 | CROSS\n1 | cross"))
+    assert run_classify(client, ["angle a", "angle b"]) == [
+        DISCOVERY_PARENT,
+        DISCOVERY_PARENT,
+    ]
+
+
+def test_one_parent_comes_back_per_question_in_input_order():
+    client = StubAnthropic(classify_response("2 | 0\n0 | 2\n1 | CROSS"))
+    parents = run_classify(client, ["angle a", "angle b", "angle c"])
+    assert parents == [
+        "Q3 convenience and the shop format",
+        DISCOVERY_PARENT,
+        "Q1 dynamic pricing",
+    ]
+    assert len(parents) == 3
+
+
+def test_an_answer_for_an_angle_that_was_not_asked_about_is_ignored():
+    """An out-of-range ANGLE index must not write past the end or shift the rest."""
+    client = StubAnthropic(classify_response("5 | 0\n0 | 1"))
+    parents = run_classify(client, ["angle a"])
+    assert parents == ["Q2 coffee and the food offer"]
+    assert len(parents) == 1
+
+
+def test_the_classification_is_provably_a_separate_call_from_the_admission():
+    """A model asked to write a question and file it in the same breath misfiles it
+    — measured 6 times in a single run."""
+    client = StubAnthropic(admitting_response())
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert len(admitted) == 1
+    calls_after_admission = (client.anthropic_calls, client.gemini_calls)
+    assert calls_after_admission[1] == 0, "admission does not classify"
+
+    classifier = StubAnthropic(classify_response("0 | 0"))
+    run_classify(classifier, [admitted[0]["text"]])
+    assert classifier.gemini_calls == 1
+    assert classifier.anthropic_calls == 0, (
+        "the classification is its own call on its own channel"
+    )
+
+
+def test_a_dict_candidate_and_a_bare_string_are_both_classifiable():
+    client = StubAnthropic(classify_response("0 | 0\n1 | 0"))
+    parents = run_classify(
+        client, [{"text": "an angle as a candidate dict"}, "an angle as a bare string"]
+    )
+    assert parents == ["Q1 dynamic pricing", "Q1 dynamic pricing"]
+
+
+def test_no_client_questions_at_all_means_everything_is_cross():
+    client = StubAnthropic(classify_response("0 | 0"))
+    assert run_classify(client, ["angle a"], client_questions=[]) == [DISCOVERY_PARENT]
+    assert client.gemini_calls == 0, "there is nothing to classify against — no spend"
+
+
+def test_classify_parent_stamps_the_callers_label_verbatim_so_allocate_still_matches():
+    """`allocate_discovery` matches with `origin if origin in labels`, so a parent
+    this function trimmed or normalised would silently collapse to the sentinel."""
+    long_label = "Q1 " + ("dynamic pricing across the Benelux network " * 12)
+    client = StubAnthropic(classify_response("0 | 0"))
+    parents = run_classify(client, ["angle a"], client_questions=[long_label])
+    assert parents == [long_label]
+    assert parents[0] in [long_label], "rule 3's `origin in labels` must still match"
+
+
+def test_the_classification_prompt_is_indexed_and_truncated_and_ignores_instructions():
+    prompt = workshop_admission._CLASSIFY_PROMPT
+    assert "{questions_block}" in prompt and "{angles_block}" in prompt
+    assert "ANGLE_INDEX | QUESTION_INDEX" in prompt
+    assert "{ignore_instructions}" in prompt
+    block = workshop_admission._render_block(["x" * 5000, "short"])
+    first = block.splitlines()[0]
+    assert first.startswith("0 | ")
+    assert len(first) <= workshop_admission._CLASSIFY_RENDER_CHARS + 8
+    assert "\n" not in workshop_admission._norm("a\nb"), "collapse, or a line can be forged"

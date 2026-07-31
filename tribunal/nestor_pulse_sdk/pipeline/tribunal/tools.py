@@ -9,6 +9,8 @@ Provides:
   - force_emit_orientation()          -> tool_choice dict that forces emit_orientation
   - EMIT_QUESTION_GROUPS_TOOL         -> client-side tool schema (D-R4 grouping, 15.6-01)
   - force_emit_question_groups()      -> tool_choice dict that forces emit_question_groups
+  - EMIT_ADMISSION_TOOL               -> client-side tool schema (D-R10 admission, 15.7-05)
+  - force_emit_admission()            -> tool_choice dict that forces emit_admission
 
 CRITICAL INVARIANTS (ADR-006 §GOTCHA):
   - web_search and web_fetch are SERVER-SIDE tools: the API resolves them within the
@@ -639,3 +641,97 @@ EMIT_FACT_LIST_TOOL: dict[str, Any] = {
 def force_emit_fact_list() -> dict[str, Any]:
     """tool_choice that forces emit_fact_list on the final own-researcher turn."""
     return {"type": "tool", "name": "emit_fact_list"}
+
+
+# ---------------------------------------------------------------------------
+# Client-side tool: emit_admission (Phase 15.7 plan 05 — the D-R10 admission gate)
+# ---------------------------------------------------------------------------
+
+#: Forced client tool for the D-R10 ADMISSION session: the cheap grounded lookup
+#: that decides whether an angle the loop INVENTED earns a research slot.
+#:
+#: THE TEST IS THE PREMISE, NOT THE ANSWER. The model is asked whether the
+#: entities, markets, mechanisms and metrics the angle names actually EXIST and
+#: whether desk research could plausibly settle the question — never whether
+#: someone has already settled it. Read the other way round, the rule admits
+#: already-documented angles (low research value) and rejects novel ones (high
+#: research value): a novelty filter pointed backwards, which measured as all four
+#: invented angles rejected and zero survivors.
+#:
+#: THERE IS DELIBERATELY NO URL FIELD ON THIS SCHEMA, AND THAT ABSENCE IS THE
+#: CONTROL. A URL the model types is the model's own output line, not evidence:
+#: offering the field at all is exactly how the measurement harness's bug got in,
+#: where a looser guard admitted 2 of 3 angles whose only URL was a literal "-"
+#: (which is truthy) because the model had "evidenced" its own angle by restating
+#: that its own entities exist. The admitting URL is read ONLY from the server-tool
+#: result blocks, by `workshop_admission.admission_evidence` via
+#: `skeptic._collect_citation_urls`. The tool may return a QUOTE; it may never
+#: return the source. Compare `EMIT_QUESTION_GROUPS_TOOL` above, whose entire
+#: question-identifying surface is integers for the same reason.
+#:
+#: `quote` and `why` are deliberately NOT in `required`, for the same reason
+#: `source_url` is not required on `EMIT_ORIENTATION_TOOL`: requiring a field the
+#: model may not honestly have is how a model gets pushed into inventing a
+#: plausible-looking value, and a rejected premise has nothing to quote. The
+#: SCHEMA BLOCK ITSELF is kept free of the substring `url` on purpose, so the
+#: absence of a source field is greppable rather than merely intended.
+EMIT_ADMISSION_TOOL: dict[str, Any] = {
+    "name": "emit_admission",
+    "description": (
+        "Emit the admission verdict for ONE invented research angle, after a small "
+        "number of web searches. The test is whether the PREMISE IS REAL: do the "
+        "entities, markets, mechanisms and metrics this angle names actually exist, "
+        "and could desk research plausibly settle the question. "
+        "Whether anyone has ALREADY ANSWERED the question is NOT the test and must "
+        "never count against the angle -- a question nobody has published on is a "
+        "better research question, not a worse one. "
+        "Set premise_real to true only when the searches showed you that the named "
+        "things exist. Quote the search result that showed you, verbatim, and never "
+        "phrase it from memory. "
+        "You do not supply a source address of any kind: the engine reads that from "
+        "the search results themselves, so a quote written without searching admits "
+        "nothing at all."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "premise_real": {
+                "type": "boolean",
+                "description": (
+                    "True when the searches established that the entities, markets, "
+                    "mechanisms and metrics the angle names exist, and that desk "
+                    "research could plausibly settle it. False otherwise."
+                ),
+            },
+            "quote": {
+                "type": "string",
+                "description": (
+                    "A short verbatim quote from the search result that established "
+                    "the premise. Empty when premise_real is false."
+                ),
+            },
+            "why": {
+                "type": "string",
+                "description": (
+                    "One clause naming which part of the premise the searches "
+                    "established, or which part they failed to establish."
+                ),
+            },
+        },
+        # `quote` and `why` are deliberately NOT required -- see the note above.
+        "required": ["premise_real"],
+    },
+}
+
+
+def force_emit_admission() -> dict[str, Any]:
+    """tool_choice that forces emit_admission on the final admission turn.
+
+    Pass as tool_choice=force_emit_admission() on the last allowed turn of the
+    D-R10 admission loop, so the session terminates with a structured verdict
+    rather than another billed search turn.
+
+    Returns:
+        {"type": "tool", "name": "emit_admission"}
+    """
+    return {"type": "tool", "name": "emit_admission"}
