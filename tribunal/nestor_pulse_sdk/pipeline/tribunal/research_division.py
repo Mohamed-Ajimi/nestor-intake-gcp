@@ -223,11 +223,40 @@ _DISCOVERY_MEMBER_SOURCE = "discovery"
 # trim (the corroboration signal itself destroyed, a named D-12 degradation).
 # That decision is live on every capped run.
 _D6_MIN_CORROBORATION = max(1, int(os.environ.get("NESTOR_TRIBUNAL_D6_MIN_CORROBORATION", "2")))
-# Winners are truncated to this many, BY RANK, before distribution. Every angle
-# is a paid deep-research call and the budget governor is inert by decision
-# (NESTOR_TRIBUNAL_UNCAPPED=1), so the angle count is the only real spend
-# control this engine has left (T-15.2-61).
-_D6_MAX_WINNERS = int(os.environ.get("NESTOR_TRIBUNAL_D6_MAX_WINNERS", "15"))
+# Winners are truncated to this many, BY RANK, before distribution.
+#
+# THE ARITHMETIC THAT PRODUCES 32, stated so it can be re-derived rather than
+# guessed. D-W4-5 (phase 15.7, the `exp11` validated configuration) sets the
+# winner count at
+#
+#     5 x <client questions>  +  2 cross-cutting
+#
+# so three client questions is 17 and SIX client questions is 32. The bound is
+# sized to the largest brief this engine takes rather than to the measured one,
+# because a bound that clips is silent and a bound with headroom is not.
+#
+# WHAT 15 WOULD HAVE DONE, named because it is the defect this line was edited
+# to close: the validated configuration's SEVENTEEN winners would have been
+# clipped to fifteen. Silently. Here, at `_normalise_winners`' truncation below
+# — AFTER the tournament had already paid to rank all seventeen. Two questions
+# the workshop selected, ranked and reported would simply never have reached a
+# provider, and nothing in the run's output would have said so beyond one
+# warning line.
+#
+# WHY THIS IS NOT A SPEND INCREASE, and a reader WILL challenge it, because
+# T-15.2-61 says the angle count is the only real spend control this engine has
+# left (the budget governor is inert under NESTOR_TRIBUNAL_UNCAPPED=1):
+#
+#   * under GROUP DISPATCH the paid-call count is `groups x len(_D6_STREAMS)`,
+#     and the group count is what `question_grouping._D6_MAX_GROUPS` governs;
+#   * `_MAX_ANGLES` (28, below) is UNCHANGED and is the second, harder bound;
+#   * so raising the WINNER bound changes how many questions ride INSIDE the
+#     same groups — the depth of each paid call — not how many calls are issued.
+#
+# The number of winners stopped driving the angle count when 15.6-03 replaced
+# per-winner dispatch with group dispatch; see `_MAX_ANGLES`' own comment, which
+# already says exactly that.
+_D6_MAX_WINNERS = int(os.environ.get("NESTOR_TRIBUNAL_D6_MAX_WINNERS", "32"))
 # D7: how many SEARCH languages one angle may name. Search surface widens; the
 # report's OUTPUT language does not — see `_d7_language_sentence`.
 _D7_MAX_LANGS = int(os.environ.get("NESTOR_TRIBUNAL_D7_MAX_LANGS", "3"))

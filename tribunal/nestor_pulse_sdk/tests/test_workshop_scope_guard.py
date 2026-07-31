@@ -46,6 +46,7 @@ Cloud Build gate:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import pathlib
 import uuid
@@ -311,6 +312,28 @@ async def stage_b(audited: Any, source: dict[str, Any], **kwargs: Any) -> dict[s
         tenant_id=TENANT_ID,
         **kwargs,
     )
+
+
+@contextlib.contextmanager
+def grouping_mode(mode: str):
+    """Pin `question_grouping._GROUPING_MODE` for one test.
+
+    D-W4-4a (phase 15.7) made ONE GROUP PER CLIENT QUESTION the primary path, and on
+    that path the grouping step builds NO PROMPT and makes NO CALL. Every assertion
+    about what the grouping model was TOLD, and every assertion about the grouping
+    step's own fallback degradation, is therefore about `topic` mode specifically and
+    says so by entering this block.
+
+    A test that does NOT enter this block runs on the production default, which is
+    what most of this file wants — the scope guard and the discovery allocation are
+    the same either way.
+    """
+    previous = question_grouping._GROUPING_MODE
+    question_grouping._GROUPING_MODE = mode
+    try:
+        yield
+    finally:
+        question_grouping._GROUPING_MODE = previous
 
 
 # ===========================================================================
@@ -1042,6 +1065,14 @@ async def test_a_rider_costs_no_group_and_no_extra_call():
     become RIDERS inside Q1's own mandate group, so NO discovery group exists,
     discovery consumes NO slot, and the mandate is offered all five — which is why
     V-01's three questions land at 9-12 calls rather than 15.
+
+    RUN IN `topic` MODE (15.7-01). The last assertion — that the mandate was OFFERED
+    the whole ceiling — is a claim about what the grouping model was TOLD, and the
+    prompt is the only place that offer exists. On D-W4-4a's primary path there is no
+    prompt to read it out of, so the assertion would have to be deleted rather than
+    moved, and a deleted assertion is how D-W3-5.3's slot-rollback stops being
+    checked. The rider arithmetic above holds in both modes; the OFFER only exists in
+    this one.
     """
     labels = ["Q1", "Q2", "Q3"]
     source = stage_a(
@@ -1051,7 +1082,8 @@ async def test_a_rider_costs_no_group_and_no_extra_call():
     )
     audited = working_fake(6, groups=[[1, 2, 3, 4, 5, 6]])
 
-    result = await stage_b(audited, source)
+    with grouping_mode(question_grouping._GROUPING_MODE_TOPIC):
+        result = await stage_b(audited, source)
 
     assert len(result["discovery"]) == 2
     assert not any(g["bracket"] == "discovery" for g in result["groups"])
@@ -1096,7 +1128,12 @@ async def test_a_cross_cutting_question_earns_exactly_one_group_called_d1():
 
 async def test_no_discovery_and_the_mandate_gets_all_five():
     """An unsourced flag takes no slot, so the unused slot rolls back — effected by
-    the ceiling subtraction NOT happening (D-W3-5.3)."""
+    the ceiling subtraction NOT happening (D-W3-5.3).
+
+    RUN IN `topic` MODE (15.7-01), for the same reason as the rider test above: the
+    "gets all five" half is observable ONLY in the prompt's offer. `no source, no
+    slot` itself is mode-independent and is asserted after the block.
+    """
     labels = ["Q1", "Q2", "Q3"]
     source = stage_a(
         labels,
@@ -1105,7 +1142,8 @@ async def test_no_discovery_and_the_mandate_gets_all_five():
     )
     audited = working_fake(groups=[[1]])
 
-    result = await stage_b(audited, source)
+    with grouping_mode(question_grouping._GROUPING_MODE_TOPIC):
+        result = await stage_b(audited, source)
 
     assert result["discovery"] == []
     assert result["discovery_not_researched"] == []
@@ -1126,6 +1164,17 @@ async def test_gap_a_the_mandate_keeps_its_slots_and_the_cross_cutting_group_is_
     would leave four. THE MANDATE WINS: no `d1` is created, the cross-cutting
     question comes back under `discovery_not_researched`, and it is a NOTE rather
     than a degradation because every client question is researched in full.
+
+    MOVED ONTO THE PRIMARY PATH BY 15.7-01, rather than pinned to `topic` like the
+    two tests above. The reason is that GAP A's claim is *"the mandate keeps its five
+    slots"*, and on D-W4-4a's primary path that is observable DIRECTLY — five client
+    questions produce five mandate groups, asserted below — instead of indirectly via
+    what the grouping model was offered in a prompt. Asserting it on the path that
+    actually runs in production is strictly stronger than asserting it on the option.
+    The `AT MOST … groups` assertion is therefore not deleted but REPLACED by its
+    primary-path counterpart: no grouping prompt is built at all, which is what makes
+    "the mandate got all five" a fact about Python's own arithmetic rather than about
+    a sentence a model may ignore.
     """
     labels = ["Q1", "Q2", "Q3", "Q4", "Q5"]
     source = stage_a(
@@ -1147,10 +1196,18 @@ async def test_gap_a_the_mandate_keeps_its_slots_and_the_cross_cutting_group_is_
         "were not researched this run" in reason
         for reason in result["degradation_reasons"]
     ), "holding the mandate line is not a degradation"
-    grouping_prompt = next(
-        p for p in audited.anthropic_prompts() if GROUP_PROMPT_MARKER in p
+    # THE PRIMARY-PATH COUNTERPART of the old `AT MOST {N} groups` prompt assertion.
+    # The mandate did not have to be OFFERED five slots by a sentence in a prompt —
+    # it took five because there are five client questions, and no grouping prompt
+    # was built at all. `len(mandate groups) == 5` above is the same claim, proven
+    # against the run's own output rather than against its input.
+    assert not any(GROUP_PROMPT_MARKER in p for p in audited.anthropic_prompts()), (
+        "the primary path must build no grouping prompt and make no grouping call"
     )
-    assert f"AT MOST {question_grouping._D6_MAX_GROUPS} groups" in grouping_prompt
+    assert not any(
+        "produced nothing usable" in reason
+        for reason in result["degradation_reasons"]
+    ), "the configured primary path is not a degradation (D-12)"
 
 
 async def test_a_grouping_failure_degrades_and_a_coverage_repair_only_notes():
@@ -1160,11 +1217,20 @@ async def test_a_grouping_failure_degrades_and_a_coverage_repair_only_notes():
     grouping FULL fallback is a real degradation (shared groundwork gets searched
     once per question instead of once per topic), while a coverage repair is only a
     note (the question IS researched).
+
+    PART (a) RUNS IN `topic` MODE (15.7-01). A grouping step can only FALL BACK if it
+    ran, and only the `topic` path runs one. This is not the plan's three named
+    prompt assertions but the same seam: without the pin, part (a)'s premise silently
+    evaporates and the test would pass while asserting nothing. Part (b) is a scope
+    repair and is mode-independent, so it deliberately stays on the default path —
+    which also keeps the D-12 distinction asserted across BOTH grouping modes rather
+    than only inside one.
     """
     labels = ["Q1", "Q2", "Q3"]
     # (a) the grouping turn returns no tool_use block at all.
     broken = working_fake(group_response=FakeTextResponse("I would rather not."))
-    degraded = await stage_b(broken, stage_a(labels, labels * 4))
+    with grouping_mode(question_grouping._GROUPING_MODE_TOPIC):
+        degraded = await stage_b(broken, stage_a(labels, labels * 4))
 
     assert any(
         "groups research questions" in reason
@@ -1277,12 +1343,20 @@ async def test_the_grouping_call_is_counted_in_the_stage_actions_and_cost():
     `cost_usd` as a string like the other three steps — so reading the wrong key
     reports every grouping call as free. The budget governor is inert by decision,
     which makes this number the only spend signal the run has.
+
+    RUN IN `topic` MODE (15.7-01), because the thing under test is that a PAID
+    grouping call is metered, and D-W4-4a's primary path deliberately makes none.
+    Pinned rather than rewritten: the accounting bug this guards against is still
+    live on the `topic` path, and there is exactly one measuring run in which the two
+    modes may be compared. The primary path's own "no call means no cost" claim is
+    asserted in `test_question_grouping.py` against a client that cannot be called.
     """
     recorder = FeedRecorder()
     feed = make_feed(recorder)
     audited = working_fake(groups=[[1]])
 
-    await stage_b(audited, stage_a(["Q1", "Q2"], ["Q1", "Q2", "Q1"]), feed=feed)
+    with grouping_mode(question_grouping._GROUPING_MODE_TOPIC):
+        await stage_b(audited, stage_a(["Q1", "Q2"], ["Q1", "Q2", "Q1"]), feed=feed)
     await feed.flush()
 
     summary = recorder.calls[-1]["detail"]["summary"]
