@@ -442,9 +442,11 @@ def test_the_winners_bound_still_bites_on_groups_a_caller_supplied(caplog):
     is a live risk because the pipeline owns that threading. Angle count is the only
     real spend control left, so the bound is re-enforced over supplied groups.
     """
-    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, 21)]
-    groups = _groups(winners, [list(range(0, 10)), list(range(10, 20))])
-    assert sum(len(g["members"]) for g in groups) == 20, "the fixture's own premise"
+    over = rd._D6_MAX_WINNERS + 5
+    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, over + 1)]
+    half = over // 2
+    groups = _groups(winners, [list(range(0, half)), list(range(half, over))])
+    assert sum(len(g["members"]) for g in groups) == over, "the fixture's own premise"
 
     with caplog.at_level(logging.WARNING):
         angles = rd.divide(_wbrief("Q1"), winners=winners, groups=groups)
@@ -453,9 +455,88 @@ def test_the_winners_bound_still_bites_on_groups_a_caller_supplied(caplog):
     for angle in angles:
         researched |= set(angle["sub_questions"])
     assert researched == {f"sub-question {i}" for i in range(1, rd._D6_MAX_WINNERS + 1)}
-    assert len(researched) == rd._D6_MAX_WINNERS == 15
+    assert len(researched) == rd._D6_MAX_WINNERS == 32
     assert any("strongest winners" in r.message for r in caplog.records), (
         "a dropped member must be named, never dropped silently"
+    )
+
+
+def test_the_dw4_5_winner_shape_reaches_dispatch_without_being_clipped():
+    """D-W4-5's EXACT validated shape, through the seam that used to eat it.
+
+    Seventeen winners: a floor of FIVE per client question over three client
+    questions, plus TWO cross-cutting. That is `exp11`, the measured configuration
+    this whole phase is building, and it is the number the 15.8 run is judged on.
+
+    THIS IS THE REGRESSION. Before phase 15.7 `_D6_MAX_WINNERS` was 15, so exactly
+    two of these seventeen were dropped by the truncation in `divide()` — silently,
+    after the tournament had already paid to rank all seventeen. A floor that is
+    truncated downstream delivers nothing, and no assertion anywhere would have
+    caught it: every group still dispatched, every client question still had a
+    winner, and the run still read healthy.
+
+    Driven through the REAL `build_groups` and the REAL `divide()` D6 branch, and
+    asserted on the SET of sub-questions that actually reach a provider — not on a
+    count, which two dropped questions and two duplicated ones would also satisfy.
+    """
+    labels = ["Q1", "Q2", "Q3"]
+    winners: list[dict] = []
+    rank = 1
+    for label in labels:
+        for n in range(5):
+            winners.append(_winner(f"{label} sub-question {n}", rank, label))
+            rank += 1
+    # The two cross-cutting questions. Each names TWO client questions in `parents`,
+    # which is what makes their group genuinely span two of the client's questions —
+    # D-W4-5's highest-value output, and the shape a per-question quota cannot make.
+    for a, b in (("Q1", "Q2"), ("Q2", "Q3")):
+        cross = _winner(f"cross-cutting {a}+{b}", rank, a)
+        cross["parents"] = [a, b]
+        winners.append(cross)
+        rank += 1
+    assert len(winners) == 17, "the fixture's own premise: 5 + 5 + 5 + 2"
+
+    groups = _groups(
+        winners,
+        [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16]],
+    )
+    assert len(groups) == 4, "three mandate groups plus the cross-cutting one"
+
+    angles = rd.divide(_wbrief(*labels), winners=winners, groups=groups)
+
+    researched: set[str] = set()
+    for angle in angles:
+        researched |= set(angle["sub_questions"])
+    assert researched == {w["text"] for w in winners}, (
+        "all SEVENTEEN must reach a provider; at the old bound of 15 exactly two "
+        "of them silently did not"
+    )
+    assert len(angles) == len(groups) * len(rd._D6_STREAMS), (
+        "and the paid-call count is still groups x streams — raising the WINNER "
+        "bound buys depth inside the same calls, not more calls"
+    )
+    assert len(angles) <= rd._MAX_ANGLES
+
+
+def test_forty_winners_still_truncate_so_the_bound_has_not_been_disabled():
+    """THE NEGATIVE ARM, and it is a behaviour-PRESERVATION guard, not vacuity.
+
+    It passes both before and after phase 15.7 by design: what it pins is that the
+    bound still EXISTS and still bites, so a future edit cannot "fix" a clipping
+    complaint by deleting the truncation outright. T-15.2-61 is why — the budget
+    governor is inert by decision, so every bound that survives is load-bearing.
+    """
+    winners = [_winner(f"sub-question {i}", i, "Q1") for i in range(1, 41)]
+    assert len(winners) > rd._D6_MAX_WINNERS, "the fixture's own premise"
+
+    angles = rd.divide(_wbrief("Q1"), winners=winners)
+
+    researched: set[str] = set()
+    for angle in angles:
+        researched |= set(angle["sub_questions"])
+    assert len(researched) == rd._D6_MAX_WINNERS == 32
+    assert researched == {f"sub-question {i}" for i in range(1, 33)}, (
+        "and it truncates BY RANK, keeping the strongest — not by arrival order"
     )
 
 
