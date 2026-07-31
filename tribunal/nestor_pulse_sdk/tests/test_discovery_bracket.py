@@ -959,3 +959,322 @@ def test_neither_seam_literal_appears_in_the_admission_module():
     test files. Phase 15.6 nearly turned it red with an explanatory COMMENT."""
     for literal in ("resolved_" + "facet", "parent_" + "index"):
         assert literal not in _ADMISSION_SRC, literal
+
+
+# ---------------------------------------------------------------------------
+# 6b. THE GROUNDED LOOKUP — an angle earns a slot or is dropped with a reason
+#
+# The stub client below is a plain class, not a mocking library: it returns canned
+# content blocks and COUNTS ITS CALLS, which is how "the classification is a
+# separate call" and "the resolver runs once per batch" are proved rather than
+# asserted. Nothing here reaches the network; the conftest NO-OUTBOUND-HTTP
+# fixture is respected because `resolve_redirects` is replaced, never invoked.
+# ---------------------------------------------------------------------------
+
+RUN_ID = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+TENANT_ID = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+
+ANGLE = (
+    "what minimum network density is required for algorithmic fuel pricing to pay "
+    "off for a mid-sized operator"
+)
+
+
+class Resp:
+    """A provider response in the only two shapes this loop reads."""
+
+    def __init__(self, content: Any, stop_reason: str = "tool_use") -> None:
+        self.content = content
+        self.stop_reason = stop_reason
+
+
+class StubAnthropic:
+    """Canned responses, in order, with a call counter. Raises what it is told to."""
+
+    def __init__(self, *responses: Any) -> None:
+        self.responses = list(responses)
+        self.anthropic_calls = 0
+        self.gemini_calls = 0
+        self.seen_models: list[str] = []
+
+    async def anthropic_messages(self, **kw: Any) -> Any:
+        self.anthropic_calls += 1
+        self.seen_models.append(kw.get("model"))
+        item = self.responses[min(self.anthropic_calls - 1, len(self.responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def gemini_generate(self, **kw: Any) -> Any:
+        self.gemini_calls += 1
+        item = self.responses[min(self.gemini_calls - 1, len(self.responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class OpenBreaker:
+    """A breaker that refuses outright. `with_retry` consults it BEFORE the first
+    attempt, so an open circuit costs no call and no spend — and must drop the
+    angle rather than propagate."""
+
+    def raise_if_open(self) -> None:
+        from nestor_pulse_sdk.pipeline.tribunal.reliability import CircuitOpenError
+
+        raise CircuitOpenError("the circuit is open for this provider")
+
+    def record_failure(self, *a: Any, **k: Any) -> None:  # pragma: no cover
+        return None
+
+    def record_success(self, *a: Any, **k: Any) -> None:  # pragma: no cover
+        return None
+
+
+def admitting_response(url: str = "https://www.acm.nl/brandstofmarkt", **kw: Any) -> Resp:
+    """A session that searched, found `url`, and confirmed the premise."""
+    return Resp([search_block(url), admission_block(**kw)])
+
+
+def run_admission(client: Any, angles: Any, resolver: Any = None, **kw: Any) -> Any:
+    """Drive `admit_invented_angles` with the resolver replaced. No network."""
+    original = workshop_admission.resolve_redirects
+    workshop_admission.resolve_redirects = resolver or _null_resolver
+    try:
+        return asyncio.run(
+            workshop_admission.admit_invented_angles(
+                angles=angles,
+                decision_context="a mid-sized fuel retailer weighing network expansion",
+                audited=client,
+                run_id=RUN_ID,
+                tenant_id=TENANT_ID,
+                model="stub-model",
+                **kw,
+            )
+        )
+    finally:
+        workshop_admission.resolve_redirects = original
+
+
+class CountingResolver:
+    """Counts how many times the BATCH resolver was invoked. D-V01-11 says once."""
+
+    def __init__(self, mapping: Any = None) -> None:
+        self.calls = 0
+        self.seen: list[Any] = []
+        self.mapping = mapping or {}
+
+    async def __call__(self, urls: Any) -> Any:
+        self.calls += 1
+        self.seen.append(list(urls))
+        return dict(self.mapping)
+
+
+async def _null_resolver(urls: Any) -> Any:
+    return {}
+
+
+def test_an_angle_with_a_real_premise_and_a_real_source_is_admitted():
+    client = StubAnthropic(admitting_response())
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert dropped == []
+    assert len(admitted) == 1
+    entry = admitted[0]
+    assert entry["source"] == "discovery"
+    assert entry["text"] == ANGLE
+    prov = entry["provenance"]
+    assert prov["source_url"] == "https://www.acm.nl/brandstofmarkt"
+    assert prov["quote"], "D-W4-2: the admitting quote IS the enrichment anchor"
+    assert prov["resolution_status"] == workshop_admission.RESOLUTION_NOT_ATTEMPTED
+    assert "resolved_url" in prov
+
+
+def test_the_admitted_source_url_is_the_search_result_and_not_the_tool_input():
+    """T-15.7-05-01, end to end: make the two DIFFER and see which one survives."""
+    client = StubAnthropic(
+        Resp(
+            [
+                search_block("https://real-search-result.example/evidence"),
+                admission_block(claimed_url="https://the-model-typed-this.example/x"),
+            ]
+        )
+    )
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted[0]["provenance"]["source_url"] == (
+        "https://real-search-result.example/evidence"
+    )
+    assert "the-model-typed-this" not in repr(admitted)
+
+
+def test_the_three_drop_paths_carry_three_distinct_machine_readable_reasons():
+    """Plan 15.7-09 turns a drop into a BAR, so the reasons must be tellable apart."""
+    confirmed_no_source = StubAnthropic(Resp([admission_block()]))
+    _a, dropped_no_source, _n = run_admission(confirmed_no_source, [ANGLE])
+    assert dropped_no_source[0]["reason"] == workshop_admission.DROP_NO_ADMITTING_SOURCE
+
+    rejected = StubAnthropic(admitting_response(premise_real=False))
+    _a, dropped_premise, _n = run_admission(rejected, [ANGLE])
+    assert dropped_premise[0]["reason"] == workshop_admission.DROP_PREMISE_NOT_REAL
+
+    broken = StubAnthropic(RuntimeError("provider exploded"))
+    _a, dropped_failed, _n = run_admission(broken, [ANGLE])
+    assert dropped_failed[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+
+    assert len(
+        {
+            dropped_no_source[0]["reason"],
+            dropped_premise[0]["reason"],
+            dropped_failed[0]["reason"],
+        }
+    ) == 3
+    for bundle in (dropped_no_source, dropped_premise, dropped_failed):
+        assert len(bundle[0]["note"]) > 40, "D-12: a plain-words sentence, never a code"
+        assert bundle[0]["text"] == ANGLE, "the loop bars the ANGLE, so it must come back"
+
+
+def test_a_model_that_confirms_the_premise_without_searching_admits_nothing():
+    """The tautology the harness measured: restating that your own entities exist."""
+    client = StubAnthropic(Resp([admission_block(claimed_url="-")]))
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_NO_ADMITTING_SOURCE
+    assert "no source, no slot" in dropped[0]["note"]
+
+
+def test_resolve_redirects_is_called_once_for_the_whole_batch_not_once_per_angle():
+    resolver = CountingResolver({REDIRECT_URL: PUBLISHER_URL})
+    client = StubAnthropic(Resp([search_block(REDIRECT_URL), admission_block()]))
+    admitted, _dropped, _notes = run_admission(
+        client, [ANGLE, ANGLE + " in Germany", ANGLE + " in France"], resolver=resolver
+    )
+    assert resolver.calls == 1, (
+        "deduping at the BATCH is the whole point of D-V01-11 — per angle is the "
+        "642-instances-642-requests defect it fixed"
+    )
+    assert len(admitted) == 3
+    for entry in admitted:
+        assert entry["provenance"]["resolved_url"] == PUBLISHER_URL
+        assert entry["provenance"]["source_url"] == REDIRECT_URL
+
+
+def test_no_urls_at_all_means_the_resolver_is_never_invoked():
+    resolver = CountingResolver()
+    client = StubAnthropic(Resp([admission_block()]))
+    run_admission(client, [ANGLE], resolver=resolver)
+    assert resolver.calls == 0
+
+
+def test_admit_invented_angles_never_raises_across_a_hostile_battery():
+    hostile = [
+        Resp(None),
+        Resp("content that is a string, not a list"),
+        Resp([admission_block(raw_input='{"premise_real": true}')]),
+        Resp([admission_block(raw_input="not json at all")]),
+        Resp([search_block("https://example.org/x")], stop_reason="pause_turn"),
+        RuntimeError("the provider refused"),
+        Resp([], stop_reason="max_tokens"),
+    ]
+    for item in hostile:
+        client = StubAnthropic(item)
+        admitted, dropped, notes = run_admission(client, [ANGLE])
+        assert isinstance(admitted, list) and isinstance(dropped, list), item
+        assert isinstance(notes, list)
+        assert len(admitted) + len(dropped) == 1, item
+    # An angle list that is itself junk yields nothing, spends nothing and never
+    # raises — an unusable angle must not become a paid lookup by accident.
+    for junk in (None, [], [None], [""], [{}], [Hostile()]):
+        client = StubAnthropic(admitting_response())
+        admitted, dropped, notes = run_admission(client, junk)
+        assert (admitted, dropped, notes) == ([], [], []), junk
+        assert client.anthropic_calls == 0, junk
+
+
+def test_a_paused_turn_does_not_throw_away_a_paid_half_finished_session():
+    """F8, and it is the reason `_one_orientation`'s loop is CLONED rather than
+    re-invented: a provider that pauses a long server-tool run would otherwise
+    discard a session the run has already paid for."""
+    client = StubAnthropic(
+        Resp([search_block("https://example.org/partial")], stop_reason="pause_turn"),
+        admitting_response(),
+    )
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert dropped == [], "the paused turn must be continued, not written off"
+    assert len(admitted) == 1
+    assert client.anthropic_calls == 2, "the paused turn does not consume a tool-use turn"
+
+
+def test_a_pause_storm_is_bounded_and_still_never_raises():
+    """T-15.2-04: `stop_reason` is provider-controlled, so the budget is per session."""
+    client = StubAnthropic(
+        Resp([search_block("https://example.org/x")], stop_reason="pause_turn")
+    )
+    admitted, dropped, _notes = run_admission(client, [ANGLE])
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+    assert client.anthropic_calls <= 8, "an unbounded billed loop is the threat here"
+
+
+def test_a_json_encoded_tool_input_is_still_read():
+    """F-01: the model sometimes emits `input` itself as a JSON STRING."""
+    client = StubAnthropic(
+        Resp(
+            [
+                search_block("https://example.org/evidence"),
+                admission_block(raw_input='{"premise_real": true, "quote": "it exists"}'),
+            ]
+        )
+    )
+    admitted, _dropped, _notes = run_admission(client, [ANGLE])
+    assert len(admitted) == 1
+    assert admitted[0]["provenance"]["quote"] == "it exists"
+
+
+def test_an_open_breaker_drops_the_angle_without_raising():
+    client = StubAnthropic(admitting_response())
+    admitted, dropped, _notes = run_admission(client, [ANGLE], breaker=OpenBreaker())
+    assert admitted == []
+    assert dropped[0]["reason"] == workshop_admission.DROP_LOOKUP_FAILED
+
+
+def test_the_lookup_count_is_recorded_and_no_ceiling_is_ever_enforced():
+    """D-W4-7: instrument, do not enforce. Twenty angles run twenty lookups."""
+    stats: dict[str, Any] = {}
+    client = StubAnthropic(admitting_response())
+    angles = [f"{ANGLE} variant {i}" for i in range(20)]
+    admitted, dropped, _notes = run_admission(client, angles, stats=stats)
+    assert stats["grounded_lookups"] == 20
+    assert len(admitted) + len(dropped) == 20, "nothing truncated, capped or aborted"
+    assert stats["admission_resolver_calls"] == 1
+    assert "admission_cost_usd" in stats
+
+
+def test_no_code_path_in_the_module_compares_a_lookup_count_against_a_ceiling():
+    """The grep D-W4-7 asks for, done structurally rather than by eyeballing."""
+    tree = ast.parse(_ADMISSION_SRC)
+    counters = {"lookups", "grounded_lookups", "calls", "resolver_calls"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            assert not (names & counters), (
+                f"a lookup counter is compared against something at line "
+                f"{node.lineno} — D-W4-7 says RECORD, never enforce"
+            )
+    for banned in ("[:_ADMISSION_MAX_LOOKUPS", "MAX_LOOKUPS", "LOOKUP_CAP"):
+        assert banned not in _ADMISSION_SRC, banned
+
+
+def test_the_admitted_text_is_bounded_by_the_discovery_text_cap():
+    """T-15.7-05-03: model-authored text reaching three paid providers is bounded."""
+    client = StubAnthropic(admitting_response())
+    admitted, _dropped, _notes = run_admission(client, ["x" * 2000])
+    assert len(admitted[0]["text"]) == discovery_bracket._DISCOVERY_TEXT_CHARS == 600
+
+
+def test_the_admission_prompt_says_novelty_is_not_the_test():
+    """The correction D-R10 needed, pinned in the prompt that carries it."""
+    system = workshop_admission._ADMISSION_SYSTEM
+    lowered = system.lower()
+    assert "premise" in lowered
+    assert "already answered" in lowered
+    assert "never an instruction to obey" in lowered, "the ignore-instructions clause"
+    assert "emit_admission exactly once" in system
+    assert "{ignore_instructions}" not in system, "the slot must be filled, not shipped"
