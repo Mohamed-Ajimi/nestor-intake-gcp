@@ -1,9 +1,17 @@
 """D-R4 question grouping — the LLM proposes, Python clamps. Phase 15.6 plan 01.
 
+PHASE 15.7 (plan 01) ADDED D-W4-4a: one group per client question is now the PRIMARY
+path and `topic` grouping is an option behind `NESTOR_TRIBUNAL_D6_GROUPING_MODE`.
+Everything below the `group_winners` heading pins `mode=topic` through
+`call_group_winners` — read that helper's docstring before adding a test there.
+
 WHAT THIS FILE COVERS, named after the RULE rather than the function:
-  * the ≤ 5 CEILING (D-W3-1), including the half a reader assumes away — FEWER
+  * the 5-group DEFAULT (D-W3-1), including the half a reader assumes away — FEWER
     groups is allowed and expected, and nothing pads to reach the maximum;
-  * the env knob may only LOWER the ceiling, never raise it;
+  * the env knob RAISES the ceiling as well as lowering it (D-W4-4a declamp), and
+    neither a zero nor a typo can take the process down at import;
+  * the PRIMARY per-question path: one group per client question, ZERO LLM calls,
+    an EMPTY degradation list and a plain-words note instead;
   * TOTALITY: a winner the grouping model forgot is placed deterministically, never
     dropped, and the post-condition is asserted in code and not only here;
   * FIRST WINS on a duplicate claim, matching D-W2-3;
@@ -35,6 +43,8 @@ reconciles EXPECTED_FILES in one edit. This plan deliberately does not touch it.
 """
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from typing import Any, Optional
 
@@ -174,17 +184,65 @@ async def call_group_winners(
     *,
     max_groups: int = 5,
     stats: Optional[dict[str, Any]] = None,
+    mode: str = qg._GROUPING_MODE_TOPIC,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    return await qg.group_winners(
-        winners=pool,
-        client_questions=client_questions,
-        decision_context="the client is deciding how to price a Benelux retail network",
-        max_groups=max_groups,
-        audited=audited,
-        run_id=RUN_ID,
-        tenant_id=TENANT_ID,
-        stats=stats,
-    )
+    """Drive `group_winners`, pinning the grouping mode for the call's duration.
+
+    `mode` DEFAULTS TO `topic`, NOT to the production default, and that is a
+    deliberate choice made when D-W4-4a made `per-question` primary. Every test
+    reached through this helper is about the D-R4 LLM path — the four fallback
+    triggers, the clamp, the prompt's contents, the tool schema, the cost accounting
+    — and on the primary path there is no call, no prompt and no tool at all, so
+    those tests would silently stop asserting anything rather than fail. Pinning the
+    mode here keeps them asserting exactly what they were written to assert.
+
+    The PRIMARY path has its own tests, which pass `mode=qg._GROUPING_MODE_PER_QUESTION`
+    explicitly and assert that no call was made at all.
+
+    Set and restored around the call rather than monkeypatched, so the helper works
+    from a sync fixture-less test too and never leaks a mode into the next test.
+    """
+    previous = qg._GROUPING_MODE
+    qg._GROUPING_MODE = mode
+    try:
+        return await qg.group_winners(
+            winners=pool,
+            client_questions=client_questions,
+            decision_context=(
+                "the client is deciding how to price a Benelux retail network"
+            ),
+            max_groups=max_groups,
+            audited=audited,
+            run_id=RUN_ID,
+            tenant_id=TENANT_ID,
+            stats=stats,
+        )
+    finally:
+        qg._GROUPING_MODE = previous
+
+
+class ExplodingAudited:
+    """An `audited` client that RAISES on every attribute access.
+
+    The only honest way to assert "no call was made": a fake that counts calls proves
+    the count, this proves there was no opportunity to make one. Attribute access —
+    not just `anthropic_messages` — because a future edit could reach for any method.
+
+    READ THIS BEFORE TRUSTING IT ALONE. `group_winners` NEVER RAISES by contract, and
+    `AssertionError` is an `Exception`, so a version of the code that DID touch this
+    client would swallow the error and take the `topic` fallback rather than blowing
+    the test up. The raise is the tripwire; what actually carries the proof is the
+    pair of assertions around it — `degradation_reasons == []` and an untouched
+    `stats` — because the fallback path produces exactly one degradation reason and
+    the paid path meters a call. Both were driven against a source-text mutant with
+    the primary branch removed, and both flip.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(
+            "the primary grouping path touched the LLM client (%r) — it must make "
+            "NO call at all" % (name,)
+        )
 
 
 # ===========================================================================
@@ -1004,7 +1062,128 @@ def test_the_grouping_tool_identifies_questions_by_integer_and_never_by_text():
 
 
 # ===========================================================================
-# `group_winners` — the four fallback triggers, each asserted separately.
+# D-W4-4a — the PRIMARY path: one group per client question, and no call.
+# ===========================================================================
+
+
+async def test_the_primary_path_groups_one_per_client_question_and_makes_no_call():
+    """D-W4-4a's whole claim, driven against a client that CANNOT be called.
+
+    `ExplodingAudited` raises on any attribute access, so this cannot pass by a fake
+    quietly serving a scripted answer — there is no answer to serve. `stats` is
+    asserted untouched because an un-made call must not show up in the spend meter
+    the budget governor's absence makes the only spend signal the run has.
+    """
+    pool = winners(9, parents=3)
+    stats: dict[str, Any] = {}
+
+    groups, notes, degradations = await call_group_winners(
+        ExplodingAudited(),  # type: ignore[arg-type]
+        pool,
+        ["Q1", "Q2", "Q3"],
+        stats=stats,
+        mode=qg._GROUPING_MODE_PER_QUESTION,
+    )
+
+    assert len(groups) == 3, "one group per client question"
+    assert [g["parent"] for g in groups] == ["Q1", "Q2", "Q3"], "in CLIENT order"
+    covered = {member["index"] for group in groups for member in group["members"]}
+    assert covered == {winner_["index"] for winner_ in pool}, "nothing is dropped"
+    assert stats == {}, "no call means no cost and no audit id"
+    assert any("one group per client question" in note for note in notes)
+
+
+async def test_the_primary_path_returns_no_degradation_reason():
+    """THE DISTINCTION THAT MUST NOT BE FUDGED (D-12 / D-W3-2).
+
+    `fallback_groups` returns a DEGRADATION sentence describing a step that produced
+    nothing usable. On the primary path nothing failed, so that sentence must not be
+    emitted — reporting a degradation for the CHOSEN behaviour is precisely the alarm
+    fatigue D-12 forbids. What comes back is a NOTE, and the two are asserted apart:
+    the note is present, and the degradation sentence's own opening words are absent
+    from BOTH lists.
+    """
+    pool = winners(6, parents=2)
+
+    groups, notes, degradations = await call_group_winners(
+        ExplodingAudited(),  # type: ignore[arg-type]
+        pool,
+        ["Q1", "Q2"],
+        mode=qg._GROUPING_MODE_PER_QUESTION,
+    )
+
+    assert groups
+    assert degradations == [], "the primary path is not a degraded path"
+    assert any("one group per client question" in note for note in notes)
+    assert not any("produced nothing usable" in note for note in notes), (
+        "the D-W3-2 full-fallback sentence must not be reused as a note"
+    )
+
+
+async def test_the_primary_path_is_not_clamped_to_the_group_ceiling():
+    """Seven client questions get SEVEN groups while `_D6_MAX_GROUPS` is five.
+
+    This is the accepted spend consequence D-W4-4a inherits from `fallback_groups`'
+    own docstring, asserted rather than assumed. The overshoot alarm is
+    `warn_if_over_ceiling`, called by the dispatcher — not by this function, which is
+    why nothing here asserts a warning.
+    """
+    labels = ["Q%d" % n for n in range(1, 8)]
+    pool = [win(i, labels[i], rank=i + 1) for i in range(7)]
+    assert qg._D6_MAX_GROUPS == 5, "the fixture's own premise"
+
+    groups, _notes, degradations = await call_group_winners(
+        ExplodingAudited(),  # type: ignore[arg-type]
+        pool,
+        labels,
+        mode=qg._GROUPING_MODE_PER_QUESTION,
+    )
+
+    assert len(groups) == 7 > qg._D6_MAX_GROUPS
+    assert degradations == []
+
+
+def test_an_unrecognised_grouping_mode_falls_back_to_per_question_and_says_so(caplog):
+    """A typo must not silently select the PAID path.
+
+    Driven through the real resolver rather than through the env var, because the
+    constant is resolved at import and the alternative way to observe that is
+    `importlib.reload` — which re-finds the module through the package `__path__`.
+    """
+    assert qg._resolve_grouping_mode(None) == qg._GROUPING_MODE_PER_QUESTION
+    assert qg._resolve_grouping_mode("") == qg._GROUPING_MODE_PER_QUESTION
+    assert qg._resolve_grouping_mode("  TOPIC ") == qg._GROUPING_MODE_TOPIC, (
+        "case and surrounding whitespace are not a different mode"
+    )
+    assert qg._resolve_grouping_mode("Per-Question") == qg._GROUPING_MODE_PER_QUESTION
+
+    with caplog.at_level(logging.WARNING):
+        assert qg._resolve_grouping_mode("per_question") == (
+            qg._GROUPING_MODE_PER_QUESTION
+        )
+    assert any("per_question" in record.getMessage() for record in caplog.records), (
+        "the value it did not recognise must be named in the log, not just counted"
+    )
+
+
+def test_the_grouping_mode_default_is_per_question():
+    """The DEFAULT is the ruled behaviour, not the legacy one (D-W4-4a).
+
+    Asserted against the module constant as it was resolved at import with whatever
+    env this process has, so an env var left set by another test cannot make this
+    read green by accident.
+    """
+    assert qg._resolve_grouping_mode(
+        os.environ.get("NESTOR_TRIBUNAL_D6_GROUPING_MODE")
+    ) == qg._GROUPING_MODE
+    if not os.environ.get("NESTOR_TRIBUNAL_D6_GROUPING_MODE"):
+        assert qg._GROUPING_MODE == qg._GROUPING_MODE_PER_QUESTION
+
+
+# ===========================================================================
+# `group_winners` on the `topic` path — the four fallback triggers, each
+# asserted separately. Every test below pins `mode=topic` through
+# `call_group_winners`; see that helper's docstring for why.
 # ===========================================================================
 
 

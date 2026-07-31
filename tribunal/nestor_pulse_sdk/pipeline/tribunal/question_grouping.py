@@ -173,6 +173,68 @@ _D6_MAX_GROUPS = max(1, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUPS", 5))
 # a degradation.
 _D6_MAX_GROUP_SIZE = max(3, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", 7))
 
+#: The two grouping modes, named rather than typed as bare literals at each site, so a
+#: caller and a test cannot drift apart on a string.
+_GROUPING_MODE_PER_QUESTION = "per-question"
+_GROUPING_MODE_TOPIC = "topic"
+
+
+def _resolve_grouping_mode(raw: Any) -> str:
+    """Read the grouping mode, defaulting to per-question. NEVER RAISES.
+
+    Split out of the constant below so the unrecognised-value branch is reachable
+    from a test WITHOUT `importlib.reload`, which is the only other way to observe an
+    import-time decision.
+    """
+    value = str(raw or "").strip().lower()
+    if not value:
+        return _GROUPING_MODE_PER_QUESTION
+    if value in (_GROUPING_MODE_PER_QUESTION, _GROUPING_MODE_TOPIC):
+        return value
+    log.warning(
+        "question_grouping: NESTOR_TRIBUNAL_D6_GROUPING_MODE=%r is not one of %r or "
+        "%r, so questions are grouped ONE GROUP PER CLIENT QUESTION (the default). "
+        "An unrecognised mode must not silently select the paid path.",
+        raw,
+        _GROUPING_MODE_PER_QUESTION,
+        _GROUPING_MODE_TOPIC,
+    )
+    return _GROUPING_MODE_PER_QUESTION
+
+
+# WHICH WAY THE WINNERS ARE GROUPED. Operator decision D-W4-4a (2026-07-30, homed in
+# phase 15.7): ONE GROUP PER CLIENT QUESTION IS THE PRIMARY PATH.
+#
+# `per-question` is deterministic, costs NO LLM call, and cannot drop a question,
+# because the grouping is a pure function of which client question each winner already
+# names as its parent. For a typical brief it is also CHEAPER than topic grouping —
+# 3 client questions x 3 providers is 9 paid calls against a happy-path ceiling of 15.
+# It starts to overspend past 5 client questions, and that overshoot is reported by
+# `warn_if_over_ceiling` from the caller, unchanged. What it costs is TOPIC DEDUP:
+# groundwork shared between two client questions is searched once per question rather
+# than once per topic.
+#
+# `topic` IS KEPT AS AN OPTION, NOT DELETED. It is the D-R4 path — one audited LLM
+# call proposing groups, Python clamping them — and everything about it below is
+# reachable and unchanged, including all four named fallback triggers. Deleting it
+# would also cost the phase its ability to compare the two, and there is exactly ONE
+# measuring run.
+#
+# THIS IS NOT A FEATURE FLAG BETWEEN TWO ENGINE PATHS IN THE D-03 SENSE. D-03 forbids
+# a knob that decides which of two implementations of the SAME decision runs on a paid
+# run; this selects between two grouping POLICIES the operator ruled on explicitly,
+# with the ruled one as the default.
+_GROUPING_MODE = _resolve_grouping_mode(os.environ.get("NESTOR_TRIBUNAL_D6_GROUPING_MODE"))
+
+#: What the run report says when the PRIMARY path ran. A NOTE, never a degradation —
+#: see the comment inside `group_winners` for why that distinction is load-bearing.
+_NOTE_GROUPED_PER_QUESTION = (
+    "The research questions were grouped one group per client question, which is how "
+    "this engine is configured to group them. Groundwork shared between two of the "
+    "client's questions was therefore searched once per question rather than once per "
+    "topic."
+)
+
 #: The two bracket values, EXPORTED because four other modules test against them and
 #: none of them may retype a string literal.
 GROUP_BRACKET_MANDATE = "mandate"
@@ -1269,11 +1331,20 @@ async def group_winners(
     model: Optional[str] = None,
     stats: Optional[dict[str, Any]] = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """Group the winners with ONE audited LLM call, or fall back. NEVER RAISES.
+    """Group the winners. NEVER RAISES. Returns `(groups, notes, degradation_reasons)`.
 
-    Returns `(groups, notes, degradation_reasons)`.
+    TWO PATHS, selected by `_GROUPING_MODE` (operator decision D-W4-4a):
 
-    FOUR THINGS LEAD TO `fallback_groups` PLUS A D-12 DEGRADATION, and each gets its
+      * `per-question` — THE PRIMARY PATH AND THE DEFAULT. One group per client
+        question, deterministic, NO LLM CALL, no spend, and an EMPTY
+        `degradation_reasons`. `stats` is left untouched because nothing was paid
+        for. It reuses `fallback_groups` for the assignment and DISCARDS the D-12
+        sentence that function returns — see the comment at the branch.
+      * `topic` — the D-R4 path below, kept as an option. ONE audited LLM call
+        proposing groups, Python clamping them, with the four fallback triggers.
+
+    FOUR THINGS LEAD TO `fallback_groups` PLUS A D-12 DEGRADATION on the `topic` path,
+    and each gets its
     own named `log.warning` so the run report says WHICH one happened: the call
     raised; the response carried no `emit_question_groups` tool_use block; `input` did
     not coerce to a dict; `validate_groups` returned nothing usable.
@@ -1303,6 +1374,45 @@ async def group_winners(
             "was skipped"
         )
         return [], notes, []
+
+    # ------------------------------------------------------------------------
+    # THE PRIMARY PATH (D-W4-4a). Taken BEFORE a prompt is built, so it makes no
+    # call, spends nothing and touches `audited` not at all.
+    #
+    # IT IS NOT CLAMPED TO `_D6_MAX_GROUPS`, and that is deliberate and already
+    # accepted — `fallback_groups`' docstring records the spend consequence in
+    # full. Seven client questions get seven groups. The caller passes the final
+    # group count to `warn_if_over_ceiling`, which logs the overshoot LOUDLY;
+    # that channel is unchanged and this path does not duplicate it.
+    #
+    # THE DEGRADATION DISTINCTION IS THE WHOLE POINT AND MUST NOT BE FUDGED.
+    # `fallback_groups` returns a D-12 DEGRADATION SENTENCE, and that sentence
+    # describes a FULL FALLBACK of the grouping step — a step that ran and
+    # produced nothing usable. On this path NOTHING FAILED: this is the
+    # configured primary behaviour. Emitting the degradation here would mark
+    # every healthy run degraded and drain `completed_degraded` of the meaning it
+    # has, which is exactly the alarm fatigue D-12 forbids. So the reason is
+    # DISCARDED and a plain-words NOTE is added instead. The two are different
+    # kinds of statement, not two wordings of one.
+    # ------------------------------------------------------------------------
+    if _GROUPING_MODE == _GROUPING_MODE_PER_QUESTION:
+        assignment, degradation_reason = fallback_groups(pool, labels)
+        groups = build_groups(assignment, pool)
+        if not groups:
+            # The deterministic path produced nothing, which can only mean
+            # `fallback_groups` or `build_groups` swallowed an exception. THAT is a
+            # real full failure of the grouping step, so it degrades — and there is
+            # nothing to fall back TO, because this path IS the fallback shape.
+            log.error(
+                "question_grouping: grouping one group per client question produced "
+                "no group at all over %d ranked question(s) — the run has no "
+                "grouping to dispatch",
+                len(pool),
+            )
+            return [], notes, [degradation_reason]
+        notes.append(_NOTE_GROUPED_PER_QUESTION)
+        _log_grouping_decision(groups)
+        return groups, notes, []
 
     prompt = _build_group_prompt(
         pool, decision_context=decision_context, max_groups=ceiling, labels=labels
