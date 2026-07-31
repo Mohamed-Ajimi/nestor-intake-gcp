@@ -370,13 +370,14 @@ steps:
                     nestor_pulse_sdk/tests/test_distiller_separators.py \
                     nestor_pulse_sdk/tests/test_claim_attribution.py \
                     nestor_pulse_sdk/tests/test_question_grouping.py \
-                    nestor_pulse_sdk/tests/test_discovery_bracket.py"
+                    nestor_pulse_sdk/tests/test_discovery_bracket.py \
+                    nestor_pulse_sdk/tests/test_workshop_loop.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=35
+            EXPECTED_FILES=36
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
