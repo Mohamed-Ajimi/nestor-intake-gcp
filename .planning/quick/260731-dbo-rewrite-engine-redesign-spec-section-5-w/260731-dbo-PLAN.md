@@ -6,6 +6,7 @@ wave: 1
 depends_on: []
 files_modified:
   - .planning/ENGINE-REDESIGN-SPEC.md
+  - .planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md
 autonomous: true
 requirements: [QUICK-260731-dbo]
 must_haves:
@@ -16,11 +17,16 @@ must_haves:
     - "§ 5 no longer contradicts the rulings in 15.7-OPEN-ITEMS.md (tournament stays, loop must DISCOVER, losers never barred)."
     - "§ 0's cost baseline, § 1's decision table, § 8's Wave-4 verification row and § 9's knob list agree with the rewritten § 5."
     - "The honest limits of the measurement (n=1, temperature variance, harness-implemented stages) are stated in the document, not omitted."
+    - "The criterion-1/criterion-2 off-by-one is corrected in BOTH places it exists — the spec's boxed warning and the 15.7 ruling ledger — so the first file the 15.7 planner reads no longer carries a known-wrong instruction."
+    - "15.7-OPEN-ITEMS.md open items 1 and 2 read as ANSWERED by measurement with their original reasoning preserved; items 3 and 4 remain open; no operator ruling in that file is altered."
     - "Nothing outside .planning/ changed — no tribunal/, backend/, frontend/ or infra/ file is touched."
   artifacts:
     - path: ".planning/ENGINE-REDESIGN-SPEC.md"
       provides: "Corrected Wave 4 section with measured diagnoses and the validated configuration"
       contains: "_CANDIDATE_PROMPT_CHARS"
+    - path: ".planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md"
+      provides: "Ruling ledger with the criterion-2 fix and open items 1-2 marked answered by measurement"
+      contains: "exit criterion 2"
   key_links:
     - from: ".planning/ENGINE-REDESIGN-SPEC.md § 5"
       to: ".planning/phases/15.7-*/15.7-OPEN-ITEMS.md"
@@ -30,18 +36,27 @@ must_haves:
       to: ".planning/ENGINE-REDESIGN-SPEC.md § 0 / § 8 / § 9"
       via: "shared cost and verification figures"
       pattern: "SUPERSEDED"
+    - from: ".planning/phases/15.7-*/15.7-OPEN-ITEMS.md open items 1-2"
+      to: ".planning/ENGINE-REDESIGN-SPEC.md § 5"
+      via: "answered-by-measurement pointer rather than a duplicated number set"
+      pattern: "ANSWERED BY MEASUREMENT"
 ---
 
 <objective>
 Rewrite § 5 (Wave 4 — the creative workshop loop) of `.planning/ENGINE-REDESIGN-SPEC.md` so its defect
-diagnoses match what local measurement actually showed, and record the validated Wave 4 configuration.
+diagnoses match what local measurement actually showed, record the validated Wave 4 configuration, and
+carry the same factual correction into the 15.7 ruling ledger.
 
 Purpose: this spec is the input to `/gsd-plan-phase 15.7`. Four of its five headline Wave-4 diagnoses
 were disproved by a local harness (11 experiments, ~$3, scratchpad only — **no repo code was changed**)
 that replayed the real V-01 run from the GCS audit log and then implemented the Wave 4 loop end-to-end.
 If the spec is not corrected first, a planner will build fixes for problems that do not exist.
 
-Output: an edited `.planning/ENGINE-REDESIGN-SPEC.md`, committed. Nothing else.
+`15.7-OPEN-ITEMS.md` is in scope for one reason and one reason only: it is the **first file the 15.7
+planner is instructed to read**, and it repeats the same criterion-1/criterion-2 factual error. Fixing
+the spec while leaving a known-wrong instruction in the file read before it defeats the purpose.
+
+Output: two edited planning documents, committed. No source, test or config change.
 </objective>
 
 <execution_context>
@@ -52,7 +67,7 @@ Output: an edited `.planning/ENGINE-REDESIGN-SPEC.md`, committed. Nothing else.
 @.planning/ENGINE-REDESIGN-SPEC.md
 @.planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md
 
-Section map of the file being edited (759 lines total):
+Section map of the spec (759 lines total):
 - `## 0. Where this came from` — line 14; `### Measured cost baseline` — line 31
 - `## 1. Decisions taken` — line 48 (the D-R1…D-R11 table)
 - `## 5. Wave 4 — the creative workshop loop (D-R6, D-R9)` — line 395
@@ -67,24 +82,39 @@ Section map of the file being edited (759 lines total):
   - `### Freeze and hand-off` — 626
 - `## 8. Verification` — 674 (per-wave table 688-694, Wave 4 row at 693)
 - `## 9. Environment knobs` — 720
+
+Section map of the ledger (140 lines total):
+- `## RULED — do not relitigate` — 25 (D-R9 at 27, D-R10 at 40, D-R11 at 65) — **read-only in this plan**
+- `## OPEN — needs an operator ruling before planning` — 87 (item 1 at 89, item 2 at 98, item 3 at 104,
+  item 4 at 109)
+- `## Traps this phase inherits` — 115; the `WEAK`-winner coverage lie bullet — 118-121, whose last
+  sentence at line 121 is the off-by-one being corrected
+- `## Still owed at 15.8` — 136 — **read-only in this plan**
 </context>
 
 <house_rules>
 These apply to all three tasks. Violating any one of them fails the plan.
 
-1. **DOC-ONLY.** The single file modified is `.planning/ENGINE-REDESIGN-SPEC.md`. Do not edit, create or
-   delete anything under `tribunal/`, `backend/`, `frontend/`, `infra/`, or any test or config file.
-   Source line numbers are quoted as *evidence*; they are not edit targets.
+1. **DOC-ONLY, and exactly two files.** The only files modified are
+   `.planning/ENGINE-REDESIGN-SPEC.md` and
+   `.planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md`.
+   Do not edit, create or delete anything under `tribunal/`, `backend/`, `frontend/`, `infra/`, or any
+   test or config file. Source line numbers are quoted as *evidence*; they are not edit targets.
 2. **Supersede, never silently delete.** Where a claim is now wrong, keep the original text visible,
    mark it `**SUPERSEDED (measured 2026-07-31)**`, and put the measured replacement beside it. A future
    reader must be able to see what was believed and why it was wrong. Strikethrough (`~~…~~`) plus a
    replacement sentence is the established convention in this file (see § 8 lines 691-692) — reuse it.
 3. **Do not relitigate operator rulings.** D-R9 (tournament stays, Elo retained), D-R10 (the loop must
-   DISCOVER, not only sharpen) and the rejected-register table — including *"losers are NEVER barred"* —
-   stay. Correct diagnoses and numbers, not rulings.
-4. **No invented figures.** Every number written into the spec must be one stated in this plan. If a
-   number is needed that is not here, write the qualitative claim without a number instead.
-5. **`.planning/` is gitignored** in this repo. Any commit of these files must use `git add -f`.
+   DISCOVER, not only sharpen) and the rejected-register table — including *"losers must NEVER be
+   barred"* — stay. In the ledger this is stricter still: the entire `## RULED` section and the
+   `## Still owed at 15.8` section are **read-only**. Correct diagnoses and numbers, not rulings.
+4. **No invented figures.** Every number written into either document must be one stated in this plan.
+   If a number is needed that is not here, write the qualitative claim without a number instead.
+5. **`.planning/` is gitignored** in this repo. Both edited files need `git add -f`, as does this plan
+   directory.
+6. **Do not duplicate a number set across the two files.** Where the ledger needs to cite a measured
+   result, it points at the rewritten § 5 rather than restating the figures. Two copies of a number
+   drift; a pointer cannot.
 </house_rules>
 
 <tasks>
@@ -139,11 +169,12 @@ reflect that items 3 and 4 are now closed by measurement (Task 2 rewrites their 
 </task>
 
 <task type="auto">
-  <name>Task 2: Correct the exit rule, the cost/population estimate, and record the validated configuration</name>
-  <files>.planning/ENGINE-REDESIGN-SPEC.md</files>
+  <name>Task 2: Correct the exit rule, the cost/population estimate, the validated configuration, and the criterion-1/2 off-by-one in BOTH files</name>
+  <files>.planning/ENGINE-REDESIGN-SPEC.md, .planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md</files>
   <action>
-Edit the boxed items 3 and 4, `### Exit criteria` (584-606) including its boxed trap warning, `### Why
-10 rounds is affordable` (608-624), and `### Freeze and hand-off` (626-628).
+In the spec, edit the boxed items 3 and 4, `### Exit criteria` (584-606) including its boxed trap
+warning, `### Why 10 rounds is affordable` (608-624), and `### Freeze and hand-off` (626-628). Then
+apply parts (g) and (h) to the ledger.
 
 **(a) The exit rule fires; it needs NO change.** Boxed item 3 and open item 1 of 15.7-OPEN-ITEMS.md
 both assume the loop hits the 10-round cap every run because criterion 2 can never be satisfied. Mark
@@ -185,25 +216,51 @@ architecture-dependent, not inherent. Do not delete the warning — scope it.
   - Measured result of that configuration: **17 questions, none weak, converges in round 9, $0.48**.
 
 **(f) Fix the two spec-internal defects while editing:**
-  - The boxed trap warning at 593-599 says to exclude resurrected candidates from **"criterion 1"**.
-    That is an off-by-one: criterion 1 is **COVERAGE** and criterion 2 is **QUALITY**; excluding them
-    from coverage breaks the very guarantee resurrection exists to provide. Correct it to **criterion
-    2**, and add a one-line note that the same off-by-one is present in `15.7-OPEN-ITEMS.md` and must be
-    corrected there when that file is next touched (do **not** edit that file in this task).
+  - The boxed trap warning at 593-599 ends *"Mark resurrected candidates and exclude them from
+    criterion 1."* That is an off-by-one: criterion 1 is **COVERAGE** and criterion 2 is **QUALITY**;
+    excluding them from coverage breaks the very guarantee resurrection exists to provide. Correct it
+    to **criterion 2**, and note that the identical error existed in `15.7-OPEN-ITEMS.md` and is
+    corrected in the same commit (part (g)).
   - Half of that guard is already built and half is missing: `workshop_rank.py:688` sets
     `entry["resurrected"] = True` for Guard 1, but **Guard 2 does not** — at `workshop_rank.py:708`,
     when critique kills everything, it rewrites every candidate to `KEEP` **unmarked**, so the one case
     where quality most needs to read as failed reads as a perfect pass. Record this as a Wave-4
     implementation requirement.
+
+**(g) Correct the SAME off-by-one in the ledger.** In
+`15.7-OPEN-ITEMS.md`, `## Traps this phase inherits`, the `WEAK`-winner coverage lie bullet (lines
+118-121), the final sentence reads *"Mark resurrected candidates and exclude them from exit criterion
+1."* Change `exit criterion 1` to `exit criterion 2` and append a short parenthetical stating why —
+criterion 1 is coverage, criterion 2 is quality, and excluding a resurrected candidate from coverage
+would break the guarantee resurrection exists to provide. **This is a criterion-number fix and nothing
+more.** Do not touch D-R9, D-R10, D-R11, the rejected-register rules, the other trap bullets, or the
+`Still owed at 15.8` section.
+
+**(h) Mark ledger open items 1 and 2 ANSWERED BY MEASUREMENT.** Keep both items and all their existing
+reasoning in place (house rule 2) and prefix each with a bold `**✅ ANSWERED BY MEASUREMENT
+2026-07-31 — see ENGINE-REDESIGN-SPEC § 5.**` line:
+  - **Item 1** (*"the exit rule probably never fires — the expensive one"*): **void, because its
+    premise was the cap-240 truncation artefact.** Its entire argument rests on *"V-01 had 9 of 10
+    winners WEAK"*, which Task 1 established is a truncation artefact rather than a quality signal.
+    With the cap fixed the loop exits in **rounds 4–9** across the measured configurations, so the
+    10-round cap is not the normal cost. No operator ruling is required.
+  - **Item 2** (*"two unset numbers — decide together"*): **not binding at the measured scale.**
+    Neither the spend ceiling nor the per-round grounded-lookup cap needs a value — the whole loop
+    lands under **$0.48** against the ~$3 budget the section assumed, and the population stays flat
+    rather than growing. Per house rule 6, cite the § 5 subsection for the measured peaks instead of
+    restating them here. Note that the correct replacement is instrumentation, not an enforced cap.
+  - **Items 3 and 4 remain genuinely OPEN** — say so explicitly, so the next planner does not read the
+    two ticks above and assume the whole section is closed. Retitle the section heading to reflect
+    that two of the four are answered.
   </action>
   <verify>
-    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "round 6" "round 9" "3 → 3 → 0 → 0" "23–32" "9k chars" "0.18" "0.48" "122" "PREFER KEEP OVER WEAK" "compound by construction" "floor of 5 per client question" "criterion 2" "workshop_rank.py:708" "instrumentation"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && grep -qF "exclude resurrected candidates from criterion 1" "$F" && { echo "FAIL: off-by-one not corrected"; exit 1; }; git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
+    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && L=".planning/phases/15.7-research-engine-redesign-creative-workshop-loop-wave-4/15.7-OPEN-ITEMS.md" && for s in "round 6" "round 9" "3 → 3 → 0 → 0" "23–32" "9k chars" "0.18" "0.48" "122" "PREFER KEEP OVER WEAK" "compound by construction" "floor of 5 per client question" "criterion 2" "workshop_rank.py:708" "instrumentation"; do grep -qF "$s" "$F" || { echo "MISSING in spec: $s"; exit 1; }; done && for s in "exit criterion 2" "ANSWERED BY MEASUREMENT" "rounds 4–9" "ENGINE-REDESIGN-SPEC § 5"; do grep -qF "$s" "$L" || { echo "MISSING in ledger: $s"; exit 1; }; done && for s in "D-R9 reaffirmed" "NEVER be barred" "must DISCOVER" "Still owed at 15.8"; do grep -qF "$s" "$L" || { echo "FAIL: a read-only ledger ruling was damaged: $s"; exit 1; }; done && if grep -rniE "exclude (them|resurrected candidates) from (exit )?criterion 1" .planning/ --exclude-dir=quick; then echo "FAIL: off-by-one still present"; exit 1; fi && git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; echo OK</automated>
   </verify>
-  <done>Boxed items 3 and 4 are marked resolved by measurement; all three exit criteria are retained and joined by the prefer-KEEP action and the compound-question exemption; the ~$3.00 estimate is superseded by $0.18–$0.48 with the 122-peak bracket nuance preserved; the validated configuration is recorded; the criterion-1/2 off-by-one and the Guard-2 marking gap are both written down.</done>
+  <done>Boxed items 3 and 4 are marked resolved by measurement; all three exit criteria are retained and joined by the prefer-KEEP action and the compound-question exemption; the ~$3.00 estimate is superseded by $0.18–$0.48 with the 122-peak bracket nuance preserved; the validated configuration is recorded; the Guard-2 marking gap is written down; and the criterion-1/criterion-2 off-by-one no longer exists anywhere under `.planning/` outside this plan directory, with ledger items 1-2 marked answered, 3-4 still open, and every ledger ruling intact.</done>
 </task>
 
 <task type="auto">
-  <name>Task 3: Replace D-R11 with the catch-up schedule, fix D-R10's admission test, and reconcile the citing sections</name>
+  <name>Task 3: Replace D-R11 with the catch-up schedule, fix D-R10's admission test, reconcile the citing sections, and commit</name>
   <files>.planning/ENGINE-REDESIGN-SPEC.md</files>
   <action>
 Edit `### D-R10` (507-538), `### D-R11` (540-558), the `### Fix the arithmetic` paragraph (499-502),
@@ -266,43 +323,71 @@ rewrite:
     instrumentation rather than an enforced cap; adjust the entry and add a knob for the catch-up
     schedule's match budget.
 
-**(e) Commit.** `.planning/` is gitignored, so use `git add -f` for the spec and this plan directory.
-Commit message: `docs(15.7): correct ENGINE-REDESIGN-SPEC § 5 against local Wave 4 measurement`.
-Verify before committing that `git status --porcelain -- tribunal backend frontend infra` is empty.
+**(e) Commit.** `.planning/` is gitignored, so `git add -f` **all three paths**: the spec, the ledger
+(`15.7-OPEN-ITEMS.md`, edited in Task 2), and this plan directory. Commit message:
+`docs(15.7): correct ENGINE-REDESIGN-SPEC § 5 and the 15.7 ledger against local Wave 4 measurement`.
+Verify before committing that `git status --porcelain -- tribunal backend frontend infra` is empty, and
+after committing that the commit contains both edited documents and no source file.
   </action>
   <verify>
-    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "catch-up schedule" "byte-identical" "1.5%" "93.8%" "95.5%" "99.8%" "29.5%" "1.8%" "3.76" "5 Swiss rounds" "groundingChunks" "PREMISE" "workshop_rank.py:878" "workshop_rank.py:1524"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && grep -qF "a resurrected candidate does **not** satisfy coverage" "$F" && { echo "FAIL: stale wave-4 verification row"; exit 1; }; git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; git log -1 --name-only --format=%s | grep -q "ENGINE-REDESIGN-SPEC" && echo OK</automated>
+    <automated>cd "$(git rev-parse --show-toplevel)" && F=.planning/ENGINE-REDESIGN-SPEC.md && for s in "catch-up schedule" "byte-identical" "1.5%" "93.8%" "95.5%" "99.8%" "29.5%" "1.8%" "3.76" "5 Swiss rounds" "groundingChunks" "PREMISE" "workshop_rank.py:878" "workshop_rank.py:1524"; do grep -qF "$s" "$F" || { echo "MISSING: $s"; exit 1; }; done && grep -qF "a resurrected candidate does **not** satisfy coverage" "$F" && { echo "FAIL: stale wave-4 verification row"; exit 1; }; git status --porcelain -- tribunal backend frontend infra | grep . && { echo "FAIL: non-doc files changed"; exit 1; }; C=$(git log -1 --name-only --format=) && echo "$C" | grep -q "ENGINE-REDESIGN-SPEC" && echo "$C" | grep -q "15.7-OPEN-ITEMS" && ! echo "$C" | grep -qE "^(tribunal|backend|frontend|infra)/" && echo OK</automated>
   </verify>
-  <done>D-R11 is replaced by the catch-up schedule with the inertness proof and all six measured percentages recorded; D-R9 is confirmed with the 3.76-matches figure and the D-R9/D-R11 interaction noted; D-R10's admission test tests the premise and mandates `groundingChunks` evidence; §§ 0/1/8/9 no longer contradict § 5; the spec is committed with `git add -f` and no source file is in the commit.</done>
+  <done>D-R11 is replaced by the catch-up schedule with the inertness proof and all six measured percentages recorded; D-R9 is confirmed with the 3.76-matches figure and the D-R9/D-R11 interaction noted; D-R10's admission test tests the premise and mandates `groundingChunks` evidence; §§ 0/1/8/9 no longer contradict § 5; one commit contains both edited documents, force-added, and no source file.</done>
 </task>
 
 </tasks>
+
+<gate_integrity_note>
+Every literal these gates grep for was checked against the files **as they exist today**, because two
+gate-integrity traps were found while writing this plan and both would have read green while being
+useless:
+
+1. **A vacuous negative gate.** An earlier draft gated on `exclude resurrected candidates from
+   criterion 1` — a phrasing that appears in **neither** file. The real strings are spec line 598
+   `Mark resurrected candidates and exclude them from criterion 1.` and ledger line 121
+   `Mark resurrected candidates and exclude them from exit criterion 1.` The gate would have passed
+   whether or not the fix landed. Task 2 now runs one recursive check over all of `.planning/`
+   (`--exclude-dir=quick`, because this plan legitimately quotes the defective string), **verified to
+   match both occurrences today** — so the two locations cannot be fixed in one spot and forgotten in
+   the other, which is exactly how this defect reached two files.
+2. **A false-failing positive gate.** An earlier draft asserted the ledger still contains `never
+   barred`; the ledger actually says `NEVER be barred`, and `grep -F` is case-sensitive, so a correct
+   edit would have failed the task. Corrected, and all four ruling-preservation literals
+   (`D-R9 reaffirmed`, `NEVER be barred`, `must DISCOVER`, `Still owed at 15.8`) were confirmed present
+   before being used as gates.
+</gate_integrity_note>
 
 <threat_model>
 ## Trust Boundaries
 
 | Boundary | Description |
 |----------|-------------|
-| planning doc → 15.7 planner | This file is the input prompt to `/gsd-plan-phase 15.7`; a wrong number here becomes built code |
+| planning docs → 15.7 planner | Both files are input prompts to `/gsd-plan-phase 15.7`; a wrong number or a wrong criterion index here becomes built code |
 | none (runtime) | Doc-only change — no code, no request path, no new dependency, no package install |
 
 ## STRIDE Threat Register
 
 | Threat ID | Category | Component | Disposition | Mitigation Plan |
 |-----------|----------|-----------|-------------|-----------------|
-| T-QDBO-01 | Tampering | `.planning/ENGINE-REDESIGN-SPEC.md` content | mitigate | House rule 4 forbids invented figures; every task's `<automated>` gate greps for the exact measured literals so a paraphrased or drifted number fails the gate |
+| T-QDBO-01 | Tampering | spec + ledger content | mitigate | House rule 4 forbids invented figures; each task's `<automated>` gate greps for the exact measured literals so a paraphrased or drifted number fails the gate |
 | T-QDBO-02 | Repudiation | superseded claims | mitigate | House rule 2 forbids silent deletion — the original claim stays visible beside its replacement, so the change is auditable |
 | T-QDBO-03 | Elevation of Privilege | scope creep into `tribunal/` source | mitigate | Every task's gate asserts `git status --porcelain -- tribunal backend frontend infra` is empty; cited source line numbers are evidence, not edit targets |
+| T-QDBO-04 | Tampering | operator rulings in the ledger | mitigate | House rule 3 marks `## RULED` and `## Still owed at 15.8` read-only; the Task 2 gate positively asserts four ruling strings still exist, so an over-broad ledger rewrite fails |
+| T-QDBO-05 | Information Disclosure | duplicated number sets drifting apart | mitigate | House rule 6 — the ledger points at § 5 rather than restating measured figures |
 | T-QDBO-SC | Tampering | npm/pip/cargo installs | accept | No package-manager install occurs in this plan — the legitimacy gate is not applicable |
 </threat_model>
 
 <verification>
 1. All three task gates pass.
 2. `git status --porcelain -- tribunal backend frontend infra` is empty — the doc-only constraint held.
-3. The rulings survive: `grep -c "we are not killing tournament\|never barred\|must DISCOVER"` still
-   matches in `.planning/ENGINE-REDESIGN-SPEC.md` — corrections changed diagnoses, not rulings.
-4. Spot-read § 5 end to end: a reader who knows nothing of the harness can tell, for each of the five
+3. `grep -rniE "exclude (them|resurrected candidates) from (exit )?criterion 1" .planning/ --exclude-dir=quick`
+   returns nothing — the off-by-one is gone from both locations.
+4. The rulings survive in both files: `we are not killing tournament`, `NEVER be barred`,
+   `must DISCOVER` still match — corrections changed diagnoses, not rulings.
+5. Spot-read § 5 end to end: a reader who knows nothing of the harness can tell, for each of the five
    headline diagnoses, whether it survived, what measurement decided it, and what replaced it.
+6. Spot-read the ledger: items 1-2 read as answered with their reasoning intact, items 3-4 read as
+   open, and a planner following its "read this first" instruction is no longer misdirected.
 </verification>
 
 <success_criteria>
@@ -312,10 +397,13 @@ Verify before committing that `git status --porcelain -- tribunal backend fronte
   population/$3.00 cost, and median Elo seeding — are each marked superseded with their measured
   replacement, and D-R9 is marked confirmed.
 - D-R10's admission test verifies the premise is real and requires `groundingChunks` evidence.
-- The criterion-1/criterion-2 off-by-one is fixed in both § 5's boxed warning and § 8's Wave-4 row, and
-  the Guard-2 (`workshop_rank.py:708`) unmarked-resurrection gap is recorded.
+- The criterion-1/criterion-2 off-by-one is fixed in all three places it exists: § 5's boxed warning,
+  § 8's Wave-4 row, and `15.7-OPEN-ITEMS.md`'s trap bullet. The Guard-2 (`workshop_rank.py:708`)
+  unmarked-resurrection gap is recorded.
+- `15.7-OPEN-ITEMS.md` open items 1 and 2 are marked answered by measurement with a pointer to § 5 and
+  their original reasoning preserved; items 3 and 4 remain open; every ruling in that file is untouched.
 - §§ 0, 1, 8, 9 agree with the rewritten § 5.
-- One commit, force-added, containing only `.planning/` files.
+- One commit, force-added, containing both edited documents and only `.planning/` files.
 </success_criteria>
 
 <output>
