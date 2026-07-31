@@ -1939,7 +1939,10 @@ def test_the_module_reaches_no_file_no_database_and_no_sibling_package():
     deliberately adds no third unpaid proof, so the register must not be able to
     persist anything even if someone later wants it to.
     """
-    for forbidden in ("open(", "os.path", "sqlalchemy", "sessionmaker", "alembic"):
+    # `alembic` is DELIBERATELY absent from this list: the module docstring is
+    # required to record that D-W4-1 adds no migration, and the word has to appear
+    # in that sentence. The tokens below are ones no prose would ever contain.
+    for forbidden in ("open(", "os.path", "sqlalchemy", "sessionmaker", "create_engine"):
         assert forbidden not in _REGISTER_SRC, forbidden
 
     code = [
