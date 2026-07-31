@@ -80,6 +80,13 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from nestor_pulse_sdk.pipeline.tribunal import grouping
+# `workshop_register` ONLY. `workshop_evolve` is DELIBERATELY NOT imported here:
+# it is written by another plan in the SAME WAVE, whose executor cannot see this
+# tree, so importing it would be the exact-set trap in another costume. Both
+# modules present a barred list; plan 15.7-09 reconciles the two presentations if
+# they differ. Calling `workshop_register.barred_block` directly cannot break on a
+# sibling plan that has not landed yet.
+from nestor_pulse_sdk.pipeline.tribunal import workshop_register
 from nestor_pulse_sdk.pipeline.tribunal.intake import detect_explicit_questions
 from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     CircuitOpenError,
@@ -1433,7 +1440,7 @@ never to change what is being asked.
 === DISTINCT ASKS INSIDE THE CLIENT QUESTION ===
 {asks_block}
 === END ASKS ===
-
+{barred_section}
 SCOPE RULE (CRITICAL):
 - These sub-questions must DEEPEN the client's question. You may NOT broaden it,
   replace it, merge it with another question, or research a different subject.
@@ -1724,6 +1731,89 @@ def _trim_round_robin(
     return kept, len(candidates) - len(kept)
 
 
+#: The key marking a barred SHADOW inside the clustering population. A shadow is
+#: never a candidate: it is a previously-rejected question travelling with the
+#: round's real ones purely so the clusterer can say "this new one IS that old
+#: one". It can never become a representative and can never contribute a parent.
+_BARRED_SHADOW = "__barred_shadow__"
+
+#: Shadows sort ABOVE every real candidate index so the lowest-index rule can
+#: never pick one even if the explicit shadow filter were removed. Belt and
+#: braces, because a shadow becoming a representative would inject a REJECTED
+#: question into the tournament — the exact opposite of what the bar is for.
+_BARRED_SHADOW_INDEX = 1_000_000_000
+
+
+def _barred_section(register: Any) -> str:
+    """Render the barred list for the generation prompt. Empty with no register.
+
+    D-W4-1's FIRST enforcement layer: *"don't propose these, and here is the flaw"*.
+    A bare list tells a model which sentences to avoid; a list WITH FLAWS tells it
+    which MISTAKE to avoid, and only the second survives rephrasing.
+
+    THIS LAYER IS NOT THE GUARANTEE and must not be mistaken for one. A model asked
+    nicely is not a control. The layer that enforces the bar is the semantic drop in
+    `cluster_candidates` below. This one is cheap, so it runs too.
+
+    Rendering is DELEGATED to `workshop_register.barred_block`, never reimplemented
+    (T-15.7-07-02): that function collapses `|`, `\\r` and `\\n`, truncates both
+    fields and addresses every entry by INDEX, so a barred question containing a
+    newline cannot forge a second addressable record. Barred text is model output on
+    its way back into a model prompt — the same untrusted class as a live candidate.
+    """
+    if register is None:
+        return ""
+    try:
+        block = workshop_register.barred_block(register)
+    except Exception as exc:  # noqa: BLE001 — a prompt block never breaks the stage
+        log.warning("workshop: the barred block could not be rendered: %r", exc)
+        return ""
+    return (
+        "\n=== ALREADY REJECTED — DO NOT PROPOSE THESE AGAIN ===\n"
+        f"{block}\n"
+        "=== END REJECTED ===\n"
+        "\nEach line above was already proposed and rejected, with the FLAW that got\n"
+        "it rejected. Do not propose them again, and do not propose a REWORDING of\n"
+        "them. Avoid the flaw, not just the sentence.\n"
+    )
+
+
+def _barred_shadows(register: Any) -> list[dict[str, Any]]:
+    """The barred entries as shadow members for the clustering population.
+
+    Never raises; returns `[]` for any register it cannot read, which degrades the
+    bar to its prompt layer alone rather than failing the round.
+    """
+    if register is None:
+        return []
+    try:
+        slots = getattr(workshop_register, "_slots")(register)
+        if not slots:
+            return []
+        out: list[dict[str, Any]] = []
+        for position, entry in enumerate(slots.get("barred") or []):
+            if not isinstance(entry, dict):
+                continue
+            text = str(entry.get("text") or "").strip()
+            if not text:
+                continue
+            out.append(
+                {
+                    "text": text[:_CANDIDATE_MAX_CHARS],
+                    "index": _BARRED_SHADOW_INDEX + position,
+                    _BARRED_SHADOW: True,
+                }
+            )
+        return out
+    except Exception as exc:  # noqa: BLE001 — the bar degrades, it never breaks
+        log.warning(
+            "workshop: the barred shadows could not be built (%r) — this round is "
+            "protected by the prompt layer only",
+            exc,
+        )
+        return []
+
+
 def _repair_uncovered_aspects(
     rows: Sequence[dict[str, Any]],
     *,
@@ -1821,6 +1911,7 @@ async def generate_candidates(
     breaker: Any | None = None,
     model: str = _WORKSHOP_MODEL,
     stats: Optional[dict[str, Any]] = None,
+    register: Any | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Deepen EVERY client question into candidate sub-questions.
 
@@ -1885,6 +1976,11 @@ async def generate_candidates(
 
     sem = asyncio.Semaphore(max(1, _WORKSHOP_CONCURRENCY))
 
+    # D-W4-1 layer 1: the barred list, WITH each entry's flaw. Empty string when no
+    # register is supplied, so the prompt carries no heading and every pre-loop
+    # caller renders exactly what it always did.
+    barred_section = _barred_section(register)
+
     # -- D-W4-4b step 1: split every question into its distinct asks -----------
     # A failure here is NEVER fatal and never loses a question: the fallback is
     # exactly today's undivided generation, with a degradation reason naming it.
@@ -1941,6 +2037,7 @@ async def generate_candidates(
             findings_block=_findings_block(findings_by_label.get(label) or []),
             context=str(brief_context or "")[:_CONTEXT_MAX_CHARS],
             asks_block=_asks_block(aspects),
+            barred_section=barred_section,
             n=_CANDIDATES_PER_QUESTION,
             parent=label,
             start=_CANDIDATES_START,
@@ -2127,6 +2224,8 @@ async def cluster_candidates(
     tenant_id: "uuid.UUID",
     feed: "Optional[StageFeed]" = None,
     stats: Optional[dict[str, Any]] = None,
+    register: Any | None = None,
+    round_no: Any = 0,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Collapse near-duplicate candidates onto one representative each.
 
@@ -2143,11 +2242,52 @@ async def cluster_candidates(
     DETERMINISTIC: the member with the lowest `index` represents its cluster, and
     representatives come back in ascending `index` order — two runs over the same
     script produce byte-identical output. Never raises.
+
+    ------------------------------------------------------------------
+    D-W4-1 LAYER 2 — THE BARRED DROP, WHICH IS THE ACTUAL GUARANTEE
+    ------------------------------------------------------------------
+    With a `register`, the barred questions travel through the clusterer AS SHADOW
+    MEMBERS alongside the round's new candidates, and any new candidate landing in
+    a cluster with a shadow is DROPPED. That is SEMANTIC, not string matching, and
+    it has to be: the requirement is *"do not propose this again OR A REWORDING OF
+    IT"*, and no string comparison can enforce a rewording ban. This is why D-W4-1
+    names `cluster_candidates` specifically rather than naming a comparison.
+
+    EVERY DROP RECORDS WHAT IT CLUSTERED ONTO, never just a count, because two
+    OPPOSITE failures were both measured and a count cannot tell them apart:
+
+      * THE LOOP SPINNING. Failed-lookup angles were never barred, so *"round 2
+        proposed 3 questions already rejected in round 1"* — the loop repeating
+        itself and paying a grounded lookup each time.
+
+      * THE DEDUP BEING OVER-EAGER. The same harness's semantic dedup dropped 6
+        proposals as rewordings, mostly fairly — but it also killed SPECIALISE and
+        COMBINE attempts, and it killed round 1's ONLY INVENT *before the grounded
+        lookup ever ran*. An over-eager dedup suppresses discovery INVISIBLY:
+        nothing errors, the round simply produces less than it could.
+
+    "3 drops" is the same number in both worlds. Only what each one clustered ONTO
+    separates them.
+
+    EVERY PRE-EXISTING PROPERTY IS PRESERVED, and a shadow can never subvert one:
+      * the representative is still the member with the lowest `index` — chosen
+        among the REAL members only, and shadows additionally sort above every real
+        index so the rule could not pick one even without that filter;
+      * `parents` is still the ordered union that makes clustering D4-safe —
+        shadows carry no parent and are excluded from the union outright;
+      * a negative cluster id is still the never-drop sentinel;
+      * any exception still degrades to one singleton per candidate, losing nothing;
+      * a cluster of shadows alone yields NO representative, so a barred question
+        can never re-enter the population it was barred out of.
+
+    With `register=None` every one of these paths is byte-identical to the phase
+    base — the register is purely additive.
     """
     items = list(candidates or [])
     reasons: list[str] = []
+    shadows = _barred_shadows(register)
 
-    if len(items) < 2 or not _WORKSHOP_CLUSTER:
+    if len(items) + len(shadows) < 2 or not _WORKSHOP_CLUSTER:
         if items and not _WORKSHOP_CLUSTER:
             log.info(
                 "workshop: near-duplicate clustering is switched off "
@@ -2167,6 +2307,15 @@ async def cluster_candidates(
             chunks = [items[i:i + size] for i in range(0, len(items), size)]
         else:
             chunks = [items]
+
+        # The shadows join EVERY chunk, not just one. A bar that only applied to
+        # whichever chunk happened to hold the shadows would be a bar that silently
+        # stopped working the moment a round grew past the block guard — the class
+        # of defect that looks green forever. The cost is bounded: the register caps
+        # what it will hand out, and cluster keys are namespaced per chunk, so the
+        # same shadow appearing in two chunks cannot collide.
+        if shadows:
+            chunks = [list(piece) + shadows for piece in chunks]
 
         sem = asyncio.Semaphore(max(1, grouping._CLUSTER_CONCURRENCY))
         calls = 0
@@ -2199,8 +2348,47 @@ async def cluster_candidates(
                 members_by_key[key].append(candidate)
 
         representatives: list[dict[str, Any]] = []
+        dropped_on_bar = 0
         for key in key_order:
             members = sorted(members_by_key[key], key=lambda c: c.get("index", 0))
+
+            # -- D-W4-1 layer 2: the semantic drop ---------------------------
+            # A shadow is NOT a member of the output. It is separated out first, so
+            # it can neither represent the cluster nor contribute to the parents
+            # union below (T-15.7-07-04).
+            barred_here = [m for m in members if m.get(_BARRED_SHADOW)]
+            members = [m for m in members if not m.get(_BARRED_SHADOW)]
+            if barred_here:
+                onto = str(barred_here[0].get("text") or "")
+                for victim in members:
+                    dropped_on_bar += 1
+                    log.info(
+                        "workshop: dropping %r — it clustered onto the already "
+                        "rejected %r",
+                        str(victim.get("text") or "")[:80],
+                        onto[:80],
+                    )
+                    try:
+                        workshop_register.record_drop(
+                            register,
+                            text=victim.get("text"),
+                            # WHAT IT CLUSTERED ONTO. Not optional, by design: a
+                            # bare count cannot separate a spinning loop from a
+                            # strangling dedup, and both were measured.
+                            clustered_onto=onto,
+                            cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED,
+                            round_no=round_no,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — a log never breaks a round
+                        log.warning("workshop: the drop could not be recorded: %r", exc)
+                # Every real member of this cluster is barred. Nothing represents
+                # it — which is the whole point of the bar.
+                continue
+            if not members:
+                # A cluster of shadows alone. It produces no representative, so a
+                # barred question can never re-enter the population.
+                continue
+
             rep = dict(members[0])
             rep["cluster_key"] = key
             rep["merged_from"] = [m.get("index") for m in members[1:]]
@@ -2217,18 +2405,30 @@ async def cluster_candidates(
 
         representatives.sort(key=lambda c: c.get("index", 0))
 
-        if len(representatives) < len(items):
+        # A candidate dropped ON THE BAR did not "collapse onto a near-duplicate",
+        # and saying it did would misreport a working bar as a lossy clusterer.
+        # The two are counted apart.
+        survived = len(items) - dropped_on_bar
+        if len(representatives) < survived:
             log.info(
                 "workshop: %d candidates collapsed to %d after near-duplicate "
                 "clustering (%d call(s))",
-                len(items),
+                survived,
                 len(representatives),
                 calls,
             )
-            reasons.append(_reason_cluster_collapse(len(items), len(representatives)))
+            reasons.append(_reason_cluster_collapse(survived, len(representatives)))
+        if dropped_on_bar:
+            log.info(
+                "workshop: %d candidate(s) were dropped because they clustered onto "
+                "an already-rejected question (%d barred entries in play)",
+                dropped_on_bar,
+                len(shadows),
+            )
 
         if isinstance(stats, dict):
             stats["calls"] = calls
+            stats["dropped_on_bar"] = dropped_on_bar
 
         _emit_cluster_thinking(
             run_id, before=len(items), after=len(representatives), calls=calls
