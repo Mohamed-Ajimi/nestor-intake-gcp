@@ -579,29 +579,66 @@ async def test_a_cross_cutting_candidate_gets_both_parents_findings():
 
 
 async def test_a_parent_with_no_findings_renders_a_placeholder_not_an_empty_block():
-    """17. An empty block would read as "no constraint"; a placeholder does not."""
+    """17. An empty block would read as "no constraint"; a placeholder does not.
+
+    The PLACEHOLDER ITSELF is asserted, not merely "the block is longish". A
+    heading plus a blank line is also longish, and it says nothing.
+    """
     unoriented = "Q9 a client question nothing oriented on"
     block = anchor(mandate(unoriented), labels=[*FINDINGS, unoriented])
 
-    assert block.strip(), "an empty anchor block is not an acceptable answer"
-    assert len(block.strip()) > 20
+    assert workshop_evolve._NO_ANCHOR_MANDATE.strip(), (
+        "the placeholder is empty — an empty anchor block reads to a model as "
+        "'no constraint here', which is the opposite of what it means"
+    )
+    assert workshop_evolve._NO_ANCHOR_MANDATE in block
     for marker in ALL_MARKERS:
         assert marker not in block
 
 
-async def test_a_discovery_candidate_with_no_provenance_still_says_so():
-    """18. The other no-evidence shape: a discovery angle carrying no anchor."""
+async def test_a_discovery_candidate_with_no_provenance_says_it_came_from_evidence():
+    """18. The other no-evidence shape: a discovery angle carrying no anchor.
+
+    It must get the DISCOVERY placeholder, not the mandate one. The two say
+    different things — the mandate placeholder says "orientation found nothing",
+    the discovery placeholder says "this came from the evidence and its source
+    was not recorded" — and a candidate told the wrong one is a candidate told
+    the wrong provenance.
+    """
     stripped = discovered()
     stripped.pop("provenance")
 
     block = anchor(stripped)
 
-    assert block.strip()
+    assert workshop_evolve._NO_ANCHOR_DISCOVERY in block, (
+        "a __discovery__ candidate fell through to the mandate branch"
+    )
     for marker in ALL_MARKERS:
         assert marker not in block, (
             "a discovery candidate with no anchor must NOT fall back to the "
             "orientation findings — that is the rejected union by another route"
         )
+
+
+async def test_a_non_http_admitting_url_is_not_rendered_as_a_source():
+    """18b. The harness's own measured bug, and it is the load-bearing one.
+
+    A looser guard (`if not url`) admitted 2 of 3 invented angles carrying a
+    literal `"-"` as their URL — which is TRUTHY. The model "evidenced" its own
+    angle by tautologically restating that its own entities exist. Without an
+    http(s) check the grounded lookup is theatre and "no source, no slot" is
+    enforced by nothing at all, so the same check binds here, where that URL is
+    re-rendered into another prompt as this question's only grounding.
+    """
+    for junk in ("-", "n/a", "none", "javascript:alert(1)", "ftp://x.example/a", " "):
+        candidate = discovered(url=junk)
+        block = anchor(candidate)
+        assert "SOURCE:" not in block, f"{junk!r} was rendered as a real source"
+        # The QUOTE still travels — losing the URL must not lose the anchor.
+        assert "ADMITTINGQUOTE" in block
+
+    good = anchor(discovered(url="https://real.example/a"))
+    assert "SOURCE: https://real.example/a" in good
 
 
 def test_the_union_of_every_orientation_finding_is_structurally_unreachable():
