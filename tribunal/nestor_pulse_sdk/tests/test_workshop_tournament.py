@@ -45,7 +45,7 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from nestor_pulse_sdk.pipeline.tribunal import workshop, workshop_rank
+from nestor_pulse_sdk.pipeline.tribunal import workshop, workshop_loop, workshop_rank
 from nestor_pulse_sdk.pipeline.tribunal.reliability import CircuitBreaker
 from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stage_feed import StageFeed
@@ -561,7 +561,7 @@ async def test_tournament_open_breaker_and_call_failure_never_raise():
 
     assert len(ranked_b) == 6
     assert [w["rank"] for w in ranked_b] == list(range(1, 7))
-    assert len(boom.gemini_calls) <= workshop_rank._TOURNAMENT_ROUNDS * 2
+    assert len(boom.gemini_calls) <= workshop_loop.tournament_rounds(6) * 2
     assert any("the judge refused this batch" in r for r in reasons_b), reasons_b
 
 
@@ -582,7 +582,9 @@ async def test_tournament_writes_one_feed_row_per_round():
     """14. D15's "Tournament round 3 of 4" line — and the stage stays open."""
     recorder = FeedRecorder()
     feed = make_feed(recorder)
-    rounds = workshop_rank._TOURNAMENT_ROUNDS
+    # DERIVED, never a constant (D-R9): the round count now follows the field, so
+    # a literal here would go on testing a number the code no longer produces.
+    rounds = workshop_loop.tournament_rounds(6)
 
     await tournament(JudgeAudited(flash_responder()), population(6, parents=6), feed=feed)
     await feed.flush()
@@ -645,7 +647,7 @@ async def test_the_tournament_emits_one_dispatch_and_exactly_one_row_per_round(
     """(d) EXACT counts. One header, R round rows, one close, one summary."""
     recorder = _EventRecorder()
     monkeypatch.setattr(run_events, "emit", recorder)
-    rounds = workshop_rank._TOURNAMENT_ROUNDS
+    rounds = workshop_loop.tournament_rounds(24)
 
     await tournament(JudgeAudited(flash_responder()), population(24, parents=6))
 
@@ -653,13 +655,20 @@ async def test_the_tournament_emits_one_dispatch_and_exactly_one_row_per_round(
     assert len(recorder.of_kind("agent_run")) == rounds
     assert len(recorder.of_kind("agent_done")) == 1
     assert len(recorder.of_kind("summary")) == 1
-    # 24 candidates x 4 rounds = 48 pairwise judgements. Six rows.
+    # R rows plus the header, the close and the summary.
     assert len(recorder.events) == rounds + 3
     assert all(event["stage"] == "workshop" for event in recorder.events)
 
 
 async def test_the_round_row_count_follows_the_round_knob(monkeypatch):
-    """(d) …and it is R, not a hardcoded four."""
+    """(d) …and it is R, not a hardcoded four.
+
+    THIS IS NOW THE OPERATOR-OVERRIDE TEST (D-R9). `_TOURNAMENT_ROUNDS` defaults
+    to 0, meaning DERIVE from the field; a positive value still wins outright, and
+    that is exactly what this monkeypatch pins. `test_engine_e2e_stubbed.py` does
+    the same thing from another plan's file, so the knob's name and its
+    override semantics are a cross-wave contract, not an implementation detail.
+    """
     monkeypatch.setattr(workshop_rank, "_TOURNAMENT_ROUNDS", 2)
     recorder = _EventRecorder()
     monkeypatch.setattr(run_events, "emit", recorder)
@@ -688,7 +697,7 @@ async def test_the_closing_line_names_candidates_rounds_and_winners(monkeypatch)
     """(e) The design of record's own shape, asserted verbatim."""
     recorder = _EventRecorder()
     monkeypatch.setattr(run_events, "emit", recorder)
-    rounds = workshop_rank._TOURNAMENT_ROUNDS
+    rounds = workshop_loop.tournament_rounds(24)
     winners = workshop_rank.winner_count(24)
 
     await tournament(JudgeAudited(flash_responder()), population(24, parents=6))
@@ -945,3 +954,255 @@ async def test_a_two_field_judge_still_costs_no_judgement_end_to_end():
     assert [c["index"] for c in ranked] != list(range(8)), (
         "the ranking collapsed to index order"
     )
+
+
+# ===========================================================================
+# SECTION 9 (phase 15.7, plan 08) — D-R9 AND D-W4-3, TESTED TOGETHER.
+#
+# NEVER SEPARATELY. D-R9 makes D-R11's problem WORSE: more Swiss rounds give
+# incumbents more matches and therefore more WINS, and wins is the PRIMARY sort
+# key. Measured on the same newcomer under the same rule — rank 6 at 4 rounds
+# entering round 3, rank 11 at 8 rounds entering round 6, rank 16 entering
+# round 7. The catch-up schedule is what makes raising the rounds safe, so a
+# catch-up test at the OLD round count has not tested the thing at all.
+#
+# THE JUDGE HERE IS AN ORACLE, NOT AN LLM. The newcomer property is a question
+# about the RANKING ALGORITHM; a deterministic perfect judge costs nothing, and
+# it is exactly the instrument the measurement harness used.
+# ===========================================================================
+
+
+def oracle_responder(strength_by_text: dict[str, int]) -> Callable[[str], str]:
+    """A PERFECT judge: it always picks the genuinely stronger candidate."""
+
+    def _respond(prompt: str) -> str:
+        return "\n".join(
+            "{} | {} | oracle".format(
+                index,
+                "A"
+                if strength_by_text.get(text_a, -1) >= strength_by_text.get(text_b, -1)
+                else "B",
+            )
+            for index, text_a, text_b in matches_in(prompt)
+        )
+
+    return _respond
+
+
+def round_spy(monkeypatch) -> list[int]:
+    """Record every REAL Swiss round by wrapping the pairing function.
+
+    Counted through `run_tournament` rather than read off a constant, because a
+    constant that no longer drives the loop is exactly the silent failure D-R9
+    invites: `tournament_rounds` honours a positive override UNCONDITIONALLY, so
+    wiring the env value in as that override without changing its default would
+    leave the derivation dead and every test in this file still green.
+    """
+    seen_rounds: list[int] = []
+    real = workshop_rank._pair_round
+
+    def spy(entries, round_no, seen):
+        seen_rounds.append(round_no)
+        return real(entries, round_no, seen)
+
+    monkeypatch.setattr(workshop_rank, "_pair_round", spy)
+    return seen_rounds
+
+
+@pytest.mark.asyncio
+async def test_the_round_count_is_derived_from_the_field_and_is_not_four(monkeypatch):
+    """41. D-R9. THE DERIVED VALUE MUST ACTUALLY DIFFER FROM THE SHIPPED 4.
+
+    Asserted explicitly, because `workshop_loop.tournament_rounds` honours a
+    positive `override` unconditionally: wiring `_TOURNAMENT_ROUNDS` in as that
+    override while leaving its default at 4 would make D-R9 a no-op and leave
+    every test in this file green. The default must mean DERIVE.
+    """
+    assert workshop_rank._TOURNAMENT_ROUNDS == 0, (
+        "the default is not DERIVE, so the operator override always wins and the "
+        "derivation never runs"
+    )
+    assert workshop_loop.tournament_rounds(17) == 6
+    assert workshop_loop.tournament_rounds(17) != 4, "still the shipped fixed 4"
+
+    seen_rounds = round_spy(monkeypatch)
+    await tournament(JudgeAudited(flash_responder()), population(17))
+    assert len(seen_rounds) == 6, seen_rounds
+
+
+@pytest.mark.asyncio
+async def test_a_positive_operator_override_still_wins_outright(monkeypatch):
+    """42. The knob survives as an OVERRIDE, and another plan's file depends on it."""
+    monkeypatch.setattr(workshop_rank, "_TOURNAMENT_ROUNDS", 2)
+    seen_rounds = round_spy(monkeypatch)
+    await tournament(JudgeAudited(flash_responder()), population(17))
+    assert len(seen_rounds) == 2, seen_rounds
+
+
+@pytest.mark.asyncio
+async def test_two_identical_tournaments_are_byte_identical():
+    """43. Determinism survives the derived round count and the catch-up stage."""
+    one, _ = await tournament(JudgeAudited(flash_responder()), population(17))
+    two, _ = await tournament(JudgeAudited(flash_responder()), population(17))
+    assert one == two
+
+
+@pytest.mark.asyncio
+async def test_carried_standings_persist_across_calls():
+    """44. D-W4-3: wins, Elo, byes and MATCH COUNTS all cross the loop-round line."""
+    standings: dict[str, Any] = {}
+    await tournament(JudgeAudited(flash_responder()), population(12), standings=standings)
+    first = {k: dict(v) for k, v in standings["by_index"].items()}
+    await tournament(JudgeAudited(flash_responder()), population(12), standings=standings)
+
+    rounds = workshop_loop.tournament_rounds(12)
+    assert any(v["matches"] > rounds for v in standings["by_index"].values()), (
+        "no candidate exceeded one call's worth of matches — nothing carried"
+    )
+    assert any(
+        standings["by_index"][k]["matches"] > first[k]["matches"] for k in first
+    )
+    assert standings["seen"] == sorted(standings["seen"]), (
+        "carried `seen` is unordered, so two identical runs write different state"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_catch_up_match_is_played_and_never_replayed():
+    """45. Catch-up matches are REAL matches, recorded in `seen`."""
+    standings: dict[str, Any] = {}
+    await tournament(JudgeAudited(flash_responder()), population(12), standings=standings)
+    before = {tuple(p) for p in standings["seen"]}
+
+    entries = [
+        {"index": i, "wins": 0, "elo": 1200.0, "byes": 0, "matches": v["matches"]}
+        for i, v in standings["by_index"].items()
+    ]
+    entries.append({"index": 12, "wins": 0, "elo": 1200.0, "byes": 0, "matches": 0})
+    median = workshop_loop.catch_up_matches([e["matches"] for e in entries])
+    assert median > 0
+
+    pairs = workshop_rank._catch_up_pairs(entries, median, before)
+    assert pairs, "a zero-match newcomer was scheduled no catch-up at all"
+    assert all(12 in pair for pair in pairs), pairs
+    assert not (set(pairs) & before), "a catch-up match replayed an already-seen pair"
+
+    await tournament(JudgeAudited(flash_responder()), population(13), standings=standings)
+    after = {tuple(p) for p in standings["seen"]}
+    assert before <= after, "carried `seen` was dropped"
+    assert any(12 in pair for pair in after), "the newcomer never played"
+
+
+#: The incumbents' head start, in LOOP ROUNDS. `run_tournament` is called once
+#: per loop round, so this IS what "introduced in a LATE round" means.
+_PRIOR_LOOP_ROUNDS = 3
+_NEWCOMER_FIELD = 30
+
+
+async def _strong_newcomer_rank(seed: int, *, catch_up: bool, monkeypatch=None):
+    """Run the measured scenario once and return `(rank, top_n)`."""
+    import random
+
+    rng = random.Random(seed)
+    incumbents = population(_NEWCOMER_FIELD)
+    strengths = list(range(_NEWCOMER_FIELD))
+    rng.shuffle(strengths)
+    by_text = {c["text"]: strengths[i] for i, c in enumerate(incumbents)}
+
+    standings: dict[str, Any] = {}
+    for _ in range(_PRIOR_LOOP_ROUNDS):
+        await tournament(
+            JudgeAudited(oracle_responder(by_text)), incumbents, standings=standings
+        )
+
+    newcomer = cand(_NEWCOMER_FIELD, parent="Q0")
+    by_text[newcomer["text"]] = _NEWCOMER_FIELD + 100  # strictly the best in the field
+
+    if not catch_up:
+        monkeypatch.setattr(workshop_rank, "_catch_up_pairs", lambda *a, **k: [])
+    ranked, _ = await tournament(
+        JudgeAudited(oracle_responder(by_text)),
+        incumbents + [newcomer],
+        standings=standings,
+    )
+    top_n = workshop_rank.winner_count(len(ranked))
+    place = next(r["rank"] for r in ranked if r["index"] == _NEWCOMER_FIELD)
+    return place, top_n
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7])
+async def test_a_strong_late_newcomer_still_reaches_the_top_n(seed):
+    """46. THE REQUIRED TEST (D-W4-3), AT THE RAISED ROUND COUNT.
+
+    Kept exactly as ruled and run at the DERIVED count, never the old 4 — D-R9
+    makes this property HARDER, not easier, so a catch-up test at four rounds
+    would be testing a different and easier question.
+
+    Eight seeds are parametrised here for CI time; the same scenario was run over
+    200 seeds on the ast-lift harness with a 200/200 pass and a worst observed
+    rank of 1. Its falsifying column is the next test.
+    """
+    assert workshop_loop.tournament_rounds(_NEWCOMER_FIELD + 1) > 4, (
+        "the newcomer property is being tested at the OLD round count"
+    )
+    place, top_n = await _strong_newcomer_rank(seed, catch_up=True)
+    assert place <= top_n, (
+        f"the strongest question in the field ranked {place} of {top_n} slots"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7])
+async def test_the_same_newcomer_fails_without_the_catch_up(seed, monkeypatch):
+    """47. THE FALSIFYING COLUMN. Without this, test 46 is unfalsifiable.
+
+    Measured over 200 seeds on the ast-lift harness: 0/200 reach the top N, best
+    observed rank 27 of 31. Seeding that same newcomer's Elo at the field median
+    instead — D-R11 EXACTLY AS RULED — also gives 0/200, which is the direct
+    demonstration that the seed is INERT and the SCHEDULE is the fix.
+    """
+    place, top_n = await _strong_newcomer_rank(seed, catch_up=False, monkeypatch=monkeypatch)
+    assert place > top_n, (
+        "the catch-up-disabled column PASSES, so test 46 proves nothing: "
+        f"rank {place} of {top_n} slots"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_candidate_finishes_at_exactly_the_elo_start():
+    """48. THE V-01 SYMPTOM IS GONE.
+
+    Run 7dcf51d5 finished three candidates at Elo exactly 1200.00 with 2 wins
+    each, straddling the top-10 cut, and one of them lost its research slot to
+    INDEX ORDER. That is what an under-separating round count looks like from the
+    outside.
+    """
+    import random
+
+    rng = random.Random(7)
+    candidates = population(17)
+    strengths = list(range(17))
+    rng.shuffle(strengths)
+    by_text = {c["text"]: strengths[i] for i, c in enumerate(candidates)}
+
+    ranked, _ = await tournament(JudgeAudited(oracle_responder(by_text)), candidates)
+    start = round(float(workshop_rank._ELO_START), 2)
+    assert not [c["index"] for c in ranked if c["elo"] == start]
+
+
+@pytest.mark.asyncio
+async def test_the_ab_control_still_ranks_by_index_at_zero_cost(monkeypatch):
+    """49. § 8's A/B control is what proves the loop earned its cost.
+
+    There is only ONE measuring run to spend, so a control that quietly started
+    making calls would not be discovered until after the money was gone.
+    """
+    monkeypatch.setattr(workshop_rank, "_TOURNAMENT_ENABLED", False)
+    audited = JudgeAudited(flash_responder())
+    ranked, reasons = await tournament(audited, population(17))
+
+    assert [c["index"] for c in ranked] == list(range(17))
+    assert [c["rank"] for c in ranked] == list(range(1, 18))
+    assert audited.gemini_calls == []
+    assert reasons == []

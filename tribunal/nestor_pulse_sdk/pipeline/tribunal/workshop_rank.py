@@ -111,6 +111,7 @@ from nestor_pulse_sdk.pipeline.tribunal import (
     gates,
     question_grouping,
     workshop,
+    workshop_loop,
 )
 from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     CircuitOpenError,
@@ -841,9 +842,23 @@ def _lowest_index_with_parent(
 # sources specify NO pairing algorithm, NO K-factor and NO round count. So each
 # of these is a reasoned default that the August live run calibrates.
 #
-#   _TOURNAMENT_ROUNDS    rounds of Swiss. FIXED, not adaptive: determinism beats
-#                         marginal ranking quality, and the operator judges
-#                         quality in August, not in CI.
+#   _TOURNAMENT_ROUNDS    THE OPERATOR OVERRIDE, NOT THE ROUND COUNT. Zero — the
+#                         default — means DERIVE from the field via
+#                         `workshop_loop.tournament_rounds`; a positive value
+#                         wins outright. IT WAS A FIXED 4 UNTIL PHASE 15.7 AND
+#                         THAT WAS THE BUG: over 17 candidates a fixed 4 gives
+#                         each candidate 3.76 matches, and the measurement
+#                         harness reproduced V-01's exact symptom from it —
+#                         three candidates finishing at Elo exactly 1200.00 with
+#                         2 wins each, straddling the top-10 cut, one losing its
+#                         research slot to INDEX ORDER. Deriving rather than
+#                         picking a bigger constant is the point: the population
+#                         GROWS every loop round, so any fixed number silently
+#                         under-separates again the moment it does, which is
+#                         precisely how the shipped 4 became wrong without
+#                         anyone changing it. Determinism is untouched — the
+#                         formula is pure integer arithmetic over the candidate
+#                         count and consults nothing else.
 #   _MATCHES_PER_CALL     match-ups rendered into one flash call (RESEARCH: 10).
 #   _ELO_START            Co-Scientist's published initial rating.
 #   _ELO_K               the K-factor. RESEARCH: 32. Elo is the TIE-BREAK only.
@@ -852,7 +867,22 @@ def _lowest_index_with_parent(
 #                         the order bias this mitigation corrects.
 #   _TOURNAMENT_ENABLED   the A/B baseline path: off => rank by index, no calls.
 # ---------------------------------------------------------------------------
-_TOURNAMENT_ROUNDS = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ROUNDS", "4"))
+_TOURNAMENT_ROUNDS = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ROUNDS", "0"))
+#: T-15.7-08-03, DENIAL OF WALLET. A hard ceiling on the TOTAL catch-up matches
+#: one tournament may schedule. `workshop_loop.catch_up_matches` returns the
+#: field's median match count and NOTHING BOUNDS IT: with carried standings the
+#: median grows every loop round (measured here: 18 after three loop rounds over
+#: a field of 30, not the ~5 the ruling's cost note assumes), and the evolve step
+#: introduces newcomers EVERY round, so the worst case is
+#: newcomers x an ever-growing median. `tournament_rounds` is bounded above by
+#: `_TOURNAMENT_ROUNDS_MAX` and by `n - 1`; this is the same bound for the other
+#: half of the schedule. 120 matches is 12 flash calls at `_MATCHES_PER_CALL`,
+#: far above anything the measured configuration reaches, so it is a ceiling and
+#: not a tuning knob. When it binds, the LOWEST-INDEXED newcomers are served
+#: first — deterministic, like every other ordering in this module.
+_CATCH_UP_MAX_MATCHES = int(
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CATCH_UP_MAX", "120")
+)
 _MATCHES_PER_CALL = int(
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_MATCHES_PER_CALL", "10")
 )
@@ -1023,6 +1053,196 @@ def _pair_round(
         used.add(partner)
         pairs.append(_pair_key(first, partner))
     return pairs, bye
+
+
+def _as_int(value: Any, default: int) -> int:
+    """A carried counter, or the default. Never raises — carried state is input."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _as_float(value: Any, default: float) -> float:
+    """A carried rating, or the default. NaN and the infinities are rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    number = float(value)
+    if number != number or number in (float("inf"), float("-inf")):
+        return default
+    return number
+
+
+def _carried_state(
+    standings: Optional[dict[str, Any]], seen: set[tuple[int, int]]
+) -> dict[int, dict[str, Any]]:
+    """Read a carried standings dict, filling `seen`. TOTAL: never raises. D-W4-3.
+
+    Every field is read defensively because carried state is INPUT — it may have
+    made a JSON round trip (which turns integer keys into strings), it may come
+    from an older shape, and a single bad entry must degrade that one candidate to
+    a fresh start rather than fail the whole tournament.
+    """
+    out: dict[int, dict[str, Any]] = {}
+    if not isinstance(standings, dict):
+        return out
+    raw = standings.get("by_index")
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            try:
+                index = int(key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict):
+                out[index] = value
+    for pair in list(standings.get("seen") or []):
+        try:
+            low, high = int(pair[0]), int(pair[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        seen.add(_pair_key(low, high))
+    return out
+
+
+def _record_reasons(
+    judge_reasons: dict[str, str],
+    pairs: Sequence[tuple[int, int]],
+    why: dict[int, str],
+    round_no: int,
+) -> None:
+    """File the judge's clauses under `r{round}:{low}v{high}` (D-R6).
+
+    Round 0 is the CATCH-UP stage, so an operator reading the audit trail can see
+    which verdicts a newcomer earned on entry rather than in the Swiss rounds.
+    """
+    for match_index, pair in enumerate(pairs):
+        reason = why.get(match_index)
+        if reason:
+            judge_reasons[f"r{round_no}:{pair[0]}v{pair[1]}"] = reason
+
+
+def _apply_verdicts(
+    pairs: Sequence[tuple[int, int]],
+    verdicts: dict[int, int],
+    state: dict[int, dict[str, Any]],
+    seen: set[tuple[int, int]],
+) -> None:
+    """Score one judged pair list into the working state. ONE code path.
+
+    Extracted so a CATCH-UP match is not a second, subtly-different scoring rule
+    from a Swiss match — a divergence there would be invisible and would land
+    straight in the ranking. Elo is order-dependent, so the application order IS
+    the pair-list order, and that is the property the determinism test pins.
+    """
+    for match_index, pair in enumerate(pairs):
+        seen.add(pair)
+        low, high = pair
+        winner = verdicts.get(match_index, low)
+        if winner not in (low, high):
+            winner = low
+        loser = high if winner == low else low
+        state[winner]["wins"] += 1
+        state[winner]["matches"] += 1
+        state[loser]["matches"] += 1
+        new_winner_elo, new_loser_elo = _apply_elo(
+            state[winner]["elo"], state[loser]["elo"], True
+        )
+        state[winner]["elo"] = new_winner_elo
+        state[loser]["elo"] = new_loser_elo
+
+
+def _catch_up_pairs(
+    entries: Sequence[dict[str, Any]], median: int, seen: set[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """The matches a NEWCOMER missed. PURE, deterministic, no side effects. D-W4-3.
+
+    THE RANKING CODE IS NOT MODIFIED. Read that first, because the obvious repair
+    is the wrong one. D-R11 as originally ruled seeded a newcomer's Elo at the
+    field median, and that is INERT — not wrong, a NO-OP, which is worse because
+    it reads as a solved problem. The standing sorts by `(-wins, -elo, index)`
+    with **wins primary and Elo only the tie-break**, exactly as `_apply_elo`'s
+    own docstring says in capitals, so median-seed and flat-1200 produce
+    BYTE-IDENTICAL output. A newcomer's disadvantage is FEWER MATCHES AND
+    THEREFORE FEWER WINS. So D-W4-3 fixes the SCHEDULE, not the sort: a new
+    candidate simply plays the matches it missed. Measured, perfect judge, 8
+    rounds, newcomer entering round 6, chance of reaching the top N:
+
+        median seed (D-R11 as ruled)      STRONG 1.5%   MEDIAN 1.5%   WEAK 0.0%
+        flat 1200 seed                    byte-identical to the median seed
+        rank by raw win-RATE              STRONG 95.5%  MEDIAN 93.8%  WEAK 5.8%
+        catch-up schedule, sort UNCHANGED STRONG 99.8%  MEDIAN 29.5%  WEAK 1.8%
+
+    The win-rate row is the obvious repair and it OVER-corrects: at 93.8% for a
+    MEDIAN candidate it has stopped discriminating altogether, which is the whole
+    job. The last row is the shape the ruling wanted. Cost: about 5 extra flash
+    judgements against a whole 4-round tournament that measured ~$0.00.
+
+    THIS IS ALSO WHAT MAKES D-R9 SAFE, and the two must never be read apart. More
+    Swiss rounds give incumbents more matches and therefore more WINS, so raising
+    the round count makes the newcomer's deficit WORSE: measured, same newcomer,
+    same rule, rank 6 at 4 rounds entering round 3, rank 11 at 8 rounds entering
+    round 6, rank 16 entering round 7 — a fail.
+
+    Opponents are drawn from the ESTABLISHED field (those already at or past the
+    median), nearest in the current standing first, ties by index, skipping pairs
+    already in `seen`. When everything available is a rematch the nearest ones are
+    used in rotation and the fact is logged at DEBUG — the same fallback and the
+    same logging `_pair_round` already uses, so there is one rule, not two.
+
+    Returns pairs keyed by ORIGINAL index, lower first, and mutates nothing —
+    `seen` is copied, and the caller owns every counter, exactly as with
+    `_pair_round`.
+    """
+    if median <= 0:
+        return []
+    standing = sorted(entries, key=lambda e: (-e["wins"], -e["elo"], e["index"]))
+    order = [e["index"] for e in standing]
+    position = {index: place for place, index in enumerate(order)}
+    established = [e["index"] for e in standing if e["matches"] >= median]
+
+    pairs: list[tuple[int, int]] = []
+    local_seen = set(seen)  # membership-tested only; never iterated.
+    for entry in sorted(entries, key=lambda e: e["index"]):
+        deficit = median - entry["matches"]
+        if deficit <= 0:
+            continue
+        me = entry["index"]
+        pool = [i for i in (established or order) if i != me]
+        if not pool:
+            continue
+        nearest_first = sorted(
+            pool, key=lambda i: (abs(position[i] - position[me]), i)
+        )
+        rematch_cursor = 0
+        for _ in range(deficit):
+            chosen: Optional[int] = None
+            for opponent in nearest_first:
+                if _pair_key(me, opponent) not in local_seen:
+                    chosen = opponent
+                    break
+            if chosen is None:
+                chosen = nearest_first[rematch_cursor % len(nearest_first)]
+                rematch_cursor += 1
+                log.debug(
+                    "workshop_rank: every catch-up opponent for candidate %d is "
+                    "a rematch — allowing the nearest one",
+                    me,
+                )
+            key = _pair_key(me, chosen)
+            local_seen.add(key)
+            pairs.append(key)
+            if len(pairs) >= max(0, _CATCH_UP_MAX_MATCHES):
+                log.warning(
+                    "workshop_rank: the catch-up schedule hit its ceiling of %d "
+                    "match(es) — newcomers above index %d enter under-matched and "
+                    "rank correspondingly lower this round",
+                    _CATCH_UP_MAX_MATCHES,
+                    me,
+                )
+                return pairs
+    return pairs
 
 
 def _present(
@@ -1548,8 +1768,9 @@ async def run_tournament(
     stats: Optional[dict[str, Any]] = None,
     parent_texts: Optional[dict[str, Any]] = None,
     findings_by_label: Optional[dict[str, Any]] = None,
+    standings: Optional[dict[str, Any]] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Rank EVERY candidate through a fixed 4-round Swiss tournament.
+    """Rank EVERY candidate through a Swiss tournament sized to the field.
 
     Returns `(ranked, degradation_reasons)` — the FULL ranked list, not just the
     winners. Selecting the top `winner_count(...)` is `run_workshop_stage_b`'s
@@ -1582,6 +1803,33 @@ async def run_tournament(
     client-question LABEL to that question's full text and to its orientation
     findings. Supplied, the judge can finally see the question it is judging FOR;
     absent, the prompt degrades to its pre-D-R6 shape.
+
+    THE ROUND COUNT IS DERIVED FROM THE FIELD (D-R9), not fixed:
+    `workshop_loop.tournament_rounds(len(items), override=_TOURNAMENT_ROUNDS)`.
+    A POSITIVE `_TOURNAMENT_ROUNDS` STILL WINS OUTRIGHT, which is why it survives
+    as an operator override rather than being deleted — `monkeypatch.setattr(...,
+    "_TOURNAMENT_ROUNDS", 2)` pins exactly 2, and tests in another plan's file
+    depend on that across a wave boundary.
+
+    `standings` is an OPTIONAL caller-owned in/out dict (D-W4-3), the same
+    additive idiom as `stats`, so the return tuple did not widen and no existing
+    caller changed. It carries `by_index` — per candidate `wins`, `elo`, `byes`
+    and `matches` — and `seen`, the played pair identities as a sorted list of
+    `[low, high]` so it is JSON-safe. Supplied, ratings and match counts PERSIST
+    ACROSS LOOP ROUNDS, and the docstring promise that "every candidate plays at
+    least 5-6 matches" therefore means WITHIN ONE LOOP ROUND.
+
+    A candidate absent from the carried state enters with zero matches and is
+    given a CATCH-UP BUDGET of `workshop_loop.catch_up_matches` of the field's
+    match counts, minus its own — see `_catch_up_pairs` for why this and not
+    D-R11's median Elo seed, which is INERT. THE STANDING SORT IS UNCHANGED.
+    Catch-up matches are REAL judged matches down the SAME `_judge_round` path,
+    they update `wins` and `elo` exactly as a Swiss round does, and they are
+    recorded in `seen` so the Swiss rounds do not replay them.
+
+    A BYE DOES NOT COUNT AS A MATCH for catch-up purposes. It scores as a win by
+    the Swiss convention, but nobody judged it; counting it would let a candidate
+    "catch up" on a scheduling artefact instead of on evidence.
 
     NEVER RAISES.
     """
@@ -1616,14 +1864,23 @@ async def run_tournament(
         return items, []
 
     by_index = {c["index"]: c for c in items}
+    seen: set[tuple[int, int]] = set()
+    carried = _carried_state(standings, seen)
     entries = [
-        {"index": c["index"], "wins": 0, "elo": float(_ELO_START), "byes": 0}
+        {
+            "index": c["index"],
+            "wins": _as_int(carried.get(c["index"], {}).get("wins"), 0),
+            "elo": _as_float(carried.get(c["index"], {}).get("elo"), float(_ELO_START)),
+            "byes": _as_int(carried.get(c["index"], {}).get("byes"), 0),
+            "matches": _as_int(carried.get(c["index"], {}).get("matches"), 0),
+        }
         for c in items
     ]
     state = {e["index"]: e for e in entries}
-    seen: set[tuple[int, int]] = set()
     reasons: list[str] = []
-    rounds = max(1, _TOURNAMENT_ROUNDS)
+    rounds = max(
+        1, workshop_loop.tournament_rounds(len(items), override=_TOURNAMENT_ROUNDS)
+    )
 
     handles = await _feed_declare(
         feed, [f"tournament round {r}/{rounds}" for r in range(1, rounds + 1)]
@@ -1639,6 +1896,51 @@ async def run_tournament(
     total_matches = 0
     first_failure: Optional[str] = None
     judge_reasons: dict[str, str] = {}
+
+    # --- THE CATCH-UP STAGE (D-W4-3), BEFORE the Swiss rounds and never inside
+    # them. A newcomer plays the matches it missed FIRST, so it enters round 1
+    # with a win count the standing can actually compare. Doing it later would
+    # not help: pairing in every round is by the standing, and a candidate with
+    # zero wins is paired at the bottom of it. Nothing here emits a feed handle
+    # or a dispatch event — `_emit_tournament_dispatch` is ONE PER TOURNAMENT and
+    # an acceptance gate pins that count.
+    median = workshop_loop.catch_up_matches([e["matches"] for e in entries])
+    catch_up = _catch_up_pairs(entries, median, seen)
+    if catch_up:
+        log.info(
+            "workshop_rank: catch-up — %d match(es) so %d newcomer(s) reach the "
+            "field's median of %d before round 1",
+            len(catch_up),
+            sum(1 for e in entries if e["matches"] < median),
+            median,
+        )
+        presented_catch_up = [
+            _present(pair, 0, match_index)
+            for match_index, pair in enumerate(catch_up)
+        ]
+        acc_catch_up: dict[str, Any] = {"calls": 0, "cost": Decimal("0"), "unjudged": 0}
+        catch_up_verdicts, catch_up_why = await _judge_round(
+            catch_up,
+            presented_catch_up,
+            by_index=by_index,
+            decision_context=decision_context,
+            audited=audited,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            breaker=breaker,
+            acc=acc_catch_up,
+            on_retry=None,
+            parent_texts=parent_texts,
+            findings_by_label=findings_by_label,
+        )
+        _record_reasons(judge_reasons, catch_up, catch_up_why, 0)
+        _apply_verdicts(catch_up, catch_up_verdicts, state, seen)
+        total_matches += len(catch_up)
+        total_unjudged += int(acc_catch_up.get("unjudged") or 0)
+        total_calls += int(acc_catch_up.get("calls") or 0)
+        total_cost = _add_cost(total_cost, acc_catch_up.get("cost"))
+        if acc_catch_up.get("error") and first_failure is None:
+            first_failure = str(acc_catch_up["error"])
 
     for round_no in range(1, rounds + 1):
         handle = _handle_at(handles, round_no - 1)
@@ -1683,23 +1985,8 @@ async def run_tournament(
             findings_by_label=findings_by_label,
         )
 
-        # Elo is order-dependent, so the application order IS the pair-list order.
-        for match_index, pair in enumerate(pairs):
-            reason = why.get(match_index)
-            if reason:
-                judge_reasons[f"r{round_no}:{pair[0]}v{pair[1]}"] = reason
-            seen.add(pair)
-            low, high = pair
-            winner = verdicts.get(match_index, low)
-            if winner not in (low, high):
-                winner = low
-            loser = high if winner == low else low
-            state[winner]["wins"] += 1
-            new_winner_elo, new_loser_elo = _apply_elo(
-                state[winner]["elo"], state[loser]["elo"], True
-            )
-            state[winner]["elo"] = new_winner_elo
-            state[loser]["elo"] = new_loser_elo
+        _record_reasons(judge_reasons, pairs, why, round_no)
+        _apply_verdicts(pairs, verdicts, state, seen)
 
         unjudged = int(acc.get("unjudged") or 0)
         judged = max(0, len(pairs) - unjudged)
@@ -1746,6 +2033,22 @@ async def run_tournament(
         stats["cost_usd"] = str(total_cost)
         stats["unjudged"] = total_unjudged
         stats["judge_reasons"] = judge_reasons
+    if isinstance(standings, dict):
+        # WRITTEN BACK SORTED AND JSON-SAFE. `seen` is a set and a set has no
+        # order, so emitting it raw would make two identical runs produce
+        # different carried state — determinism broken by the bookkeeping rather
+        # than by the ranking. `elo` is rounded to 2dp for exactly the same
+        # reason the ranked output is.
+        standings["by_index"] = {
+            entry["index"]: {
+                "wins": entry["wins"],
+                "elo": round(entry["elo"], 2),
+                "byes": entry["byes"],
+                "matches": entry["matches"],
+            }
+            for entry in sorted(entries, key=lambda e: e["index"])
+        }
+        standings["seen"] = sorted([low, high] for low, high in seen)
 
     log.info(
         "workshop_rank: tournament done — %d candidate(s) over %d round(s), %d "
