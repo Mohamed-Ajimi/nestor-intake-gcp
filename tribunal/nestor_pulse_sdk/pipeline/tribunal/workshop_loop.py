@@ -505,3 +505,244 @@ def select_winners(
     winners = [_stamped(p) for p in sorted(taken)]
     below_cut = [_stamped(p) for p in range(total) if p not in taken]
     return winners, below_cut
+
+
+# ===========================================================================
+# The degradation vocabulary, built HERE in one place, exactly as
+# `workshop_rank.py:218-280` and `workshop.py:218-280` do for their own stages.
+# Each sentence is > 40 characters, names its count as a literal digit, and
+# states the CONSEQUENCE rather than just the event — the bar `test_fail_loud`
+# sets is a sentence a human reads, not a code.
+# ===========================================================================
+
+
+def _reason_cap_with_weak(weak: int, total: int) -> str:
+    return (
+        f"question workshop: the loop reached its round cap with {weak} of "
+        f"{total} winning question(s) that could not be sharpened past {_WEAK}, "
+        f"so those questions go to research as they stand — every client "
+        f"question is still covered, but that many answers will be "
+        f"correspondingly less pointed."
+    )
+
+
+def _reason_cap_with_resurrected(resurrected: int, total: int) -> str:
+    return (
+        f"question workshop: the loop reached its round cap with {resurrected} "
+        f"of {total} winning question(s) that survived only because a coverage "
+        f"guard kept them when the critique pass tried to remove everything, so "
+        f"those questions were never actually judged worth researching — they "
+        f"are there to keep a client question from going unanswered."
+    )
+
+
+def _exempt_cross_cutting(winner: Any) -> bool:
+    """EXEMPTION A, AND IT IS STRUCTURAL ON PURPOSE. Read the whole of this.
+
+    A cross-cutting question is compound BY CONSTRUCTION — it joins two topics
+    deliberately — so the flaw clause about being two questions in one must not
+    count against it in criterion 2. Without the exemption, criterion 2
+    structurally penalises exactly the highest-value questions the loop exists to
+    produce: it would be built to reject its own best output. `exp9` marked both
+    its best questions WEAK for precisely this reason.
+
+    THE OBVIOUS IMPLEMENTATION IS TO MATCH THAT PHRASE IN THE FLAW TEXT. DO NOT.
+    The critique prompt is English, but a Dutch or French run flaw clause is
+    model prose in the run own language, so a text matcher would silently NEVER
+    FIRE on those runs — and a guard that never fires is worse than no guard,
+    because it reads as a solved problem. This keys off the boolean
+    `select_winners` stamps, which is language-independent and derived from the
+    candidate parent structure rather than from prose.
+    """
+    if not isinstance(winner, dict):
+        return False
+    return winner.get("cross_cutting") is True
+
+
+def _is_resurrected(winner: Any) -> bool:
+    """EXEMPTION B. READ the flag; never INFER it.
+
+    `workshop_rank` Guard 1 sets `resurrected`; Guard 2 — the one that rewrites
+    EVERY candidate to KEEP when critique kills everything — does NOT set it
+    today, and plan 15.7-08 makes it do so. This function must be correct
+    whether or not that has landed, so it reads the flag and deduces nothing.
+    """
+    if not isinstance(winner, dict):
+        return False
+    return winner.get("resurrected") is True
+
+
+def exit_verdict(
+    *,
+    winners: Any,
+    client_questions: Any,
+    round_no: Any,
+    max_rounds: Optional[int] = None,
+) -> dict[str, Any]:
+    """Should the loop stop? D-W4-6, all three criteria, none removed or reordered.
+
+    THE CRITERION NUMBERING IS LOAD-BEARING AND HAS ALREADY BEEN WRONG ONCE IN
+    THREE FILES AT THE SAME TIME:
+
+        1 = COVERAGE    every client question has at least one KEEP winner
+        2 = QUALITY     no winner is WEAK, subject to the two exemptions
+        3 = SATURATION  the last evolve pass produced no new entrant to the top N
+
+    CORRECTED 2026-07-31. Until that date `15.7-OPEN-ITEMS.md`, spec section 5
+    boxed warning and section 8 Wave 4 row ALL said the resurrection exemption
+    targeted criterion 1. That inverted the rule own purpose: criterion 1 is
+    COVERAGE, and excluding a resurrected candidate from COVERAGE would break the
+    exact guarantee resurrection exists to provide. THE TARGET IS CRITERION 2.
+
+    MEASURED, SO THE `AND` IS NOT PARANOIA: all three global configurations
+    exited on the criteria well inside the cap — rounds 4, 6 and 9 — and the
+    criteria were observed to gate each other in turn rather than one blocking
+    forever (round 2 saturation passed while quality failed; round 3 the
+    reverse). WEAK winners fell 3 -> 3 -> 0 -> 0 across the configurations.
+
+    A `False` HERE IS OFTEN A NORMAL READING. In the harness, COVERAGE FAILED in
+    rounds 4 and 5 before recovering, because barring WEAK-after-two-passes
+    stripped every KEEP candidate from one client question. The exit AND
+    correctly refused to exit. That is the loop working, not a bug to tune out.
+
+    AT THE CAP THE LOOP SHIPS AND RECORDS A REASON, matching D-12: degraded means
+    honest, not broken. V-01 would have carried a sentence naming 3 of 10 winners
+    that could not be sharpened past WEAK — exactly what an operator wants to see.
+    """
+    entries = _as_entries(winners)
+    labels = _clean_labels(client_questions)
+    current = _safe_int(round_no, 0)
+    cap = _LOOP_MAX_ROUNDS if max_rounds is None else _safe_int(
+        max_rounds, _LOOP_MAX_ROUNDS
+    )
+
+    # --- Criterion 1: COVERAGE. A KEEP winner for every client question.
+    covered: set[str] = set()
+    for winner in entries:
+        if _critique_of(winner) == _KEEP:
+            covered.update(_parents_of(winner))
+    coverage_ok = all(label in covered for label in labels)
+
+    # --- Criterion 2: QUALITY, with Exemption A (structural) and Exemption B.
+    weak_winners = 0
+    resurrected_winners = 0
+    for winner in entries:
+        if _is_resurrected(winner):
+            resurrected_winners += 1
+        if _critique_of(winner) == _WEAK and not _exempt_cross_cutting(winner):
+            weak_winners += 1
+    quality_ok = weak_winners == 0 and resurrected_winners == 0
+
+    # --- Criterion 3: SATURATION. Nothing in the winner set was born this round.
+    _ABSENT = -(10**9)
+    new_entrants = 0
+    for winner in entries:
+        if not isinstance(winner, dict) or winner.get("born_round") is None:
+            continue
+        if _safe_int(winner.get("born_round"), _ABSENT) == current:
+            new_entrants += 1
+    saturation_ok = new_entrants == 0
+
+    cap_reached = current >= cap
+    should_exit = bool(coverage_ok and quality_ok and saturation_ok)
+
+    sentences: list[str] = []
+    if cap_reached and not quality_ok:
+        if weak_winners:
+            sentences.append(_reason_cap_with_weak(weak_winners, len(entries)))
+        if resurrected_winners:
+            sentences.append(
+                _reason_cap_with_resurrected(resurrected_winners, len(entries))
+            )
+
+    return {
+        "round_no": current,
+        "max_rounds": cap,
+        "winner_count": len(entries),
+        "coverage_ok": bool(coverage_ok),
+        "quality_ok": bool(quality_ok),
+        "saturation_ok": bool(saturation_ok),
+        "should_exit": should_exit,
+        "cap_reached": bool(cap_reached),
+        "weak_winners": int(weak_winners),
+        "resurrected_winners": int(resurrected_winners),
+        "new_entrants": int(new_entrants),
+        "degradation_reason": " ".join(sentences),
+    }
+
+
+def _count_of(value: Any) -> int:
+    """A count from whatever the caller had to hand. Never raises.
+
+    A caller that passes the winner LIST rather than its length gets the length,
+    not a silent zero. Instrumentation that quietly reports 0 is worse than
+    instrumentation that is absent, because a zero looks like a measurement.
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, bytes)):
+        return _safe_int(value, 0)
+    try:
+        return len(value)
+    except TypeError:
+        return _safe_int(value, 0)
+
+
+def _cost_str(value: Any) -> str:
+    """Spend as a STRING, the same idiom `workshop_rank` uses for `stats`.
+
+    A float in an audit record renders differently depending on who serialises
+    it, and these records are read by a human comparing rounds.
+    """
+    try:
+        return str(float(value))
+    except (TypeError, ValueError):
+        return "0.0"
+
+
+def round_metrics(
+    *,
+    round_no: Any,
+    candidates_in: Any,
+    new_candidates: Any,
+    winners: Any,
+    weak_winners: Any,
+    barred: Any,
+    dropped_as_reproposal: Any,
+    lookups: Any,
+    calls: Any,
+    cost_usd: Any,
+) -> dict[str, Any]:
+    """One per-round instrumentation record. D-W4-7. IT ENFORCES NOTHING.
+
+    NO CEILING, NO TRUNCATION, NO EXCEPTION — and that is a decision, not an
+    omission. Neither the spend ceiling nor a population cap nor a per-round
+    grounded-lookup cap is binding at the measured scale: population stayed
+    between 23 and 41 across all three global configurations, the largest prompt
+    the loop ever built was ~9k chars, and the validated configuration cost
+    $0.24 in total against the spec original ~$3.00 estimate for 10 rounds.
+
+    AN ENFORCED CEILING NOBODY HAS MEASURED A NEED FOR IS A KNOB THAT WILL ONE
+    DAY TRUNCATE A RUN FOR NO REASON. A logged number is what tells you whether a
+    ceiling is ever warranted. The one guard that does real work is SATURATION,
+    and the round cap is a ceiling rather than a target — confirmed by
+    measurement rather than assumed. If runs routinely hit 10 rounds, that is
+    evidence the cap should go HIGHER, not that money is being wasted.
+
+    The record is plain ints and strings so it survives `json.dumps` unchanged
+    and carries no float into an audit trail.
+    """
+    return {
+        "round_no": _count_of(round_no),
+        "candidates_in": _count_of(candidates_in),
+        "new_candidates": _count_of(new_candidates),
+        "winners": _count_of(winners),
+        "weak_winners": _count_of(weak_winners),
+        "barred": _count_of(barred),
+        "dropped_as_reproposal": _count_of(dropped_as_reproposal),
+        "lookups": _count_of(lookups),
+        "calls": _count_of(calls),
+        "cost_usd": _cost_str(cost_usd),
+    }
