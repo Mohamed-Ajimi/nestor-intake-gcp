@@ -176,26 +176,79 @@ _FEED_NAME_CHARS = 60
 
 # ---------------------------------------------------------------------------
 # Candidate-generation tunables. Same idiom, same MEDIUM-confidence caveat.
-#   _CANDIDATES_PER_QUESTION      how many sub-questions are ASKED for. Six across
-#                                 up to eight client questions lands the population
-#                                 in D2's stated 30-50 band.
-#   _CANDIDATES_PER_QUESTION_MAX  the PARSE-side hard bound, so a runaway response
-#                                 cannot inflate the downstream tournament's cost.
-#   _MAX_CANDIDATES               the global bound across all questions.
-#   _CANDIDATE_MAX_CHARS          characters kept per candidate sub-question.
+#
+# ALL FOUR DEFAULTS WERE RAISED TOGETHER IN PHASE 15.7 and they must go on moving
+# together. Each is one authority over a value another constant also governs, so
+# raising one alone silently restores the old behaviour under a new number. That
+# is why `test_workshop_tournament.py` asserts these four AND `workshop_rank`'s
+# two prompt-side widths in ONE test, values and ordering relations both.
+#
+#   _CANDIDATES_PER_QUESTION = 12
+#       How many sub-questions are ASKED for. THIS IS THE SELECTION RATIO, and it
+#       is a measured lever rather than a cosmetic bump. Two runs of an identical
+#       architecture over an identical 17 winner slots, differing in NOTHING but
+#       this number:
+#           six generated  -> a five-per-question floor is a 5-of-6 choice, which
+#                             is no selection at all. The prefer-KEEP-over-WEAK
+#                             rule is inert because there is never a spare KEEP to
+#                             prefer, the loop ground its winner set clean over
+#                             NINE rounds, and it cost $0.48.
+#           twelve         -> a real 5-of-12 choice. The winner set is clean from
+#                             round 1, the loop exits in round FOUR, and it costs
+#                             $0.24.
+#       Raising the count HALVED the cost and more than halved the rounds at an
+#       identical slot count. Read as a range those two runs say nothing; read as
+#       before/after they identify the lever.
+#   _CANDIDATES_PER_QUESTION_MAX = 24
+#       The PARSE-side hard bound, applied as `out[:cap]` in
+#       `_candidates_from_lines`, so a runaway response cannot inflate the
+#       downstream tournament's cost. IT MUST STAY ABOVE THE GENERATION COUNT.
+#       The trap, by name: raise generation to twelve and leave this at ten and
+#       the run silently yields TEN, with the selection ratio above — the whole
+#       lever of the measured configuration — quietly halved and nothing in the
+#       output saying so. One logical value with two authorities, only one of
+#       which got updated: the same defect class as CR-01 in Wave 3.
+#   _MAX_CANDIDATES = 120
+#       The global bound across all questions: `_CANDIDATES_PER_QUESTION` x 10
+#       client questions. The old 60 was exactly 12 x 5, so the round-robin trim
+#       below would have started eating candidates at the SIXTH client question —
+#       silently spending the selection ratio it had just paid to generate.
+#   _CANDIDATE_MAX_CHARS = 600
+#       Characters kept per candidate sub-question, applied at PARSE time, before
+#       the candidate is ever stored. Real candidates run to 373 characters, so
+#       the old 300 handed the critic a question cut off mid-word no matter what
+#       width the critique prompt itself allowed. 600 is the bound
+#       `research_division._SUBQ_CHARS` ALREADY applies to this same text on its
+#       way to three paid third-party providers, so nothing here widens the
+#       attacker-influenced surface past a boundary the text already crosses.
+#       THE 600 IS DUPLICATED AS A LITERAL ON PURPOSE AND IS NOT IMPORTED across
+#       that seam: a constant imported across a seam two plans both touch is the
+#       trap that turned phase 15.5's merged tree red. The agreement is stated
+#       here in words instead, and asserted in the ladder test.
 #   _WORKSHOP_CLUSTER             false -> every candidate is its own singleton and
 #                                 no clustering call is made (the A/B baseline,
 #                                 mirroring `grouping._CLUSTER_ENABLED`).
+#
+# VERIFIED 2026-07-31, because a later plan depends on it having been CHECKED
+# rather than assumed: the redesign spec warns that the generation prompt "states
+# the candidate count TWICE" and that both sites must be changed. THAT IS NOT A
+# DEFECT IN THIS REPOSITORY. `_CANDIDATE_PROMPT_TEMPLATE` writes `{n}` at two
+# places, but there is exactly ONE `.format(...)` call feeding it and exactly one
+# `n=_CANDIDATES_PER_QUESTION` keyword, so both sites read the same value from
+# this one constant and cannot disagree. The two-authorities defect the spec saw
+# was an artefact of the measurement harness's own patched copy of the prompt,
+# not of this file. The real two-authorities defects here are
+# `_CANDIDATES_PER_QUESTION_MAX` and `_CANDIDATE_MAX_CHARS`, both named above.
 # ---------------------------------------------------------------------------
 _CANDIDATES_PER_QUESTION = int(
-    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATES_PER_Q", "6")
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATES_PER_Q", "12")
 )
 _CANDIDATES_PER_QUESTION_MAX = int(
-    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATES_PER_Q_MAX", "10")
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATES_PER_Q_MAX", "24")
 )
-_MAX_CANDIDATES = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_MAX_CANDIDATES", "60"))
+_MAX_CANDIDATES = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_MAX_CANDIDATES", "120"))
 _CANDIDATE_MAX_CHARS = int(
-    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATE_CHARS", "300")
+    os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CANDIDATE_CHARS", "600")
 )
 _WORKSHOP_CLUSTER = (
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CLUSTER", "true").lower() == "true"
@@ -1036,6 +1089,12 @@ async def run_orientation(
 # ---------------------------------------------------------------------------
 # Candidate generation (D2 step 2) — a plain text completion per question, read
 # back through a fenced sentinel parser.
+#
+# `{n}` appears TWICE below, in the "Output EXACTLY" sentence and in the fenced
+# placeholder line. That is ONE format variable filled by ONE keyword argument
+# from `_CANDIDATES_PER_QUESTION`, so the two sentences cannot drift apart. Do
+# not "fix" this into two constants; see the verification note in the tunables
+# block above.
 # ---------------------------------------------------------------------------
 
 _CANDIDATE_PROMPT_TEMPLATE = """\
