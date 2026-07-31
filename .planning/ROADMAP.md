@@ -166,7 +166,7 @@ and ONE measuring run, both at the end of phase 15.8.
 **Code review runs PER WAVE, not batched** — Wave 3 shipped 42/42 verification and 1283 green tests
 with two criticals living in the SEAMS between plans.
 **Requirements**: none (this phase maps to no REQ-ID; plans trace to decision IDs instead)
-**Plans:** 5/9 plans executed
+**Plans:** 7/9 plans executed
 
 Plans:
 - [x] 15.7-01-PLAN.md — wave 1 — grouping declamp + the two downstream bounds that would silently clip the D-W4-5 floor (D-W4-4a)
@@ -174,8 +174,8 @@ Plans:
 - [x] 15.7-03-PLAN.md — wave 1 — `workshop_loop.py`: derived round count, catch-up budget, floor-at-the-cut selection, three-criteria exit, per-round metrics (D-R9/D-W4-3/5/6/7)
 - [x] 15.7-05-PLAN.md — wave 1 — `workshop_admission.py`: the corrected premise-real grounded lookup, the real-search-result evidence gate, Python-stamped parents (D-R10)
 - [x] 15.7-04-PLAN.md — wave 2 — `workshop_register.py`: the WITHIN-RUN rejected register, three bar causes and no fourth (D-W4-1)
-- [ ] 15.7-06-PLAN.md — wave 3 — `workshop_evolve.py`: generative evolve (COMBINE/EXTEND/INVERT/SPECIALISE/INVENT), the D-W4-2 anchors, the meta-review (D-R6)
-- [ ] 15.7-07-PLAN.md — wave 3 — aspect extraction with a Python assertion, the added COVERAGE rule, and the barred semantic drop in `cluster_candidates` (D-W4-4b/D-W4-1)
+- [x] 15.7-06-PLAN.md — wave 3 — `workshop_evolve.py`: generative evolve (COMBINE/EXTEND/INVERT/SPECIALISE/INVENT), the D-W4-2 anchors, the meta-review (D-R6)
+- [x] 15.7-07-PLAN.md — wave 3 — aspect extraction with a Python assertion, the added COVERAGE rule, and the barred semantic drop in `cluster_candidates` (D-W4-4b/D-W4-1)
 - [ ] 15.7-08-PLAN.md — wave 4 — judges that reason, carried standings with the catch-up schedule, the derived round count, and Guard 2 marking what it rescues (D-R6/D-R9/D-W4-3/D-W4-6)
 - [ ] 15.7-09-PLAN.md — wave 5 — the loop driver in `run_workshop_stage_b`, instrumentation, and the END-TO-END seam tests for every § 8 Wave 4 item
 
