@@ -1645,3 +1645,389 @@ async def test_stage_a_is_unchanged_end_to_end_with_the_real_emitter():
     assert result["candidates"], result
     assert result["brief_conflicts"], "the D4 flags still reach the caller as DATA"
     assert result["stage_a_fallback"] is False
+
+
+# ===========================================================================
+# SECTION 6 (plan 15.7-04) — THE WITHIN-RUN REJECTED REGISTER (D-W4-1).
+#
+# WHAT THIS SECTION PINS, and why the NEGATIVE half of it is the load-bearing
+# half. `workshop_register` is the list of questions the workshop has already
+# rejected, carried into every generate and evolve call this run so the loop
+# stops re-proposing its own rejects. Operator decision D-W4-1 (2026-07-31)
+# closed the spec's ambiguity: the register lives for the duration of ONE
+# workshop run and DIES WITH IT. "Barred this run, kept for the next" means the
+# next ROUND, not the next RUN — so there is NO table, NO alembic migration and
+# nothing here that touches a disk.
+#
+# The rule these tests exist to defend is a NEGATIVE one:
+#
+#   | Outcome                                        | Treatment              |
+#   |------------------------------------------------|------------------------|
+#   | KILL — unanswerable / opinion / nothing turns on it | BARRED             |
+#   | KILL — a restatement of another candidate      | NOT barred             |
+#   | WEAK after two evolve passes                   | BARRED                 |
+#   | Lost the tournament                            | NEVER barred           |
+#   | An invented angle whose grounded lookup found nothing | BARRED           |
+#
+# Bar something that merely came last and you break `enforce_scope_guard`
+# (`workshop_rank.py:2194`), whose documented repair ladder PROMOTES a
+# below-the-cut candidate when a client question has no winner. The coverage
+# guarantee depends on those candidates staying available, and the failure would
+# be silent — a client question quietly researched from its own raw text, or not
+# covered at all. `test_a_candidate_that_merely_came_last_is_still_promotable...`
+# below drives the real guard to prove the repair path still works.
+#
+# Like everything above, this section MAKES ZERO LLM CALLS, OPENS NO DATABASE,
+# USES NO MOCKING LIBRARY AND NEEDS NO API KEY.
+# ===========================================================================
+
+import ast  # noqa: E402 — appended section, as with the imports above
+import importlib.util  # noqa: E402
+
+from nestor_pulse_sdk.pipeline.tribunal import workshop_register  # noqa: E402
+
+#: The register's own logger, so a caplog assertion names the exact source.
+_REGISTER_LOG = "nestor_pulse_sdk.pipeline.tribunal.workshop_register"
+
+#: The register source, read once, resolved from THIS file's location and never
+#: from a repo root — Cloud Build ships only `tribunal/` (Pitfall 8).
+_REGISTER_PATH = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "pipeline"
+    / "tribunal"
+    / "workshop_register.py"
+)
+_REGISTER_SRC = _REGISTER_PATH.read_text(encoding="utf-8")
+
+
+class _HostileStr:
+    """An object whose `__str__` raises. Every renderer here must survive it."""
+
+    def __str__(self) -> str:  # pragma: no cover — driven, never displayed
+        raise RuntimeError("hostile __str__")
+
+
+#: The 5-shape hostile battery every public function is driven against.
+_HOSTILE = (None, [], {}, _HostileStr(), 12345)
+
+
+def _type_names(value: Any, out: set[str]) -> set[str]:
+    """Every type name reachable inside a register, for the JSON-safety test."""
+    out.add(type(value).__name__)
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _type_names(key, out)
+            _type_names(item, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _type_names(item, out)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Task 1 — bar, the three causes, and the never-bar rule.
+# ---------------------------------------------------------------------------
+
+
+def test_the_register_exposes_exactly_three_bar_causes_and_can_express_no_fourth():
+    """THE ABSENCE IS THE CONTROL. Read this before "completing" the enum.
+
+    There is deliberately NO cause meaning "lost the tournament" and NO cause
+    meaning "it restated another candidate". Those two outcomes do NOT bar
+    (D-W4-1's table), and the way this module enforces that is by being unable to
+    say them: `bar` refuses any cause outside the three named here, so a caller
+    cannot bar one even by mistake. An enum with a fourth member would move the
+    guarantee from "impossible" to "nobody has done it yet".
+
+    The stake is `enforce_scope_guard`'s repair ladder, which promotes a
+    below-the-cut candidate for an uncovered client question. Bar those and the
+    repair breaks with no error and no log — coverage silently lost.
+    """
+    names = sorted(n for n in dir(workshop_register) if n.startswith("BAR_"))
+    assert names == ["BAR_KILL_DEFECT", "BAR_LOOKUP_FAILED", "BAR_WEAK_TWICE"], (
+        "a fourth BAR_* cause appeared. If it means a tournament loss or a "
+        "restatement, D-W4-1 forbids it outright"
+    )
+
+    values = [str(getattr(workshop_register, n)) for n in names]
+    assert len(set(values)) == 3, "the three causes must be DISTINCT to be readable"
+
+    blob = " ".join(names + values).lower()
+    for forbidden in ("tournament", "loser", "lost", "duplicate", "restat", "rank"):
+        assert forbidden not in blob, (
+            f"a cause name or value contains {forbidden!r} — the two non-barring "
+            f"outcomes must remain inexpressible"
+        )
+
+
+def test_each_of_the_three_causes_bars_and_reports_a_new_entry():
+    """The three barring outcomes of D-W4-1's table, driven one at a time."""
+    reg = workshop_register.new_register()
+
+    assert (
+        workshop_register.bar(
+            reg,
+            text="what is the meaning of coffee",
+            flaw="pure opinion, nothing turns on it",
+            cause=workshop_register.BAR_KILL_DEFECT,
+            round_no=1,
+        )
+        is True
+    )
+    assert (
+        workshop_register.bar(
+            reg,
+            text="how big is the market",
+            flaw="too broad after two evolve passes",
+            cause=workshop_register.BAR_WEAK_TWICE,
+            round_no=2,
+        )
+        is True
+    )
+    assert (
+        workshop_register.bar(
+            reg,
+            text="minimale netwerkdichtheid voor rendabele koffiecorners",
+            flaw="no admitting source could be found for the premise",
+            cause=workshop_register.BAR_LOOKUP_FAILED,
+            round_no=2,
+        )
+        is True
+    )
+
+    assert len(reg["barred"]) == 3, reg
+
+
+def test_a_cause_the_table_does_not_allow_refuses_to_bar_and_logs(caplog):
+    """A caller inventing a cause is a caller trying to bar the un-barrable.
+
+    The refusal is not tidiness. The only causes anyone would plausibly invent
+    are the two D-W4-1 rules OUT — a tournament loss and a restatement — so an
+    unknown cause is treated as an attempt to break `enforce_scope_guard`'s
+    repair path and is rejected loudly rather than stored.
+    """
+    reg = workshop_register.new_register()
+    with caplog.at_level(logging.WARNING, logger=_REGISTER_LOG):
+        added = workshop_register.bar(
+            reg,
+            text="a perfectly good question that merely came last",
+            flaw="came last",
+            cause="tournament_loss",
+            round_no=3,
+        )
+    assert added is False
+    assert reg["barred"] == [], "nothing may be stored under an unknown cause"
+    assert caplog.text.strip(), "the refusal is logged, never silent"
+
+
+def test_barring_the_same_text_twice_keeps_one_entry_and_the_first_flaw():
+    """First-wins on the flaw, the rule `_dedupe_claims` already follows."""
+    reg = workshop_register.new_register()
+    assert workshop_register.bar(
+        reg,
+        text="How big is the NL coffee market?",
+        flaw="the first flaw",
+        cause=workshop_register.BAR_KILL_DEFECT,
+        round_no=1,
+    )
+    assert (
+        workshop_register.bar(
+            reg,
+            text="  how BIG is the   nl coffee market?  ",
+            flaw="the second flaw",
+            cause=workshop_register.BAR_WEAK_TWICE,
+            round_no=4,
+        )
+        is False
+    ), "a re-bar of the same text adds no entry"
+
+    assert len(reg["barred"]) == 1, reg
+    assert reg["barred"][0]["flaw"] == "the first flaw"
+    assert reg["barred"][0]["cause"] == workshop_register.BAR_KILL_DEFECT
+
+
+def test_a_barred_entry_records_its_cause_its_flaw_and_the_round_it_was_barred_in():
+    """D-W4-1: the flaw is the point. A bare list does not hold in a prompt."""
+    reg = workshop_register.new_register()
+    workshop_register.bar(
+        reg,
+        text="does the client like the colour blue",
+        flaw="pure opinion; no research can settle it",
+        cause=workshop_register.BAR_KILL_DEFECT,
+        round_no=7,
+    )
+    entry = reg["barred"][0]
+    assert entry["text"] == "does the client like the colour blue"
+    assert entry["flaw"] == "pure opinion; no research can settle it"
+    assert entry["cause"] == workshop_register.BAR_KILL_DEFECT
+    assert entry["round"] == 7
+
+
+def test_the_register_is_json_safe_and_holds_no_set_and_no_float():
+    """It dies with the run, but it must still survive a feed row on the way."""
+    reg = workshop_register.new_register()
+    json.dumps(reg)
+
+    for i in range(20):
+        workshop_register.bar(
+            reg,
+            text=f"candidate number {i} about margins and volumes",
+            flaw=f"flaw {i}",
+            cause=workshop_register.BAR_WEAK_TWICE,
+            round_no=i % 5,
+        )
+    assert len(reg["barred"]) == 20
+    json.dumps(reg)
+
+    names = _type_names(reg, set())
+    assert "set" not in names, names
+    assert "float" not in names, names
+
+
+def test_note_weak_pass_counts_evolve_passes_so_the_caller_holds_no_state():
+    """"WEAK after TWO evolve passes" needs a counter somewhere. It is here."""
+    reg = workshop_register.new_register()
+    text = "how do margins differ across formats?"
+    assert workshop_register.note_weak_pass(reg, text) == 1
+    assert workshop_register.note_weak_pass(reg, "  HOW do margins DIFFER across formats? ") == 2
+    assert workshop_register.note_weak_pass(reg, "an unrelated question about volumes") == 1
+
+
+def test_new_register_hands_back_a_fresh_dict_every_time():
+    """No module-level mutable default: one run's bars cannot leak into another.
+
+    A shared default would be cross-run persistence by accident — exactly what
+    D-W4-1 ruled out — and it would be invisible until two runs shared a process.
+    """
+    first = workshop_register.new_register()
+    second = workshop_register.new_register()
+    assert first is not second
+    workshop_register.bar(
+        first,
+        text="a question barred only in the first register",
+        flaw="a flaw",
+        cause=workshop_register.BAR_KILL_DEFECT,
+        round_no=1,
+    )
+    assert second["barred"] == [], "registers must not share storage"
+
+
+def test_the_source_has_no_module_level_mutable_default_and_no_mutable_argument():
+    """The same rule, asserted over the SOURCE so a future edit cannot reintroduce it."""
+    tree = ast.parse(_REGISTER_SRC)
+    mutable = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
+
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            assert not isinstance(node.value, mutable), ast.dump(node)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defaults = list(node.args.defaults) + [
+                d for d in node.args.kw_defaults if d is not None
+            ]
+            for default in defaults:
+                assert not isinstance(default, mutable), (
+                    f"{node.name} has a mutable default"
+                )
+
+
+def test_the_module_reaches_no_file_no_database_and_no_sibling_package():
+    """No table, no migration, no disk — D-W4-1's consequence, asserted.
+
+    Migrations `0016` and `0017` have still never touched a database. This phase
+    deliberately adds no third unpaid proof, so the register must not be able to
+    persist anything even if someone later wants it to.
+    """
+    for forbidden in ("open(", "os.path", "sqlalchemy", "sessionmaker", "alembic"):
+        assert forbidden not in _REGISTER_SRC, forbidden
+
+    code = [
+        line
+        for line in _REGISTER_SRC.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    offenders = [line for line in code if "nestor_pulse_sdk" in line]
+    assert offenders == [], offenders
+
+
+def test_the_module_loads_standalone_from_its_file_with_no_package_import():
+    """It must import on the one interpreter this machine has, with no SDK.
+
+    Both `workshop.py` and `workshop_rank.py` need to import this module, so it
+    can import neither of them without a cycle; loading it straight off its path,
+    outside the package, proves the dependency really is one-way.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_standalone_workshop_register", _REGISTER_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.new_register()["barred"] == []
+    assert module.BAR_KILL_DEFECT and module.BAR_WEAK_TWICE and module.BAR_LOOKUP_FAILED
+
+
+def test_every_register_function_is_total_over_a_hostile_input_battery():
+    """None, a list, a dict, an exploding `__str__` and an int. Nothing raises."""
+    for shape in _HOSTILE:
+        reg = workshop_register.new_register()
+
+        workshop_register.bar(
+            reg, text=shape, flaw=shape, cause=workshop_register.BAR_KILL_DEFECT
+        )
+        workshop_register.bar(
+            reg, text="a real question about margins", flaw=shape, cause=shape
+        )
+        workshop_register.note_weak_pass(reg, shape)
+
+        assert isinstance(workshop_register.bar(shape, text="x", flaw="y", cause=shape), bool)
+        assert isinstance(workshop_register.note_weak_pass(shape, "x"), int)
+        json.dumps(reg)
+
+
+def test_a_candidate_that_merely_came_last_is_still_promotable_after_barring():
+    """THE LOAD-BEARING TEST. The coverage repair must survive the register.
+
+    `enforce_scope_guard` repairs an uncovered client question by PROMOTING that
+    question's best-ranked candidate out of `all_ranked` even though it finished
+    below the winner cut. If a candidate could be barred for coming last, this
+    repair would quietly stop finding anything and the client's question would be
+    researched from its own raw text — or not at all.
+
+    Driven end to end against the REAL guard, with a register that has barred
+    other things in the same run, so the two subsystems are proven compatible
+    rather than merely proven separately.
+    """
+    reg = workshop_register.new_register()
+    workshop_register.bar(
+        reg,
+        text="a genuinely defective question",
+        flaw="unanswerable in principle",
+        cause=workshop_register.BAR_KILL_DEFECT,
+        round_no=1,
+    )
+    # The candidate below came LAST. No cause exists that could bar it.
+    the_also_ran = {
+        "index": 9,
+        "rank": 42,
+        "text": "which store formats clear a 30% coffee margin in NL?",
+        "parents": ["Q2"],
+        "parent": "Q2",
+    }
+
+    winners, notes, injected = workshop_rank.enforce_scope_guard(
+        winners=[{"index": 1, "rank": 1, "text": "a winner", "parents": ["Q1"]}],
+        client_questions=["Q1", "Q2"],
+        all_ranked=[the_also_ran],
+        question_texts={"Q1": "question one", "Q2": "question two"},
+    )
+
+    promoted = [w for w in winners if w.get("scope_injected")]
+    assert len(promoted) == 1, winners
+    assert promoted[0]["text"] == the_also_ran["text"], (
+        "the below-the-cut candidate was NOT promoted — the coverage repair broke"
+    )
+    assert promoted[0]["text"] != "question two", "it fell back to verbatim injection"
+    assert injected == ["Q2"]
+    assert notes, "a promotion is always explained in plain words"
