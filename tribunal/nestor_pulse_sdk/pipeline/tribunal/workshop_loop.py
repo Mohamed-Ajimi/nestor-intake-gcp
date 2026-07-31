@@ -249,3 +249,259 @@ def catch_up_matches(match_counts: Any) -> int:
         return 0
     values.sort()
     return int(values[(len(values) - 1) // 2])
+
+
+# ===========================================================================
+# Candidate-shape helpers. Total, defensive, and shared by everything below.
+# ===========================================================================
+
+
+def _as_entries(ranked: Any) -> list[dict[str, Any]]:
+    """Coerce the caller input into a list of candidate dicts. Never raises.
+
+    A non-dict element is KEPT as an empty dict rather than dropped. That looks
+    pedantic and is not: the never-drop rule below is an invariant of this
+    module, and an input shape nobody expected is not a licence to start
+    deleting positions from a pool that another stage is going to reconcile
+    against.
+    """
+    if ranked is None or isinstance(ranked, (str, bytes, dict)):
+        if isinstance(ranked, (str, bytes)):
+            return [{} for _ in range(len(ranked))]
+        return []
+    try:
+        raw_items = list(ranked)
+    except TypeError:
+        return []
+    return [item if isinstance(item, dict) else {} for item in raw_items]
+
+
+def _clean_labels(client_questions: Any) -> list[str]:
+    """The ordered, de-duplicated client-question labels. Never raises."""
+    out: list[str] = []
+    if client_questions is None or isinstance(client_questions, (str, bytes)):
+        return out
+    try:
+        raw_items = list(client_questions)
+    except TypeError:
+        return out
+    for raw in raw_items:
+        try:
+            label = str(raw or "").strip()
+        except Exception:  # noqa: BLE001 - a total function by contract
+            continue
+        if label and label not in out:
+            out.append(label)
+    return out
+
+
+def _parents_of(entry: Any) -> list[str]:
+    """The ordered parent labels one candidate covers. Mirrors `workshop_rank._parents_of`.
+
+    UNION OVER `parents`, FALLING BACK TO `parent` — and the direction matters.
+    The near-duplicate collapse can legitimately carry two client questions onto
+    ONE representative: the representative keeps the lowest-ranked member own
+    `parent`, but `parents` is the ordered union of every member. Reading only
+    `parent` would report a false coverage miss on a perfectly valid clustering.
+    """
+    out: list[str] = []
+    if not isinstance(entry, dict):
+        return out
+    try:
+        raw_parents = list(entry.get("parents") or [])
+    except TypeError:
+        raw_parents = []
+    for raw in raw_parents:
+        try:
+            label = str(raw or "").strip()
+        except Exception:  # noqa: BLE001 - a total function by contract
+            continue
+        if label and label not in out:
+            out.append(label)
+    if not out:
+        try:
+            own = str(entry.get("parent") or "").strip()
+        except Exception:  # noqa: BLE001 - a total function by contract
+            own = ""
+        if own:
+            out.append(own)
+    return out
+
+
+def _critique_of(entry: Any) -> str:
+    """The critique verdict, upper-cased. Anything unreadable reads as KEEP.
+
+    THE DEFAULT INVERTS TOWARDS SURVIVAL, exactly as `workshop_rank`
+    `_CRITIQUE_DEFAULT` does, and for the same reason: a needless match costs a
+    fraction of a cent, whereas a silently deleted sub-question is a scope loss
+    nobody can see.
+    """
+    if not isinstance(entry, dict):
+        return _KEEP
+    try:
+        verdict = str(entry.get("critique") or "").strip().upper()
+    except Exception:  # noqa: BLE001 - a total function by contract
+        return _KEEP
+    return verdict or _KEEP
+
+
+def _is_cross_cutting(entry: Any, labels: Sequence[str]) -> bool:
+    """Does this candidate join two client questions, or come from discovery?
+
+    Two shapes count, and both are real. A candidate whose `parents` span two or
+    more CLIENT-QUESTION labels is a cross-cutting mandate question — those have
+    two genuine parents and are where the best measured output came from. A
+    candidate carrying the `__discovery__` sentinel came from nowhere on the
+    mandate at all, which is the other way a question can be cross-cutting.
+    """
+    parents = _parents_of(entry)
+    if _DISCOVERY_PARENT in parents:
+        return True
+    return len([p for p in parents if p in labels]) >= 2
+
+
+def select_winners(
+    ranked: Any,
+    *,
+    client_questions: Any,
+    default_cut: Any,
+    floor_per_question: Optional[int] = None,
+    cross_cutting_slots: Optional[int] = None,
+    prefer_keep: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Choose the winners at the cut. D-W4-5, the `exp11` validated configuration.
+
+    Returns `(winners, below_cut)`. `ranked` is in rank order — position 0 is
+    rank 1 — and both lists come back in ascending rank order.
+
+    THE SHAPE: a floor of `floor_per_question` winners per client question, plus
+    `cross_cutting_slots` for questions that span two of them, applied AT THE CUT
+    rather than by splitting the pool into per-question quotas. Measured over 3
+    client questions with 12 candidates generated each: 17 winners, 5 + 5 + 5 + 2,
+    none WEAK, converging in round 4.
+
+    THREE THINGS A FUTURE READER WILL GET WRONG, STATED PLAINLY:
+
+    1. THIS FUNCTION NEVER BARS ANYTHING. Losing the tournament is not a defect —
+       it means the candidate was fine and just missed the cut.
+       `enforce_scope_guard` documented repair ladder PROMOTES a below-the-cut
+       candidate when a client question ends up with no winner, so barring losers
+       silently breaks the coverage guarantee. `below_cut` is returned for
+       exactly that reason and it is a complete partition of the input: every
+       candidate handed in comes back in one list or the other, always.
+
+    2. THE FLOOR OVERRIDES `_WINNERS_MIN` / `_WINNERS_MAX`. `winner_count` would
+       cap the cut at 15 and the validated configuration is 17. D-W4-5 is an
+       operator decision and the floor wins. `default_cut` is consulted ONLY when
+       there are no client questions at all. Say it here and pin it in a test, or
+       a later reader restores the cap and silently deletes two research
+       questions.
+
+    3. `discovery_bracket` ANTI-QUOTA DOCSTRING DOES NOT GOVERN THIS FLOOR. That
+       docstring argues against quotas by name, and it is right about what it is
+       arguing about: a per-question DISCOVERY quota would force the engine to
+       MANUFACTURE a discovery question for a client question that has no
+       conflict worth exploring. A MANDATE floor manufactures nothing — the
+       per-question candidates already exist and were already generated. A future
+       reader will cite that docstring to block this floor. It does not apply.
+
+    PREFER-KEEP is applied at EVERY step, and it is ONE rule: within the eligible
+    pool for a slot, take the best-ranked candidate whose critique is KEEP if any
+    KEEP is eligible, otherwise the best-ranked non-KEEP.
+
+    It is the single highest-leverage rule the measurement found, and it is a few
+    lines of selection logic. Exit criterion 2 CHECKS for WEAK winners, and
+    nothing anywhere ever PREVENTED one from being selected — a smoke alarm with
+    no fire door. Adding the preference took WEAK winners to 0 and made criterion
+    2 satisfiable BY CONSTRUCTION rather than by luck.
+
+    ITS DEPENDENCY, WHICH IS NOT A PROPERTY OF THE RULE: prefer-KEEP only works
+    when there are spare KEEP candidates to prefer, and that is a property of the
+    SELECTION RATIO. At 6 generated per question against a 5-slot floor it is a
+    5-of-6 choice and the rule is INERT; at 12 generated it is a 5-of-12 choice
+    and the rule always has a KEEP available. That single change halved the cost
+    AND more than halved the rounds at an identical slot count.
+    """
+    entries = _as_entries(ranked)
+    labels = _clean_labels(client_questions)
+    total = len(entries)
+
+    floor = _FLOOR_PER_QUESTION if floor_per_question is None else _safe_int(
+        floor_per_question, _FLOOR_PER_QUESTION
+    )
+    slots = _CROSS_CUTTING_SLOTS if cross_cutting_slots is None else _safe_int(
+        cross_cutting_slots, _CROSS_CUTTING_SLOTS
+    )
+    floor = max(0, floor)
+    slots = max(0, slots)
+
+    if labels:
+        target = floor * len(labels) + slots
+    else:
+        target = _safe_int(default_cut, 0)
+    target = max(0, min(target, total))
+
+    taken: set[int] = set()
+
+    def _pick(eligible: list[int]) -> Optional[int]:
+        """One slot. Prefer a KEEP if one is eligible, else the best rank."""
+        if not eligible:
+            return None
+        if prefer_keep:
+            for position in eligible:
+                if _critique_of(entries[position]) == _KEEP:
+                    return position
+        return eligible[0]
+
+    # --- Step 1: the per-client-question floor, in CLIENT-QUESTION ORDER.
+    for label in labels:
+        for _ in range(floor):
+            if len(taken) >= target:
+                break
+            eligible = [
+                p
+                for p in range(total)
+                if p not in taken and label in _parents_of(entries[p])
+            ]
+            chosen = _pick(eligible)
+            if chosen is None:
+                break
+            taken.add(chosen)
+
+    # --- Step 2: the cross-cutting slots.
+    for _ in range(slots if labels else 0):
+        if len(taken) >= target:
+            break
+        eligible = [
+            p
+            for p in range(total)
+            if p not in taken and _is_cross_cutting(entries[p], labels)
+        ]
+        chosen = _pick(eligible)
+        if chosen is None:
+            break
+        taken.add(chosen)
+
+    # --- Step 3: fill whatever is left of the target, by rank.
+    while len(taken) < target:
+        chosen = _pick([p for p in range(total) if p not in taken])
+        if chosen is None:
+            break
+        taken.add(chosen)
+
+    def _stamped(position: int) -> dict[str, Any]:
+        """A COPY, with the cross-cutting boolean stamped on.
+
+        A copy because the caller ranked pool is reused by the evolve step and a
+        function that quietly writes into it would pass every behavioural test
+        and still be a bug. The boolean is stamped here so `exit_verdict` reads a
+        flag instead of re-deriving the property — see Exemption A, which must be
+        STRUCTURAL rather than textual.
+        """
+        copied = dict(entries[position])
+        copied["cross_cutting"] = _is_cross_cutting(entries[position], labels)
+        return copied
+
+    winners = [_stamped(p) for p in sorted(taken)]
+    below_cut = [_stamped(p) for p in range(total) if p not in taken]
+    return winners, below_cut
