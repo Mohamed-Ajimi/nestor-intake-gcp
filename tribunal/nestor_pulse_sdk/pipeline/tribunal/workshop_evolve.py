@@ -1095,3 +1095,211 @@ async def evolve_generative(
         discarded,
     )
     return produced, workshop._dedup_reasons(reasons)
+
+
+# ===========================================================================
+# D-R6 — THE META-REVIEW
+# ===========================================================================
+
+_META_REVIEW_PROMPT = """\
+You are reviewing one round of a research-question workshop, so the NEXT round
+writes better questions than this one did.
+
+The client's decision this research has to serve:
+{decision_context}
+
+Below are two lists from THIS round: every flaw the critique pass found in a
+candidate question, and every reason the judge gave for preferring one question
+over another in a head-to-head.
+
+Read them and write SHORT guidance for the next round: what the questions keep
+getting wrong, and what would make the next batch better. Name the pattern, not
+the individual questions — the next round writes new questions, not fixes to
+these.
+
+Write ONE paragraph of plain prose. No lists, no numbering, no headings, no
+preamble such as "Here is the guidance". Under {max_chars} characters.
+
+{ignore_instructions}
+
+WHAT THE CRITIQUE PASS SAID WAS WRONG:
+{flaws_block}
+
+WHY THE JUDGE PREFERRED ONE QUESTION OVER ANOTHER:
+{reasons_block}
+"""
+
+
+def _indexed_block(entries: Any, *, empty: str) -> str:
+    """Render one list INDEXED and TRUNCATED. The control every block here states.
+
+    Both of this prompt's inputs are MODEL OUTPUT — critique flaws and judge
+    reasons — so both cross the same trust boundary a candidate's text crosses,
+    and both get the same two controls: addressed by INDEX so one entry cannot
+    speak for another's slot, and bounded by `workshop_rank._flatten` so an
+    entry cannot spend unbounded prompt or forge a line.
+    """
+    lines: list[str] = []
+    try:
+        items = list(entries or [])
+    except TypeError:
+        items = []
+    if isinstance(entries, (str, bytes)):
+        items = []
+    for entry in items:
+        text = _flatten(entry, _META_LIST_CHARS)
+        if not text:
+            continue
+        lines.append(f"{len(lines)} | {text}")
+        if len(lines) >= max(1, _META_MAX_ENTRIES):
+            break
+    return "\n".join(lines) if lines else empty
+
+
+async def meta_review(
+    *,
+    flaws: Any,
+    judge_reasons: Any,
+    decision_context: str = "",
+    round_no: Any,
+    audited: "AuditedLLMClient",
+    run_id: "uuid.UUID",
+    tenant_id: "uuid.UUID",
+    breaker: Any | None = None,
+    stats: Optional[dict[str, Any]] = None,
+) -> tuple[str, list[str]]:
+    """One call per round: this round's own criticism becomes the next round's brief.
+
+    Returns `(guidance, degradation_reasons)`. NEVER RAISES.
+
+    WHAT THIS IS FOR, in D-R6's terms. Today the judge sees two question texts, a
+    short decision blurb and a 160-character flaw clause — IT IS JUDGING BLIND.
+    Giving it the parent client question in full plus that question's orientation
+    findings has three effects: better judgements, an audit trail of WHY 7 beat 9,
+    and MATERIAL FOR THE META-REVIEW. This function is the third of the three.
+
+    DEPENDENCY, STATED RATHER THAN ASSUMED. `judge_reasons` only exists once plan
+    15.7-08 changes `_TOURNAMENT_PROMPT`'s output from `MATCH_INDEX | A` to
+    `MATCH_INDEX | A | <one clause why>`. Until then this function DEGRADES TO
+    FLAWS-ONLY GUIDANCE rather than failing: an empty `judge_reasons` still makes
+    the call and still renders the flaws. Only BOTH lists being empty means there
+    is nothing to review, and then it makes no call at all.
+
+    THE RETURNED GUIDANCE IS BOUNDED, AND THAT IS A SECURITY CONTROL. It is model
+    output that goes straight back into another model's prompt, so it is run
+    through `workshop_rank._flatten` at `_GUIDANCE_MAX_CHARS` — collapsing
+    newlines and pipes, squeezing whitespace, truncating — exactly as every other
+    piece of such text in this engine is bounded. `_guidance_section` then
+    presents it to the next round as DATA, under the same ignore-instructions
+    sentence, and says so in the prompt. It is never presented as an instruction,
+    and that is precisely why it is BOUNDED rather than TRUSTED: a guidance
+    string that could carry a line break could carry an instruction to re-parent
+    or re-scope a candidate, and the next round's parser addresses records by
+    line.
+
+    A failed call, an open breaker or an unusable response each return `("",
+    [reason])`. The loop continues WITHOUT guidance rather than stopping — one
+    degree less informed is a far better outcome than a halted run.
+    """
+    if isinstance(stats, dict):
+        stats.setdefault("meta_calls", 0)
+        stats.setdefault("meta_cost_usd", "0")
+
+    flaws_block = _indexed_block(flaws, empty="")
+    reasons_block = _indexed_block(judge_reasons, empty="")
+
+    if not flaws_block and not reasons_block:
+        log.info(
+            "workshop_evolve: round %s produced no critique flaws and no judge "
+            "reasons, so there is nothing to meta-review and no call is made",
+            round_no,
+        )
+        return "", []
+
+    if not _META_ENABLED:
+        log.info(
+            "workshop_evolve: the meta-review is switched off "
+            "(NESTOR_TRIBUNAL_WORKSHOP_META_REVIEW) — round %s writes its "
+            "questions without guidance and makes no call",
+            round_no,
+        )
+        return "", []
+
+    prompt = _META_REVIEW_PROMPT.format(
+        decision_context=_render_decision(decision_context),
+        ignore_instructions=_IGNORE_INSTRUCTIONS,
+        max_chars=max(1, _GUIDANCE_MAX_CHARS),
+        flaws_block=flaws_block or "(the critique pass recorded no flaw this round)",
+        reasons_block=(
+            reasons_block
+            or "(the judge recorded no reason this round — judge on the flaws alone)"
+        ),
+    )
+
+    out: dict[str, Any] = {}
+    config = gates._make_config()
+    kwargs: dict[str, Any] = {"config": config} if config is not None else {}
+
+    try:
+        resp = await with_retry(
+            lambda: audited.gemini_generate(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                model=_META_MODEL,
+                contents=prompt,
+                audit_out=out,
+                **kwargs,
+            ),
+            attempts=max(0, workshop_rank._RANK_RETRIES) + 1,
+            base_s=workshop_rank._RANK_BACKOFF_S,
+            label="workshop.meta_review",
+            breaker=breaker,
+        )
+    except Exception as exc:  # noqa: BLE001 — a lost meta-review degrades, never fails
+        detail = (
+            str(exc) if isinstance(exc, CircuitOpenError)
+            else f"{type(exc).__name__}: {exc}"
+        )
+        log.warning(
+            "workshop_evolve: the meta-review call for round %s failed — the next "
+            "round is written without guidance: %r",
+            round_no,
+            exc,
+        )
+        return "", [_reason_meta_review_failed(detail)]
+
+    if isinstance(stats, dict):
+        stats["meta_calls"] = int(stats.get("meta_calls") or 0) + 1
+        stats["meta_cost_usd"] = str(
+            workshop._add_cost(
+                Decimal(str(stats.get("meta_cost_usd") or "0")), out.get("cost_usd")
+            )
+        )
+
+    # The response-text ladder, taken from `workshop_rank._critique_once` rather
+    # than simplified: some SDK versions populate `.text`, others only
+    # `.candidates`.
+    text = getattr(resp, "text", None)
+    if not text:
+        cands = getattr(resp, "candidates", None) or []
+        if cands:
+            parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
+            if parts:
+                text = getattr(parts[0], "text", None) or ""
+
+    guidance = _flatten(text, _GUIDANCE_MAX_CHARS)
+    if not guidance:
+        log.warning(
+            "workshop_evolve: the meta-review for round %s returned nothing "
+            "usable — the next round is written without guidance",
+            round_no,
+        )
+        return "", [_reason_meta_review_failed("the response carried no text")]
+
+    log.info(
+        "workshop_evolve: round %s meta-review produced %d character(s) of "
+        "guidance for the next round",
+        round_no,
+        len(guidance),
+    )
+    return guidance, []
