@@ -835,7 +835,17 @@ def _classify_prompt(prompt: str) -> str:
     The generative-evolve prompt also carries `LANGS:`, so `SOURCE_INDICES` has
     to be tested before the sharpener — otherwise every generation call would be
     answered with sharpener lines and the loop would never grow its pool.
+
+    `CLUSTER_ID` is FIRST and it is the one that unlocks D-W4-1 layer 2. Until it
+    was routed, the near-duplicate clustering call fell through to the `meta`
+    branch, `_parse_cluster_lines` found no parseable line, every candidate got
+    the `-1` singleton sentinel — and THE SEMANTIC DROP NEVER FIRED IN ANY TEST.
+    Every barred-reappearance assertion built on that would have passed because
+    nothing was ever clustered, which is the silently-vacuous shape this whole
+    file exists to avoid.
     """
+    if "CLUSTER_ID" in prompt:
+        return "cluster"
     if "MATCH_INDEX" in prompt:
         return "judge"
     if "SOURCE_INDICES" in prompt:
@@ -1328,7 +1338,712 @@ def test_a_resurrected_candidate_never_reaches_the_register_as_a_bar() -> None:
         )
 
     survivors, _reasons = asyncio.run(_drive())
-    # Guard 2 rescued it, so it is alive...
+    # GUARD 1 rescued it — not Guard 2. The candidate carries a parent label, and
+    # Guard 1 (the per-client-question rescue) therefore fires first and leaves
+    # `survivors` non-empty, so Guard 2's "the population is empty" branch is
+    # never reached. Naming the wrong guard here would be the same error plan 08's
+    # first Guard 2 test made: GUARD 2 IS ONLY REACHABLE WHEN NO CANDIDATE CARRIES
+    # A PARENT LABEL AT ALL. The assertion below holds for either guard, which is
+    # why the test is still sound — but a reader chasing Guard 2 would be looking
+    # at the wrong branch.
     assert survivors
     # ...and therefore it must NOT be offered to the register as a bar.
     assert killed_out == []
+
+
+# ===========================================================================
+# TASK 3 — THE SEAM SUITE. Section 8's Wave 4 row, ITEM BY ITEM, each as its
+# own named test, and each driving the REAL `run_workshop_stage_b` and
+# asserting on THE CONTRACT IT RETURNS.
+#
+# WHY THE END-TO-END FORM IS NON-NEGOTIABLE HERE. Wave 3 shipped 42/42
+# verification and 1283 green tests and still carried TWO CRITICALS — a
+# prompt-injection channel and a silent deletion of client questions — because
+# every plan's own `must_haves` were individually satisfied and both defects
+# lived in the SEAMS BETWEEN PLANS. Plan 09 IS that seam. A barred question that
+# does not reappear "according to the register" proves nothing; only its absence
+# from the RETURNED winner set does.
+#
+# ONE ITEM CANNOT TAKE THIS FORM, and it is called out rather than quietly
+# reshaped: the generation-count item asserts the STAGE A generation prompt,
+# which `run_workshop_stage_b` never builds. See
+# `test_section8_the_generation_count_appears_in_both_places_the_prompt_states_it`.
+# ===========================================================================
+
+
+def _oracle_script(*, strong_newcomer: bool = False, newcomer_strength: int = 999,
+                   generate_rounds: int = 3, new_per_round: int = 6,
+                   weak_first_rounds: int = 0, weak_label: str = CQ3):
+    """A scripted responder whose JUDGE IS AN ORACLE rather than a coin flip.
+
+    Every candidate text carries `STRENGTH=<n>`; the judge reads both sides and
+    always answers the higher one. That makes the tournament DETERMINISTIC and
+    makes "did the better question win?" an assertion rather than a hope — the
+    random judge in `_script` can only support statements about shape.
+
+    With `strong_newcomer` the generative evolve writes candidates at
+    `newcomer_strength`, which is above every seed candidate, so a candidate born
+    in a LATE round is the best in the field and must finish in the top N.
+    """
+    state: dict[str, int] = {"round": 0, "generate": 0}
+
+    def _strength(text: str) -> int:
+        found = re.search(r"STRENGTH=(\d+)", text or "")
+        return int(found.group(1)) if found else 0
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                if state["round"] <= weak_first_rounds and weak_label in text:
+                    verdict, flaw = _WEAK, "too broad to answer as it stands"
+                else:
+                    verdict, flaw = _KEEP, "-"
+                lines.append(f"{int(raw_index)} | {verdict} | {flaw}")
+            return "\n".join(lines)
+
+        if kind == "judge":
+            lines = []
+            for match in re.finditer(
+                r"^\s*(\d+)\s*\|\s*A:\s*(.*?)\s*\|\s*B:\s*(.*)$", prompt, re.M
+            ):
+                index, side_a, side_b = match.group(1), match.group(2), match.group(3)
+                winner = "A" if _strength(side_a) >= _strength(side_b) else "B"
+                lines.append(f"{int(index)} | {winner} | the stronger question")
+            return "\n".join(lines) or "0 | A | the stronger question"
+
+        if kind == "sharpen":
+            # THE SHARPENER MUST PRESERVE `STRENGTH=`. It rewrites every winner's
+            # text, and a rewrite that dropped the marker would make the oracle's
+            # verdict unreadable in the RETURNED winners — the assertion would
+            # then be about the sharpener, not about the tournament.
+            out = []
+            for line in re.findall(r"^(\d+) \| (.*?)(?: \| |$)", prompt, re.M):
+                index, text = int(line[0]), line[1]
+                out.append(
+                    f"{index} | sharpened {text} | LANGS: nl,en"
+                )
+            body = "\n".join(out)
+            return f"{_START}\n{body}\n{_END}"
+
+        if kind == "generate":
+            state["generate"] += 1
+            if state["generate"] > generate_rounds:
+                return f"{_START}\n{_END}"
+            strength = newcomer_strength if strong_newcomer else 5
+            lines = [
+                f"{k} | COMBINE | 0,1 | loop-born question {state['generate']}-{k} "
+                f"STRENGTH={strength} | LANGS: nl,en"
+                for k in range(new_per_round)
+            ]
+            return f"{_START}\n" + "\n".join(lines) + f"\n{_END}"
+
+        return "focus the next round on cost evidence"
+
+    return respond
+
+
+def _strength_stage_a(labels, per_question: int = 12):
+    """Stage A whose candidate texts carry an explicit, distinct `STRENGTH=`.
+
+    Seed strengths run 10..10+per_question, all BELOW `_oracle_script`'s
+    newcomer strength, so a late newcomer reaching the top N cannot be an
+    artefact of a tie.
+    """
+    payload = _keyed_stage_a(labels, per_question=per_question)
+    for position, candidate in enumerate(payload["candidates"]):
+        candidate["text"] = f"{candidate['text']} STRENGTH={10 + position}"
+    return payload
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 1 — "loop exits on saturation before the cap"
+# --------------------------------------------------------------------------
+def test_section8_the_loop_exits_on_saturation_before_the_cap() -> None:
+    """A healthy brief converges on its OWN criteria and never reaches the cap.
+
+    THE EXIT ROUND IS ASSERTED AS A RANGE AND NEVER AS A CONSTANT. Evolve runs at
+    temperature 1.0: the design harness exited at rounds 4, 6 and 6 on three runs
+    of ONE configuration, and this file's scripted stubs measured [3, 3, 3, 3, 3,
+    4] over six seeds. A hard round number is a flaky test by construction; what
+    is actually guaranteed is convergence strictly INSIDE the cap.
+
+    The lower bound matters as much as the upper one. A run that exited in round
+    1 would satisfy "before the cap" while proving nothing about the loop at all,
+    so `>= 2` is asserted separately and for that reason.
+    """
+    cap = workshop_loop._LOOP_MAX_ROUNDS
+    observed = []
+    for seed in range(6):
+        result = _run_stage_b(_ScriptedClient(_script(seed=seed)), SEAM_LABELS)
+        observed.append(result["counts"]["rounds"])
+        # It exited on the CRITERIA, so it carries no cap degradation sentence.
+        cap_sentences = [
+            reason for reason in result["degradation_reasons"]
+            if "round cap" in reason or "could not be sharpened" in reason
+        ]
+        assert not cap_sentences, (seed, cap_sentences)
+
+    assert all(2 <= round_no < cap for round_no in observed), observed
+    # SATURATION is the criterion that closes the loop: the last round it ran
+    # added no NEW candidate to the winner set. Read off the returned
+    # instrumentation rather than re-derived, so the assertion is about what the
+    # run recorded.
+    assert len(result["loop_rounds"]) == result["counts"]["rounds"]
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 2 — "a resurrected candidate does not satisfy QUALITY"
+# --------------------------------------------------------------------------
+def test_section8_a_resurrected_candidate_does_not_satisfy_criterion_two() -> None:
+    """CRITERION 2 IS QUALITY, and until 2026-07-31 three documents said 1.
+
+    That inversion mattered: criterion 1 is COVERAGE, and excluding a resurrected
+    candidate from coverage would break the exact guarantee resurrection exists to
+    provide. Driven END TO END — a critique that kills everything, through the
+    never-drop guard that resurrects, through to a loop that REFUSES TO EXIT and
+    ships at the cap saying why.
+
+    THIS IS GUARD 1, the per-client-question rescue, and it is named because the
+    distinction is a live trap: Guard 2 is only reachable when NO candidate
+    carries a parent label, so any "Guard 2" test built on parented candidates is
+    vacuous. Every candidate here has a parent, so Guard 1 fires and Guard 2 is
+    never entered.
+    """
+    def _kill_everything(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            return "\n".join(
+                f"{int(i)} | {_KILL} | nothing about the decision turns on it"
+                for i, _text in rows
+            )
+        return _script()(kind, prompt)
+
+    result = _run_stage_b(_ScriptedClient(_kill_everything), SEAM_LABELS)
+
+    # It never satisfied criterion 2, so it ran the whole way to the cap...
+    assert result["counts"]["rounds"] == workshop_loop._LOOP_MAX_ROUNDS
+    # ...and it SHIPPED, saying so in a sentence a human reads (D-12: degraded
+    # means honest, not broken).
+    assert result["winners"]
+    # MATCHED ON THE SENTENCE'S OWN PROVENANCE, not on the word "resurrected" —
+    # which is the code's vocabulary and appears nowhere in the operator-facing
+    # sentence `_reason_cap_with_resurrected` actually returns.
+    reasons = " ".join(result["degradation_reasons"])
+    assert "coverage guard" in reasons, result["degradation_reasons"]
+
+    # AND CRITERION 1 STILL HELD. Every client question is still covered — which
+    # is the half that the corrected numbering protects.
+    covered = set()
+    for winner in result["winners"]:
+        covered.update(winner.get("parents") or [])
+    assert set(SEAM_LABELS) <= covered, covered
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 3 — "barred questions do not reappear"
+# --------------------------------------------------------------------------
+_BARRED_MARKER = "number 3"
+_REWORDING = "REWORDEDBARRED"
+
+
+def _rewording_script(*, merge_the_rewording: bool):
+    """KILL one candidate as a DEFECT, then re-propose a REWORDING of it.
+
+    `merge_the_rewording` is the NON-VACUITY CONTROL and the reason this helper
+    takes a parameter at all. The semantic drop only fires when the clusterer
+    puts the rewording in the same cluster as the barred SHADOW; with the
+    clusterer answering "every candidate is its own singleton", the rewording
+    survives. Running BOTH ways in one test proves the rewording would have
+    become a winner and that THE BAR is what removed it — rather than it having
+    been absent for some unrelated reason.
+
+    THE JUDGE IS THE ORACLE, NOT THE COIN FLIP, and that is what makes the
+    control decisive. The rewording carries the highest `STRENGTH=` in the field,
+    so on the control run it MUST take a slot; with a random judge its absence
+    would be explainable as "it simply lost", and the control would prove
+    nothing.
+    """
+    base = _oracle_script(weak_first_rounds=2, generate_rounds=3)
+    state: dict[str, int] = {"round": 0}
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                if _BARRED_MARKER in text and CQ1 in text:
+                    # A DEFECT, not a restatement — so the register bars it.
+                    lines.append(
+                        f"{int(raw_index)} | {_KILL} | it is unanswerable in principle"
+                    )
+                elif state["round"] <= 2 and CQ3 in text:
+                    # THE LOOP HAS TO ACTUALLY LOOP FOR THIS TEST TO MEAN
+                    # ANYTHING. Evolve runs AFTER selection, so a run that exits
+                    # in round 1 writes the rewording and stops before it can
+                    # ever compete — the winner-set assertion would then pass
+                    # because the candidate was never a candidate. Keeping one
+                    # client question WEAK for two rounds keeps criterion 2
+                    # failing and the loop running.
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+
+        if kind == "cluster":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                related = _BARRED_MARKER in text or _REWORDING in text
+                if merge_the_rewording and related:
+                    lines.append(f"{int(raw_index)} | 777")
+                else:
+                    lines.append(f"{int(raw_index)} | {900 + int(raw_index)}")
+            return "\n".join(lines)
+
+        if kind == "generate":
+            # A REWORDING, never the same string — that is the whole point. A
+            # string comparison cannot enforce "or a rewording of it", which is
+            # why D-W4-1 names `cluster_candidates` rather than a comparison.
+            return (
+                f"{_START}\n"
+                f"0 | SPECIALISE | 0 | {_REWORDING} a differently worded take on "
+                f"the very same question STRENGTH=999 | LANGS: nl,en\n"
+                f"{_END}"
+            )
+
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_section8_a_barred_question_does_not_reappear_as_a_winner() -> None:
+    """D-W4-1 END TO END, asserted on the WINNER SET and never on the register.
+
+    A question barred in round 1 is re-proposed as a REWORDING by the scripted
+    evolve, and must not be a winner at the end. That exercises the SEMANTIC
+    DROP — the barred questions travel through the clusterer as shadow members —
+    rather than a string comparison, which could not enforce a rewording ban at
+    all.
+
+    A bar that the register records but that stage B never actually acts on is
+    precisely the shape of defect that got through Wave 3's 42/42 verification.
+    """
+    payload = _strength_stage_a(SEAM_LABELS)
+
+    dropped = _run_stage_b(
+        _ScriptedClient(_rewording_script(merge_the_rewording=True)),
+        SEAM_LABELS,
+        payload=copy.deepcopy(payload),
+    )
+    # The bar was really made...
+    assert dropped["counts"]["barred"] > 0
+    # ...the semantic drop really fired...
+    assert dropped["counts"]["dropped_as_reproposal"] > 0
+    # ...and the REWORDING is not a winner.
+    assert not [
+        w for w in dropped["winners"] if _REWORDING in str(w.get("text") or "")
+    ], [w.get("text") for w in dropped["winners"]]
+
+    # THE NON-VACUITY CONTROL. Same script, same bar, but a clusterer that merges
+    # nothing: the rewording survives all the way into the winner set. Without
+    # this, an assertion that the rewording is absent would pass just as happily
+    # if the evolve step had never proposed it.
+    kept = _run_stage_b(
+        _ScriptedClient(_rewording_script(merge_the_rewording=False)),
+        SEAM_LABELS,
+        payload=copy.deepcopy(payload),
+    )
+    assert [
+        w for w in kept["winners"] if _REWORDING in str(w.get("text") or "")
+    ], "the control run never produced the rewording, so the test above is vacuous"
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 4 — "losers remain promotable"
+# --------------------------------------------------------------------------
+def _drop_one_questions_winners(label: str):
+    """A `select_winners` that returns no winner for `label`, keeping the rest.
+
+    WHY A COLLABORATOR IS PINNED HERE AND NOWHERE ELSE IN THIS SUITE. The winner
+    selection guarantees a FLOOR of five per client question, so on any honest
+    script every client question already has a winner and `enforce_scope_guard`'s
+    repair ladder is simply never entered. Pinning selection is the only way to
+    reach the repair at all — and it is an INPUT CONDITION, exactly like the
+    scripted LLM responses: the assertion below is still made on the contract the
+    REAL `run_workshop_stage_b` returns, and every other step (the tournament,
+    the ten rounds of barring, the scope guard, the tail) is the real one.
+    """
+    original = workshop_loop.select_winners
+
+    def _patched(ranked, **kw):
+        winners, below = original(ranked, **kw)
+        kept = [w for w in winners if label not in (w.get("parents") or [])]
+        moved = [w for w in winners if label in (w.get("parents") or [])]
+        return kept, list(moved) + list(below)
+
+    return original, _patched
+
+
+def test_section8_losers_remain_promotable_after_ten_rounds_of_barring() -> None:
+    """T-15.7-09-02, END TO END and after the loop has barred all it is going to.
+
+    An over-eager bar deletes a client question's coverage INVISIBLY, and the
+    structural protection is that a tournament loss can never be expressed as a
+    bar. This asserts the consequence rather than the mechanism: after ten rounds
+    of barring, a client question left with no winner is repaired by PROMOTING a
+    below-the-cut candidate out of the FULL ranked list — not by injecting the
+    client's question text verbatim.
+
+    THE DISTINCTION IS THE WHOLE TEST. A verbatim injection also "covers" the
+    question, so a test that only asserted coverage would pass just as well
+    against a scope guard whose promotion ladder had stopped working — and a
+    verbatim client question is raw brief text where a promotion is a real,
+    tournament-ranked sub-question.
+    """
+    original, patched = _drop_one_questions_winners(CQ3)
+    workshop_loop.select_winners = patched
+    try:
+        result = _run_stage_b(
+            _ScriptedClient(_rewording_script(merge_the_rewording=False)),
+            SEAM_LABELS,
+            payload=_strength_stage_a(SEAM_LABELS),
+        )
+    finally:
+        workshop_loop.select_winners = original
+
+    # Ten rounds, and they really were rounds that barred.
+    assert result["counts"]["rounds"] == workshop_loop._LOOP_MAX_ROUNDS
+    assert result["counts"]["barred"] > 0
+
+    repaired = [w for w in result["winners"] if CQ3 in (w.get("parents") or [])]
+    assert repaired, "the starved client question was not repaired at all"
+
+    # IT IS A PROMOTION. `_verbatim_winner` is a fixed 12-key shape carrying
+    # `source: "verbatim"` and the sentinel `index: -1`; a promoted candidate is a
+    # copy of a real ranked entry, so it has a real index and a tournament rank.
+    promoted = [w for w in repaired if w.get("source") != "verbatim"]
+    assert promoted, [
+        (w.get("source"), w.get("index"), w.get("text")) for w in repaired
+    ]
+    winner = promoted[0]
+    assert winner.get("index", -1) >= 0, winner
+    assert isinstance(winner.get("rank"), int) and winner["rank"] >= 1, winner
+    # ...and it carries a real sub-question, not the client's own question text.
+    assert str(winner.get("text") or "") != f"Client question: {CQ3}"
+    assert winner.get("langs"), winner
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 5 — "a strong newcomer entering in a late round still
+# reaches the top N under the catch-up schedule"
+# --------------------------------------------------------------------------
+_LATE_ENTRANT = "LATEENTRANT"
+
+
+def _lone_late_newcomer_script(*, entry_round: int = 3):
+    """EXACTLY ONE strong candidate, born in a LATE round, against a settled field.
+
+    THE COUNT IS THE WHOLE POINT AND THIS TEST WAS REWRITTEN TO GET IT RIGHT.
+    An earlier version of this test let the generative evolve write SIX
+    999-strength newcomers EVERY round. It passed — and it passed for the wrong
+    reason: a field flooded with top-strength entrants puts one of them in the
+    top N no matter what the match schedule does. Measured, `catch_up_matches ->
+    0` did not move that test at all, which means it was asserting nothing about
+    D-W4-3.
+
+    With ONE newcomer entering in round 3 the schedule becomes load-bearing and
+    the mutant is caught: the late entrant reaches the winner set on the baseline
+    and does NOT reach it with the catch-up removed.
+    """
+    state: dict[str, int] = {"round": 0, "generate": 0}
+
+    def _strength(text: str) -> int:
+        found = re.search(r"STRENGTH=(\d+)", text or "")
+        return int(found.group(1)) if found else 0
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                # One question stays WEAK for most of the run, which is what
+                # keeps criterion 2 failing and the loop turning long enough for
+                # a round-3 entrant to exist at all.
+                if CQ3 in text and state["round"] <= 8:
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+
+        if kind == "judge":
+            lines = []
+            for match in re.finditer(
+                r"^\s*(\d+)\s*\|\s*A:\s*(.*?)\s*\|\s*B:\s*(.*)$", prompt, re.M
+            ):
+                side = (
+                    "A"
+                    if _strength(match.group(2)) >= _strength(match.group(3))
+                    else "B"
+                )
+                lines.append(f"{int(match.group(1))} | {side} | the stronger question")
+            return "\n".join(lines) or "0 | A | the stronger question"
+
+        if kind == "sharpen":
+            out = []
+            for line in re.findall(r"^(\d+) \| (.*?)(?: \| |$)", prompt, re.M):
+                out.append(f"{int(line[0])} | sharpened {line[1]} | LANGS: nl,en")
+            return f"{_START}\n" + "\n".join(out) + f"\n{_END}"
+
+        if kind == "generate":
+            state["generate"] += 1
+            if state["generate"] != entry_round:
+                return f"{_START}\n{_END}"
+            return (
+                f"{_START}\n0 | COMBINE | 0,1 | {_LATE_ENTRANT} the one late "
+                f"entrant STRENGTH=999 | LANGS: nl,en\n{_END}"
+            )
+
+        return "focus the next round on cost evidence"
+
+    return respond
+
+
+def test_section8_a_strong_late_newcomer_still_reaches_the_top_n() -> None:
+    """D-W4-3 AT THE SEAM. Plan 15.7-08 asserts this at the tournament level;
+    this asserts it survives a loop that adds candidates round after round.
+
+    The mechanism is the SCHEDULE and not the sort: the standing sorts by
+    `(-wins, -elo, index)`, so a newcomer's disadvantage is FEWER MATCHES and
+    therefore FEWER WINS — which is exactly why D-R11's median Elo seed is inert
+    (median-seed and flat-1200 give byte-identical output) and why
+    `catch_up_matches` is what actually works.
+
+    Driven with an ORACLE judge so the entrant's strength is decisive rather than
+    probabilistic: it carries the highest `STRENGTH=` in the field, so if it does
+    not reach the top N then the make-up matches are what failed.
+    """
+    result = _run_stage_b(
+        _ScriptedClient(_lone_late_newcomer_script()),
+        SEAM_LABELS,
+        payload=_strength_stage_a(SEAM_LABELS),
+    )
+
+    # It really did loop long enough for a round-3 entrant to exist.
+    assert result["counts"]["rounds"] >= 3, result["counts"]["rounds"]
+
+    entrant = [
+        w for w in result["winners"]
+        if _LATE_ENTRANT in str(w.get("text") or "")
+    ]
+    assert entrant, (
+        "the best question in the field entered late and never reached the top N"
+    )
+    # It is genuinely a LATE arrival, not a seed candidate that happened to match.
+    assert (entrant[0].get("born_round") or 0) >= 2, entrant[0]
+    assert result["counts"]["loop_born_winners"] >= 1
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 6 — "zero WEAK winners — prefer-KEEP is applied"
+# --------------------------------------------------------------------------
+def _half_weak_script(**kw):
+    """Half of every question's candidates are WEAK FOREVER, half are KEEP.
+
+    A SURPLUS OF KEEP IS WHAT MAKES THIS TEST MEAN ANYTHING. With six KEEP
+    candidates per question against a floor of five, prefer-KEEP has a real
+    choice at every slot; with fewer KEEP than slots the winner set would be
+    WEAK-free only because there was nothing else to take, and the assertion
+    would hold without the rule existing.
+    """
+    base = _script(**kw)
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                found = re.search(r"number (\d+)", text)
+                weak = found is not None and int(found.group(1)) >= 6
+                if weak:
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_section8_zero_weak_winners_when_keep_and_weak_both_exist_in_surplus() -> None:
+    """D-W4-5's prefer-KEEP, asserted on the RETURNED winner set.
+
+    The measured configuration produces 17 winners with NONE weak. Prefer-KEEP is
+    what does it: a rank-9 KEEP is taken over a rank-4 WEAK when a slot is being
+    filled, because a WEAK winner is a paid research question the workshop itself
+    said was not sharp enough.
+    """
+    result = _run_stage_b(
+        _ScriptedClient(_half_weak_script(seed=0)),
+        SEAM_LABELS,
+        payload=_stage_a(SEAM_LABELS),
+    )
+
+    weak = [
+        w for w in result["winners"]
+        if str(w.get("critique") or "").upper() == _WEAK
+        and not w.get("cross_cutting")
+    ]
+    assert not weak, [(w.get("text"), w.get("critique")) for w in weak]
+
+    # NON-VACUITY: the WEAK candidates really existed and really were available
+    # to be chosen. Without this the run could have been all-KEEP by accident.
+    assert result["counts"]["ranked"] > len(result["winners"])
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 7 — "the raised generation count appears in BOTH places the
+# prompt states it"
+# --------------------------------------------------------------------------
+def test_section8_the_generation_count_appears_in_both_places_the_prompt_states_it() -> None:
+    """THE ONE § 8 ITEM THAT CANNOT BE DRIVEN THROUGH `run_workshop_stage_b`.
+
+    This is stated rather than worked around. The generation prompt is built by
+    `workshop.generate_candidates`, which belongs to STAGE A: stage B receives an
+    already-generated candidate list in its `stage_a` payload and never builds a
+    generation prompt at all. Driving it through stage B is therefore impossible,
+    and dressing it up as a stage-B test would be a test that asserts nothing.
+    So it drives the REAL `generate_candidates` and asserts on the REAL rendered
+    prompt.
+
+    The spec names both sites explicitly — the `Output EXACTLY {n} lines`
+    sentence and the `<your {n} lines go here>` placeholder — and warns that both
+    must change together. In THIS repository they cannot drift: the template
+    writes `{n}` twice but there is exactly one `.format(...)` call feeding it
+    with one `n=` keyword. That is asserted here as a PROPERTY of the rendered
+    text, so the day someone splits it into two constants this fails.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import workshop as _workshop
+
+    seen: list[str] = []
+
+    class _PromptCapture:
+        async def anthropic_messages(self, *, run_id, tenant_id, model, messages,
+                                     max_tokens=None, audit_out=None, **kw):
+            for message in messages:
+                for block in message.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        seen.append(block.get("text") or "")
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(type="text", text="")],
+                stop_reason="end_turn",
+            )
+
+        async def gemini_generate(self, *, run_id, tenant_id, model, contents,
+                                  audit_out=None, **kw):
+            seen.append(contents if isinstance(contents, str) else str(contents))
+            return types.SimpleNamespace(text="", candidates=None)
+
+    asyncio.run(_workshop.generate_candidates(
+        questions=[{"label": CQ1, "text": f"Client question: {CQ1}"}],
+        orientations=[],
+        brief_context="Should the client roll out shop-in-shop coffee?",
+        audited=_PromptCapture(),
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+    ))
+
+    # SELECTED ON THE CANDIDATE OUTPUT LINE, which only this prompt contains.
+    # The ASK-SPLIT prompt that runs first shares both "lines go here" AND
+    # "between the two sentinels", so either of those would have asserted the
+    # generation count against the wrong prompt — and the ask-split prompt states
+    # no candidate count at all, so the test would simply have been wrong.
+    generation = [p for p in seen if "CANDIDATE: <" in p and "| PARENT:" in p]
+    assert generation, "the candidate generation prompt was never rendered"
+    prompt = generation[0]
+
+    count = _workshop._CANDIDATES_PER_QUESTION
+    assert f"Output EXACTLY {count} lines" in prompt, prompt[:400]
+    assert f"<your {count} lines go here>" in prompt, prompt[:400]
+
+    # AND THE PARSE-SIDE BOUND MUST STAY ABOVE THE GENERATION COUNT. "Raise
+    # generation to twelve and leave the cap at ten" silently halves the measured
+    # selection ratio with nothing in the output saying so — one logical value
+    # with two authorities, only one of which got updated.
+    assert _workshop._CANDIDATES_PER_QUESTION_MAX > count
+
+
+# --------------------------------------------------------------------------
+# THE WHOLE-PHASE SHAPE — and the last hop, which is the seam plan 15.7-01
+# opened and this is where it is proven closed.
+# --------------------------------------------------------------------------
+def test_the_whole_phase_shape_three_questions_seventeen_winners_reach_a_provider() -> None:
+    """3 client questions in, 17 winners out, none WEAK, ALL SEVENTEEN dispatched.
+
+    This is the validated `exp11` configuration end to end: a floor of 5 winners
+    per client question plus 2 cross-cutting, prefer-KEEP applied, converging
+    inside the cap — and then the hop nothing else in this phase asserts, through
+    `research_division.divide` to the angles a paid provider is actually sent.
+
+    THAT LAST HOP IS THE POINT. Three separate downstream clips could each
+    truncate the winner set after stage B had already produced a correct 17, and
+    every plan in this phase would still read green: a floor that is quietly cut
+    to 15 on the way to dispatch delivers nothing. The assertion is therefore
+    about the ANGLES, not about the winner list.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import research_division
+
+    result = _run_stage_b(_ScriptedClient(_script(seed=0)), SEAM_LABELS)
+    winners = result["winners"]
+
+    # -- the shape stage B returns
+    assert len(winners) == 17, len(winners)
+    assert not [
+        w for w in winners
+        if str(w.get("critique") or "").upper() == _WEAK and not w.get("cross_cutting")
+    ]
+    cross = [w for w in winners if w.get("cross_cutting")]
+    assert len(cross) == 2, len(cross)
+    # A floor of five per client question, counted on the parents union so a
+    # cross-cutting winner counts for both questions it spans.
+    for label in SEAM_LABELS:
+        covering = [w for w in winners if label in (w.get("parents") or [])]
+        assert len(covering) >= 5, (label, len(covering))
+    assert result["counts"]["rounds"] < workshop_loop._LOOP_MAX_ROUNDS
+
+    # -- and the last hop: every one of the 17 reaches a provider
+    angles = research_division.divide(
+        {
+            "deep_research_prompt": "Should the client roll out shop-in-shop coffee?",
+            "focus_areas": [],
+        },
+        winners=winners,
+        groups=result["groups"],
+    )
+    assert angles, "no angle was dispatched at all"
+    assert {str(a.get("provider") or "") for a in angles} == set(
+        research_division._D6_STREAMS
+    )
+
+    dispatched = " ".join(str(a.get("query") or "") for a in angles)
+    missing = [
+        w.get("text") for w in winners
+        if str(w.get("text") or "")[:60] not in dispatched
+    ]
+    assert not missing, (
+        f"{len(missing)} of {len(winners)} winners never reached a provider "
+        f"query: {missing}"
+    )
