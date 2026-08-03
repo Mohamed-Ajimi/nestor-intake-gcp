@@ -2377,7 +2377,7 @@ def _candidate_response(*rows: tuple) -> FakeTextResponse:
     )
 
 
-def _generate(questions, script, **kw):
+def _generate_with_asks(questions, script, **kw):
     """Drive the REAL `generate_candidates` with a scripted client."""
     audited = ScriptedWorkshopAudited(anthropic_script=script)
     stats: dict[str, Any] = {}
@@ -2405,7 +2405,7 @@ _THREE_ASKS = (
 
 def test_a_two_of_three_coverage_gap_is_repaired_and_carries_its_siblings_parent():
     """THE CENTRAL TEST. Two asks covered, the third is repaired — not raised."""
-    candidates, reasons, stats, _ = _generate(
+    candidates, reasons, stats, _ = _generate_with_asks(
         [_question("Q1", "a compound question asking three things at once")],
         [
             _asks_response(*_THREE_ASKS),
@@ -2433,7 +2433,7 @@ def test_a_two_of_three_coverage_gap_is_repaired_and_carries_its_siblings_parent
 
 
 def test_full_coverage_adds_no_repair_and_no_note():
-    candidates, reasons, stats, _ = _generate(
+    candidates, reasons, stats, _ = _generate_with_asks(
         [_question("Q1", "a compound question asking three things at once")],
         [
             _asks_response(*_THREE_ASKS),
@@ -2454,7 +2454,7 @@ def test_a_single_ask_question_yields_one_aspect_and_unchanged_candidate_output(
     phase base: three model candidates, no repair, no note, no degradation. The
     ONLY thing D-W4-4b may change for a simple question is the prompt.
     """
-    candidates, reasons, stats, _ = _generate(
+    candidates, reasons, stats, _ = _generate_with_asks(
         [_question("Q1", "one simple ask")],
         [
             _asks_response("How large is the Belgian market?"),
@@ -2476,7 +2476,7 @@ def test_a_single_ask_question_yields_one_aspect_and_unchanged_candidate_output(
 
 def test_a_total_decomposition_failure_still_produces_candidates_and_degrades():
     """Decomposition dies -> undivided generation, a DEGRADATION, nothing lost."""
-    candidates, reasons, stats, _ = _generate(
+    candidates, reasons, stats, _ = _generate_with_asks(
         [_question("Q1", "a compound question")],
         [
             FakeTextResponse("the model refused to decompose anything"),
@@ -2491,7 +2491,7 @@ def test_a_total_decomposition_failure_still_produces_candidates_and_degrades():
 
 
 def test_no_client_question_is_lost_when_decomposition_fails_for_every_question():
-    candidates, reasons, _, _ = _generate(
+    candidates, reasons, _, _ = _generate_with_asks(
         [_question("Q1", "first"), _question("Q2", "second")],
         [FakeTextResponse("garbage")],
     )
@@ -2536,7 +2536,7 @@ def test_the_prompt_carries_BOTH_the_scope_rule_and_the_coverage_rule():
 
 
 def test_both_rules_reach_the_rendered_prompt_of_a_real_call():
-    _, _, _, audited = _generate(
+    _, _, _, audited = _generate_with_asks(
         [_question("Q1", "a compound question")],
         [_asks_response(*_THREE_ASKS), _candidate_response(("aaaaaaaaaaaaaaaa", 1))],
     )
@@ -2630,7 +2630,7 @@ def _barred(*rows: tuple) -> Any:
     return reg
 
 
-def _cluster(candidates, cluster_ids, **kw):
+def _cluster_with_stub(candidates, cluster_ids, **kw):
     """Drive the REAL `cluster_candidates` with a stubbed `_cluster_block`.
 
     `cluster_ids` is a callable `(piece) -> list[int]`, so a test decides which
@@ -2660,7 +2660,7 @@ def _cluster(candidates, cluster_ids, **kw):
     return reps, reasons, calls
 
 
-def _cand(index: int, text: str, parent: str = "Q1") -> dict:
+def _cand_plain(index: int, text: str, parent: str = "Q1") -> dict:
     return {"index": index, "text": text, "parent": parent, "parents": [parent],
             "source": "model"}
 
@@ -2675,10 +2675,10 @@ def test_a_rewording_of_a_barred_question_is_dropped_and_a_new_one_survives():
     """THE CENTRAL TEST of layer 2, and it is SEMANTIC — the strings differ."""
     reg = _barred(("What is the minimum network density for fuel retail?",
                    "unanswerable without a source nobody has"))
-    reps, _, _ = _cluster(
+    reps, _, _ = _cluster_with_stub(
         [
-            _cand(0, "Which minimum DENSITY of stations does the network need?"),
-            _cand(1, "What margin do fresh-food formats achieve?"),
+            _cand_plain(0, "Which minimum DENSITY of stations does the network need?"),
+            _cand_plain(1, "What margin do fresh-food formats achieve?"),
         ],
         _by_density,
         register=reg,
@@ -2703,10 +2703,10 @@ def test_a_rewording_of_a_barred_question_is_dropped_and_a_new_one_survives():
 def test_a_barred_shadow_never_represents_and_never_contributes_a_parent():
     """T-15.7-07-04. A shadow entering the output would inject a REJECTED question."""
     reg = _barred(("a barred question about density", "its flaw"))
-    reps, _, _ = _cluster(
+    reps, _, _ = _cluster_with_stub(
         [
-            _cand(0, "a live question about density", parent="Q1"),
-            _cand(1, "a wholly different live question", parent="Q2"),
+            _cand_plain(0, "a live question about density", parent="Q1"),
+            _cand_plain(1, "a wholly different live question", parent="Q2"),
         ],
         _by_density,
         register=reg,
@@ -2722,10 +2722,10 @@ def test_a_barred_shadow_never_represents_and_never_contributes_a_parent():
 def test_a_new_candidate_clustering_onto_another_new_one_is_collapsed_not_barred():
     """Near-duplicate collapse is NOT a bar — it keeps a representative."""
     reg = _barred(("something else entirely", "its flaw"))
-    reps, reasons, _ = _cluster(
+    reps, reasons, _ = _cluster_with_stub(
         [
-            _cand(0, "a question about density"),
-            _cand(1, "another question about density"),
+            _cand_plain(0, "a question about density"),
+            _cand_plain(1, "another question about density"),
         ],
         _by_density,
         register=reg,
@@ -2741,12 +2741,12 @@ def test_a_new_candidate_clustering_onto_another_new_one_is_collapsed_not_barred
 def test_with_no_register_the_output_is_identical_to_the_phase_base():
     """BEHAVIOUR-PRESERVATION GUARD, named as such."""
     population = [
-        _cand(0, "a question about density"),
-        _cand(1, "another question about density"),
-        _cand(2, "a wholly different question", parent="Q2"),
+        _cand_plain(0, "a question about density"),
+        _cand_plain(1, "another question about density"),
+        _cand_plain(2, "a wholly different question", parent="Q2"),
     ]
-    base, base_reasons, base_calls = _cluster(population, _by_density)
-    with_none, none_reasons, none_calls = _cluster(population, _by_density, register=None)
+    base, base_reasons, base_calls = _cluster_with_stub(population, _by_density)
+    with_none, none_reasons, none_calls = _cluster_with_stub(population, _by_density, register=None)
 
     assert base == with_none
     assert base_reasons == none_reasons
@@ -2760,8 +2760,8 @@ def test_with_no_register_the_output_is_identical_to_the_phase_base():
 def test_the_never_drop_sentinel_still_survives_a_register():
     """A negative cluster id is still "the model failed to place this" — kept."""
     reg = _barred(("a barred question about density", "its flaw"))
-    reps, _, _ = _cluster(
-        [_cand(0, "unplaceable one"), _cand(1, "unplaceable two")],
+    reps, _, _ = _cluster_with_stub(
+        [_cand_plain(0, "unplaceable one"), _cand_plain(1, "unplaceable two")],
         lambda piece: [-1] * len(piece),
         register=reg,
     )
@@ -2776,8 +2776,8 @@ def test_the_exception_path_still_returns_one_singleton_per_candidate():
     def boom(piece):
         raise RuntimeError("the clusterer exploded")
 
-    reps, reasons, _ = _cluster(
-        [_cand(0, "first one"), _cand(1, "second one")], boom, register=reg
+    reps, reasons, _ = _cluster_with_stub(
+        [_cand_plain(0, "first one"), _cand_plain(1, "second one")], boom, register=reg
     )
     assert [r["text"] for r in reps] == ["first one", "second one"]
     assert all(r["cluster_key"].startswith("__singleton__:") for r in reps)
@@ -2796,8 +2796,8 @@ def test_the_shadows_join_every_chunk_not_just_one(monkeypatch):
     def _shadows_apart(piece):
         return [99 if c.get(workshop._BARRED_SHADOW) else int(c["index"]) for c in piece]
 
-    reps, _, calls = _cluster(
-        [_cand(i, f"live question number {i}") for i in range(4)],
+    reps, _, calls = _cluster_with_stub(
+        [_cand_plain(i, f"live question number {i}") for i in range(4)],
         _shadows_apart,
         register=reg,
     )
@@ -2815,10 +2815,10 @@ def test_the_generation_prompt_carries_the_barred_heading_only_with_a_register()
     script = [_asks_response("one simple ask"),
               _candidate_response(("aaaaaaaaaaaaaaaa", 1))]
 
-    _, _, _, without = _generate([_question("Q1", "a question")], list(script))
+    _, _, _, without = _generate_with_asks([_question("Q1", "a question")], list(script))
     assert "ALREADY REJECTED" not in without.anthropic_prompts()[-1]
 
-    _, _, _, with_reg = _generate(
+    _, _, _, with_reg = _generate_with_asks(
         [_question("Q1", "a question")], list(script), register=reg
     )
     prompt = with_reg.anthropic_prompts()[-1]
@@ -2845,8 +2845,8 @@ def test_the_barred_surfaces_never_raise_over_the_hostile_battery():
         assert isinstance(workshop._barred_shadows(shape), list)
     # And through the REAL clusterer, with a garbage register.
     for shape in _HOSTILE:
-        reps, _, _ = _cluster(
-            [_cand(0, "first one"), _cand(1, "second one")],
+        reps, _, _ = _cluster_with_stub(
+            [_cand_plain(0, "first one"), _cand_plain(1, "second one")],
             lambda piece: [1] * len(piece),
             register=shape,
         )
@@ -3062,3 +3062,45 @@ def test_the_prompt_record_blocks_stay_bounded_and_never_raise():
     assert isinstance(workshop._findings_block(list(_HOSTILE)), str)
     for shape in (None, "", "\x00\x01", "|" * 500, "\n" * 500):
         assert isinstance(workshop._asks_block([shape]), str)
+
+
+# ===========================================================================
+# THE GUARD THAT WOULD HAVE CAUGHT THIS FILE'S OWN DEFECT
+# ===========================================================================
+
+
+def test_no_module_level_name_in_this_file_is_defined_twice():
+    """A SHADOWED TEST HELPER IS INVISIBLE, AND THIS FILE HAD THREE.
+
+    Plan 15.7-07 added `_generate`, `_cluster` and `_cand` at the bottom of this
+    file. Names that plan 15.2-10 had already used at the top, with DIFFERENT
+    signatures and different return arities. Python keeps the last definition, so
+    ten tests written against the 15.2-10 helpers silently began calling the
+    15.7-07 ones and failed with errors that pointed nowhere near the cause:
+
+        RuntimeError: asyncio.run() cannot be called from a running event loop
+        TypeError: _cand() got an unexpected keyword argument 'parents'
+        KeyError: 'cluster_key'
+
+    None of those is a source defect, and none is a stale assertion — every one of
+    the ten tests was CORRECT and was fixed by renaming the intruders, with no
+    assertion touched. The failure mode is worse than the ten red tests, though:
+    `_cands` calls `_cand` by name at RUNTIME, so it silently began building
+    candidates with no `cluster_key` and no `parents` for tests that still PASSED.
+
+    A duplicate module-level def is never intentional in a test file. This guard
+    is cheap, it is total, and it does not care which names collide next time.
+    """
+    import ast
+    import collections
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(__file__).resolve().read_text(encoding="utf-8"))
+
+    counts = collections.Counter(
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
+    duplicates = {name: n for name, n in counts.items() if n > 1}
+    assert not duplicates, f"module-level names defined more than once: {duplicates}"
