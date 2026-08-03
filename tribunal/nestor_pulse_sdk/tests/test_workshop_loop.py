@@ -813,8 +813,13 @@ import re
 import types
 import uuid
 
-from nestor_pulse_sdk.pipeline.tribunal import workshop_rank
+from nestor_pulse_sdk.pipeline.tribunal import (
+    discovery_bracket,
+    workshop_rank,
+    workshop_register,
+)
 
+_KILL = "KILL"
 _START = workshop_rank._WINNERS_START
 _END = workshop_rank._WINNERS_END
 
@@ -1103,3 +1108,227 @@ def test_the_evolve_prompt_carries_the_scoped_rule_not_the_flat_ban() -> None:
     assert workshop_evolve.DISCOVERY_EVIDENCE_ANCHOR in block
     assert "Do NOT merge two questions into one" not in workshop_rank._EVOLVE_PROMPT
     assert "{scope_rules}" in workshop_rank._EVOLVE_PROMPT
+
+
+# ===========================================================================
+# TASK 2 — the register, the admission gate and the instrumentation.
+# ===========================================================================
+
+
+def _keyed_stage_a(labels, per_question: int = 12):
+    """Stage A where every candidate carries a DISTINCT `cluster_key`.
+
+    The KILL split reads the CLUSTERING SHAPE, not the flaw prose, so without a
+    cluster key there is no structural signal and nothing is barred — which is
+    the deliberate fail-safe, and would make every bar test below vacuous.
+    """
+    payload = _stage_a(labels, per_question=per_question)
+    for candidate in payload["candidates"]:
+        candidate["cluster_key"] = f"k{candidate['index']}"
+    return payload
+
+
+def _kill_script(kill_marker: str, **kw):
+    """Like `_script`, but KILLs every candidate whose text carries `kill_marker`
+    with a flaw naming a DEFECT rather than a restatement."""
+    base = _script(**kw)
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                if kill_marker in text:
+                    lines.append(
+                        f"{int(raw_index)} | {_KILL} | it is unanswerable in principle"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_a_tournament_loss_can_never_be_expressed_as_a_bar() -> None:
+    """D-W4-1, and the enforcement is STRUCTURAL rather than a rule to remember.
+
+    `workshop_register.bar` accepts exactly three causes and "came last" is not
+    one of them, so the loop could not bar a loser even by accident. That is what
+    keeps `enforce_scope_guard`'s promotion of a below-the-cut candidate working
+    after however many rounds of barring (T-15.7-09-02).
+    """
+    register = workshop_register.new_register()
+    stored = workshop_register.bar(
+        register, text="a losing question", flaw="came last",
+        cause="tournament_loss", round_no=1,
+    )
+    assert stored is False
+    assert register["barred"] == []
+
+
+def test_a_weak_bars_on_the_second_pass_and_never_on_the_first() -> None:
+    """ONE WEAK verdict is a question the workshop has not finished with; TWO is
+    one it cannot sharpen. Asserted as two separate steps, because a rule that
+    barred on the first pass would read identically at the call site."""
+    register = workshop_register.new_register()
+    assert workshop_register.note_weak_pass(register, "some question") == 1
+    assert workshop_register.note_weak_pass(register, "some question") == 2
+
+
+def test_the_kill_split_bars_a_defect_and_spares_a_restatement() -> None:
+    """The four shapes of `_kill_is_a_restatement`, which is the KILL split.
+
+    The signal is STRUCTURAL — the clustering shape — and never the flaw prose,
+    because the flaw clause is model prose in the run's own language and a text
+    matcher would silently never fire on a Dutch or French run.
+    """
+    population = [{"index": 1, "cluster_key": "other"}]
+    defect = {"index": 99, "text": "t", "flaw": "unanswerable",
+              "cluster_key": "unique-key", "merged_from": []}
+
+    # A DEFECT: no duplicate family anywhere -> it bars.
+    assert workshop_rank._kill_is_a_restatement(defect, population) is False
+
+    # A RESTATEMENT: a live candidate shares its cluster -> it does NOT bar.
+    shared = dict(defect, cluster_key="shared")
+    assert workshop_rank._kill_is_a_restatement(
+        shared, [{"index": 1, "cluster_key": "shared"}]
+    ) is True
+
+    # It absorbed near-duplicates -> it is a duplicate family -> does NOT bar.
+    assert workshop_rank._kill_is_a_restatement(
+        dict(defect, merged_from=[3, 4]), population
+    ) is True
+
+    # NO CLUSTERING SIGNAL AT ALL -> FAIL SAFE TOWARDS NOT BARRING. An over-eager
+    # bar suppresses discovery invisibly; an under-eager one costs one duplicate
+    # the clusterer collapses anyway.
+    assert workshop_rank._kill_is_a_restatement(
+        dict(defect, cluster_key=""), population
+    ) is True
+
+
+def test_a_kill_naming_a_defect_reaches_the_register_end_to_end() -> None:
+    """Driven through the REAL stage B, not through the register alone — a bar
+    that the register records but that stage B never actually makes is exactly
+    the shape of defect that got through Wave 3."""
+    client = _ScriptedClient(_kill_script(CQ3, seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+    assert result["counts"]["barred"] > 0
+
+
+def test_the_loop_records_one_metrics_row_per_round_and_enforces_nothing() -> None:
+    """D-W4-7. The numbers are RECORDED; nothing is compared against a ceiling.
+
+    Population, spend and lookups are all present per round, and the absence of
+    any enforcement is the assertion: an enforced ceiling nobody has measured a
+    need for is a knob that will one day truncate a run for no reason.
+    """
+    client = _ScriptedClient(_script(seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+
+    assert "loop_rounds" in result
+    assert len(result["loop_rounds"]) == result["counts"]["rounds"]
+    for record in result["loop_rounds"]:
+        for key in ("round_no", "candidates_in", "new_candidates", "winners",
+                    "weak_winners", "barred", "dropped_as_reproposal",
+                    "lookups", "calls", "cost_usd"):
+            assert key in record, key
+        for value in record.values():
+            assert not isinstance(value, float)
+    # The whole result is checkpointed by `pipeline.py`.
+    json.dumps(result)
+
+
+def test_the_counts_gained_the_loop_numbers_and_the_docstring_names_them() -> None:
+    """Both halves asserted: a counts key nobody documented is a key the next
+    reader will not know exists, and a documented key that is not emitted is
+    worse."""
+    client = _ScriptedClient(_script(seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+    doc = workshop_rank.run_workshop_stage_b.__doc__ or ""
+    for key in ("rounds", "loop_born_winners", "barred",
+                "dropped_as_reproposal", "grounded_lookups", "admitted_angles"):
+        assert key in result["counts"], key
+        assert key in doc, key
+    assert "loop_rounds" in doc
+
+
+def test_the_discovery_allocation_bound_still_binds_over_admitted_angles() -> None:
+    """D-W3-4 is UNCHANGED: at most 5 discovered questions, per-parent cap 3, and
+    discovery never borrows from the mandate. The admitted inventions CONTINUE
+    that allocation rather than running a second one, and the ceilings are read
+    from `discovery_bracket` rather than retyped."""
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        [{"parent": "P"} for _ in range(10)], already=[], per_parent={}
+    )
+    assert len(taken) == discovery_bracket._DISCOVERY_PER_PARENT_CAP
+
+    mixed = ([{"parent": "A"}] * 3) + ([{"parent": "B"}] * 3) + ([{"parent": "C"}] * 3)
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        mixed, already=[], per_parent={}
+    )
+    assert len(taken) <= discovery_bracket._DISCOVERY_MAX_SLOTS
+
+    # Slots orientation already spent are not spent twice.
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        mixed, already=[{}] * discovery_bracket._DISCOVERY_MAX_SLOTS, per_parent={}
+    )
+    assert taken == []
+
+
+def test_an_admitted_angle_keeps_its_own_text_and_its_admitting_source() -> None:
+    """D-W4-2: a discovery candidate's OWN admitting quote and URL ARE its
+    enrichment anchor. The angle must NOT be reframed into the orientation
+    conflict sentence, which would both discard the question the INVENT move
+    wrote and assert it came from orientation, which is false."""
+    angle = {
+        "text": "Which product categories are legally excluded after 20:00?",
+        "source": "discovery",
+        "provenance": {
+            "quote": "the Act excludes tobacco after 20:00",
+            "why": "the brief assumes no category limits",
+            "source_url": "https://example.gov/act",
+            "resolved_url": "https://example.gov/act",
+            "resolution_status": "resolved",
+        },
+    }
+    entry = workshop_rank._conflict_from_admitted(angle, CQ3)
+    assert entry["text"] == angle["text"]
+    assert entry["parent"] == CQ3
+    assert entry["parents"] == [CQ3]
+    assert entry["source"] == "discovery"
+    assert entry["provenance"]["source_url"] == "https://example.gov/act"
+    assert entry["provenance"]["world_says"] == "the Act excludes tobacco after 20:00"
+    # `rank` is DELIBERATELY invalid — the caller re-stamps it below every
+    # mandate winner, and 0 is a loud placeholder rather than a plausible rank.
+    assert entry["rank"] == 0
+
+
+def test_a_resurrected_candidate_never_reaches_the_register_as_a_bar() -> None:
+    """Both critique guards put a killed candidate BACK into `survivors`, and a
+    candidate the pipeline chose to keep must never be barred — barring it would
+    delete the very coverage the resurrection exists to provide."""
+    killed_out: list[dict[str, Any]] = []
+
+    async def _drive():
+        return await workshop_rank.critique_candidates(
+            candidates=[
+                {"index": 0, "text": "only candidate for this question",
+                 "parent": CQ1, "parents": [CQ1]},
+            ],
+            decision_context="ctx",
+            audited=_ScriptedClient(
+                lambda kind, prompt: "0 | KILL | nothing turns on it"
+            ),
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            killed_out=killed_out,
+        )
+
+    survivors, _reasons = asyncio.run(_drive())
+    # Guard 2 rescued it, so it is alive...
+    assert survivors
+    # ...and therefore it must NOT be offered to the register as a bar.
+    assert killed_out == []

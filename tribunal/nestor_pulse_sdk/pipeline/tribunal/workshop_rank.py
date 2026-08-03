@@ -603,6 +603,7 @@ async def critique_candidates(
     feed: "Optional[StageFeed]" = None,
     breaker: Any | None = None,
     stats: Optional[dict[str, Any]] = None,
+    killed_out: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """ENGINE-05: screen every candidate KEEP / WEAK / KILL before the tournament.
 
@@ -633,6 +634,20 @@ async def critique_candidates(
     `cost_usd` (str), the same additive idiom plan 15.2-10 used, so
     `run_workshop_stage_b` can roll a stage summary up without widening this
     return type.
+
+    `killed_out` is an OPTIONAL caller-owned out-LIST, the same additive idiom,
+    and it exists because THE KILLED CANDIDATES ARE OTHERWISE UNRECOVERABLE. A
+    KILL removes the candidate from `survivors` and its named `flaw` is discarded
+    with it, so a caller could see THAT something was killed (by diffing the
+    input) but never WHY. D-W4-1's rejected register has to tell a KILL that
+    names a DEFECT from a KILL that names a RESTATEMENT, and only the flaw and the
+    candidate's clustering shape can do that — so both are handed back here rather
+    than re-derived by a second critique call nobody would pay for.
+
+    Each entry is `{index, text, flaw, parents, cluster_key, merged_from}`. A
+    RESURRECTED candidate is NOT in this list: Guard 1 and Guard 2 put it back
+    into `survivors`, and a candidate the pipeline chose to keep is not a
+    candidate the register may bar.
 
     NEVER RAISES.
     """
@@ -722,6 +737,18 @@ async def critique_candidates(
         flaw = flaws[position] if position < len(flaws) else ""
         if verdict == _KILL:
             killed += 1
+            if isinstance(killed_out, list):
+                entry = candidate if isinstance(candidate, dict) else {}
+                killed_out.append(
+                    {
+                        "index": _index_of(entry),
+                        "text": entry.get("text"),
+                        "flaw": flaw,
+                        "parents": _parents_of(entry),
+                        "cluster_key": entry.get("cluster_key") or "",
+                        "merged_from": list(entry.get("merged_from") or []),
+                    }
+                )
             continue
         survivors.append(_with_critique(candidate, verdict, flaw))
 
@@ -783,6 +810,15 @@ async def critique_candidates(
         reasons.append(_reason_critique_population())
 
     survivors.sort(key=lambda c: _index_of(c))
+
+    # A RESURRECTED CANDIDATE IS NOT A KILLED ONE. Both guards above put a
+    # candidate the critique killed back into `survivors`, and a candidate the
+    # pipeline chose to KEEP must never reach the register as a bar — barring it
+    # would delete the very coverage the resurrection exists to provide
+    # (T-15.7-09-02). Reconciled here, once, rather than at every call site.
+    if isinstance(killed_out, list) and killed_out:
+        alive = {_index_of(s) for s in survivors}
+        killed_out[:] = [k for k in killed_out if k.get("index") not in alive]
 
     unscreened = sum(1 for flag in defaulted if flag)
     if killed:
@@ -3382,6 +3418,7 @@ def _stage_b_result(
     groups: Sequence[dict[str, Any]] = (),
     discovery: Sequence[dict[str, Any]] = (),
     discovery_not_researched: Sequence[dict[str, Any]] = (),
+    loop_rounds: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """The ONE builder for stage B's contract, so no path can omit a key.
 
@@ -3407,6 +3444,13 @@ def _stage_b_result(
         "degradation_reasons": _dedup_reasons(degradation_reasons),
         "workshop_notes": _dedup_reasons(workshop_notes),
         "counts": {key: int(value) for key, value in counts.items()},
+        # D-W4-7's per-round instrumentation. PRESENT ON EVERY PATH INCLUDING THE
+        # CRASH PATH (an empty list there), for the same reason the three list
+        # keys above are: a key that exists on the happy path and vanishes on the
+        # degraded one teaches a caller to reach for `.get()` and then stop
+        # noticing. Each record is `workshop_loop.round_metrics`' plain
+        # ints-and-strings shape, so the whole result still survives `json.dumps`.
+        "loop_rounds": list(loop_rounds or []),
     }
 
 
@@ -3441,6 +3485,152 @@ async def _stage_b_feed_finish(
         await feed.flush()
     except Exception as exc:  # noqa: BLE001 — telemetry never breaks the work
         log.warning("workshop_rank: stage B summary write failed: %r", exc)
+
+
+def _kill_is_a_restatement(
+    killed: dict[str, Any], population: Sequence[dict[str, Any]]
+) -> bool:
+    """THE KILL SPLIT. Is this KILL a RESTATEMENT (never bar) or a DEFECT (bar)?
+
+    THE PROBLEM, STATED HONESTLY. The critique prompt defines KILL as four things
+    at once: *"unanswerable in principle, pure opinion, A RESTATEMENT OF ANOTHER
+    CANDIDATE, or nothing about the client's decision turns on it"*. Three of those
+    are DEFECTS and D-W4-1 bars them. The fourth is a restatement, and barring a
+    restatement is how the register starts deleting coverage.
+
+    THE OBVIOUS IMPLEMENTATION IS TO MATCH THE WORD "restatement" IN THE FLAW
+    TEXT. DO NOT. The flaw clause is model prose in the RUN'S OWN LANGUAGE — a
+    Dutch or French run produces a Dutch or French clause — so a text matcher
+    would silently NEVER FIRE on those runs, and a guard that never fires is worse
+    than no guard because it reads as a solved problem. This module already states
+    that rule for `workshop_loop._exempt_cross_cutting` ("keyed off the boolean,
+    which is language-independent"), and it applies here unchanged.
+
+    SO THE SIGNAL IS STRUCTURAL: a restatement of another candidate is exactly what
+    NEAR-DUPLICATE CLUSTERING detects, and the clusterer has already run. A killed
+    candidate is treated as a RESTATEMENT when it is demonstrably part of a
+    near-duplicate family — it absorbed members (`merged_from`), or another live
+    candidate carries the same non-empty `cluster_key`.
+
+    THE FAILURE DIRECTION, AND IT IS DELIBERATE: **towards NOT barring.**
+
+      * If clustering never ran, every `cluster_key` is empty, no positive defect
+        signal exists, and NOTHING is barred on a KILL. That is the safe default,
+        not an oversight.
+      * If the clusterer MISSES a restatement, one restatement is barred. The cost
+        is one duplicate the clusterer would have collapsed anyway.
+      * An OVER-EAGER bar, by contrast, suppresses discovery INVISIBLY — nothing
+        errors, the round simply produces less — and that is the failure the Wave 4
+        harness actually measured.
+
+    Returns True when the kill must NOT be barred.
+    """
+    if not isinstance(killed, dict):
+        return True
+    if list(killed.get("merged_from") or []):
+        return True
+    key = str(killed.get("cluster_key") or "").strip()
+    if not key:
+        # No clustering signal at all — fail safe, treat it as a restatement so
+        # nothing is barred.
+        return True
+    own_index = killed.get("index")
+    for entry in population or []:
+        if not isinstance(entry, dict):
+            continue
+        if _index_of(entry) == own_index:
+            continue
+        if str(entry.get("cluster_key") or "").strip() == key:
+            return True
+    return False
+
+
+def _conflict_from_admitted(angle: dict[str, Any], parent: str) -> dict[str, Any]:
+    """One admitted invented angle, in the shape `allocate_discovery` allocates.
+
+    WHY THIS ADAPTER EXISTS, AND THE CONTRADICTION IT RESOLVES. The plan requires
+    admitted angles to "flow into the EXISTING `allocate_discovery` allocation,
+    which is unchanged", AND to join the discovery pool "carrying its quote and
+    URL". Those two cannot both hold literally: `allocate_discovery` does not read
+    an incoming `text` at all — it COMPOSES one via
+    `discovery_bracket.discovery_question_text`, whose fixed frame reads *"The
+    brief assumes: X. A source read during orientation says instead: Y"*. Pushing
+    an invented angle through that frame would (a) discard the question the INVENT
+    move actually wrote and (b) assert it came from orientation, which is false —
+    it came from the loop, and its source is its own admitting lookup.
+
+    SO THE ALLOCATION IS CONTINUED RATHER THAN RE-RUN. `allocate_discovery` is
+    called first over the real orientation conflicts and hands back its per-parent
+    counts; the admitted angles are then filled into the REMAINING slots under the
+    SAME ceilings, read from `discovery_bracket` rather than retyped here. There is
+    still exactly one set of numbers, `discovery_bracket` is not modified, and
+    D-W3-4's bound (at most 5 slots, per-parent cap 3, never borrowing from the
+    mandate) is the bound that binds.
+
+    The returned entry mirrors `allocate_discovery`'s own output shape key for key,
+    including the deliberately invalid `rank: 0` the caller re-stamps.
+    """
+    provenance = angle.get("provenance") if isinstance(angle, dict) else None
+    provenance = provenance if isinstance(provenance, dict) else {}
+    return {
+        "text": str(angle.get("text") or ""),
+        "parent": parent,
+        "parents": [parent],
+        "rank": 0,
+        "langs": [],
+        "source": "discovery",
+        "scope_injected": False,
+        "bracket": "discovery",
+        # D-W4-2: a discovery candidate's OWN admitting quote and URL ARE its
+        # enrichment anchor. `question` carries the parent the SEPARATE
+        # `classify_parent` call decided, never a label the writing model chose.
+        "provenance": {
+            "question": parent,
+            "assumption": str(provenance.get("why") or ""),
+            "world_says": str(provenance.get("quote") or ""),
+            "source_url": str(provenance.get("source_url") or ""),
+            "resolved_url": str(provenance.get("resolved_url") or ""),
+            "resolution_status": str(provenance.get("resolution_status") or ""),
+        },
+    }
+
+
+def _fill_remaining_discovery_slots(
+    admitted_conflicts: Sequence[dict[str, Any]],
+    *,
+    already: Sequence[dict[str, Any]],
+    per_parent: dict[str, int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Continue D-W3-4's allocation into whatever slots orientation left unused.
+
+    The ceilings are READ FROM `discovery_bracket`, never redeclared — one set of
+    numbers, one authority. Returns `(taken, notes)`.
+    """
+    notes: list[str] = []
+    slots = int(discovery_bracket._DISCOVERY_MAX_SLOTS)
+    cap = max(1, int(discovery_bracket._DISCOVERY_PER_PARENT_CAP))
+    counts = dict(per_parent or {})
+    taken: list[dict[str, Any]] = []
+    used = len(list(already or []))
+    capped = 0
+
+    for entry in admitted_conflicts or []:
+        if used + len(taken) >= slots:
+            break
+        parent = str(entry.get("parent") or "")
+        if counts.get(parent, 0) >= cap:
+            capped += 1
+            continue
+        counts[parent] = counts.get(parent, 0) + 1
+        taken.append(entry)
+
+    if capped:
+        notes.append(
+            f"question workshop: {capped} admitted invented angle(s) exceeded the "
+            f"per-parent maximum of {cap} discovered question(s) and were reported "
+            f"rather than researched — discovery never borrows from the mandate."
+        )
+    return taken, notes
 
 
 def _next_free_index(population: Sequence[dict[str, Any]]) -> int:
@@ -3601,7 +3791,24 @@ async def run_workshop_stage_b(
                                       `loop_born_winners` (how many of the final
                                       winners were written by the loop rather
                                       than by stage A). EVERY ONE OF THESE IS
-                                      PRESENT ON THE CRASH PATH TOO.
+                                      PRESENT ON THE CRASH PATH TOO, along with
+                                      `barred`, `dropped_as_reproposal`,
+                                      `grounded_lookups` and `admitted_angles`.
+      loop_rounds         list[dict]  D-W4-7's PER-ROUND INSTRUMENTATION: one
+                                      `workshop_loop.round_metrics` record per
+                                      loop round, carrying that round's
+                                      population, new candidates, winners, weak
+                                      winners, bars, dropped re-proposals,
+                                      grounded lookups, calls and spend. IT
+                                      ENFORCES NOTHING — no ceiling, no
+                                      truncation — because nothing binds at the
+                                      measured scale and an enforced ceiling
+                                      nobody has measured a need for is a knob
+                                      that will one day truncate a run for no
+                                      reason. Plain ints and strings, so the
+                                      result still survives `json.dumps`. Present
+                                      on EVERY path; an empty list on the crash
+                                      path.
 
     NO DISCOVERY QUESTION EVER ENTERS `winners`. They live only as group MEMBERS.
     `research_division.build_mission_brief_from_winners` derives the report's
@@ -3680,13 +3887,30 @@ async def run_workshop_stage_b(
         evolve_stats: dict[str, Any] = {}
         meta_stats: dict[str, Any] = {}
         generative_stats: dict[str, Any] = {}
+        admission_stats: dict[str, Any] = {}
+        cluster_stats: dict[str, Any] = {}
+        # The angles the loop INVENTED and the evidence gate ADMITTED, in
+        # `allocate_discovery`'s own output shape, waiting for the allocation
+        # below to fill them into whatever slots orientation left unused.
+        admitted_angles: list[dict[str, Any]] = []
 
         # Function-local, and it has to be: `workshop_evolve` imports THIS module
         # at module level, so a module-level import the other way is a cycle.
         # `citations/extractor.py:937` uses the same technique.
         from nestor_pulse_sdk.pipeline.tribunal import (  # noqa: PLC0415
+            workshop_admission,
             workshop_evolve,
+            workshop_register,
         )
+
+        # THE REJECTED REGISTER. ONE PER RUN, created here, never module-level,
+        # and it DIES WITH THIS CALL. D-W4-1's "barred this run, kept for the
+        # next" means the next ROUND, not the next RUN — which is exactly why
+        # there is no table and no fourth alembic migration. A module-level
+        # register would be cross-run persistence by accident, and it would stay
+        # invisible until two runs shared one process, which is how the worker
+        # actually runs.
+        register = workshop_register.new_register()
 
         population: list[dict[str, Any]] = [
             dict(c) for c in candidates_in if isinstance(c, dict)
@@ -3715,8 +3939,12 @@ async def run_workshop_stage_b(
         for round_no in range(1, max_rounds + 1):
             rounds_run = round_no
             population_in = len(population)
+            barred_this_round = 0
+            dropped_this_round = 0
+            lookups_before = int(admission_stats.get("grounded_lookups") or 0)
 
             # --- 1. CRITIQUE the whole current population.
+            killed_out: list[dict[str, Any]] = []
             screened, round_critique_reasons = await critique_candidates(
                 candidates=population,
                 decision_context=decision_context,
@@ -3726,8 +3954,49 @@ async def run_workshop_stage_b(
                 feed=feed,
                 breaker=breaker,
                 stats=critique_stats,
+                killed_out=killed_out,
             )
             critique_reasons = round_critique_reasons
+
+            # --- 1a. BAR CAUSE ONE: a KILL that names a DEFECT. A KILL that names
+            # a RESTATEMENT does NOT bar — see `_kill_is_a_restatement` for the
+            # structural test and for why the failure direction is towards NOT
+            # barring.
+            for killed in killed_out:
+                if _kill_is_a_restatement(killed, population):
+                    continue
+                if workshop_register.bar(
+                    register,
+                    text=killed.get("text"),
+                    flaw=killed.get("flaw"),
+                    cause=workshop_register.BAR_KILL_DEFECT,
+                    round_no=round_no,
+                ):
+                    barred_this_round += 1
+
+            # --- 1b. BAR CAUSE TWO: still WEAK after TWO evolve passes. ONE weak
+            # verdict is a question the workshop has not finished with; TWO is one
+            # it cannot sharpen. The count lives in the register so the loop does
+            # not carry a second piece of state whose lifetime could drift.
+            for entry in screened:
+                if str(entry.get("critique") or "").upper() != _WEAK:
+                    continue
+                if workshop_register.note_weak_pass(register, entry.get("text")) >= 2:
+                    if workshop_register.bar(
+                        register,
+                        text=entry.get("text"),
+                        flaw=entry.get("flaw"),
+                        cause=workshop_register.BAR_WEAK_TWICE,
+                        round_no=round_no,
+                    ):
+                        barred_this_round += 1
+
+            # LOSING THE TOURNAMENT NEVER BARS, and the enforcement is STRUCTURAL
+            # rather than a rule anyone has to remember: `workshop_register.bar`
+            # accepts only three causes and none of them is "came last", so this
+            # loop could not bar a loser even by accident. That is what keeps
+            # `enforce_scope_guard`'s promotion of a below-the-cut candidate
+            # working after ten rounds of barring (T-15.7-09-02).
 
             # --- 2. RANK it, carrying the standings forward (D-W4-3, D-R9).
             ranked, round_tourney_reasons = await run_tournament(
@@ -3782,6 +4051,7 @@ async def run_workshop_stage_b(
             # --- 5. EVOLVE GENERATIVELY: grow the pool from this round's winners.
             new_candidates, round_generative_reasons = await workshop_evolve.evolve_generative(
                 winners=selected,
+                register=register,
                 findings_by_label=findings_by_label,
                 client_questions=labels,
                 guidance=guidance,
@@ -3797,6 +4067,107 @@ async def run_workshop_stage_b(
             )
             generative_reasons = round_generative_reasons
             loop_reasons += list(round_generative_reasons)
+
+            # --- 5a. THE INVENT MOVES GO THROUGH THE EVIDENCE GATE (D-R10).
+            # An invention has no source winner by construction, so it earns a
+            # research slot only once a real published source is found for its
+            # premise: no source, no slot.
+            invented = [
+                c for c in new_candidates
+                if isinstance(c, dict) and c.get("pending_admission")
+            ]
+            mutations = [
+                c for c in new_candidates
+                if isinstance(c, dict) and not c.get("pending_admission")
+            ]
+
+            if invented:
+                admitted, dropped, admission_notes = await workshop_admission.admit_invented_angles(
+                    angles=invented,
+                    decision_context=decision_context,
+                    audited=audited,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    breaker=breaker,
+                    feed=feed,
+                    stats=admission_stats,
+                )
+                loop_notes += list(admission_notes)
+
+                # A DROPPED INVENTION IS A BAR, and this is the single most
+                # expensive omission the Wave 4 harness measured: with
+                # failed-lookup angles missing from the register, "minimale
+                # netwerkdichtheid" was re-proposed in rounds 2 AND 3, spending a
+                # paid grounded lookup each time. Barring it means the second
+                # lookup is never bought.
+                for drop in dropped:
+                    if not isinstance(drop, dict):
+                        continue
+                    if workshop_register.bar(
+                        register,
+                        text=drop.get("text"),
+                        flaw=drop.get("note") or drop.get("reason"),
+                        cause=workshop_register.BAR_LOOKUP_FAILED,
+                        round_no=round_no,
+                    ):
+                        barred_this_round += 1
+
+                if admitted:
+                    # THE PARENT IS DECIDED BY A SEPARATE, DEDICATED CALL and
+                    # stamped in Python. The harness caught the model misfiling
+                    # its own parent 6 times in a single run when the writing call
+                    # was also asked to file it.
+                    parents = await workshop_admission.classify_parent(
+                        questions=admitted,
+                        client_questions=labels,
+                        audited=audited,
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        breaker=breaker,
+                        stats=admission_stats,
+                    )
+                    for position, angle in enumerate(admitted):
+                        parent = (
+                            parents[position]
+                            if position < len(parents)
+                            else discovery_bracket.DISCOVERY_PARENT
+                        )
+                        admitted_angles.append(
+                            _conflict_from_admitted(angle, parent)
+                        )
+
+            # --- 5b. D-W4-1 LAYER 2 — THE SEMANTIC DROP, which is the actual
+            # guarantee. The barred questions travel through the clusterer as
+            # SHADOW MEMBERS, and any new candidate landing in a cluster with a
+            # shadow is dropped. A prompt asking a model not to re-propose
+            # something is not a control; this is.
+            #
+            # THE REAL ROUND NUMBER IS PASSED, NEVER THE `0` DEFAULT. The drop log
+            # exists to separate two OPPOSITE measured failures — the loop
+            # SPINNING (round 2 re-proposing round 1's rejects) from an over-eager
+            # dedup strangling discovery — and stamping every drop round 0 destroys
+            # the one distinction it was built to make. That failure is silent and
+            # every test stays green.
+            drops_before = len(register.get("drops") or [])
+            if mutations:
+                mutations, cluster_reasons = await workshop.cluster_candidates(
+                    candidates=mutations,
+                    audited=audited,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    feed=feed,
+                    stats=cluster_stats,
+                    register=register,
+                    round_no=round_no,
+                )
+                loop_reasons += list(cluster_reasons)
+            dropped_this_round = len(register.get("drops") or []) - drops_before
+
+            # A dropped re-proposal means the register is WORKING, so the summary
+            # is a NOTE and never a degradation (D-12's alarm-fatigue rule).
+            loop_notes.append(workshop_register.drop_summary(register, round_no))
+
+            new_candidates = mutations
 
             # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
             # `_stamp_loop_candidates` for why `born_round` is the round the
@@ -3815,6 +4186,16 @@ async def run_workshop_stage_b(
                 max_rounds=max_rounds,
             )
 
+            # D-W4-7 — RECORDED, AND NOTHING IS ENFORCED ON IT. There is no spend
+            # ceiling, no population cap and no per-round lookup cap here, and
+            # that is a decision rather than an omission: nothing binds at the
+            # measured scale (population stayed between 23 and 41, the largest
+            # prompt the loop built was ~9k chars, and the validated configuration
+            # cost $0.24 in total against a ~$3.00 estimate). AN ENFORCED CEILING
+            # NOBODY HAS MEASURED A NEED FOR IS A KNOB THAT WILL ONE DAY TRUNCATE
+            # A RUN FOR NO REASON; a logged number is what tells you whether a
+            # ceiling is ever warranted. And if runs routinely hit 10 rounds, that
+            # is evidence the cap should go HIGHER, not that money is being wasted.
             round_records.append(
                 workshop_loop.round_metrics(
                     round_no=round_no,
@@ -3822,11 +4203,14 @@ async def run_workshop_stage_b(
                     new_candidates=len(stamped),
                     winners=len(selected),
                     weak_winners=verdict.get("weak_winners") or 0,
-                    barred=0,
-                    dropped_as_reproposal=0,
-                    lookups=0,
-                    calls=0,
-                    cost_usd=0,
+                    barred=barred_this_round,
+                    dropped_as_reproposal=dropped_this_round,
+                    lookups=int(admission_stats.get("grounded_lookups") or 0)
+                    - lookups_before,
+                    calls=int(critique_stats.get("calls") or 0)
+                    + int(tourney_stats.get("calls") or 0)
+                    + int(generative_stats.get("calls") or 0),
+                    cost_usd=generative_stats.get("cost_usd") or 0,
                 )
             )
 
@@ -3904,6 +4288,20 @@ async def run_workshop_stage_b(
         discovery, per_parent, disc_notes = discovery_bracket.allocate_discovery(
             conflicts, labels
         )
+        # The loop's ADMITTED inventions continue that same allocation into the
+        # slots orientation left unused — same ceilings, read from
+        # `discovery_bracket`, and `discovery_bracket` itself is untouched. See
+        # `_conflict_from_admitted` for why they are not pushed back through
+        # `allocate_discovery` itself.
+        if admitted_angles:
+            extra, extra_notes = _fill_remaining_discovery_slots(
+                admitted_angles, already=discovery, per_parent=per_parent
+            )
+            discovery = list(discovery) + extra
+            disc_notes = list(disc_notes) + extra_notes
+            for entry in extra:
+                parent = str(entry.get("parent") or "")
+                per_parent[parent] = per_parent.get(parent, 0) + 1
         riders, cross_cutting = discovery_bracket.partition_discovery(discovery)
 
         # A provisional rank BELOW every client winner. The mandate can never be
@@ -4090,6 +4488,11 @@ async def run_workshop_stage_b(
         reasons += list(group_reasons)
         notes = (
             list(notes)
+            # The loop's NOTES, not degradations: a dropped re-proposal means the
+            # register is working, and an admission note records what the evidence
+            # gate refused. Neither makes the run worse (D-12's alarm-fatigue
+            # rule, which this module already states at `enforce_scope_guard`).
+            + list(loop_notes)
             + list(disc_notes)
             + list(group_notes)
             + list(rider_notes)
@@ -4158,7 +4561,14 @@ async def run_workshop_stage_b(
                 # --- the loop's numbers (D-W4-7: recorded, never enforced) ---
                 "rounds": int(rounds_run),
                 "loop_born_winners": int(loop_born_winners),
+                "barred": len(register.get("barred") or []),
+                "dropped_as_reproposal": len(register.get("drops") or []),
+                "grounded_lookups": int(
+                    admission_stats.get("grounded_lookups") or 0
+                ),
+                "admitted_angles": int(admission_stats.get("admitted") or 0),
             },
+            loop_rounds=round_records,
         )
 
         await _stage_b_feed_finish(
@@ -4226,7 +4636,12 @@ async def run_workshop_stage_b(
                 # difference — the same rule the three list keys above follow.
                 "rounds": 0,
                 "loop_born_winners": 0,
+                "barred": 0,
+                "dropped_as_reproposal": 0,
+                "grounded_lookups": 0,
+                "admitted_angles": 0,
             },
+            loop_rounds=[],
         )
 
 
