@@ -372,6 +372,53 @@ def _flatten(text: Any, cap: int) -> str:
     return raw[:limit] if limit else ""
 
 
+def _stats_cost(stats: Any, key: str = "cost_usd") -> Decimal:
+    """One stats dict's running cost as a Decimal. Never raises."""
+    if not isinstance(stats, dict):
+        return Decimal("0")
+    return _add_cost(Decimal("0"), stats.get(key))
+
+
+def _accumulate_stats(
+    stats: Any,
+    *,
+    calls: Any = 0,
+    cost: Any = None,
+    unjudged: Any = None,
+) -> None:
+    """ADD one stage's bookkeeping to a caller-owned out-dict. Never raises.
+
+    ACCUMULATE, NEVER ASSIGN (CR-06). `run_tournament` and `critique_candidates`
+    both used to write `stats["calls"] = total`, while every sibling
+    (`workshop_evolve`, `workshop_admission`) accumulates. The Wave 4 loop calls
+    both of them once per round with ONE shared dict, so on a nine-round run the
+    two most call-heavy stages in the engine reported roughly ONE NINTH of their
+    calls and their cost — and `run_tournament`'s early returns wrote nothing at
+    all, leaving the PREVIOUS round's numbers standing as if they were this
+    round's.
+
+    `round_metrics`' own docstring says the recorded number is the only thing
+    that could ever justify a ceiling, and 15.8 exists to produce exactly one
+    measuring run. A number that is wrong by 9x while still looking plausible is
+    the worst possible shape for that.
+
+    Called with zeros on the early-return paths ON PURPOSE: a stage that did no
+    work contributes zero rather than leaving whatever was there before.
+    """
+    if not isinstance(stats, dict):
+        return
+    try:
+        stats["calls"] = int(stats.get("calls") or 0) + int(calls or 0)
+    except (TypeError, ValueError):
+        stats["calls"] = int(stats.get("calls") or 0)
+    stats["cost_usd"] = str(_add_cost(_stats_cost(stats), cost))
+    if unjudged is not None:
+        try:
+            stats["unjudged"] = int(stats.get("unjudged") or 0) + int(unjudged or 0)
+        except (TypeError, ValueError):
+            stats["unjudged"] = int(stats.get("unjudged") or 0)
+
+
 def _parents_of(entry: dict[str, Any]) -> list[str]:
     """The ordered parent labels one candidate / winner covers.
 
@@ -656,6 +703,9 @@ async def critique_candidates(
         stats.setdefault("calls", 0)
         stats.setdefault("cost_usd", "0")
     if not items:
+        # ZERO CONTRIBUTION, WRITTEN (CR-06) — not "nothing written", which under
+        # the old assigning shape left the previous round's numbers standing.
+        _accumulate_stats(stats, calls=0, cost=0)
         return [], []
 
     if not _CRITIQUE_ENABLED:
@@ -665,6 +715,7 @@ async def critique_candidates(
             "unscreened and no call is made",
             len(items),
         )
+        _accumulate_stats(stats, calls=0, cost=0)
         return [_with_critique(c, _KEEP, "") for c in items], []
 
     size = max(1, _CRITIQUE_BATCH)
@@ -726,9 +777,9 @@ async def critique_candidates(
         cost = _add_cost(cost, acc.get("cost_usd"))
         if acc.get("error"):
             failures.append(str(acc["error"]))
-    if isinstance(stats, dict):
-        stats["calls"] = calls
-        stats["cost_usd"] = str(cost)
+    # ACCUMULATE (CR-06). The loop hands this function ONE dict per RUN and calls
+    # it once per ROUND, so assigning here reported the final round only.
+    _accumulate_stats(stats, calls=calls, cost=cost)
 
     survivors: list[dict[str, Any]] = []
     killed = 0
@@ -1900,6 +1951,10 @@ async def run_tournament(
         stats.setdefault("unjudged", 0)
         stats.setdefault("judge_reasons", {})
     if not items:
+        # ZERO CONTRIBUTION, WRITTEN (CR-06). Under the old assigning shape this
+        # path wrote nothing, so the PREVIOUS round's calls, cost and unjudged
+        # count stayed in the dict and were read as if they were this round's.
+        _accumulate_stats(stats, calls=0, cost=0, unjudged=0)
         return [], []
 
     for position, entry in enumerate(items):
@@ -1921,6 +1976,8 @@ async def run_tournament(
             entry["elo"] = round(float(_ELO_START), 2)
             entry["byes"] = 0
             entry["rank"] = position + 1
+        # Zero contribution, written — see the `not items` guard above (CR-06).
+        _accumulate_stats(stats, calls=0, cost=0, unjudged=0)
         return items, []
 
     by_index = {c["index"]: c for c in items}
@@ -2088,10 +2145,21 @@ async def run_tournament(
         reasons.append(_reason_tournament_unjudged(total_unjudged, total_matches))
     if first_failure is not None:
         reasons.append(_reason_tournament_failed(first_failure))
+    # ACCUMULATE (CR-06). The loop hands this function ONE dict per RUN and calls
+    # it once per ROUND, so assigning here reported the final round only — and on
+    # a nine-round run that is about one ninth of the engine's heaviest stage.
+    _accumulate_stats(
+        stats, calls=total_calls, cost=total_cost, unjudged=total_unjudged
+    )
     if isinstance(stats, dict):
-        stats["calls"] = total_calls
-        stats["cost_usd"] = str(total_cost)
-        stats["unjudged"] = total_unjudged
+        # `judge_reasons` IS DELIBERATELY STILL AN ASSIGNMENT, and it is the one
+        # key here that must not accumulate. Its only consumer is the loop's
+        # meta-review, which asks for THIS round's judging clauses; and the key
+        # is `r{tournament_round}:{low}v{high}`, where the round number is the
+        # SWISS round, not the loop round — so entries from two loop rounds
+        # collide on the same key anyway. Accumulating would silently mix rounds
+        # AND overwrite within the mixture. Per-round is both what the consumer
+        # wants and the only shape the key can express.
         stats["judge_reasons"] = judge_reasons
     if isinstance(standings, dict):
         # WRITTEN BACK SORTED AND JSON-SAFE. `seen` is a set and a set has no
@@ -4136,6 +4204,27 @@ async def run_workshop_stage_b(
             barred_this_round = 0
             dropped_this_round = 0
             lookups_before = int(admission_stats.get("grounded_lookups") or 0)
+            # EVERY ROUND RECORD IS A DELTA, and every one of these `_before`
+            # readings is what makes that true (CR-06). The four stats dicts are
+            # created ONCE PER RUN and every stage accumulates into them, so
+            # reading them raw at the bottom of a round yields the run total to
+            # date, not the round. `lookups` was already written as a delta;
+            # `calls` and `cost_usd` were not, and mixing a per-round number with
+            # a cumulative one in the same record produces something that is
+            # wrong while still looking plausible.
+            calls_before = (
+                int(critique_stats.get("calls") or 0)
+                + int(tourney_stats.get("calls") or 0)
+                + int(generative_stats.get("calls") or 0)
+            )
+            # The SAME three stages the `calls` delta covers. Before this the
+            # round's cost read `generative_stats` alone, so the record's cost
+            # and its call count described different work.
+            cost_before = (
+                _stats_cost(critique_stats)
+                + _stats_cost(tourney_stats)
+                + _stats_cost(generative_stats)
+            )
 
             # --- 1. CRITIQUE the whole current population.
             killed_out: list[dict[str, Any]] = []
@@ -4480,8 +4569,14 @@ async def run_workshop_stage_b(
                     - lookups_before,
                     calls=int(critique_stats.get("calls") or 0)
                     + int(tourney_stats.get("calls") or 0)
-                    + int(generative_stats.get("calls") or 0),
-                    cost_usd=generative_stats.get("cost_usd") or 0,
+                    + int(generative_stats.get("calls") or 0)
+                    - calls_before,
+                    cost_usd=str(
+                        _stats_cost(critique_stats)
+                        + _stats_cost(tourney_stats)
+                        + _stats_cost(generative_stats)
+                        - cost_before
+                    ),
                 )
             )
 
