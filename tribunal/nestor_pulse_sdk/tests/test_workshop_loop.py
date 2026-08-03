@@ -1664,3 +1664,251 @@ def test_section8_a_barred_question_does_not_reappear_as_a_winner() -> None:
     assert [
         w for w in kept["winners"] if _REWORDING in str(w.get("text") or "")
     ], "the control run never produced the rewording, so the test above is vacuous"
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 4 — "losers remain promotable"
+# --------------------------------------------------------------------------
+def _drop_one_questions_winners(label: str):
+    """A `select_winners` that returns no winner for `label`, keeping the rest.
+
+    WHY A COLLABORATOR IS PINNED HERE AND NOWHERE ELSE IN THIS SUITE. The winner
+    selection guarantees a FLOOR of five per client question, so on any honest
+    script every client question already has a winner and `enforce_scope_guard`'s
+    repair ladder is simply never entered. Pinning selection is the only way to
+    reach the repair at all — and it is an INPUT CONDITION, exactly like the
+    scripted LLM responses: the assertion below is still made on the contract the
+    REAL `run_workshop_stage_b` returns, and every other step (the tournament,
+    the ten rounds of barring, the scope guard, the tail) is the real one.
+    """
+    original = workshop_loop.select_winners
+
+    def _patched(ranked, **kw):
+        winners, below = original(ranked, **kw)
+        kept = [w for w in winners if label not in (w.get("parents") or [])]
+        moved = [w for w in winners if label in (w.get("parents") or [])]
+        return kept, list(moved) + list(below)
+
+    return original, _patched
+
+
+def test_section8_losers_remain_promotable_after_ten_rounds_of_barring() -> None:
+    """T-15.7-09-02, END TO END and after the loop has barred all it is going to.
+
+    An over-eager bar deletes a client question's coverage INVISIBLY, and the
+    structural protection is that a tournament loss can never be expressed as a
+    bar. This asserts the consequence rather than the mechanism: after ten rounds
+    of barring, a client question left with no winner is repaired by PROMOTING a
+    below-the-cut candidate out of the FULL ranked list — not by injecting the
+    client's question text verbatim.
+
+    THE DISTINCTION IS THE WHOLE TEST. A verbatim injection also "covers" the
+    question, so a test that only asserted coverage would pass just as well
+    against a scope guard whose promotion ladder had stopped working — and a
+    verbatim client question is raw brief text where a promotion is a real,
+    tournament-ranked sub-question.
+    """
+    original, patched = _drop_one_questions_winners(CQ3)
+    workshop_loop.select_winners = patched
+    try:
+        result = _run_stage_b(
+            _ScriptedClient(_rewording_script(merge_the_rewording=False)),
+            SEAM_LABELS,
+            payload=_strength_stage_a(SEAM_LABELS),
+        )
+    finally:
+        workshop_loop.select_winners = original
+
+    # Ten rounds, and they really were rounds that barred.
+    assert result["counts"]["rounds"] == workshop_loop._LOOP_MAX_ROUNDS
+    assert result["counts"]["barred"] > 0
+
+    repaired = [w for w in result["winners"] if CQ3 in (w.get("parents") or [])]
+    assert repaired, "the starved client question was not repaired at all"
+
+    # IT IS A PROMOTION. `_verbatim_winner` is a fixed 12-key shape carrying
+    # `source: "verbatim"` and the sentinel `index: -1`; a promoted candidate is a
+    # copy of a real ranked entry, so it has a real index and a tournament rank.
+    promoted = [w for w in repaired if w.get("source") != "verbatim"]
+    assert promoted, [
+        (w.get("source"), w.get("index"), w.get("text")) for w in repaired
+    ]
+    winner = promoted[0]
+    assert winner.get("index", -1) >= 0, winner
+    assert isinstance(winner.get("rank"), int) and winner["rank"] >= 1, winner
+    # ...and it carries a real sub-question, not the client's own question text.
+    assert str(winner.get("text") or "") != f"Client question: {CQ3}"
+    assert winner.get("langs"), winner
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 5 — "a strong newcomer entering in a late round still
+# reaches the top N under the catch-up schedule"
+# --------------------------------------------------------------------------
+_LATE_ENTRANT = "LATEENTRANT"
+
+
+def _lone_late_newcomer_script(*, entry_round: int = 3):
+    """EXACTLY ONE strong candidate, born in a LATE round, against a settled field.
+
+    THE COUNT IS THE WHOLE POINT AND THIS TEST WAS REWRITTEN TO GET IT RIGHT.
+    An earlier version of this test let the generative evolve write SIX
+    999-strength newcomers EVERY round. It passed — and it passed for the wrong
+    reason: a field flooded with top-strength entrants puts one of them in the
+    top N no matter what the match schedule does. Measured, `catch_up_matches ->
+    0` did not move that test at all, which means it was asserting nothing about
+    D-W4-3.
+
+    With ONE newcomer entering in round 3 the schedule becomes load-bearing and
+    the mutant is caught: the late entrant reaches the winner set on the baseline
+    and does NOT reach it with the catch-up removed.
+    """
+    state: dict[str, int] = {"round": 0, "generate": 0}
+
+    def _strength(text: str) -> int:
+        found = re.search(r"STRENGTH=(\d+)", text or "")
+        return int(found.group(1)) if found else 0
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                # One question stays WEAK for most of the run, which is what
+                # keeps criterion 2 failing and the loop turning long enough for
+                # a round-3 entrant to exist at all.
+                if CQ3 in text and state["round"] <= 8:
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+
+        if kind == "judge":
+            lines = []
+            for match in re.finditer(
+                r"^\s*(\d+)\s*\|\s*A:\s*(.*?)\s*\|\s*B:\s*(.*)$", prompt, re.M
+            ):
+                side = (
+                    "A"
+                    if _strength(match.group(2)) >= _strength(match.group(3))
+                    else "B"
+                )
+                lines.append(f"{int(match.group(1))} | {side} | the stronger question")
+            return "\n".join(lines) or "0 | A | the stronger question"
+
+        if kind == "sharpen":
+            out = []
+            for line in re.findall(r"^(\d+) \| (.*?)(?: \| |$)", prompt, re.M):
+                out.append(f"{int(line[0])} | sharpened {line[1]} | LANGS: nl,en")
+            return f"{_START}\n" + "\n".join(out) + f"\n{_END}"
+
+        if kind == "generate":
+            state["generate"] += 1
+            if state["generate"] != entry_round:
+                return f"{_START}\n{_END}"
+            return (
+                f"{_START}\n0 | COMBINE | 0,1 | {_LATE_ENTRANT} the one late "
+                f"entrant STRENGTH=999 | LANGS: nl,en\n{_END}"
+            )
+
+        return "focus the next round on cost evidence"
+
+    return respond
+
+
+def test_section8_a_strong_late_newcomer_still_reaches_the_top_n() -> None:
+    """D-W4-3 AT THE SEAM. Plan 15.7-08 asserts this at the tournament level;
+    this asserts it survives a loop that adds candidates round after round.
+
+    The mechanism is the SCHEDULE and not the sort: the standing sorts by
+    `(-wins, -elo, index)`, so a newcomer's disadvantage is FEWER MATCHES and
+    therefore FEWER WINS — which is exactly why D-R11's median Elo seed is inert
+    (median-seed and flat-1200 give byte-identical output) and why
+    `catch_up_matches` is what actually works.
+
+    Driven with an ORACLE judge so the entrant's strength is decisive rather than
+    probabilistic: it carries the highest `STRENGTH=` in the field, so if it does
+    not reach the top N then the make-up matches are what failed.
+    """
+    result = _run_stage_b(
+        _ScriptedClient(_lone_late_newcomer_script()),
+        SEAM_LABELS,
+        payload=_strength_stage_a(SEAM_LABELS),
+    )
+
+    # It really did loop long enough for a round-3 entrant to exist.
+    assert result["counts"]["rounds"] >= 3, result["counts"]["rounds"]
+
+    entrant = [
+        w for w in result["winners"]
+        if _LATE_ENTRANT in str(w.get("text") or "")
+    ]
+    assert entrant, (
+        "the best question in the field entered late and never reached the top N"
+    )
+    # It is genuinely a LATE arrival, not a seed candidate that happened to match.
+    assert (entrant[0].get("born_round") or 0) >= 2, entrant[0]
+    assert result["counts"]["loop_born_winners"] >= 1
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 6 — "zero WEAK winners — prefer-KEEP is applied"
+# --------------------------------------------------------------------------
+def _half_weak_script(**kw):
+    """Half of every question's candidates are WEAK FOREVER, half are KEEP.
+
+    A SURPLUS OF KEEP IS WHAT MAKES THIS TEST MEAN ANYTHING. With six KEEP
+    candidates per question against a floor of five, prefer-KEEP has a real
+    choice at every slot; with fewer KEEP than slots the winner set would be
+    WEAK-free only because there was nothing else to take, and the assertion
+    would hold without the rule existing.
+    """
+    base = _script(**kw)
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                found = re.search(r"number (\d+)", text)
+                weak = found is not None and int(found.group(1)) >= 6
+                if weak:
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_section8_zero_weak_winners_when_keep_and_weak_both_exist_in_surplus() -> None:
+    """D-W4-5's prefer-KEEP, asserted on the RETURNED winner set.
+
+    The measured configuration produces 17 winners with NONE weak. Prefer-KEEP is
+    what does it: a rank-9 KEEP is taken over a rank-4 WEAK when a slot is being
+    filled, because a WEAK winner is a paid research question the workshop itself
+    said was not sharp enough.
+    """
+    result = _run_stage_b(
+        _ScriptedClient(_half_weak_script(seed=0)),
+        SEAM_LABELS,
+        payload=_stage_a(SEAM_LABELS),
+    )
+
+    weak = [
+        w for w in result["winners"]
+        if str(w.get("critique") or "").upper() == _WEAK
+        and not w.get("cross_cutting")
+    ]
+    assert not weak, [(w.get("text"), w.get("critique")) for w in weak]
+
+    # NON-VACUITY: the WEAK candidates really existed and really were available
+    # to be chosen. Without this the run could have been all-KEEP by accident.
+    assert result["counts"]["ranked"] > len(result["winners"])
