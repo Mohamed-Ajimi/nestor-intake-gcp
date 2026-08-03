@@ -54,7 +54,25 @@ class FakeAudited:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """Drive one coroutine to completion.
+
+    `asyncio.get_event_loop()` USED TO BE HERE, and it stopped working: it no
+    longer creates a loop implicitly when none is running on the main thread, so
+    all three tests that call this helper died with
+
+        RuntimeError: There is no current event loop in thread 'MainThread'
+
+    BEFORE REACHING A SINGLE ASSERTION. The other four tests in this file never
+    call `_run`, which is exactly why they stayed green and the breakage read as
+    a partial failure rather than a broken helper.
+
+    `asyncio.run` is the right replacement rather than a hand-rolled
+    `new_event_loop()` because every caller here awaits ONE coroutine and shares
+    no loop state with any other — so a loop created, driven and closed per call
+    is precisely the semantics these tests want, and unlike the old global-loop
+    form it cannot leak a half-used loop into the next test.
+    """
+    return asyncio.run(coro)
 
 
 MISSION_BRIEF = {"focus_areas": [{"focus_area": "general"}]}

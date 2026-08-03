@@ -629,9 +629,22 @@ async def test_persist_tribunal_claims_shape(monkeypatch):
     # signature it was never asked to reproduce. They are accepted and ignored:
     # this test is about the RETURN SHAPE, and the values themselves are pinned
     # by test_citation_roundtrip.py's D-13 write-contract tests.
+    # `sub_question` / `corroboration_key` / `as_of` are D-R3's columns (phase
+    # 15.5, migration 0017). `_insert_claim` declares all three, defaulted, and
+    # `persist_tribunal_claims` PASSES ALL THREE on every atomic claim — so this
+    # stand-in raised `TypeError: got an unexpected keyword argument
+    # 'sub_question'` and the test could never reach its return-shape assertion.
+    #
+    # NAMED EXPLICITLY, NEVER A `**kwargs` CATCH-ALL, and that is the whole point
+    # of the rule this file already states twice above. A catch-all would make
+    # this stand-in silently absorb the NEXT column too — and a stand-in that can
+    # never fail on a signature change stops being a check of the write contract
+    # at exactly the moment the contract moves. Failing loudly here is the
+    # feature; adding the argument by hand is the maintenance it buys.
     async def fake_insert_claim(
         session, *, tenant_id, run_id, claim_text, facet, position=None,
         certainty=None, found_by=None,
+        sub_question=None, corroboration_key=None, as_of=None,
     ):
         return uuid.uuid4()
 
