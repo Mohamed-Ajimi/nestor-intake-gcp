@@ -81,6 +81,15 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 from nestor_pulse_sdk.citations.redirect_resolver import is_redirect_url, resolve_redirects
 from nestor_pulse_sdk.pipeline.tribunal.discovery_bracket import (
+    # `DISCOVERY_PARENT` is READ AT RUNTIME by `_parse_classification` (:792, :812)
+    # and by `classify_parent`'s pre-fill (:888) — it was used from the day
+    # `classify_parent` landed and never imported. The module still compiled, and
+    # the `ast`-lift harness every plan in phase 15.7 verified against SUPPLIES
+    # module globals into its exec namespace, so it MANUFACTURED this name and the
+    # missing import was invisible to "38 lifted tests green". The real pytest gate
+    # found it immediately (11 NameErrors, Cloud Build 3230abc9). Keep it imported,
+    # and do not trust a lifted run to prove a name resolves.
+    DISCOVERY_PARENT,
     _DISCOVERY_TEXT_CHARS,
     _norm,
     _norm_url,
