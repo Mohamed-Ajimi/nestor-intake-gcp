@@ -149,22 +149,38 @@ _D6_MAX_GROUPS = max(1, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUPS", 5))
 # 5 groups, so 15 / 5 = 3 is the INFEASIBILITY FLOOR (a cap below 3 cannot be satisfied
 # at all) and 4 leaves slack. Hence `max(3, ...)`.~~
 #
-# THE ARITHMETIC, RE-DERIVED AGAINST D-W4-5 (phase 15.7) rather than swapped: the
-# validated configuration selects a FLOOR OF 5 WINNERS PER CLIENT QUESTION plus 2
-# cross-cutting, and under `_GROUPING_MODE = "per-question"` those 5 land in ONE
-# mandate group. That group then also hosts up to 2 discovery riders (D-W3-5.2), so
+# ~~THE ARITHMETIC, RE-DERIVED AGAINST D-W4-5: 7 = 5 winners + 2 riders.~~
 #
-#     7 = 5 winners + 2 riders
+# BOTH DERIVATIONS ABOVE ARE DEAD, AND THE SECOND ONE IS WHY THIS COMMENT IS NOW
+# WRITTEN THE WAY IT IS (CR-09). It was RESTATED AGAINST THE NEW PREMISE INSTEAD OF
+# RE-CHECKED AGAINST THE FUNCTION THAT CONSUMES THE NUMBER, so the number moved 4 -> 7
+# and the defect did not. `7 = 5 winners + 2 riders` FORGOT WHERE THE 2 CROSS-CUTTING
+# WINNERS GO. They are not `__discovery__`-parented: `workshop_evolve._stamp_candidate`
+# sets `parent = parents[0]`, a REAL CLIENT LABEL, and `fallback_groups` buckets purely
+# on `_own_parent` — so BOTH CROSS-CUTTING WINNERS LAND INSIDE A CLIENT QUESTION'S OWN
+# GROUP. At the validated 17-winner configuration that group holds 5 + 2 = 7 members
+# BEFORE ANY RIDER ARRIVES, and `attach_discovery_riders` then shed every rider it had
+# just attached. Measured on committed source, 17 winners / 3 labels / 3 riders:
 #
-# and a cap of 4 would SHED EVERY RIDER ON ARRIVAL — silently deleting the discovery
-# bracket Wave 3 built, at the one function (`attach_discovery_riders`) that reads this
-# number. The old 4 was correct for the arithmetic it was derived from and is wrong for
-# this one; that is why the derivation is restated rather than the number edited.
+#     groups:       [('g1', 7, 'Q1'), ('g2', 5, 'Q2'), ('g3', 5, 'Q3')]
+#     after riders: [('g1', 7, 0),    ('g2', 6, 1),    ('g3', 6, 1)]
+#     SHED: ['discovered A']
 #
-# The INFEASIBILITY FLOOR is unchanged in meaning and kept at 3: a cap below 3 could
-# not be satisfied under the old 15-winner / 5-group arithmetic, and a cap that low is
-# still nonsense for a group that must hold a client question's whole sub-question set.
-# Hence `max(3, ...)`.
+# THE STANDING RULE THAT REPLACES THE ARITHMETIC: a TOTAL-SIZE cap can always be
+# exhausted by winners, and winners arrive from a budget this constant does not
+# control (`workshop_loop.select_winners` allocates `floor * len(labels) + slots`).
+# So the rider allowance is NO LONGER DERIVED FROM A TOTAL SIZE AT ALL — see
+# `_D6_MAX_RIDERS_PER_GROUP` below, which is the number `attach_discovery_riders`
+# actually enforces. THAT is the re-checkable statement: the cap on riders is a
+# property of riders only, so no number of winners can shed one.
+#
+# `_D6_MAX_GROUP_SIZE` IS THEREFORE NO LONGER A SHEDDING THRESHOLD. It survives as the
+# size hint `clamp_groups` uses when it decides how to SPLIT a model-proposed grouping
+# (`max_size=` at the `clamp_groups` call site), which is a different job: clamping
+# rebalances winners between groups and never deletes anything.
+#
+# The INFEASIBILITY FLOOR is unchanged in meaning and kept at 3: a cap that low is
+# nonsense for a group that must hold a client question's whole sub-question set.
 #
 # THE PRECEDENCE, STATED EXPLICITLY BECAUSE THE TWO COLLIDE, AND UNCHANGED BY D-W4-4a:
 # the ceiling is an OPERATOR decision and this size cap is the engine's own. WHEN THEY
@@ -172,6 +188,31 @@ _D6_MAX_GROUPS = max(1, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUPS", 5))
 # split into an extra group. Every question is still researched, so that is a note, not
 # a degradation.
 _D6_MAX_GROUP_SIZE = max(3, _env_int("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", 7))
+
+# How many DISCOVERY RIDERS one mandate group may carry — the number
+# `attach_discovery_riders` enforces, and the whole of CR-09's fix.
+#
+# THE DERIVATION, AND HOW TO RE-CHECK IT AGAINST THE CONSUMING FUNCTION: a rider is
+# admitted by `discovery_bracket.allocate_discovery`, which caps discovery at
+# `_DISCOVERY_PER_PARENT_CAP` (3, env `NESTOR_TRIBUNAL_DISCOVERY_PER_PARENT`) questions
+# PER PARENT LABEL. `attach_discovery_riders` hosts a rider in the mandate group holding
+# its parent. So the most riders that can ever legitimately arrive at one group is the
+# per-parent cap, and setting this budget EQUAL TO THAT CAP means a rider is shed only
+# when the discovery stage has ALREADY over-allocated against its own rule.
+#
+#     3 = discovery_bracket._DISCOVERY_PER_PARENT_CAP
+#
+# TO RE-CHECK: read `attach_discovery_riders`' shedding loop and confirm it counts
+# `_is_rider(member)` members ONLY. If it ever counts winners again, this derivation is
+# void and CR-09 is back — that is the exact failure being guarded against.
+#
+# WHY IT IS NOT IMPORTED FROM `discovery_bracket`: this module is deliberately
+# import-light (see the module docstring's note on sibling plans editing neighbours),
+# and the scope guard's import allowlist is asserted per-file. Duplicated with the
+# source named, exactly like `_parents_of`.
+_D6_MAX_RIDERS_PER_GROUP = max(
+    0, _env_int("NESTOR_TRIBUNAL_D6_MAX_RIDERS_PER_GROUP", 3)
+)
 
 #: The two grouping modes, named rather than typed as bare literals at each site, so a
 #: caller and a test cannot drift apart on a string.
@@ -1007,7 +1048,7 @@ def fallback_groups(winners: Any, client_questions: Any) -> tuple[list[list[int]
 
 
 def attach_discovery_riders(
-    groups: Any, riders: Any, *, max_size: int
+    groups: Any, riders: Any, *, max_size: Any = None, max_riders: Any = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """Ride discovery questions along inside their host mandate group. NEVER RAISES.
 
@@ -1017,11 +1058,36 @@ def attach_discovery_riders(
     of its own, and that group is built separately with
     `bracket=GROUP_BRACKET_DISCOVERY`.
 
-    THE SIZE CAP NOW BINDS ON RIDERS, AND ONLY ON RIDERS. § 4 requirement 2 caps
+    THE CAP IS A RIDER BUDGET, NOT A GROUP SIZE (CR-09). § 4 requirement 2 caps
     questions per group because the risk is a provider writing six thin paragraphs
     instead of one deep report, and D-W3-4 says discovery NEVER BORROWS FROM THE
     MANDATE — so when prompt space runs out, DISCOVERY is what yields. A winner is
     never shed. A rider never displaces a client question's sub-question.
+
+    THAT IS WHY THE THRESHOLD COUNTS RIDERS ONLY. It used to shed while
+    `len(members) > max_size`, counting WINNERS towards a cap whose stated purpose
+    was to leave room for riders — so a group that was already full of winners
+    shed every rider it had just attached, and the discovery bracket deleted
+    itself silently. It was not a tuning error: at the validated configuration a
+    per-question group holds the 5-winner floor PLUS BOTH CROSS-CUTTING WINNERS,
+    because a cross-cutting winner is parented to a real client label
+    (`workshop_evolve._stamp_candidate` sets `parent = parents[0]`) and
+    `fallback_groups` buckets on `_own_parent`. That is 7 members before a single
+    rider arrives, so a cap of 7 shed them all — and so did the previous cap of 4.
+    Raising the number again would have moved the symptom, not the defect.
+
+    Counting riders only makes the guarantee INDEPENDENT OF THE WINNER COUNT: no
+    allocation of winners, cross-cutting or otherwise, can crowd a rider out.
+    `max_riders` defaults to `_D6_MAX_RIDERS_PER_GROUP`, which equals discovery's
+    own per-parent cap, so a rider is shed only when the discovery stage has
+    already over-allocated against its own rule.
+
+    `max_size` IS ACCEPTED AND NO LONGER BINDS. It is kept in the signature because
+    live callers still pass it positionally by keyword, and REMOVING it would be a
+    silent TypeError in a stage that must never raise. It is deliberately not
+    re-purposed as a rider budget: a total-size number reinterpreted as a rider
+    number is exactly the restated-premise mistake that produced CR-09. Pass
+    `max_riders` to control shedding.
 
     `parent`, `rank` and `client_parents` are left FROZEN from the mandate members. A
     rider must not steal its host's facet, and `client_parents` is what decides
@@ -1039,7 +1105,16 @@ def attach_discovery_riders(
     shed: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
     try:
-        size_cap = max(1, int(max_size))
+        # `max_size` is READ AND DISCARDED — see the docstring. Coerced anyway so a
+        # garbage value from a caller cannot sit unexamined in the signature.
+        _ = max_size
+        try:
+            rider_budget = (
+                _D6_MAX_RIDERS_PER_GROUP if max_riders is None else int(max_riders)
+            )
+        except (TypeError, ValueError):
+            rider_budget = _D6_MAX_RIDERS_PER_GROUP
+        rider_budget = max(0, rider_budget)
         for raw_group in list(groups or []):
             if not isinstance(raw_group, dict):
                 continue
@@ -1100,18 +1175,26 @@ def attach_discovery_riders(
                 if label not in out[host]["parents"]:
                     out[host]["parents"].append(label)
 
-        # THE SIZE CAP, on riders only.
+        # THE RIDER BUDGET. Counted over riders only, so no number of winners —
+        # including the cross-cutting winners that land in a per-question group —
+        # can shed a rider. CR-09: this loop used to test `len(members)`.
         for group in out:
             members = group.get("members") or []
-            while len(members) > size_cap:
+            while True:
                 # Positions, not dict identity: two riders can be equal dicts and
                 # `list.remove` would then drop whichever compared equal first.
                 rider_positions = [
                     p for p, member in enumerate(members) if _is_rider(member)
                 ]
-                if not rider_positions:
-                    # A WINNER IS NEVER SHED. The group stays oversized instead.
+                if len(rider_positions) <= rider_budget:
                     break
+                # A WINNER IS NEVER SHED, now BY CONSTRUCTION rather than by a
+                # guard: `rider_budget >= 0` and the test above, taken together,
+                # mean this line is reached only when `rider_positions` is
+                # non-empty, and the victim is always chosen FROM that list. The
+                # old explicit `if not rider_positions: break` was the guard for
+                # the total-size rule, which could run out of riders while the
+                # group was still over its cap; a rider budget cannot.
                 victim_position = max(
                     rider_positions, key=lambda p: (_rank_of(members[p]), p)
                 )
@@ -1119,9 +1202,14 @@ def attach_discovery_riders(
                 shed.append(victim)
                 group["riders"] = max(0, int(group.get("riders") or 0) - 1)
                 notes.append(
+                    # "already full" was accurate under the total-size rule and is
+                    # not under the rider budget: the group is not full, it has
+                    # taken its full SHARE OF DISCOVERY. Both marker phrases the
+                    # committed tests match on are preserved verbatim.
                     "One question the evidence raised was dropped from a research "
-                    "group that was already full, so it is reported but was not "
-                    "researched. The client's own questions were kept."
+                    "group that had already taken its full share of discovery "
+                    "questions, so it is reported but was not researched. The "
+                    "client's own questions were kept."
                 )
             group["members"] = members
             # Re-stamp `parents` only. `parent`, `rank` and `client_parents` stay
