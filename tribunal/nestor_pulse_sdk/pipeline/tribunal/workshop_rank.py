@@ -4909,10 +4909,26 @@ async def run_workshop_stage_b(
             + int(generative_stats.get("calls") or 0)
             + int(meta_stats.get("meta_calls") or 0)
             + int(group_stats.get("calls") or 0)
+            # --- THE ADMISSION GATE AND THE CLUSTERER (CR-07) ---
+            # All five of these numbers were produced and NONE was read, so the
+            # grounded lookups — the loop's only web-grounded paid component, and
+            # the one T-15.7-08-03 names as the denial-of-wallet risk — reported
+            # $0.00 and 0 calls. Each stage keeps its spend under ITS OWN key, the
+            # same way `meta_review` and `group_winners` do, so reading `calls`
+            # here would have silently under-reported every one of them as zero.
+            + int(admission_stats.get("admission_calls") or 0)
+            + int(admission_stats.get("admission_resolver_calls") or 0)
+            + int(admission_stats.get("classify_calls") or 0)
+            + int(cluster_stats.get("calls") or 0)
         )
         cost = Decimal("0")
         for stats in (critique_stats, tourney_stats, evolve_stats, generative_stats):
             cost = _add_cost(cost, stats.get("cost_usd"))
+        # The admission gate's own spend key. `classify_parent` and
+        # `cluster_candidates` record calls but no cost of their own, so there is
+        # nothing further to read for either — stated so a future reader does not
+        # go looking for a key that was never written.
+        cost = _add_cost(cost, admission_stats.get("admission_cost_usd"))
         # The meta-review keeps its spend under its own key, the same way
         # `group_winners` does — reading the wrong key would under-report every
         # meta call as zero, and the budget governor is inert by decision, so the

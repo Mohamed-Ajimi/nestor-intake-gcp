@@ -2512,8 +2512,18 @@ async def cluster_candidates(
             )
 
         if isinstance(stats, dict):
-            stats["calls"] = calls
-            stats["dropped_on_bar"] = dropped_on_bar
+            # ACCUMULATE, NEVER ASSIGN — the same defect CR-06 names in
+            # `run_tournament` and `critique_candidates`, and this one matters
+            # because CR-07 makes `stats["calls"]` reach the run's call total.
+            # The Wave 4 loop creates ONE `cluster_stats` per run and calls this
+            # function once per round, so assigning reported the final round
+            # only. The two early returns above deliberately write nothing: a
+            # round with fewer than two things to cluster makes no call, and
+            # under accumulation "add nothing" is exactly right.
+            stats["calls"] = int(stats.get("calls") or 0) + calls
+            stats["dropped_on_bar"] = (
+                int(stats.get("dropped_on_bar") or 0) + dropped_on_bar
+            )
 
         _emit_cluster_thinking(
             run_id, before=len(items), after=len(representatives), calls=calls
