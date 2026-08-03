@@ -4143,7 +4143,39 @@ async def run_workshop_stage_b(
                             _conflict_from_admitted(angle, parent)
                         )
 
-            # --- 5b. D-W4-1 LAYER 2 — THE SEMANTIC DROP, which is the actual
+            # --- 5b. STAMP FIRST. THIS ORDER IS LOAD-BEARING AND IT USED TO BE
+            # THE OTHER WAY ROUND (CR-02).
+            #
+            # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
+            # `_stamp_loop_candidates` for why `born_round` is the round the
+            # candidate FIRST COMPETES IN, and `_next_free_index` for why a
+            # collision here would silently detach every carried standing.
+            #
+            # WHY IT MUST HAPPEN BEFORE THE CLUSTERER AND NOT AFTER. Every
+            # candidate `workshop_evolve` produces carries `index: -1` — its own
+            # documented placeholder, "the caller renumbers the pool" — and
+            # `workshop.cluster_candidates` buckets on
+            # `candidate.get("index", position)`. The key is PRESENT and POISONED,
+            # so the `position` default never fires: with clustering run first,
+            # EVERY loop-born candidate keyed to `__singleton__:-1`, landed in ONE
+            # bucket, and only `members[0]` came back. Six freshly-evolved
+            # questions collapsed to one and the collapse was reported by
+            # `_reason_cluster_collapse` as an ordinary near-duplicate merge —
+            # SILENT DELETION of research questions, indistinguishable from
+            # correct behaviour. Stamping first gives the clusterer the globally
+            # unique indices its bucket key has always assumed.
+            #
+            # `next_index` ADVANCES BY WHAT WAS STAMPED, NOT BY WHAT SURVIVED
+            # CLUSTERING. An index consumed by a candidate the clusterer merged or
+            # the register dropped is BURNED, never handed out again: `merged_from`
+            # records those indices, and reusing one would make a later
+            # candidate's provenance point at a different question.
+            stamped = _stamp_loop_candidates(
+                mutations, start_index=next_index, born_round=round_no + 1
+            )
+            next_index += len(stamped)
+
+            # --- 5c. D-W4-1 LAYER 2 — THE SEMANTIC DROP, which is the actual
             # guarantee. The barred questions travel through the clusterer as
             # SHADOW MEMBERS, and any new candidate landing in a cluster with a
             # shadow is dropped. A prompt asking a model not to re-propose
@@ -4156,9 +4188,9 @@ async def run_workshop_stage_b(
             # the one distinction it was built to make. That failure is silent and
             # every test stays green.
             drops_before = len(register.get("drops") or [])
-            if mutations:
-                mutations, cluster_reasons = await workshop.cluster_candidates(
-                    candidates=mutations,
+            if stamped:
+                stamped, cluster_reasons = await workshop.cluster_candidates(
+                    candidates=stamped,
                     audited=audited,
                     run_id=run_id,
                     tenant_id=tenant_id,
@@ -4173,17 +4205,6 @@ async def run_workshop_stage_b(
             # A dropped re-proposal means the register is WORKING, so the summary
             # is a NOTE and never a degradation (D-12's alarm-fatigue rule).
             loop_notes.append(workshop_register.drop_summary(register, round_no))
-
-            new_candidates = mutations
-
-            # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
-            # `_stamp_loop_candidates` for why `born_round` is the round the
-            # candidate FIRST COMPETES IN, and `_next_free_index` for why a
-            # collision here would silently detach every carried standing.
-            stamped = _stamp_loop_candidates(
-                new_candidates, start_index=next_index, born_round=round_no + 1
-            )
-            next_index += len(stamped)
 
             # --- 6. EXIT CHECK — all three criteria, gating each other in turn.
             verdict = workshop_loop.exit_verdict(

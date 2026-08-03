@@ -2323,7 +2323,10 @@ async def cluster_candidates(
         index so the rule could not pick one even without that filter;
       * `parents` is still the ordered union that makes clustering D4-safe —
         shadows carry no parent and are excluded from the union outright;
-      * a negative cluster id is still the never-drop sentinel;
+      * a negative cluster id is still the never-drop sentinel, and since CR-02 so
+        is a negative or unusable candidate `index` — an unstamped candidate gets
+        a `__unstamped__:{chunk}:{position}` bucket of its own rather than sharing
+        `__singleton__:-1` with every other unstamped candidate in the round;
       * any exception still degrades to one singleton per candidate, losing nothing;
       * a cluster of shadows alone yields NO representative, so a barred question
         can never re-enter the population it was barred out of.
@@ -2384,12 +2387,46 @@ async def cluster_candidates(
         for chunk_index, (piece, cids) in enumerate(zip(chunks, chunk_ids)):
             for position, candidate in enumerate(piece):
                 cid = cids[position] if position < len(cids) else -1
-                index = candidate.get("index", position)
+                # THE NEVER-DROP SENTINEL NEEDS AN IDENTITY THAT IS ACTUALLY
+                # UNIQUE, AND `.get("index", position)` WAS NOT ONE (CR-02).
+                # `workshop_evolve._stamp_candidate` writes `index: -1` as its
+                # documented placeholder ("the caller renumbers the pool"), so for
+                # every loop-born candidate the key was PRESENT AND POISONED and
+                # the `position` default never fired. All of them keyed to
+                # `__singleton__:-1`, landed in ONE bucket, and only `members[0]`
+                # came back — N research questions silently deleted and reported
+                # by `_reason_cluster_collapse` as an ordinary near-duplicate
+                # merge. A clustering call that times out returns `[-1] * n`, so
+                # the whole round collapsed to one question on a TIMEOUT.
+                #
+                # `workshop_rank` now stamps before it clusters; this is the belt
+                # to that pair of braces, and it makes the invariant three lines
+                # up ("a negative id is still the never-drop sentinel") true for
+                # that caller instead of merely claimed.
+                #
+                # IT FALLS BACK TO A CHUNK-NAMESPACED POSITION, NOT TO THE BARE
+                # POSITION. A bare position collides with a real `index` of the
+                # same number carried by another candidate — trading one silent
+                # deletion for a different one — and positions repeat across
+                # chunks. `__unstamped__` cannot collide with `__singleton__` by
+                # construction, so every unstamped candidate is guaranteed a
+                # bucket of its own, which is what "a candidate the model failed
+                # to place is still ranked" has always meant.
+                raw_index = candidate.get("index")
+                try:
+                    index = -1 if raw_index is None else int(raw_index)
+                except (TypeError, ValueError):
+                    index = -1
+                singleton = (
+                    f"__unstamped__:{chunk_index}:{position}"
+                    if index < 0
+                    else f"__singleton__:{index}"
+                )
                 # Namespacing mirrors `_cluster_keys:380-385`; a negative id is the
                 # never-drop sentinel: "a claim the model failed to place is still
                 # verified" (`grouping.py:66-68`), and here a candidate the model
                 # failed to place is still ranked.
-                key = f"__singleton__:{index}" if cid < 0 else f"{chunk_index}#{cid}"
+                key = singleton if cid < 0 else f"{chunk_index}#{cid}"
                 if key not in members_by_key:
                     members_by_key[key] = []
                     key_order.append(key)
