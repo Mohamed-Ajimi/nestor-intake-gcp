@@ -3761,6 +3761,140 @@ def _stamp_loop_candidates(
     return stamped
 
 
+def _pool_after_bars(
+    population: Sequence[dict[str, Any]],
+    *,
+    barred_keys: Any,
+    client_questions: Sequence[str],
+    key_of: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The pool the NEXT round competes over, with the bars actually applied.
+
+    Returns `(pool, removed, rescued)`. Never raises.
+
+    WHY THIS EXISTS (CR-05). `population` only ever GREW — its single assignment
+    in the loop was `population = population + stamped` — and `select_winners`
+    takes no register. So a candidate barred as WEAK-TWICE stayed in the pool,
+    was critiqued again, ranked again and SELECTED again (`_pick` falls back to
+    `eligible[0]` when no KEEP is eligible), `exit_verdict` counted a WEAK winner,
+    `quality_ok` was never true, and the loop burned all ten rounds — while the
+    bar blocked the one thing that could have repaired it, because round 3's
+    sharpened version clustered onto the barred shadow and was dropped. The
+    measured design and the implementation had diverged: `exit_verdict`'s own
+    docstring describes a bar that REMOVES candidates, and here it removed
+    nothing.
+
+    ------------------------------------------------------------------
+    WHICH LIST IS FILTERED, WHICH IS NOT, AND WHY. READ THIS BEFORE MOVING IT.
+    ------------------------------------------------------------------
+    FILTERED: `population` — and only between rounds. That is the pool the next
+    round critiques, ranks and selects from, so this is the one place where
+    removing a candidate means what the bar says it means.
+
+    NOT FILTERED: `ranked`. `enforce_scope_guard` runs AFTER the loop over the
+    FULL ranked list of the FINAL round, because its documented repair ladder
+    PROMOTES a below-the-cut candidate before it falls back to injecting a client
+    question verbatim. Filtering `ranked` would make a loser unpromotable and
+    silently break the coverage guarantee (T-15.7-09-02). A barred candidate that
+    was still in the pool for the final round therefore still appears in `ranked`
+    and stays promotable — the bar shrinks the pool going forward, it never
+    reaches back into a ranking that has already happened.
+
+    NOT FILTERED: `selected` / the winners. Same reason, one step later.
+
+    ------------------------------------------------------------------
+    COVERAGE OUTRANKS THE BAR, AND THAT IS NOT A SOFTENING.
+    ------------------------------------------------------------------
+    A barred candidate is KEPT when dropping it would leave a client question
+    with nothing at all in the pool. D4 says every client-validated question is
+    researched; a question covered only by a sub-question the workshop could not
+    sharpen is degraded, but a question covered by NOTHING is a scope loss, and
+    the second is strictly worse. This is the same rule and the same failure
+    direction as `critique_candidates`' Guard 1, applied one stage later.
+
+    The rescue pass runs in population order and updates its own coverage set as
+    it goes, so exactly one barred candidate is rescued per otherwise-uncovered
+    question, never all of them.
+
+    AND A FLOOR: if every candidate is barred and there are no client questions
+    to rescue against, the whole population is kept. An empty pool is always a
+    bookkeeping failure and never a correct answer — the same judgement
+    `critique_candidates`' Guard 2 makes about an empty survivor list.
+    """
+    items = [c for c in (population or []) if isinstance(c, dict)]
+    try:
+        keys = {str(k) for k in (barred_keys or set()) if str(k)}
+    except TypeError:
+        keys = set()
+    if not keys or not items:
+        return list(items), [], []
+
+    labels = {str(q) for q in (client_questions or []) if str(q)}
+
+    live: list[dict[str, Any]] = []
+    barred: list[dict[str, Any]] = []
+    for entry in items:
+        try:
+            entry_key = key_of(entry.get("text"))
+        except Exception:  # noqa: BLE001 — bookkeeping never breaks a round
+            entry_key = ""
+        (barred if entry_key and entry_key in keys else live).append(entry)
+
+    if not barred:
+        return list(items), [], []
+
+    covered: set[str] = set()
+    for entry in live:
+        covered.update(p for p in _parents_of(entry) if p in labels)
+
+    rescued: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for entry in barred:
+        parents = [p for p in _parents_of(entry) if p in labels]
+        if any(p not in covered for p in parents):
+            rescued.append(entry)
+            covered.update(parents)
+            log.warning(
+                "workshop_rank: %r is barred but is the only remaining candidate "
+                "for client question %r — it stays in the pool. Coverage outranks "
+                "the bar: a question covered only by a sub-question the workshop "
+                "could not sharpen is degraded, one covered by nothing is a scope "
+                "loss",
+                str(entry.get("text") or "")[:80],
+                next((p for p in parents if p in covered), "")[:80],
+            )
+            continue
+        removed.append(entry)
+
+    keep = {id(entry) for entry in live} | {id(entry) for entry in rescued}
+    pool = [entry for entry in items if id(entry) in keep]
+    if not pool:
+        # The floor. Everything was barred and nothing was rescuable.
+        log.error(
+            "workshop_rank: every one of the %d remaining candidate(s) is barred — "
+            "keeping all of them anyway; an empty candidate pool is always a "
+            "bookkeeping failure and never a correct answer",
+            len(items),
+        )
+        return list(items), [], []
+    return pool, removed, rescued
+
+
+def _note_bars_applied(removed: int, rescued: int, round_no: int) -> str:
+    """CR-05: the bar took effect on the pool. A NOTE — the register is WORKING."""
+    tail = (
+        f" {rescued} barred question(s) stayed because they were the only "
+        f"remaining cover for a client question — coverage outranks the bar."
+        if rescued
+        else ""
+    )
+    return (
+        f"question workshop: after round {round_no}, {removed} barred "
+        f"sub-question(s) left the pool, so the next round competes without "
+        f"them and its winners can improve on the last.{tail}"
+    )
+
+
 async def run_workshop_stage_b(
     *,
     stage_a: dict[str, Any],
@@ -4362,6 +4496,36 @@ async def run_workshop_stage_b(
                     verdict.get("saturation_ok"),
                 )
                 break
+
+            # --- 7. THE BARS TAKE EFFECT ON THE POOL (CR-05). Until this line
+            # `population` only ever grew, so a barred candidate was critiqued,
+            # ranked and selected again every round — `exit_verdict` kept counting
+            # a WEAK winner, `quality_ok` was never true, and the loop burned all
+            # ten rounds while the bar blocked the only repair.
+            #
+            # IT HAPPENS HERE AND NOWHERE ELSE: after the exit check, so a round
+            # that has already ranked and selected is never rewritten underneath
+            # itself, and BEFORE the next round's critique, which is the pool the
+            # bar is supposed to shrink. `ranked` is deliberately untouched —
+            # `enforce_scope_guard` gets the FULL final ranked list so a loser
+            # stays promotable. See `_pool_after_bars` for which list is filtered,
+            # which is not, and why coverage outranks the bar.
+            population, bars_removed, bars_rescued = _pool_after_bars(
+                population,
+                barred_keys={
+                    str(entry.get("key") or "")
+                    for entry in (register.get("barred") or [])
+                    if isinstance(entry, dict)
+                },
+                client_questions=labels,
+                key_of=workshop_register._key,
+            )
+            if bars_removed:
+                loop_notes.append(
+                    _note_bars_applied(
+                        len(bars_removed), len(bars_rescued), round_no
+                    )
+                )
 
             population = population + stamped
 
