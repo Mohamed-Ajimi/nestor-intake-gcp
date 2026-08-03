@@ -350,6 +350,14 @@ _M_EVOLVE = "sharpening the winning research sub-questions"
 #: fails, which is precisely how they were found.
 _M_ASKS = "DISTINCT ASKS it contains"
 _M_GENERATE = "widening and sharpening the set of research questions"
+
+#: The ONE question the scripted generative evolve proposes. It names a metric, a
+#: named market and a year, because `evolve_generative` discards a line that
+#: reads as a non-question — and a discarded line is reported as a degradation.
+_GENERATIVE_QUESTION = (
+    "What were LUKOIL's Benelux retail fuel volumes and unit margins in 2026, "
+    "against the one comparator that already divested"
+)
 _M_DISTILLER = "You are a claim distiller."
 
 #: The 240-character truncation `gates._gate_batch`, `grouping._cluster_block`
@@ -842,23 +850,33 @@ class _ScriptedProvidersAudited:
         ])
 
     def _answer_generative(self, prompt: str) -> str:
-        """PROPOSE NOTHING. An EMPTY fence is a valid, parseable answer.
+        """ONE new question, by the SPECIALISE move.
 
-        WHY EMPTY RATHER THAN A SCRIPTED CANDIDATE, and it is a deliberate choice
-        rather than laziness. `evolve_generative` runs once PER ROUND, so a fake
-        that proposes a new question every round makes the population grow every
-        round — and criterion 3 (SATURATION) is "the last evolve produced no new
-        entrant to the top N". This run would then never satisfy criterion 3, the
-        loop would spend all ten rounds, and this file's cost, call-count and
-        model-list assertions would all move for a reason that is a property of
-        THE FAKE and not of the engine.
+        AN EMPTY FENCE IS NOT A NEUTRAL ANSWER, and this is why it is not used:
+        `evolve_generative` reports a round that produced no usable new question
+        as a D-12 DEGRADATION ("the generative evolve step returned 0 usable new
+        questions this round"). A fake that proposes nothing therefore makes
+        every "a clean run named no degradation" assertion in this file fail —
+        measured, not reasoned about.
 
-        Whether the generative moves produce GOOD questions is a V-02 judgement
-        that `test_workshop_loop.py` covers with scripted moves at the stage-B
-        seam. What this file must prove is that the loop TERMINATES and that the
-        run still completes end to end, which an empty proposal set does exactly.
+        ONE question rather than a stream of them, because `evolve_generative`
+        runs once PER ROUND. New candidates are stamped `born_round = round + 1`,
+        so nothing generated in round 1 can be a winner OF round 1: criterion 3
+        (SATURATION) holds, the loop exits on its own criteria in round 1, and
+        exactly one generative call is made. A fake that proposed on every round
+        would push the run to the cap and move this file's cost, call-count and
+        model-list assertions for a reason that is a property of THE FAKE.
+
+        Whether the five moves produce GOOD questions is a V-02 judgement, and
+        `test_workshop_loop.py` covers it at the stage-B seam with scripted moves.
+        What this file proves is that the loop TERMINATES and the run still
+        completes end to end.
         """
-        return f"{_rank_mod._WINNERS_START}\n{_rank_mod._WINNERS_END}"
+        return "\n".join([
+            _rank_mod._WINNERS_START,
+            f"0 | SPECIALISE | 0 | {_GENERATIVE_QUESTION} | LANGS: nl,en",
+            _rank_mod._WINNERS_END,
+        ])
 
     def _answer_evolve(self, prompt: str) -> str:
         """Echo each winner unchanged inside the fence, with a language tag.
@@ -1883,13 +1901,21 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
     # is the point: a stage that silently stopped being called would otherwise
     # leave this test green.
     for route in (
-        "workshop_orientation", "workshop_candidates", "workshop_critique",
-        "workshop_tournament", "workshop_evolve",
-        # WAVE 3: grouping is a NEW audited call on the critical path of every run.
-        # Naming it here is what stops it silently reverting to the D-W3-2 fallback,
-        # which is a real outcome that costs the whole saving and is only visible in
-        # a degradation reason nobody reads on a green build.
-        "workshop_grouping",
+        "workshop_orientation",
+        # WAVE 4: the ask-split now runs BEFORE candidate generation, and
+        # `evolve_generative` runs once per loop round. Both are new audited calls
+        # on the critical path of every run, and both are named here for the same
+        # reason every other route is: a stage that silently stopped being called
+        # would otherwise leave this test green.
+        "workshop_asks",
+        "workshop_candidates", "workshop_critique",
+        "workshop_tournament",
+        "workshop_generative_evolve",
+        # The once-after-the-loop SHARPENING pass, which is a DIFFERENT call from
+        # the per-round generative one above. Both are listed deliberately: the
+        # two have a stated division of labour, and a loop that routed around
+        # `workshop_evolve` would ship winners with no D7 `langs` at all.
+        "workshop_evolve",
         "deep_research_gemini", "deep_research_openai", "deep_research_claude",
         "merge_tag", "merge_cluster",
         "gate_materiality", "gate_stability",
@@ -1913,6 +1939,19 @@ async def test_the_stubbed_run_made_no_live_calls(monkeypatch):
             f"provider fell back onto `own` — and either way this run bought a "
             f"stream the operator was told was retired."
         )
+    # AND `workshop_grouping`, RETIRED FROM THE DEFAULT PATH THE SAME WAY.
+    #
+    # It was in the REQUIRED list above from Wave 3 until D-W4-4a made
+    # `per-question` grouping the primary path — deterministic, in Python, and
+    # making NO model call. Leaving it in the required list fails the build;
+    # deleting it silently would leave nothing recording that a paid call on the
+    # critical path stopped being made. So it is asserted in the other direction,
+    # and the `topic` path keeps its own three tests, which pin the mode.
+    assert audited.routes.get("workshop_grouping", 0) == 0, (
+        "a paid grouping call was made on the production default. D-W4-4a's "
+        "primary path builds the partition in Python and spends nothing; if this "
+        "fires, either the mode default has moved or a test leaked its override."
+    )
 
     assert audited.calls == sum(audited.routes.values()), (
         f"unaccounted provider call: calls={audited.calls}, "
@@ -2318,10 +2357,17 @@ async def test_the_stubbed_run_dispatches_by_group_not_by_position(monkeypatch):
     be a partition the fallback also produces: the test would pass whether or not
     `divide()` was ever handed stage B's grouping. Two groups over one client question
     is a shape only the grouping step can produce, so the angle count separates them.
+
+    PINNED TO `topic` FOR EXACTLY THAT REASON. The paragraph above already says
+    two groups over one client question is a shape ONLY the LLM grouping step can
+    produce — and since D-W4-4a the production default is the deterministic
+    one-group-per-client-question path, which by construction produces the very
+    one-group answer this test exists to distinguish itself from.
     """
     audited = _SplitGroupingProvidersAudited()
     _result, statements = await _engine_run(
-        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES)
+        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES),
+        grouping_mode=_grouping_mod_qg._GROUPING_MODE_TOPIC,
     )
 
     assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
