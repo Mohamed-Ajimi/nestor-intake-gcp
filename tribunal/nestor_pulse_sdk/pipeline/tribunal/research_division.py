@@ -705,6 +705,51 @@ def _normalise_winners(
     return [e[2] for e in entries]
 
 
+def _compose_parent_assignment(question: Any, brief: Any) -> str:
+    """The ONE rule for a mandate angle's parent assignment. PURE, NEVER RAISES.
+
+    CR-08. A paid provider's assignment must carry BOTH halves:
+
+      1. the CLIENT'S QUESTION, IN FULL AND UNTRUNCATED — it is the thing the
+         client is paying to have answered; and
+      2. the run's brief (`deep_research_prompt`) as CONTEXT, so the question is
+         researched against the client's actual decision.
+
+    Until CR-08 it carried NEITHER in full. `build_mission_brief_from_winners`
+    set `research_prompt` to the 120-char LABEL — `workshop._LABEL_MAX_CHARS`,
+    a value whose own comment calls it "a dict key and the join key", and which
+    nobody recorded was ALSO what a provider reads — and because that value is
+    non-empty, the brief-appending fallback underneath it could never fire. The
+    measured result was an assignment cut off mid-word ("...gegeven de dalende
+    brand") with no brief at all, while the cross-cutting DISCOVERY group — the
+    questions the client never asked — was the only one handed the full brief.
+
+    THERE IS DELIBERATELY NO CHARACTER CAP HERE, and adding one would re-open
+    the defect. The cap that matters is on MODEL-authored text: `_angle_query`
+    truncates every sub-question at `_SUBQ_CHARS`, and that is the injection
+    control. Both halves composed here are non-model input — the client's own
+    question and the engine's own brief — and `_angle_query`'s contract is that
+    the parent assignment comes FIRST and VERBATIM.
+
+    Whitespace IS collapsed on both halves. That is not cosmetic: it is the
+    same register as `_angle_query`'s rule 2, and it stops a client question
+    containing blank lines from forging block structure inside an assignment
+    the engine is supposed to author.
+
+    Spelled ONCE and called from every site that composes this value, so the
+    assignment cannot acquire a second, divergent shape — the same discipline
+    `_text_key` states for the join key ("one rule, spelled once").
+    """
+    try:
+        q = " ".join(str(question or "").split())
+        b = " ".join(str(brief or "").split())
+    except Exception:  # noqa: BLE001 — a hostile __str__ is untrusted input, not an error
+        return ""
+    if q and b:
+        return f"{q}\n\n{b}"
+    return q or b
+
+
 def build_mission_brief_from_winners(
     *,
     winners: Any,
@@ -724,6 +769,17 @@ def build_mission_brief_from_winners(
 
     A winner whose `parent` matches no client question is attached to the FIRST
     client question with one warning: a label typo must never lose a winner.
+
+    `parent_prompts` (CR-08) maps a client-question LABEL to that question's
+    FULL, UNTRUNCATED TEXT. It exists because `client_questions` carries only
+    the labels, and a label is `workshop.normalise_questions`' `text[:120]` —
+    a dict/join key, not something a research provider should ever be asked to
+    answer. The brief is appended here, by `_compose_parent_assignment`, so the
+    shape of a provider's assignment is decided in exactly one place.
+
+    A label with no entry degrades to the label itself, which is precisely the
+    pre-CR-08 behaviour: this parameter can improve an assignment, never break
+    one. `{"taxonomy": ...}` on a dict-shaped value is still honoured.
 
     Never raises. Always returns the five top-level keys.
     """
@@ -791,7 +847,16 @@ def build_mission_brief_from_winners(
             # and a made-up code would be a fabricated fact.
             "taxonomy": taxonomies.get(label, ""),
             "stakes": stakes,
-            "research_prompt": prompts.get(label) or label,
+            # CR-08. `research_prompt` is THE TEXT A PAID PROVIDER READS — every
+            # one of its three consumers says so (`intake.py:25` "self-contained,
+            # multi-line assignment"; `divide()` "the real text divide() sends to
+            # the researcher; the label above is only the display key";
+            # `_divide_from_winners` uses it verbatim as the parent assignment).
+            # It must therefore be the FULL question plus the brief, never the
+            # 120-char label — which is what it silently was until now.
+            "research_prompt": _compose_parent_assignment(
+                prompts.get(label) or label, deep_research_prompt
+            ),
         })
 
     return {
@@ -1211,9 +1276,16 @@ def _divide_from_winners(
         label = (fa.get("focus_area") or "").strip()
         if not label:
             continue
+        # CR-08. The first branch is the PRIMARY path and now carries the full
+        # question + the brief (composed once, in the producer). The second is
+        # the LEGACY guard for an `intake.py`-authored mission_brief that left
+        # `research_prompt` empty — it is unreachable from
+        # `build_mission_brief_from_winners`, which never emits an empty one.
+        # Both go through the SAME composer, so the two cannot disagree about
+        # the shape of an assignment.
         parent_prompt[label] = (
             (fa.get("research_prompt") or "").strip()
-            or (f"{label}: {base_prompt}" if base_prompt else label)
+            or _compose_parent_assignment(label, base_prompt)
         )
 
     ordered = _normalise_winners(winners, labels[0] if labels else "general")
@@ -1565,12 +1637,10 @@ def divide(
         # shape — which leaks the whole brief into every angle and never folds in
         # the user's answers (the under-exploited-intake gap, plan item 1.1).
         research_prompt = (fa.get("research_prompt") or "").strip()
-        if research_prompt:
-            query = research_prompt
-        elif base_prompt:
-            query = f"{label}: {base_prompt}"
-        else:
-            query = label
+        # CR-08: same composer as the winners path. Behaviour is unchanged in
+        # kind (research_prompt wins; otherwise label + brief; otherwise label)
+        # — only the separator is now the single shared one.
+        query = research_prompt or _compose_parent_assignment(label, base_prompt)
 
         angle = {
             "query": query,
