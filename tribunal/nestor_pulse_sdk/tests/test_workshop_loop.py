@@ -1912,3 +1912,138 @@ def test_section8_zero_weak_winners_when_keep_and_weak_both_exist_in_surplus() -
     # NON-VACUITY: the WEAK candidates really existed and really were available
     # to be chosen. Without this the run could have been all-KEEP by accident.
     assert result["counts"]["ranked"] > len(result["winners"])
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 7 — "the raised generation count appears in BOTH places the
+# prompt states it"
+# --------------------------------------------------------------------------
+def test_section8_the_generation_count_appears_in_both_places_the_prompt_states_it() -> None:
+    """THE ONE § 8 ITEM THAT CANNOT BE DRIVEN THROUGH `run_workshop_stage_b`.
+
+    This is stated rather than worked around. The generation prompt is built by
+    `workshop.generate_candidates`, which belongs to STAGE A: stage B receives an
+    already-generated candidate list in its `stage_a` payload and never builds a
+    generation prompt at all. Driving it through stage B is therefore impossible,
+    and dressing it up as a stage-B test would be a test that asserts nothing.
+    So it drives the REAL `generate_candidates` and asserts on the REAL rendered
+    prompt.
+
+    The spec names both sites explicitly — the `Output EXACTLY {n} lines`
+    sentence and the `<your {n} lines go here>` placeholder — and warns that both
+    must change together. In THIS repository they cannot drift: the template
+    writes `{n}` twice but there is exactly one `.format(...)` call feeding it
+    with one `n=` keyword. That is asserted here as a PROPERTY of the rendered
+    text, so the day someone splits it into two constants this fails.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import workshop as _workshop
+
+    seen: list[str] = []
+
+    class _PromptCapture:
+        async def anthropic_messages(self, *, run_id, tenant_id, model, messages,
+                                     max_tokens=None, audit_out=None, **kw):
+            for message in messages:
+                for block in message.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        seen.append(block.get("text") or "")
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(type="text", text="")],
+                stop_reason="end_turn",
+            )
+
+        async def gemini_generate(self, *, run_id, tenant_id, model, contents,
+                                  audit_out=None, **kw):
+            seen.append(contents if isinstance(contents, str) else str(contents))
+            return types.SimpleNamespace(text="", candidates=None)
+
+    asyncio.run(_workshop.generate_candidates(
+        questions=[{"label": CQ1, "text": f"Client question: {CQ1}"}],
+        orientations=[],
+        brief_context="Should the client roll out shop-in-shop coffee?",
+        audited=_PromptCapture(),
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+    ))
+
+    # SELECTED ON THE CANDIDATE OUTPUT LINE, which only this prompt contains.
+    # The ASK-SPLIT prompt that runs first shares both "lines go here" AND
+    # "between the two sentinels", so either of those would have asserted the
+    # generation count against the wrong prompt — and the ask-split prompt states
+    # no candidate count at all, so the test would simply have been wrong.
+    generation = [p for p in seen if "CANDIDATE: <" in p and "| PARENT:" in p]
+    assert generation, "the candidate generation prompt was never rendered"
+    prompt = generation[0]
+
+    count = _workshop._CANDIDATES_PER_QUESTION
+    assert f"Output EXACTLY {count} lines" in prompt, prompt[:400]
+    assert f"<your {count} lines go here>" in prompt, prompt[:400]
+
+    # AND THE PARSE-SIDE BOUND MUST STAY ABOVE THE GENERATION COUNT. "Raise
+    # generation to twelve and leave the cap at ten" silently halves the measured
+    # selection ratio with nothing in the output saying so — one logical value
+    # with two authorities, only one of which got updated.
+    assert _workshop._CANDIDATES_PER_QUESTION_MAX > count
+
+
+# --------------------------------------------------------------------------
+# THE WHOLE-PHASE SHAPE — and the last hop, which is the seam plan 15.7-01
+# opened and this is where it is proven closed.
+# --------------------------------------------------------------------------
+def test_the_whole_phase_shape_three_questions_seventeen_winners_reach_a_provider() -> None:
+    """3 client questions in, 17 winners out, none WEAK, ALL SEVENTEEN dispatched.
+
+    This is the validated `exp11` configuration end to end: a floor of 5 winners
+    per client question plus 2 cross-cutting, prefer-KEEP applied, converging
+    inside the cap — and then the hop nothing else in this phase asserts, through
+    `research_division.divide` to the angles a paid provider is actually sent.
+
+    THAT LAST HOP IS THE POINT. Three separate downstream clips could each
+    truncate the winner set after stage B had already produced a correct 17, and
+    every plan in this phase would still read green: a floor that is quietly cut
+    to 15 on the way to dispatch delivers nothing. The assertion is therefore
+    about the ANGLES, not about the winner list.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal import research_division
+
+    result = _run_stage_b(_ScriptedClient(_script(seed=0)), SEAM_LABELS)
+    winners = result["winners"]
+
+    # -- the shape stage B returns
+    assert len(winners) == 17, len(winners)
+    assert not [
+        w for w in winners
+        if str(w.get("critique") or "").upper() == _WEAK and not w.get("cross_cutting")
+    ]
+    cross = [w for w in winners if w.get("cross_cutting")]
+    assert len(cross) == 2, len(cross)
+    # A floor of five per client question, counted on the parents union so a
+    # cross-cutting winner counts for both questions it spans.
+    for label in SEAM_LABELS:
+        covering = [w for w in winners if label in (w.get("parents") or [])]
+        assert len(covering) >= 5, (label, len(covering))
+    assert result["counts"]["rounds"] < workshop_loop._LOOP_MAX_ROUNDS
+
+    # -- and the last hop: every one of the 17 reaches a provider
+    angles = research_division.divide(
+        {
+            "deep_research_prompt": "Should the client roll out shop-in-shop coffee?",
+            "focus_areas": [],
+        },
+        winners=winners,
+        groups=result["groups"],
+    )
+    assert angles, "no angle was dispatched at all"
+    assert {str(a.get("provider") or "") for a in angles} == set(
+        research_division._D6_STREAMS
+    )
+
+    dispatched = " ".join(str(a.get("query") or "") for a in angles)
+    missing = [
+        w.get("text") for w in winners
+        if str(w.get("text") or "")[:60] not in dispatched
+    ]
+    assert not missing, (
+        f"{len(missing)} of {len(winners)} winners never reached a provider "
+        f"query: {missing}"
+    )
