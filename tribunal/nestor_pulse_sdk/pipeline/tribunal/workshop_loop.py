@@ -279,10 +279,20 @@ def _as_entries(ranked: Any) -> list[dict[str, Any]]:
     module, and an input shape nobody expected is not a licence to start
     deleting positions from a pool that another stage is going to reconcile
     against.
+
+    A `str`/`bytes` INPUT IS NOT A POOL OF ONE-CHARACTER CANDIDATES, IT IS A
+    WRONG-TYPE INPUT, and it returns `[]`. This used to return
+    `[{} for _ in range(len(ranked))]`, so `select_winners("abcdef", ...)`
+    fabricated SIX TEXTLESS CANDIDATES and handed every one of them on as a
+    winner — positions with no question in them, bound for a paid provider. The
+    never-drop rule protects real candidates from being DELETED; it is not a
+    licence to INVENT them, and inventing is the strictly worse failure, because
+    a dropped candidate is still recoverable from the pool while a fabricated one
+    is indistinguishable from a real one downstream. The sibling readers
+    `_clean_labels` and `_parents_of` already return `[]` for a `str` for exactly
+    this reason; this function was the odd one out.
     """
     if ranked is None or isinstance(ranked, (str, bytes, dict)):
-        if isinstance(ranked, (str, bytes)):
-            return [{} for _ in range(len(ranked))]
         return []
     try:
         raw_items = list(ranked)
