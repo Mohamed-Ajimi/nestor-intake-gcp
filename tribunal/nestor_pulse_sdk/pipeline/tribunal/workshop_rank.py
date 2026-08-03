@@ -2294,7 +2294,8 @@ SHARPENING RULE (CRITICAL):
 - Keep the SAME subject and the SAME scope. Make the question specific and
   answerable: name the entity, the geography and the time frame where the
   question already implies them.
-- Do NOT merge two questions into one, and do NOT broaden one.
+
+{scope_rules}
 
 LANGUAGE RULE (search only):
 - Name the ISO 639-1 languages worth SEARCHING in for that question, based on
@@ -2329,6 +2330,61 @@ Questions:
 # attribution"). Index addressing is simultaneously the prompt-injection control
 # (`gates.py:362-371`). A line that does carry a PARENT: segment is read only far
 # enough to log a DEBUG disagreement, then discarded.
+
+
+def _scope_rules_block() -> str:
+    """THE SCOPE RULE, IN ITS TWO HALVES. D-R6. Read this before editing it.
+
+    THIS REPLACES A DELETED SENTENCE, AND THE REPLACEMENT IS THE POINT. Until
+    Wave 4 the sharpening prompt carried one flat line — *"Do NOT merge two
+    questions into one, and do NOT broaden one."* — which D-R6 had to remove
+    because the loop's COMBINE move exists precisely to merge two winning
+    questions into one, and a prompt forbidding that would have made the engine's
+    highest-value measured move unreachable.
+
+    DELETING IT ALONE WOULD HAVE BEEN A LIVE REGRESSION WITH EVERY TEST GREEN.
+    The sentence was also the only thing in this prompt stopping a sharpening
+    pass from BROADENING a mandate question past what the client asked, and D4's
+    guarantee — depth may grow while SCOPE MAY NOT — rests on that. So the rule is
+    not removed, it is SCOPED: the lock still binds MANDATE questions, and
+    DISCOVERY questions are governed by the evidence anchor instead, because a
+    discovered question is allowed to go wherever its admitting source reaches and
+    earns its slot from evidence rather than from the mandate.
+
+    BOTH HALVES COME FROM `workshop_evolve`, NEVER RETYPED HERE. They are the same
+    two constants the GENERATIVE evolve prompt renders, so the sharpening pass and
+    the generation pass cannot drift into two different scope rules — the
+    single-value-two-authorities defect this phase has already paid for twice. A
+    retyped literal drifts silently; an imported constant cannot.
+
+    THE IMPORT IS FUNCTION-LOCAL BECAUSE THE DEPENDENCY IS A CYCLE. `workshop_evolve`
+    imports THIS module at module level (`workshop_evolve.py:123-129` aliases
+    `_flatten`, `_normalise_langs` and four more from it), so a module-level import
+    the other way would not resolve at all. `citations/extractor.py:937` uses the
+    same technique for the same reason.
+
+    Falls back to the mandate half in plain words if the import ever fails: a
+    prompt that silently loses its scope rule is the regression this docstring
+    exists to prevent, so the failure mode keeps the LOCK rather than dropping it.
+    """
+    try:
+        from nestor_pulse_sdk.pipeline.tribunal import (  # noqa: PLC0415
+            workshop_evolve,
+        )
+
+        return f"{workshop_evolve.MANDATE_SCOPE_LOCK}\n\n{workshop_evolve.DISCOVERY_EVIDENCE_ANCHOR}"
+    except Exception as exc:  # noqa: BLE001 — a prompt never loses its scope rule
+        log.warning(
+            "workshop_rank: could not import the scope-rule constants (%r) — "
+            "falling back to the mandate lock in plain words rather than sending "
+            "a sharpening prompt with no scope rule at all",
+            exc,
+        )
+        return (
+            "SCOPE RULE FOR MANDATE QUESTIONS: a new MANDATE question must stay "
+            "inside what the client actually asked. Keep the same subject and the "
+            "same scope as the winning question or questions it was built from."
+        )
 
 
 def _parse_winner_lines(
@@ -2469,6 +2525,7 @@ async def evolve_winners(
 
     prompt = _EVOLVE_PROMPT.format(
         decision_context=_render_decision(decision_context),
+        scope_rules=_scope_rules_block(),
         ignore_instructions=_IGNORE_INSTRUCTIONS,
         langs_max=max(1, _LANGS_MAX),
         run_language=str(run_language or "the language of the questions below"),
