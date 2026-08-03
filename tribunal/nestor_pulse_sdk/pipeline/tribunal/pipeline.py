@@ -1899,11 +1899,66 @@ class TribunalPipeline:
             # 15.2-11's own fallback wording. Order of reasons is not cosmetic here.
             _no_stated_decision = parsed.source == "structured"
 
+        # CR-08 — GIVE THE PROVIDER THE WHOLE QUESTION, NOT THE JOIN KEY.
+        #
+        # `client_questions` above carries LABELS, and a label is
+        # `workshop.normalise_questions`' `text[:120]`. That constant is
+        # documented as "a dict key and the join key"; nobody recorded that it
+        # was also the entire assignment a paid research provider receives. It
+        # was: the assignment reached the provider cut off mid-word, with no
+        # brief, while the cross-cutting discovery group got the full brief.
+        #
+        # The full text still exists here, so hand it over. `parsed.questions`
+        # is the structured seam's own list; `detect_explicit_questions` is the
+        # SAME detector the workshop falls back to, reused rather than
+        # re-written, so both label sources are covered. A label is a PREFIX of
+        # its text by construction, which is the whole matching rule — no copy
+        # of the 120 lives here, so the constant can move without this drifting.
+        _full_texts: list[str] = []
+        for _raw in list(parsed.questions or []) + detect_explicit_questions(brief or ""):
+            _text = str(_raw or "").strip()
+            if _text and _text not in _full_texts:
+                _full_texts.append(_text)
+        parent_prompts: dict[str, str] = {}
+        # EACH FULL TEXT IS CLAIMED AT MOST ONCE. Without this, two client
+        # questions that share their first 120 characters — which is exactly
+        # when `normalise_questions` has to de-duplicate their labels — both
+        # prefix-match the SAME first text, so question 2 would be dispatched
+        # question 1's wording. That is strictly worse than the truncation this
+        # fix exists to remove: it researches a question the client never asked
+        # and silently loses one they did. Consuming the match makes the pairing
+        # positional among the colliding group, which is the correct reading.
+        _unclaimed = list(_full_texts)
+        for _label in client_questions:
+            # `normalise_questions` de-duplicates colliding labels by appending
+            # " (2)", " (3)", ... so a label that matches nothing is retried
+            # once with that suffix removed. If that convention ever changes the
+            # retry simply stops matching and the label stands — i.e. today's
+            # behaviour.
+            _candidates = [_label]
+            if _label.endswith(")") and " (" in _label:
+                _head, _, _tail = _label.rpartition(" (")
+                if _tail[:-1].isdigit() and _head:
+                    _candidates.append(_head)
+            for _cand in _candidates:
+                _hit = next((t for t in _unclaimed if t.startswith(_cand)), "")
+                if _hit and _hit != _label:
+                    parent_prompts[_label] = _hit
+                    _unclaimed.remove(_hit)
+                    break
+        if parent_prompts:
+            log.info(
+                "tribunal_pipeline: %d of %d client question(s) dispatched with "
+                "their full text rather than the 120-char label",
+                len(parent_prompts), len(client_questions),
+            )
+
         mission_brief = build_mission_brief_from_winners(
             winners=winners,
             client_questions=client_questions,
             language=run_language,
             deep_research_prompt=deep_research_prompt,
+            parent_prompts=parent_prompts,
         )
 
         # D-12, reason 1 of 3: everything the workshop itself named. This goes
