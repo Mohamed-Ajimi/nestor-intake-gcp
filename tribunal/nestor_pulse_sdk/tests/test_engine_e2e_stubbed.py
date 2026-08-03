@@ -73,6 +73,7 @@ from nestor_pulse_sdk.pipeline.tribunal import pipeline as _pipeline_mod
 #: discovery frame are all read from production here rather than retyped, so a
 #: rename breaks the script loudly instead of turning an assertion vacuous.
 from nestor_pulse_sdk.pipeline.tribunal import question_grouping as _grouping_mod_qg
+from nestor_pulse_sdk.pipeline.tribunal import workshop_loop as _loop_mod
 from nestor_pulse_sdk.pipeline.tribunal import discovery_bracket as _discovery_mod
 from nestor_pulse_sdk.pipeline.tribunal import tools as _tools_mod
 from nestor_pulse_sdk.pipeline.deep_researchers import degraded_parallel as _degraded_mod
@@ -1296,6 +1297,7 @@ async def _engine_run(
     serpapi_key: Optional[str] = "scripted-key",
     max_winners: int = 1,
     max_group_size: Optional[int] = None,
+    grouping_mode: Optional[str] = None,
 ):
     """Drive the real pipeline against `audited`. Returns (result, statements).
 
@@ -1378,9 +1380,21 @@ async def _engine_run(
     # Keep the run small and DETERMINISTIC. Each value is set explicitly rather
     # than inherited, so a future default change cannot silently make this test
     # slower or differently shaped.
+    # AN OVERRIDE, NOT THE PRODUCTION VALUE. Production derives the Swiss round
+    # count from the field size (`workshop_loop.tournament_rounds`); 1 is forced
+    # here purely to keep the stubbed run small and deterministic.
     monkeypatch.setattr(_rank_mod, "_TOURNAMENT_ROUNDS", 1)
     monkeypatch.setattr(_rank_mod, "_RANK_BACKOFF_S", 0.0)
+    # AN OVERRIDE, NOT THE PRODUCTION VALUE. Production generates
+    # `_CANDIDATES_PER_QUESTION = 12` per client question — the measured
+    # selection ratio. This run uses the scripted candidate list instead.
     monkeypatch.setattr(_workshop_mod, "_CANDIDATES_PER_QUESTION", len(_CANDIDATES))
+    # AN OVERRIDE, NOT THE PRODUCTION VALUE. Production allows the workshop loop
+    # ten rounds; two is enough here and keeps the stubbed run fast. The fake
+    # proposes nothing generatively, so the loop satisfies criterion 3
+    # (SATURATION) and exits on its own criteria well inside this cap — the
+    # bound is a safety net, not the thing being measured.
+    monkeypatch.setattr(_loop_mod, "_LOOP_MAX_ROUNDS", 2)
     # ONE winner -> one research group -> exactly one angle per stream in
     # `_D6_STREAMS`, so every stream in the rotation runs once and contributes its
     # own scripted report once. Since D-W3-3 the rotation is THREE streams
@@ -1402,6 +1416,16 @@ async def _engine_run(
         monkeypatch.setattr(
             _grouping_mod_qg, "_D6_MAX_GROUP_SIZE", int(max_group_size)
         )
+    # THE GROUPING MODE. Left ALONE by default, so every test sees the
+    # PRODUCTION primary path (`per-question`, D-W4-4a) — deterministic, no LLM
+    # call, no spend. The three callers that pass `topic` are the ones asserting
+    # the D-R4 LLM path: its prompt, its partition repair and its four fallback
+    # triggers. On the primary path there is no call, no prompt and no tool at
+    # all, so those tests would assert NOTHING rather than fail — which is
+    # exactly what had happened to them. Same convention, and the same reasoning,
+    # as `test_question_grouping.call_group_winners`.
+    if grouping_mode is not None:
+        monkeypatch.setattr(_grouping_mod_qg, "_GROUPING_MODE", grouping_mode)
     monkeypatch.setattr(_budget_mod, "TRIBUNAL_UNCAPPED", True)
     monkeypatch.setattr(_gates_mod, "_GATE_BACKOFF_S", 0.0)
 
@@ -2384,9 +2408,20 @@ async def test_every_client_question_survives_the_stubbed_run_into_a_group(monke
     test watches the guarantee from the far end — the operator's dispatch feed — so a
     question lost anywhere between the tournament and the angle list fails HERE
     rather than surfacing as a client question with zero claims.
+
+    PINNED TO `topic`, THE LLM GROUPING PATH, because that is the path whose
+    guarantee this asserts. Since D-W4-4a the production default is
+    `per-question`: deterministic, no model call, and therefore no model that
+    could drop a question at all. Left on the default this test would still pass
+    while asserting nothing — `group_partitions` would simply be empty. The
+    primary path's own guarantee is asserted in
+    `test_the_primary_grouping_path_makes_no_model_call` below.
     """
     audited = _ScriptedProvidersAudited()
-    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+    result, statements = await _engine_run(
+        audited, monkeypatch=monkeypatch,
+        grouping_mode=_grouping_mod_qg._GROUPING_MODE_TOPIC,
+    )
 
     assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
     assert audited.group_partitions, (
@@ -2429,9 +2464,16 @@ async def test_a_grouping_failure_degrades_the_stubbed_run_and_does_not_break_it
     question — the deterministic one-group-per-client-question fallback — and must
     say so in words the client reads, because the saving the phase was bought for is
     exactly what was lost.
+
+    PINNED TO `topic`: the four fallback TRIGGERS are properties of the LLM
+    grouping path, and the production default since D-W4-4a makes no call that
+    could fail. On the default there is no failure to degrade from.
     """
     audited = _UngroupedProvidersAudited()
-    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+    result, statements = await _engine_run(
+        audited, monkeypatch=monkeypatch,
+        grouping_mode=_grouping_mod_qg._GROUPING_MODE_TOPIC,
+    )
 
     assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
     assert audited.routes.get("workshop_grouping", 0) == 1, (
@@ -2509,10 +2551,15 @@ async def test_an_incomplete_grouping_partition_is_repaired_not_dropped(monkeypa
     property of a group, and the default 1-winner bound would drop the omitted
     question for an unrelated reason (`_bound_groups_to_winners`) and make the
     assertion pass without the repair ever happening.
+
+    PINNED TO `topic`: `validate_groups`' totality repair only exists because a
+    MODEL proposed the partition. The production default since D-W4-4a builds
+    the partition in Python, where there is nothing incomplete to repair.
     """
     audited = _PartialGroupingProvidersAudited()
     result, statements = await _engine_run(
-        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES)
+        audited, monkeypatch=monkeypatch, max_winners=len(_CANDIDATES),
+        grouping_mode=_grouping_mod_qg._GROUPING_MODE_TOPIC,
     )
 
     assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
@@ -2558,6 +2605,53 @@ async def test_an_incomplete_grouping_partition_is_repaired_not_dropped(monkeypa
     labels = [str(row.get("name") or "").split(" → ", 1)[0] for row in angle_rows]
     assert any(label.startswith(_CLIENT_QUESTION[:48]) for label in labels), (
         f"the client's own question is not the focus area of any angle: {labels}"
+    )
+
+
+async def test_the_primary_grouping_path_makes_no_model_call(monkeypatch):
+    """D-W4-4a's PRIMARY path, on the PRODUCTION default, end to end.
+
+    THE THREE TESTS ABOVE NOW PIN `topic`, AND THIS IS WHAT STOPS THAT FROM
+    BEING A GAP. They assert the D-R4 LLM path's own guarantees; none of them
+    any longer exercises what a real run actually does. This one does, and its
+    claim is the opposite of theirs: on the default there is NO grouping call,
+    NO grouping prompt and NO spend — the partition is built in Python, one
+    group per client question.
+
+    AND IT MUST NOT DEGRADE. `fallback_groups` returns a D-12 degradation
+    sentence describing a step that ran and produced nothing usable; on this path
+    nothing failed, so that sentence is DISCARDED and a plain note is added
+    instead. Emitting it here would mark every healthy run degraded and drain
+    `completed_degraded` of the meaning it has.
+    """
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
+    assert audited.routes.get("workshop_grouping", 0) == 0, (
+        "the production default made a paid grouping call; D-W4-4a's primary "
+        "path is deterministic and spends nothing"
+    )
+    assert not audited.group_prompts, "a grouping prompt was built on the primary path"
+
+    reasons = result["verification_summary"]["degradation_reasons"]
+    assert not [r for r in reasons if r and _GROUPING_FALLBACK_REASON.startswith(r)], (
+        f"the primary path reported itself as a grouping FALLBACK: {reasons}. "
+        f"Nothing failed — this is the configured behaviour — and marking it "
+        f"degraded is the alarm fatigue D-12 rejects."
+    )
+
+    # AND THE RUN STILL RESEARCHED THE CLIENT'S QUESTION. Deterministic grouping
+    # is only acceptable because it loses no scope.
+    items = _division_items(statements)
+    angle_rows = items[1:]
+    assert angle_rows, "no angle reached the feed at all"
+    labels = [str(row.get("name") or "").split(" → ", 1)[0] for row in angle_rows]
+    assert any(label.startswith(_CLIENT_QUESTION[:48]) for label in labels), (
+        f"the client's own question is not the focus area of any angle: {labels}"
+    )
+    assert result["verification_summary"]["distilled"] > 0, (
+        "the primary path dispatched on paper and produced no evidence"
     )
 
 
