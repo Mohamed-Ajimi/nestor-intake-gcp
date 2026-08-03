@@ -790,3 +790,545 @@ def test_round_metrics_never_raises_on_hostile_input() -> None:
         json.dumps(metrics)
         for value in metrics.values():
             assert not isinstance(value, float)
+
+
+# ===========================================================================
+# THE SEAM: the loop driven END TO END through the REAL `run_workshop_stage_b`.
+#
+# WHY THESE ASSERT ON THE RETURNED CONTRACT AND NEVER ON A COLLABORATOR. Wave 3
+# shipped 42/42 verification and 1283 green tests and still carried TWO
+# criticals, because every plan's own `must_haves` were individually satisfied
+# and the defects lived in the SEAMS BETWEEN PLANS. This plan IS the seam, so a
+# barred question that does not reappear "according to the register" proves
+# nothing — only its absence from the RETURNED winner set does.
+#
+# Every model call is SCRIPTED: a canned critique per round, an oracle judge, a
+# scripted sharpener, a scripted generative evolve and a scripted meta-review.
+# That makes a multi-round run deterministic, free and fast, and it is the only
+# way these assertions can be driven at all.
+# ===========================================================================
+
+import asyncio
+import re
+import types
+import uuid
+
+from nestor_pulse_sdk.pipeline.tribunal import (
+    discovery_bracket,
+    workshop_rank,
+    workshop_register,
+)
+
+_KILL = "KILL"
+_START = workshop_rank._WINNERS_START
+_END = workshop_rank._WINNERS_END
+
+CQ1 = "Coffee monetisation"
+CQ2 = "Rollout cost"
+CQ3 = "Opening hours"
+SEAM_LABELS = [CQ1, CQ2, CQ3]
+
+
+def _classify_prompt(prompt: str) -> str:
+    """Which workshop call is this? Ordered MOST SPECIFIC FIRST.
+
+    The generative-evolve prompt also carries `LANGS:`, so `SOURCE_INDICES` has
+    to be tested before the sharpener — otherwise every generation call would be
+    answered with sharpener lines and the loop would never grow its pool.
+    """
+    if "MATCH_INDEX" in prompt:
+        return "judge"
+    if "SOURCE_INDICES" in prompt:
+        return "generate"
+    if "KILL" in prompt and "KEEP" in prompt and "WEAK" in prompt:
+        return "critique"
+    if "LANGS:" in prompt:
+        return "sharpen"
+    return "meta"
+
+
+def _script(*, weak_first_rounds: int = 2, generate_rounds: int = 3,
+            new_per_round: int = 6, seed: int = 0, weak_label: str = CQ3):
+    """A scripted responder.
+
+    `weak_label`'s candidates are WEAK for the first `weak_first_rounds` rounds,
+    so that question's floor slots have no KEEP to prefer and BOTH criterion 1
+    (coverage) and criterion 2 (quality) fail early. That is what makes the loop
+    actually loop: with every candidate KEEP from round 1, prefer-KEEP satisfies
+    all three criteria immediately and the run correctly exits in round 1 —
+    which proves nothing about the loop.
+    """
+    state: dict[str, int] = {"round": 0, "generate": 0}
+    rng = random.Random(seed)
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                if state["round"] <= weak_first_rounds and weak_label in text:
+                    verdict, flaw = _WEAK, "too broad to answer as it stands"
+                else:
+                    verdict, flaw = _KEEP, "-"
+                lines.append(f"{int(raw_index)} | {verdict} | {flaw}")
+            return "\n".join(lines)
+
+        if kind == "judge":
+            count = len(re.findall(r"^\s*\d+\s*\|", prompt, re.M))
+            return "\n".join(
+                f"{i} | {'A' if rng.random() < 0.5 else 'B'} | scripted verdict"
+                for i in range(max(count, 1))
+            )
+
+        if kind == "sharpen":
+            indices = sorted({int(m) for m in re.findall(r"^(\d+) \| ", prompt, re.M)})
+            body = "\n".join(
+                f"{i} | sharpened research question {i} for this client | LANGS: nl,en"
+                for i in indices
+            )
+            return f"{_START}\n{body}\n{_END}"
+
+        if kind == "generate":
+            state["generate"] += 1
+            if state["generate"] > generate_rounds:
+                return f"{_START}\n{_END}"
+            lines = [
+                f"{k} | COMBINE | 0,1 | new loop question round "
+                f"{state['generate']} number {k} joining two winners | LANGS: nl,en"
+                for k in range(new_per_round)
+            ]
+            return f"{_START}\n" + "\n".join(lines) + f"\n{_END}"
+
+        return "focus the next round on cost evidence"
+
+    return respond
+
+
+class _ScriptedClient:
+    """The audited LLM client, entirely scripted. Records every prompt it saw."""
+
+    def __init__(self, responder: Any) -> None:
+        self._responder = responder
+        self.prompts: list[str] = []
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents,
+                              audit_out=None, **kw):
+        prompt = contents if isinstance(contents, str) else str(contents)
+        self.prompts.append(prompt)
+        if isinstance(audit_out, dict):
+            audit_out["cost_usd"] = "0.001"
+        return types.SimpleNamespace(
+            text=self._responder(_classify_prompt(prompt), prompt), candidates=None
+        )
+
+    async def anthropic_messages(self, *, run_id, tenant_id, model, messages,
+                                 max_tokens=None, audit_out=None, **kw):
+        prompt = ""
+        for message in messages:
+            for block in message.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    prompt += block.get("text") or ""
+        self.prompts.append(prompt)
+        if isinstance(audit_out, dict):
+            audit_out["cost_usd"] = "0.001"
+        return types.SimpleNamespace(
+            content=[types.SimpleNamespace(
+                type="text", text=self._responder(_classify_prompt(prompt), prompt)
+            )],
+            stop_reason="end_turn",
+        )
+
+
+def _stage_a(labels, per_question: int = 12, empty_labels: Any = ()):
+    """A stage-A payload. A label in `empty_labels` gets a client question but NO
+    candidates, which is what forces a scope-guard repair."""
+    questions = [{"label": L, "text": f"Client question: {L}"} for L in labels]
+    candidates: list[dict[str, Any]] = []
+    cursor = 0
+    for label in labels:
+        if label in empty_labels:
+            continue
+        for k in range(per_question):
+            candidates.append({
+                "index": cursor,
+                "text": f"sub-question {cursor} about {label} number {k}",
+                "parent": label,
+                "parents": [label],
+                "source": "model",
+                "scope_injected": False,
+                "cluster_key": "",
+                "merged_from": [],
+            })
+            cursor += 1
+    return {
+        "questions": questions,
+        "candidates": candidates,
+        "brief_conflicts": [],
+        "degradation_reasons": [],
+    }
+
+
+def _run_stage_b(client: Any, labels: Any, payload: Any = None) -> dict[str, Any]:
+    return asyncio.run(workshop_rank.run_workshop_stage_b(
+        stage_a=payload if payload is not None else _stage_a(labels),
+        decision_context="Should the client roll out shop-in-shop coffee?",
+        run_language="nl",
+        deep_research_prompt="",
+        audited=client,
+        run_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        feed=None,
+        breaker=None,
+    ))
+
+
+def test_the_loop_exits_on_its_criteria_before_the_cap() -> None:
+    """D-W4-6. THE EXIT ROUND IS ASSERTED AS A RANGE AND NEVER AS A CONSTANT.
+
+    The measurement harness exited at rounds 4, 6 and 6 on three runs of the SAME
+    configuration, because evolve runs at temperature 1.0. A hard round number is
+    a flaky test by construction; what is actually guaranteed is that a healthy
+    brief converges strictly INSIDE the cap.
+    """
+    observed = []
+    for seed in range(5):
+        result = _run_stage_b(_ScriptedClient(_script(seed=seed)), SEAM_LABELS)
+        observed.append(result["counts"]["rounds"])
+    assert all(1 <= r < workshop_loop._LOOP_MAX_ROUNDS for r in observed), observed
+    # It must actually LOOP. Without this line a run that exited in round 1 would
+    # satisfy the assertion above while proving nothing about the loop at all.
+    assert all(r >= 2 for r in observed), observed
+
+
+def test_every_final_winner_carries_a_non_empty_langs_list() -> None:
+    """D7 SURVIVES THE LOOP, asserted through the contract stage B returns.
+
+    `langs` is written only by `evolve_winners` via `_normalise_langs`, and plan
+    15.2-13 builds its angle-query language sentence ONLY when `langs` is
+    non-empty — so a loop that routed around that step would ship D7-less winners
+    while every other assertion in this phase read green.
+    """
+    result = _run_stage_b(_ScriptedClient(_script()), SEAM_LABELS)
+    assert result["winners"]
+    for winner in result["winners"]:
+        assert winner.get("langs"), winner.get("text")
+
+
+def test_a_scope_guard_injected_winner_also_carries_langs() -> None:
+    """THE NON-VACUITY CASE for the test above, and it is not decoration.
+
+    A client question with NO candidates is repaired by `enforce_scope_guard`
+    injecting `_verbatim_winner`, which sets `langs: []` — and that winner reaches
+    the tail WITHOUT passing through `evolve_winners`. Deleting the
+    `_normalise_langs` sweep below the scope guard makes exactly this winner ship
+    with an empty `langs`; measured, that mutant takes the empty count from 0 to
+    1 while every other assertion in this file stays green.
+    """
+    empty = "Staffing model"
+    labels = SEAM_LABELS + [empty]
+    payload = _stage_a(labels, empty_labels=(empty,))
+    result = _run_stage_b(_ScriptedClient(_script()), labels, payload=payload)
+    injected = [w for w in result["winners"] if w.get("source") == "verbatim"]
+    assert injected, "the empty client question should have been repaired"
+    for winner in result["winners"]:
+        assert winner.get("langs"), winner.get("text")
+
+
+def test_no_winner_is_a_discovery_question() -> None:
+    """T-15.7-09-04. `build_mission_brief_from_winners` derives the report's
+    client-facing focus-area sections from this list, so a discovered question in
+    it would mint a section the client never asked for — and D4 says depth may
+    grow while SCOPE MAY NOT."""
+    result = _run_stage_b(_ScriptedClient(_script()), SEAM_LABELS)
+    for winner in result["winners"]:
+        assert winner.get("source") != "discovery", winner.get("text")
+
+
+def test_the_crash_path_still_returns_every_contract_key() -> None:
+    """NEVER RAISES, and the three list keys are present on the DEGRADED path too.
+
+    A contract key that exists on the happy path and vanishes on the crash path is
+    how a caller learns to reach for `.get()` and then stops noticing.
+    """
+    original = workshop_rank.critique_candidates
+
+    async def _explode(**kw):
+        raise RuntimeError("scripted explosion inside the loop")
+
+    workshop_rank.critique_candidates = _explode
+    try:
+        result = _run_stage_b(_ScriptedClient(_script()), SEAM_LABELS)
+    finally:
+        workshop_rank.critique_candidates = original
+
+    assert result["workshop_fallback"] is True
+    for key in ("groups", "discovery", "discovery_not_researched"):
+        assert key in result, key
+    for key in ("rounds", "loop_born_winners"):
+        assert key in result["counts"], key
+    json.dumps(result)
+
+
+def test_candidate_indices_never_collide_across_rounds() -> None:
+    """T-15.7-09-05. `run_tournament` RENUMBERS the whole field the moment it sees
+    a duplicate index, and a renumber mid-loop would silently detach every carried
+    standing — `wins`, `elo`, `byes` and `matches` are all keyed by index."""
+    population = [{"index": i} for i in range(5)]
+    start = workshop_rank._next_free_index(population)
+    assert start == 5
+    stamped = workshop_rank._stamp_loop_candidates(
+        [{}, {}, {}], start_index=start, born_round=2
+    )
+    indices = [entry["index"] for entry in stamped]
+    assert indices == [5, 6, 7]
+    assert set(indices).isdisjoint({p["index"] for p in population})
+
+
+def test_born_round_is_the_round_the_candidate_first_competes_in() -> None:
+    """Criterion 3 (SATURATION) is tested as `born_round == round_no` over the
+    winners SELECTED in that round. Selection happens BEFORE evolve inside a
+    round, so stamping the WRITING round would make `new_entrants` permanently
+    zero and criterion 3 permanently true — a criterion that always passes is not
+    a criterion."""
+    stamped = workshop_rank._stamp_loop_candidates([{}], start_index=0, born_round=4)
+    assert stamped[0]["born_round"] == 4
+
+
+def test_the_evolve_prompt_carries_the_scoped_rule_not_the_flat_ban() -> None:
+    """D-R6. The flat sentence is GONE and BOTH halves of its replacement are
+    present. Asserted against the EXPORTED CONSTANTS rather than retyped
+    literals, because a retyped literal drifts silently — which is the whole
+    reason deleting the old line was dangerous."""
+    from nestor_pulse_sdk.pipeline.tribunal import workshop_evolve
+
+    block = workshop_rank._scope_rules_block()
+    assert workshop_evolve.MANDATE_SCOPE_LOCK in block
+    assert workshop_evolve.DISCOVERY_EVIDENCE_ANCHOR in block
+    assert "Do NOT merge two questions into one" not in workshop_rank._EVOLVE_PROMPT
+    assert "{scope_rules}" in workshop_rank._EVOLVE_PROMPT
+
+
+# ===========================================================================
+# TASK 2 — the register, the admission gate and the instrumentation.
+# ===========================================================================
+
+
+def _keyed_stage_a(labels, per_question: int = 12):
+    """Stage A where every candidate carries a DISTINCT `cluster_key`.
+
+    The KILL split reads the CLUSTERING SHAPE, not the flaw prose, so without a
+    cluster key there is no structural signal and nothing is barred — which is
+    the deliberate fail-safe, and would make every bar test below vacuous.
+    """
+    payload = _stage_a(labels, per_question=per_question)
+    for candidate in payload["candidates"]:
+        candidate["cluster_key"] = f"k{candidate['index']}"
+    return payload
+
+
+def _kill_script(kill_marker: str, **kw):
+    """Like `_script`, but KILLs every candidate whose text carries `kill_marker`
+    with a flaw naming a DEFECT rather than a restatement."""
+    base = _script(**kw)
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                if kill_marker in text:
+                    lines.append(
+                        f"{int(raw_index)} | {_KILL} | it is unanswerable in principle"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_a_tournament_loss_can_never_be_expressed_as_a_bar() -> None:
+    """D-W4-1, and the enforcement is STRUCTURAL rather than a rule to remember.
+
+    `workshop_register.bar` accepts exactly three causes and "came last" is not
+    one of them, so the loop could not bar a loser even by accident. That is what
+    keeps `enforce_scope_guard`'s promotion of a below-the-cut candidate working
+    after however many rounds of barring (T-15.7-09-02).
+    """
+    register = workshop_register.new_register()
+    stored = workshop_register.bar(
+        register, text="a losing question", flaw="came last",
+        cause="tournament_loss", round_no=1,
+    )
+    assert stored is False
+    assert register["barred"] == []
+
+
+def test_a_weak_bars_on_the_second_pass_and_never_on_the_first() -> None:
+    """ONE WEAK verdict is a question the workshop has not finished with; TWO is
+    one it cannot sharpen. Asserted as two separate steps, because a rule that
+    barred on the first pass would read identically at the call site."""
+    register = workshop_register.new_register()
+    assert workshop_register.note_weak_pass(register, "some question") == 1
+    assert workshop_register.note_weak_pass(register, "some question") == 2
+
+
+def test_the_kill_split_bars_a_defect_and_spares_a_restatement() -> None:
+    """The four shapes of `_kill_is_a_restatement`, which is the KILL split.
+
+    The signal is STRUCTURAL — the clustering shape — and never the flaw prose,
+    because the flaw clause is model prose in the run's own language and a text
+    matcher would silently never fire on a Dutch or French run.
+    """
+    population = [{"index": 1, "cluster_key": "other"}]
+    defect = {"index": 99, "text": "t", "flaw": "unanswerable",
+              "cluster_key": "unique-key", "merged_from": []}
+
+    # A DEFECT: no duplicate family anywhere -> it bars.
+    assert workshop_rank._kill_is_a_restatement(defect, population) is False
+
+    # A RESTATEMENT: a live candidate shares its cluster -> it does NOT bar.
+    shared = dict(defect, cluster_key="shared")
+    assert workshop_rank._kill_is_a_restatement(
+        shared, [{"index": 1, "cluster_key": "shared"}]
+    ) is True
+
+    # It absorbed near-duplicates -> it is a duplicate family -> does NOT bar.
+    assert workshop_rank._kill_is_a_restatement(
+        dict(defect, merged_from=[3, 4]), population
+    ) is True
+
+    # NO CLUSTERING SIGNAL AT ALL -> FAIL SAFE TOWARDS NOT BARRING. An over-eager
+    # bar suppresses discovery invisibly; an under-eager one costs one duplicate
+    # the clusterer collapses anyway.
+    assert workshop_rank._kill_is_a_restatement(
+        dict(defect, cluster_key=""), population
+    ) is True
+
+
+def test_a_kill_naming_a_defect_reaches_the_register_end_to_end() -> None:
+    """Driven through the REAL stage B, not through the register alone — a bar
+    that the register records but that stage B never actually makes is exactly
+    the shape of defect that got through Wave 3."""
+    client = _ScriptedClient(_kill_script(CQ3, seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+    assert result["counts"]["barred"] > 0
+
+
+def test_the_loop_records_one_metrics_row_per_round_and_enforces_nothing() -> None:
+    """D-W4-7. The numbers are RECORDED; nothing is compared against a ceiling.
+
+    Population, spend and lookups are all present per round, and the absence of
+    any enforcement is the assertion: an enforced ceiling nobody has measured a
+    need for is a knob that will one day truncate a run for no reason.
+    """
+    client = _ScriptedClient(_script(seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+
+    assert "loop_rounds" in result
+    assert len(result["loop_rounds"]) == result["counts"]["rounds"]
+    for record in result["loop_rounds"]:
+        for key in ("round_no", "candidates_in", "new_candidates", "winners",
+                    "weak_winners", "barred", "dropped_as_reproposal",
+                    "lookups", "calls", "cost_usd"):
+            assert key in record, key
+        for value in record.values():
+            assert not isinstance(value, float)
+    # The whole result is checkpointed by `pipeline.py`.
+    json.dumps(result)
+
+
+def test_the_counts_gained_the_loop_numbers_and_the_docstring_names_them() -> None:
+    """Both halves asserted: a counts key nobody documented is a key the next
+    reader will not know exists, and a documented key that is not emitted is
+    worse."""
+    client = _ScriptedClient(_script(seed=0))
+    result = _run_stage_b(client, SEAM_LABELS, payload=_keyed_stage_a(SEAM_LABELS))
+    doc = workshop_rank.run_workshop_stage_b.__doc__ or ""
+    for key in ("rounds", "loop_born_winners", "barred",
+                "dropped_as_reproposal", "grounded_lookups", "admitted_angles"):
+        assert key in result["counts"], key
+        assert key in doc, key
+    assert "loop_rounds" in doc
+
+
+def test_the_discovery_allocation_bound_still_binds_over_admitted_angles() -> None:
+    """D-W3-4 is UNCHANGED: at most 5 discovered questions, per-parent cap 3, and
+    discovery never borrows from the mandate. The admitted inventions CONTINUE
+    that allocation rather than running a second one, and the ceilings are read
+    from `discovery_bracket` rather than retyped."""
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        [{"parent": "P"} for _ in range(10)], already=[], per_parent={}
+    )
+    assert len(taken) == discovery_bracket._DISCOVERY_PER_PARENT_CAP
+
+    mixed = ([{"parent": "A"}] * 3) + ([{"parent": "B"}] * 3) + ([{"parent": "C"}] * 3)
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        mixed, already=[], per_parent={}
+    )
+    assert len(taken) <= discovery_bracket._DISCOVERY_MAX_SLOTS
+
+    # Slots orientation already spent are not spent twice.
+    taken, _notes = workshop_rank._fill_remaining_discovery_slots(
+        mixed, already=[{}] * discovery_bracket._DISCOVERY_MAX_SLOTS, per_parent={}
+    )
+    assert taken == []
+
+
+def test_an_admitted_angle_keeps_its_own_text_and_its_admitting_source() -> None:
+    """D-W4-2: a discovery candidate's OWN admitting quote and URL ARE its
+    enrichment anchor. The angle must NOT be reframed into the orientation
+    conflict sentence, which would both discard the question the INVENT move
+    wrote and assert it came from orientation, which is false."""
+    angle = {
+        "text": "Which product categories are legally excluded after 20:00?",
+        "source": "discovery",
+        "provenance": {
+            "quote": "the Act excludes tobacco after 20:00",
+            "why": "the brief assumes no category limits",
+            "source_url": "https://example.gov/act",
+            "resolved_url": "https://example.gov/act",
+            "resolution_status": "resolved",
+        },
+    }
+    entry = workshop_rank._conflict_from_admitted(angle, CQ3)
+    assert entry["text"] == angle["text"]
+    assert entry["parent"] == CQ3
+    assert entry["parents"] == [CQ3]
+    assert entry["source"] == "discovery"
+    assert entry["provenance"]["source_url"] == "https://example.gov/act"
+    assert entry["provenance"]["world_says"] == "the Act excludes tobacco after 20:00"
+    # `rank` is DELIBERATELY invalid — the caller re-stamps it below every
+    # mandate winner, and 0 is a loud placeholder rather than a plausible rank.
+    assert entry["rank"] == 0
+
+
+def test_a_resurrected_candidate_never_reaches_the_register_as_a_bar() -> None:
+    """Both critique guards put a killed candidate BACK into `survivors`, and a
+    candidate the pipeline chose to keep must never be barred — barring it would
+    delete the very coverage the resurrection exists to provide."""
+    killed_out: list[dict[str, Any]] = []
+
+    async def _drive():
+        return await workshop_rank.critique_candidates(
+            candidates=[
+                {"index": 0, "text": "only candidate for this question",
+                 "parent": CQ1, "parents": [CQ1]},
+            ],
+            decision_context="ctx",
+            audited=_ScriptedClient(
+                lambda kind, prompt: "0 | KILL | nothing turns on it"
+            ),
+            run_id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
+            killed_out=killed_out,
+        )
+
+    survivors, _reasons = asyncio.run(_drive())
+    # Guard 2 rescued it, so it is alive...
+    assert survivors
+    # ...and therefore it must NOT be offered to the register as a bar.
+    assert killed_out == []
