@@ -835,7 +835,17 @@ def _classify_prompt(prompt: str) -> str:
     The generative-evolve prompt also carries `LANGS:`, so `SOURCE_INDICES` has
     to be tested before the sharpener — otherwise every generation call would be
     answered with sharpener lines and the loop would never grow its pool.
+
+    `CLUSTER_ID` is FIRST and it is the one that unlocks D-W4-1 layer 2. Until it
+    was routed, the near-duplicate clustering call fell through to the `meta`
+    branch, `_parse_cluster_lines` found no parseable line, every candidate got
+    the `-1` singleton sentinel — and THE SEMANTIC DROP NEVER FIRED IN ANY TEST.
+    Every barred-reappearance assertion built on that would have passed because
+    nothing was ever clustered, which is the silently-vacuous shape this whole
+    file exists to avoid.
     """
+    if "CLUSTER_ID" in prompt:
+        return "cluster"
     if "MATCH_INDEX" in prompt:
         return "judge"
     if "SOURCE_INDICES" in prompt:
@@ -1328,7 +1338,329 @@ def test_a_resurrected_candidate_never_reaches_the_register_as_a_bar() -> None:
         )
 
     survivors, _reasons = asyncio.run(_drive())
-    # Guard 2 rescued it, so it is alive...
+    # GUARD 1 rescued it — not Guard 2. The candidate carries a parent label, and
+    # Guard 1 (the per-client-question rescue) therefore fires first and leaves
+    # `survivors` non-empty, so Guard 2's "the population is empty" branch is
+    # never reached. Naming the wrong guard here would be the same error plan 08's
+    # first Guard 2 test made: GUARD 2 IS ONLY REACHABLE WHEN NO CANDIDATE CARRIES
+    # A PARENT LABEL AT ALL. The assertion below holds for either guard, which is
+    # why the test is still sound — but a reader chasing Guard 2 would be looking
+    # at the wrong branch.
     assert survivors
     # ...and therefore it must NOT be offered to the register as a bar.
     assert killed_out == []
+
+
+# ===========================================================================
+# TASK 3 — THE SEAM SUITE. Section 8's Wave 4 row, ITEM BY ITEM, each as its
+# own named test, and each driving the REAL `run_workshop_stage_b` and
+# asserting on THE CONTRACT IT RETURNS.
+#
+# WHY THE END-TO-END FORM IS NON-NEGOTIABLE HERE. Wave 3 shipped 42/42
+# verification and 1283 green tests and still carried TWO CRITICALS — a
+# prompt-injection channel and a silent deletion of client questions — because
+# every plan's own `must_haves` were individually satisfied and both defects
+# lived in the SEAMS BETWEEN PLANS. Plan 09 IS that seam. A barred question that
+# does not reappear "according to the register" proves nothing; only its absence
+# from the RETURNED winner set does.
+#
+# ONE ITEM CANNOT TAKE THIS FORM, and it is called out rather than quietly
+# reshaped: the generation-count item asserts the STAGE A generation prompt,
+# which `run_workshop_stage_b` never builds. See
+# `test_section8_the_generation_count_appears_in_both_places_the_prompt_states_it`.
+# ===========================================================================
+
+
+def _oracle_script(*, strong_newcomer: bool = False, newcomer_strength: int = 999,
+                   generate_rounds: int = 3, new_per_round: int = 6,
+                   weak_first_rounds: int = 0, weak_label: str = CQ3):
+    """A scripted responder whose JUDGE IS AN ORACLE rather than a coin flip.
+
+    Every candidate text carries `STRENGTH=<n>`; the judge reads both sides and
+    always answers the higher one. That makes the tournament DETERMINISTIC and
+    makes "did the better question win?" an assertion rather than a hope — the
+    random judge in `_script` can only support statements about shape.
+
+    With `strong_newcomer` the generative evolve writes candidates at
+    `newcomer_strength`, which is above every seed candidate, so a candidate born
+    in a LATE round is the best in the field and must finish in the top N.
+    """
+    state: dict[str, int] = {"round": 0, "generate": 0}
+
+    def _strength(text: str) -> int:
+        found = re.search(r"STRENGTH=(\d+)", text or "")
+        return int(found.group(1)) if found else 0
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                if state["round"] <= weak_first_rounds and weak_label in text:
+                    verdict, flaw = _WEAK, "too broad to answer as it stands"
+                else:
+                    verdict, flaw = _KEEP, "-"
+                lines.append(f"{int(raw_index)} | {verdict} | {flaw}")
+            return "\n".join(lines)
+
+        if kind == "judge":
+            lines = []
+            for match in re.finditer(
+                r"^\s*(\d+)\s*\|\s*A:\s*(.*?)\s*\|\s*B:\s*(.*)$", prompt, re.M
+            ):
+                index, side_a, side_b = match.group(1), match.group(2), match.group(3)
+                winner = "A" if _strength(side_a) >= _strength(side_b) else "B"
+                lines.append(f"{int(index)} | {winner} | the stronger question")
+            return "\n".join(lines) or "0 | A | the stronger question"
+
+        if kind == "sharpen":
+            # THE SHARPENER MUST PRESERVE `STRENGTH=`. It rewrites every winner's
+            # text, and a rewrite that dropped the marker would make the oracle's
+            # verdict unreadable in the RETURNED winners — the assertion would
+            # then be about the sharpener, not about the tournament.
+            out = []
+            for line in re.findall(r"^(\d+) \| (.*?)(?: \| |$)", prompt, re.M):
+                index, text = int(line[0]), line[1]
+                out.append(
+                    f"{index} | sharpened {text} | LANGS: nl,en"
+                )
+            body = "\n".join(out)
+            return f"{_START}\n{body}\n{_END}"
+
+        if kind == "generate":
+            state["generate"] += 1
+            if state["generate"] > generate_rounds:
+                return f"{_START}\n{_END}"
+            strength = newcomer_strength if strong_newcomer else 5
+            lines = [
+                f"{k} | COMBINE | 0,1 | loop-born question {state['generate']}-{k} "
+                f"STRENGTH={strength} | LANGS: nl,en"
+                for k in range(new_per_round)
+            ]
+            return f"{_START}\n" + "\n".join(lines) + f"\n{_END}"
+
+        return "focus the next round on cost evidence"
+
+    return respond
+
+
+def _strength_stage_a(labels, per_question: int = 12):
+    """Stage A whose candidate texts carry an explicit, distinct `STRENGTH=`.
+
+    Seed strengths run 10..10+per_question, all BELOW `_oracle_script`'s
+    newcomer strength, so a late newcomer reaching the top N cannot be an
+    artefact of a tie.
+    """
+    payload = _keyed_stage_a(labels, per_question=per_question)
+    for position, candidate in enumerate(payload["candidates"]):
+        candidate["text"] = f"{candidate['text']} STRENGTH={10 + position}"
+    return payload
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 1 — "loop exits on saturation before the cap"
+# --------------------------------------------------------------------------
+def test_section8_the_loop_exits_on_saturation_before_the_cap() -> None:
+    """A healthy brief converges on its OWN criteria and never reaches the cap.
+
+    THE EXIT ROUND IS ASSERTED AS A RANGE AND NEVER AS A CONSTANT. Evolve runs at
+    temperature 1.0: the design harness exited at rounds 4, 6 and 6 on three runs
+    of ONE configuration, and this file's scripted stubs measured [3, 3, 3, 3, 3,
+    4] over six seeds. A hard round number is a flaky test by construction; what
+    is actually guaranteed is convergence strictly INSIDE the cap.
+
+    The lower bound matters as much as the upper one. A run that exited in round
+    1 would satisfy "before the cap" while proving nothing about the loop at all,
+    so `>= 2` is asserted separately and for that reason.
+    """
+    cap = workshop_loop._LOOP_MAX_ROUNDS
+    observed = []
+    for seed in range(6):
+        result = _run_stage_b(_ScriptedClient(_script(seed=seed)), SEAM_LABELS)
+        observed.append(result["counts"]["rounds"])
+        # It exited on the CRITERIA, so it carries no cap degradation sentence.
+        cap_sentences = [
+            reason for reason in result["degradation_reasons"]
+            if "round cap" in reason or "could not be sharpened" in reason
+        ]
+        assert not cap_sentences, (seed, cap_sentences)
+
+    assert all(2 <= round_no < cap for round_no in observed), observed
+    # SATURATION is the criterion that closes the loop: the last round it ran
+    # added no NEW candidate to the winner set. Read off the returned
+    # instrumentation rather than re-derived, so the assertion is about what the
+    # run recorded.
+    assert len(result["loop_rounds"]) == result["counts"]["rounds"]
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 2 — "a resurrected candidate does not satisfy QUALITY"
+# --------------------------------------------------------------------------
+def test_section8_a_resurrected_candidate_does_not_satisfy_criterion_two() -> None:
+    """CRITERION 2 IS QUALITY, and until 2026-07-31 three documents said 1.
+
+    That inversion mattered: criterion 1 is COVERAGE, and excluding a resurrected
+    candidate from coverage would break the exact guarantee resurrection exists to
+    provide. Driven END TO END — a critique that kills everything, through the
+    never-drop guard that resurrects, through to a loop that REFUSES TO EXIT and
+    ships at the cap saying why.
+
+    THIS IS GUARD 1, the per-client-question rescue, and it is named because the
+    distinction is a live trap: Guard 2 is only reachable when NO candidate
+    carries a parent label, so any "Guard 2" test built on parented candidates is
+    vacuous. Every candidate here has a parent, so Guard 1 fires and Guard 2 is
+    never entered.
+    """
+    def _kill_everything(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            return "\n".join(
+                f"{int(i)} | {_KILL} | nothing about the decision turns on it"
+                for i, _text in rows
+            )
+        return _script()(kind, prompt)
+
+    result = _run_stage_b(_ScriptedClient(_kill_everything), SEAM_LABELS)
+
+    # It never satisfied criterion 2, so it ran the whole way to the cap...
+    assert result["counts"]["rounds"] == workshop_loop._LOOP_MAX_ROUNDS
+    # ...and it SHIPPED, saying so in a sentence a human reads (D-12: degraded
+    # means honest, not broken).
+    assert result["winners"]
+    # MATCHED ON THE SENTENCE'S OWN PROVENANCE, not on the word "resurrected" —
+    # which is the code's vocabulary and appears nowhere in the operator-facing
+    # sentence `_reason_cap_with_resurrected` actually returns.
+    reasons = " ".join(result["degradation_reasons"])
+    assert "coverage guard" in reasons, result["degradation_reasons"]
+
+    # AND CRITERION 1 STILL HELD. Every client question is still covered — which
+    # is the half that the corrected numbering protects.
+    covered = set()
+    for winner in result["winners"]:
+        covered.update(winner.get("parents") or [])
+    assert set(SEAM_LABELS) <= covered, covered
+
+
+# --------------------------------------------------------------------------
+# § 8 Wave 4, item 3 — "barred questions do not reappear"
+# --------------------------------------------------------------------------
+_BARRED_MARKER = "number 3"
+_REWORDING = "REWORDEDBARRED"
+
+
+def _rewording_script(*, merge_the_rewording: bool):
+    """KILL one candidate as a DEFECT, then re-propose a REWORDING of it.
+
+    `merge_the_rewording` is the NON-VACUITY CONTROL and the reason this helper
+    takes a parameter at all. The semantic drop only fires when the clusterer
+    puts the rewording in the same cluster as the barred SHADOW; with the
+    clusterer answering "every candidate is its own singleton", the rewording
+    survives. Running BOTH ways in one test proves the rewording would have
+    become a winner and that THE BAR is what removed it — rather than it having
+    been absent for some unrelated reason.
+
+    THE JUDGE IS THE ORACLE, NOT THE COIN FLIP, and that is what makes the
+    control decisive. The rewording carries the highest `STRENGTH=` in the field,
+    so on the control run it MUST take a slot; with a random judge its absence
+    would be explainable as "it simply lost", and the control would prove
+    nothing.
+    """
+    base = _oracle_script(weak_first_rounds=2, generate_rounds=3)
+    state: dict[str, int] = {"round": 0}
+
+    def respond(kind: str, prompt: str) -> str:
+        if kind == "critique":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            if rows and int(rows[0][0]) == 0:
+                state["round"] += 1
+            lines = []
+            for raw_index, text in rows:
+                if _BARRED_MARKER in text and CQ1 in text:
+                    # A DEFECT, not a restatement — so the register bars it.
+                    lines.append(
+                        f"{int(raw_index)} | {_KILL} | it is unanswerable in principle"
+                    )
+                elif state["round"] <= 2 and CQ3 in text:
+                    # THE LOOP HAS TO ACTUALLY LOOP FOR THIS TEST TO MEAN
+                    # ANYTHING. Evolve runs AFTER selection, so a run that exits
+                    # in round 1 writes the rewording and stops before it can
+                    # ever compete — the winner-set assertion would then pass
+                    # because the candidate was never a candidate. Keeping one
+                    # client question WEAK for two rounds keeps criterion 2
+                    # failing and the loop running.
+                    lines.append(
+                        f"{int(raw_index)} | {_WEAK} | too broad to answer as it stands"
+                    )
+                else:
+                    lines.append(f"{int(raw_index)} | {_KEEP} | -")
+            return "\n".join(lines)
+
+        if kind == "cluster":
+            rows = re.findall(r"^\s*(\d+)\s*\|\s*(.*)$", prompt, re.M)
+            lines = []
+            for raw_index, text in rows:
+                related = _BARRED_MARKER in text or _REWORDING in text
+                if merge_the_rewording and related:
+                    lines.append(f"{int(raw_index)} | 777")
+                else:
+                    lines.append(f"{int(raw_index)} | {900 + int(raw_index)}")
+            return "\n".join(lines)
+
+        if kind == "generate":
+            # A REWORDING, never the same string — that is the whole point. A
+            # string comparison cannot enforce "or a rewording of it", which is
+            # why D-W4-1 names `cluster_candidates` rather than a comparison.
+            return (
+                f"{_START}\n"
+                f"0 | SPECIALISE | 0 | {_REWORDING} a differently worded take on "
+                f"the very same question STRENGTH=999 | LANGS: nl,en\n"
+                f"{_END}"
+            )
+
+        return base(kind, prompt)
+
+    return respond
+
+
+def test_section8_a_barred_question_does_not_reappear_as_a_winner() -> None:
+    """D-W4-1 END TO END, asserted on the WINNER SET and never on the register.
+
+    A question barred in round 1 is re-proposed as a REWORDING by the scripted
+    evolve, and must not be a winner at the end. That exercises the SEMANTIC
+    DROP — the barred questions travel through the clusterer as shadow members —
+    rather than a string comparison, which could not enforce a rewording ban at
+    all.
+
+    A bar that the register records but that stage B never actually acts on is
+    precisely the shape of defect that got through Wave 3's 42/42 verification.
+    """
+    payload = _strength_stage_a(SEAM_LABELS)
+
+    dropped = _run_stage_b(
+        _ScriptedClient(_rewording_script(merge_the_rewording=True)),
+        SEAM_LABELS,
+        payload=copy.deepcopy(payload),
+    )
+    # The bar was really made...
+    assert dropped["counts"]["barred"] > 0
+    # ...the semantic drop really fired...
+    assert dropped["counts"]["dropped_as_reproposal"] > 0
+    # ...and the REWORDING is not a winner.
+    assert not [
+        w for w in dropped["winners"] if _REWORDING in str(w.get("text") or "")
+    ], [w.get("text") for w in dropped["winners"]]
+
+    # THE NON-VACUITY CONTROL. Same script, same bar, but a clusterer that merges
+    # nothing: the rewording survives all the way into the winner set. Without
+    # this, an assertion that the rewording is absent would pass just as happily
+    # if the evolve step had never proposed it.
+    kept = _run_stage_b(
+        _ScriptedClient(_rewording_script(merge_the_rewording=False)),
+        SEAM_LABELS,
+        payload=copy.deepcopy(payload),
+    )
+    assert [
+        w for w in kept["winners"] if _REWORDING in str(w.get("text") or "")
+    ], "the control run never produced the rewording, so the test above is vacuous"
