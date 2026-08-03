@@ -372,6 +372,53 @@ def _flatten(text: Any, cap: int) -> str:
     return raw[:limit] if limit else ""
 
 
+def _stats_cost(stats: Any, key: str = "cost_usd") -> Decimal:
+    """One stats dict's running cost as a Decimal. Never raises."""
+    if not isinstance(stats, dict):
+        return Decimal("0")
+    return _add_cost(Decimal("0"), stats.get(key))
+
+
+def _accumulate_stats(
+    stats: Any,
+    *,
+    calls: Any = 0,
+    cost: Any = None,
+    unjudged: Any = None,
+) -> None:
+    """ADD one stage's bookkeeping to a caller-owned out-dict. Never raises.
+
+    ACCUMULATE, NEVER ASSIGN (CR-06). `run_tournament` and `critique_candidates`
+    both used to write `stats["calls"] = total`, while every sibling
+    (`workshop_evolve`, `workshop_admission`) accumulates. The Wave 4 loop calls
+    both of them once per round with ONE shared dict, so on a nine-round run the
+    two most call-heavy stages in the engine reported roughly ONE NINTH of their
+    calls and their cost — and `run_tournament`'s early returns wrote nothing at
+    all, leaving the PREVIOUS round's numbers standing as if they were this
+    round's.
+
+    `round_metrics`' own docstring says the recorded number is the only thing
+    that could ever justify a ceiling, and 15.8 exists to produce exactly one
+    measuring run. A number that is wrong by 9x while still looking plausible is
+    the worst possible shape for that.
+
+    Called with zeros on the early-return paths ON PURPOSE: a stage that did no
+    work contributes zero rather than leaving whatever was there before.
+    """
+    if not isinstance(stats, dict):
+        return
+    try:
+        stats["calls"] = int(stats.get("calls") or 0) + int(calls or 0)
+    except (TypeError, ValueError):
+        stats["calls"] = int(stats.get("calls") or 0)
+    stats["cost_usd"] = str(_add_cost(_stats_cost(stats), cost))
+    if unjudged is not None:
+        try:
+            stats["unjudged"] = int(stats.get("unjudged") or 0) + int(unjudged or 0)
+        except (TypeError, ValueError):
+            stats["unjudged"] = int(stats.get("unjudged") or 0)
+
+
 def _parents_of(entry: dict[str, Any]) -> list[str]:
     """The ordered parent labels one candidate / winner covers.
 
@@ -656,6 +703,9 @@ async def critique_candidates(
         stats.setdefault("calls", 0)
         stats.setdefault("cost_usd", "0")
     if not items:
+        # ZERO CONTRIBUTION, WRITTEN (CR-06) — not "nothing written", which under
+        # the old assigning shape left the previous round's numbers standing.
+        _accumulate_stats(stats, calls=0, cost=0)
         return [], []
 
     if not _CRITIQUE_ENABLED:
@@ -665,6 +715,7 @@ async def critique_candidates(
             "unscreened and no call is made",
             len(items),
         )
+        _accumulate_stats(stats, calls=0, cost=0)
         return [_with_critique(c, _KEEP, "") for c in items], []
 
     size = max(1, _CRITIQUE_BATCH)
@@ -726,9 +777,9 @@ async def critique_candidates(
         cost = _add_cost(cost, acc.get("cost_usd"))
         if acc.get("error"):
             failures.append(str(acc["error"]))
-    if isinstance(stats, dict):
-        stats["calls"] = calls
-        stats["cost_usd"] = str(cost)
+    # ACCUMULATE (CR-06). The loop hands this function ONE dict per RUN and calls
+    # it once per ROUND, so assigning here reported the final round only.
+    _accumulate_stats(stats, calls=calls, cost=cost)
 
     survivors: list[dict[str, Any]] = []
     killed = 0
@@ -1900,6 +1951,10 @@ async def run_tournament(
         stats.setdefault("unjudged", 0)
         stats.setdefault("judge_reasons", {})
     if not items:
+        # ZERO CONTRIBUTION, WRITTEN (CR-06). Under the old assigning shape this
+        # path wrote nothing, so the PREVIOUS round's calls, cost and unjudged
+        # count stayed in the dict and were read as if they were this round's.
+        _accumulate_stats(stats, calls=0, cost=0, unjudged=0)
         return [], []
 
     for position, entry in enumerate(items):
@@ -1921,6 +1976,8 @@ async def run_tournament(
             entry["elo"] = round(float(_ELO_START), 2)
             entry["byes"] = 0
             entry["rank"] = position + 1
+        # Zero contribution, written — see the `not items` guard above (CR-06).
+        _accumulate_stats(stats, calls=0, cost=0, unjudged=0)
         return items, []
 
     by_index = {c["index"]: c for c in items}
@@ -2088,10 +2145,21 @@ async def run_tournament(
         reasons.append(_reason_tournament_unjudged(total_unjudged, total_matches))
     if first_failure is not None:
         reasons.append(_reason_tournament_failed(first_failure))
+    # ACCUMULATE (CR-06). The loop hands this function ONE dict per RUN and calls
+    # it once per ROUND, so assigning here reported the final round only — and on
+    # a nine-round run that is about one ninth of the engine's heaviest stage.
+    _accumulate_stats(
+        stats, calls=total_calls, cost=total_cost, unjudged=total_unjudged
+    )
     if isinstance(stats, dict):
-        stats["calls"] = total_calls
-        stats["cost_usd"] = str(total_cost)
-        stats["unjudged"] = total_unjudged
+        # `judge_reasons` IS DELIBERATELY STILL AN ASSIGNMENT, and it is the one
+        # key here that must not accumulate. Its only consumer is the loop's
+        # meta-review, which asks for THIS round's judging clauses; and the key
+        # is `r{tournament_round}:{low}v{high}`, where the round number is the
+        # SWISS round, not the loop round — so entries from two loop rounds
+        # collide on the same key anyway. Accumulating would silently mix rounds
+        # AND overwrite within the mixture. Per-round is both what the consumer
+        # wants and the only shape the key can express.
         stats["judge_reasons"] = judge_reasons
     if isinstance(standings, dict):
         # WRITTEN BACK SORTED AND JSON-SAFE. `seen` is a set and a set has no
@@ -2246,6 +2314,22 @@ def _note_discovery_yielded_its_slot(dropped: int, questions: int) -> str:
         f"itself raised are reported but were not researched this run. The client's "
         f"own questions were researched in full, which is the trade this engine "
         f"makes every time."
+    )
+
+
+def _note_angle_already_bought(suppressed: int, round_no: int) -> str:
+    """CR-03: re-proposed invented angles that were NOT sent to a paid lookup.
+
+    A NOTE, not a degradation (D-12's alarm-fatigue rule): a suppressed
+    re-proposal means the machinery is WORKING and money was saved. It still has
+    to be a sentence rather than a count, because the number is also the signal
+    that the loop is repeating itself rather than exploring.
+    """
+    return (
+        f"question workshop: round {round_no} re-proposed {suppressed} invented "
+        f"angle(s) this run had already looked up, so no second grounded lookup "
+        f"was bought for them and they took no second discovery slot. An angle is "
+        f"paid for once per run."
     )
 
 
@@ -3612,6 +3696,23 @@ def _fill_remaining_discovery_slots(
 
     The ceilings are READ FROM `discovery_bracket`, never redeclared — one set of
     numbers, one authority. Returns `(taken, notes)`.
+
+    IT DEDUPES ON TEXT, MIRRORING `allocate_discovery`'S RULE 5 (CR-03). Without
+    it, the same invented angle re-proposed in a later round appended a SECOND
+    identical entry, and over ten rounds all five discovery slots could hold one
+    question — dispatched as five separate paid research questions. The loop now
+    also refuses to buy a second lookup for an angle it already bought, so this
+    is the braces to that belt; it is here as well because the two guards fail
+    differently and this one is the last thing between a duplicate and dispatch.
+
+    THE KEY IS THE COMPOSED QUESTION TEXT, NOT RULE 5'S
+    `(parent, assumption, world_says)`. `_conflict_from_admitted` writes the
+    INVENT move's own text rather than composing one through
+    `discovery_question_text`'s frame, so the assumption/world-says triple is not
+    this shape's identity — the text is. It is case-folded as well as collapsed,
+    which is STRICTER than Rule 5: a duplicate dropped here costs one discovery
+    slot occupant, a duplicate that gets through costs a whole paid research
+    question, so the failure direction is chosen deliberately.
     """
     notes: list[str] = []
     slots = int(discovery_bracket._DISCOVERY_MAX_SLOTS)
@@ -3620,15 +3721,29 @@ def _fill_remaining_discovery_slots(
     taken: list[dict[str, Any]] = []
     used = len(list(already or []))
     capped = 0
+    duplicated = 0
+
+    def _key(entry: Any) -> str:
+        source = entry.get("text") if isinstance(entry, dict) else entry
+        return discovery_bracket._norm(source).casefold()
+
+    seen: set[str] = {_key(q) for q in (already or [])}
+    seen.discard("")
 
     for entry in admitted_conflicts or []:
         if used + len(taken) >= slots:
             break
+        key = _key(entry)
+        if key and key in seen:
+            duplicated += 1
+            continue
         parent = str(entry.get("parent") or "")
         if counts.get(parent, 0) >= cap:
             capped += 1
             continue
         counts[parent] = counts.get(parent, 0) + 1
+        if key:
+            seen.add(key)
         taken.append(entry)
 
     if capped:
@@ -3636,6 +3751,12 @@ def _fill_remaining_discovery_slots(
             f"question workshop: {capped} admitted invented angle(s) exceeded the "
             f"per-parent maximum of {cap} discovered question(s) and were reported "
             f"rather than researched — discovery never borrows from the mandate."
+        )
+    if duplicated:
+        notes.append(
+            f"question workshop: {duplicated} admitted invented angle(s) repeated a "
+            f"question already holding a discovery slot and were not given a second "
+            f"one, so the freed slot stays available to a genuinely new question."
         )
     return taken, notes
 
@@ -3706,6 +3827,140 @@ def _stamp_loop_candidates(
         cursor += 1
         stamped.append(row)
     return stamped
+
+
+def _pool_after_bars(
+    population: Sequence[dict[str, Any]],
+    *,
+    barred_keys: Any,
+    client_questions: Sequence[str],
+    key_of: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The pool the NEXT round competes over, with the bars actually applied.
+
+    Returns `(pool, removed, rescued)`. Never raises.
+
+    WHY THIS EXISTS (CR-05). `population` only ever GREW — its single assignment
+    in the loop was `population = population + stamped` — and `select_winners`
+    takes no register. So a candidate barred as WEAK-TWICE stayed in the pool,
+    was critiqued again, ranked again and SELECTED again (`_pick` falls back to
+    `eligible[0]` when no KEEP is eligible), `exit_verdict` counted a WEAK winner,
+    `quality_ok` was never true, and the loop burned all ten rounds — while the
+    bar blocked the one thing that could have repaired it, because round 3's
+    sharpened version clustered onto the barred shadow and was dropped. The
+    measured design and the implementation had diverged: `exit_verdict`'s own
+    docstring describes a bar that REMOVES candidates, and here it removed
+    nothing.
+
+    ------------------------------------------------------------------
+    WHICH LIST IS FILTERED, WHICH IS NOT, AND WHY. READ THIS BEFORE MOVING IT.
+    ------------------------------------------------------------------
+    FILTERED: `population` — and only between rounds. That is the pool the next
+    round critiques, ranks and selects from, so this is the one place where
+    removing a candidate means what the bar says it means.
+
+    NOT FILTERED: `ranked`. `enforce_scope_guard` runs AFTER the loop over the
+    FULL ranked list of the FINAL round, because its documented repair ladder
+    PROMOTES a below-the-cut candidate before it falls back to injecting a client
+    question verbatim. Filtering `ranked` would make a loser unpromotable and
+    silently break the coverage guarantee (T-15.7-09-02). A barred candidate that
+    was still in the pool for the final round therefore still appears in `ranked`
+    and stays promotable — the bar shrinks the pool going forward, it never
+    reaches back into a ranking that has already happened.
+
+    NOT FILTERED: `selected` / the winners. Same reason, one step later.
+
+    ------------------------------------------------------------------
+    COVERAGE OUTRANKS THE BAR, AND THAT IS NOT A SOFTENING.
+    ------------------------------------------------------------------
+    A barred candidate is KEPT when dropping it would leave a client question
+    with nothing at all in the pool. D4 says every client-validated question is
+    researched; a question covered only by a sub-question the workshop could not
+    sharpen is degraded, but a question covered by NOTHING is a scope loss, and
+    the second is strictly worse. This is the same rule and the same failure
+    direction as `critique_candidates`' Guard 1, applied one stage later.
+
+    The rescue pass runs in population order and updates its own coverage set as
+    it goes, so exactly one barred candidate is rescued per otherwise-uncovered
+    question, never all of them.
+
+    AND A FLOOR: if every candidate is barred and there are no client questions
+    to rescue against, the whole population is kept. An empty pool is always a
+    bookkeeping failure and never a correct answer — the same judgement
+    `critique_candidates`' Guard 2 makes about an empty survivor list.
+    """
+    items = [c for c in (population or []) if isinstance(c, dict)]
+    try:
+        keys = {str(k) for k in (barred_keys or set()) if str(k)}
+    except TypeError:
+        keys = set()
+    if not keys or not items:
+        return list(items), [], []
+
+    labels = {str(q) for q in (client_questions or []) if str(q)}
+
+    live: list[dict[str, Any]] = []
+    barred: list[dict[str, Any]] = []
+    for entry in items:
+        try:
+            entry_key = key_of(entry.get("text"))
+        except Exception:  # noqa: BLE001 — bookkeeping never breaks a round
+            entry_key = ""
+        (barred if entry_key and entry_key in keys else live).append(entry)
+
+    if not barred:
+        return list(items), [], []
+
+    covered: set[str] = set()
+    for entry in live:
+        covered.update(p for p in _parents_of(entry) if p in labels)
+
+    rescued: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for entry in barred:
+        parents = [p for p in _parents_of(entry) if p in labels]
+        if any(p not in covered for p in parents):
+            rescued.append(entry)
+            covered.update(parents)
+            log.warning(
+                "workshop_rank: %r is barred but is the only remaining candidate "
+                "for client question %r — it stays in the pool. Coverage outranks "
+                "the bar: a question covered only by a sub-question the workshop "
+                "could not sharpen is degraded, one covered by nothing is a scope "
+                "loss",
+                str(entry.get("text") or "")[:80],
+                next((p for p in parents if p in covered), "")[:80],
+            )
+            continue
+        removed.append(entry)
+
+    keep = {id(entry) for entry in live} | {id(entry) for entry in rescued}
+    pool = [entry for entry in items if id(entry) in keep]
+    if not pool:
+        # The floor. Everything was barred and nothing was rescuable.
+        log.error(
+            "workshop_rank: every one of the %d remaining candidate(s) is barred — "
+            "keeping all of them anyway; an empty candidate pool is always a "
+            "bookkeeping failure and never a correct answer",
+            len(items),
+        )
+        return list(items), [], []
+    return pool, removed, rescued
+
+
+def _note_bars_applied(removed: int, rescued: int, round_no: int) -> str:
+    """CR-05: the bar took effect on the pool. A NOTE — the register is WORKING."""
+    tail = (
+        f" {rescued} barred question(s) stayed because they were the only "
+        f"remaining cover for a client question — coverage outranks the bar."
+        if rescued
+        else ""
+    )
+    return (
+        f"question workshop: after round {round_no}, {removed} barred "
+        f"sub-question(s) left the pool, so the next round competes without "
+        f"them and its winners can improve on the last.{tail}"
+    )
 
 
 async def run_workshop_stage_b(
@@ -3949,6 +4204,27 @@ async def run_workshop_stage_b(
             barred_this_round = 0
             dropped_this_round = 0
             lookups_before = int(admission_stats.get("grounded_lookups") or 0)
+            # EVERY ROUND RECORD IS A DELTA, and every one of these `_before`
+            # readings is what makes that true (CR-06). The four stats dicts are
+            # created ONCE PER RUN and every stage accumulates into them, so
+            # reading them raw at the bottom of a round yields the run total to
+            # date, not the round. `lookups` was already written as a delta;
+            # `calls` and `cost_usd` were not, and mixing a per-round number with
+            # a cumulative one in the same record produces something that is
+            # wrong while still looking plausible.
+            calls_before = (
+                int(critique_stats.get("calls") or 0)
+                + int(tourney_stats.get("calls") or 0)
+                + int(generative_stats.get("calls") or 0)
+            )
+            # The SAME three stages the `calls` delta covers. Before this the
+            # round's cost read `generative_stats` alone, so the record's cost
+            # and its call count described different work.
+            cost_before = (
+                _stats_cost(critique_stats)
+                + _stats_cost(tourney_stats)
+                + _stats_cost(generative_stats)
+            )
 
             # --- 1. CRITIQUE the whole current population.
             killed_out: list[dict[str, Any]] = []
@@ -4088,6 +4364,62 @@ async def run_workshop_stage_b(
                 if isinstance(c, dict) and not c.get("pending_admission")
             ]
 
+            # AN ANGLE IS PAID FOR ONCE PER RUN, AND THIS IS THE GATE THAT MAKES
+            # THAT TRUE (CR-03). It sits ABOVE `admit_invented_angles` on purpose:
+            # every layer that used to guard this sat below the spend.
+            #
+            # THE HOLE IT CLOSES, IN BOTH DIRECTIONS. An angle the gate ADMITTED
+            # leaves `new_candidates` for `admitted_angles`, never joins
+            # `population`, is never seen by `cluster_candidates` and never enters
+            # the register — so round 3's prompt had no record it exists, and
+            # re-inventing it bought a SECOND paid grounded lookup and appended a
+            # SECOND identical entry to the discovery slots. And an angle the gate
+            # DROPPED is barred, but the bar's enforcing layer is the semantic drop
+            # inside `cluster_candidates`, WHICH THE INVENT PATH DOES NOT GO
+            # THROUGH — so that half was only ever protected by the prompt, and
+            # `barred_block`'s own docstring says the prompt layer will not hold.
+            #
+            # Identity is `workshop_register._key` — the run's ONE authority on
+            # what counts as the same question (case-folded, whitespace-collapsed,
+            # 600 chars), reused rather than retyped so a bar and this gate can
+            # never disagree about what a re-proposal is.
+            #
+            # WHAT THIS DOES NOT CLOSE, STATED: a REWORDED re-invention. String
+            # identity cannot catch one, and the layer that could — the semantic
+            # drop — is not on this path. That is the standing warning about the
+            # INVENT path bypassing `cluster_candidates`, and it is a separate
+            # change; this gate is the exact-text floor beneath it.
+            if invented:
+                already_bought = {
+                    workshop_register._key(a.get("text"))
+                    for a in admitted_angles
+                    if isinstance(a, dict)
+                }
+                already_bought.discard("")
+                already_bought |= {
+                    str(e.get("key") or "")
+                    for e in (register.get("barred") or [])
+                    if isinstance(e, dict)
+                }
+                already_bought.discard("")
+                fresh = [
+                    c for c in invented
+                    if workshop_register._key(c.get("text")) not in already_bought
+                ]
+                suppressed = len(invented) - len(fresh)
+                if suppressed:
+                    log.info(
+                        "workshop_rank: %d re-proposed invented angle(s) in round "
+                        "%d were not sent to a paid grounded lookup — this run has "
+                        "already bought or barred them",
+                        suppressed,
+                        round_no,
+                    )
+                    loop_notes.append(
+                        _note_angle_already_bought(suppressed, round_no)
+                    )
+                invented = fresh
+
             if invented:
                 admitted, dropped, admission_notes = await workshop_admission.admit_invented_angles(
                     angles=invented,
@@ -4143,7 +4475,39 @@ async def run_workshop_stage_b(
                             _conflict_from_admitted(angle, parent)
                         )
 
-            # --- 5b. D-W4-1 LAYER 2 — THE SEMANTIC DROP, which is the actual
+            # --- 5b. STAMP FIRST. THIS ORDER IS LOAD-BEARING AND IT USED TO BE
+            # THE OTHER WAY ROUND (CR-02).
+            #
+            # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
+            # `_stamp_loop_candidates` for why `born_round` is the round the
+            # candidate FIRST COMPETES IN, and `_next_free_index` for why a
+            # collision here would silently detach every carried standing.
+            #
+            # WHY IT MUST HAPPEN BEFORE THE CLUSTERER AND NOT AFTER. Every
+            # candidate `workshop_evolve` produces carries `index: -1` — its own
+            # documented placeholder, "the caller renumbers the pool" — and
+            # `workshop.cluster_candidates` buckets on
+            # `candidate.get("index", position)`. The key is PRESENT and POISONED,
+            # so the `position` default never fires: with clustering run first,
+            # EVERY loop-born candidate keyed to `__singleton__:-1`, landed in ONE
+            # bucket, and only `members[0]` came back. Six freshly-evolved
+            # questions collapsed to one and the collapse was reported by
+            # `_reason_cluster_collapse` as an ordinary near-duplicate merge —
+            # SILENT DELETION of research questions, indistinguishable from
+            # correct behaviour. Stamping first gives the clusterer the globally
+            # unique indices its bucket key has always assumed.
+            #
+            # `next_index` ADVANCES BY WHAT WAS STAMPED, NOT BY WHAT SURVIVED
+            # CLUSTERING. An index consumed by a candidate the clusterer merged or
+            # the register dropped is BURNED, never handed out again: `merged_from`
+            # records those indices, and reusing one would make a later
+            # candidate's provenance point at a different question.
+            stamped = _stamp_loop_candidates(
+                mutations, start_index=next_index, born_round=round_no + 1
+            )
+            next_index += len(stamped)
+
+            # --- 5c. D-W4-1 LAYER 2 — THE SEMANTIC DROP, which is the actual
             # guarantee. The barred questions travel through the clusterer as
             # SHADOW MEMBERS, and any new candidate landing in a cluster with a
             # shadow is dropped. A prompt asking a model not to re-propose
@@ -4156,9 +4520,9 @@ async def run_workshop_stage_b(
             # the one distinction it was built to make. That failure is silent and
             # every test stays green.
             drops_before = len(register.get("drops") or [])
-            if mutations:
-                mutations, cluster_reasons = await workshop.cluster_candidates(
-                    candidates=mutations,
+            if stamped:
+                stamped, cluster_reasons = await workshop.cluster_candidates(
+                    candidates=stamped,
                     audited=audited,
                     run_id=run_id,
                     tenant_id=tenant_id,
@@ -4173,17 +4537,6 @@ async def run_workshop_stage_b(
             # A dropped re-proposal means the register is WORKING, so the summary
             # is a NOTE and never a degradation (D-12's alarm-fatigue rule).
             loop_notes.append(workshop_register.drop_summary(register, round_no))
-
-            new_candidates = mutations
-
-            # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
-            # `_stamp_loop_candidates` for why `born_round` is the round the
-            # candidate FIRST COMPETES IN, and `_next_free_index` for why a
-            # collision here would silently detach every carried standing.
-            stamped = _stamp_loop_candidates(
-                new_candidates, start_index=next_index, born_round=round_no + 1
-            )
-            next_index += len(stamped)
 
             # --- 6. EXIT CHECK — all three criteria, gating each other in turn.
             verdict = workshop_loop.exit_verdict(
@@ -4216,8 +4569,14 @@ async def run_workshop_stage_b(
                     - lookups_before,
                     calls=int(critique_stats.get("calls") or 0)
                     + int(tourney_stats.get("calls") or 0)
-                    + int(generative_stats.get("calls") or 0),
-                    cost_usd=generative_stats.get("cost_usd") or 0,
+                    + int(generative_stats.get("calls") or 0)
+                    - calls_before,
+                    cost_usd=str(
+                        _stats_cost(critique_stats)
+                        + _stats_cost(tourney_stats)
+                        + _stats_cost(generative_stats)
+                        - cost_before
+                    ),
                 )
             )
 
@@ -4232,6 +4591,36 @@ async def run_workshop_stage_b(
                     verdict.get("saturation_ok"),
                 )
                 break
+
+            # --- 7. THE BARS TAKE EFFECT ON THE POOL (CR-05). Until this line
+            # `population` only ever grew, so a barred candidate was critiqued,
+            # ranked and selected again every round — `exit_verdict` kept counting
+            # a WEAK winner, `quality_ok` was never true, and the loop burned all
+            # ten rounds while the bar blocked the only repair.
+            #
+            # IT HAPPENS HERE AND NOWHERE ELSE: after the exit check, so a round
+            # that has already ranked and selected is never rewritten underneath
+            # itself, and BEFORE the next round's critique, which is the pool the
+            # bar is supposed to shrink. `ranked` is deliberately untouched —
+            # `enforce_scope_guard` gets the FULL final ranked list so a loser
+            # stays promotable. See `_pool_after_bars` for which list is filtered,
+            # which is not, and why coverage outranks the bar.
+            population, bars_removed, bars_rescued = _pool_after_bars(
+                population,
+                barred_keys={
+                    str(entry.get("key") or "")
+                    for entry in (register.get("barred") or [])
+                    if isinstance(entry, dict)
+                },
+                client_questions=labels,
+                key_of=workshop_register._key,
+            )
+            if bars_removed:
+                loop_notes.append(
+                    _note_bars_applied(
+                        len(bars_removed), len(bars_rescued), round_no
+                    )
+                )
 
             population = population + stamped
 
@@ -4520,10 +4909,26 @@ async def run_workshop_stage_b(
             + int(generative_stats.get("calls") or 0)
             + int(meta_stats.get("meta_calls") or 0)
             + int(group_stats.get("calls") or 0)
+            # --- THE ADMISSION GATE AND THE CLUSTERER (CR-07) ---
+            # All five of these numbers were produced and NONE was read, so the
+            # grounded lookups — the loop's only web-grounded paid component, and
+            # the one T-15.7-08-03 names as the denial-of-wallet risk — reported
+            # $0.00 and 0 calls. Each stage keeps its spend under ITS OWN key, the
+            # same way `meta_review` and `group_winners` do, so reading `calls`
+            # here would have silently under-reported every one of them as zero.
+            + int(admission_stats.get("admission_calls") or 0)
+            + int(admission_stats.get("admission_resolver_calls") or 0)
+            + int(admission_stats.get("classify_calls") or 0)
+            + int(cluster_stats.get("calls") or 0)
         )
         cost = Decimal("0")
         for stats in (critique_stats, tourney_stats, evolve_stats, generative_stats):
             cost = _add_cost(cost, stats.get("cost_usd"))
+        # The admission gate's own spend key. `classify_parent` and
+        # `cluster_candidates` record calls but no cost of their own, so there is
+        # nothing further to read for either — stated so a future reader does not
+        # go looking for a key that was never written.
+        cost = _add_cost(cost, admission_stats.get("admission_cost_usd"))
         # The meta-review keeps its spend under its own key, the same way
         # `group_winners` does — reading the wrong key would under-report every
         # meta call as zero, and the budget governor is inert by decision, so the
