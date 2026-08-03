@@ -335,6 +335,20 @@ _M_SECTION = "YOUR ASSIGNMENT: write ONE markdown section"
 _M_WRAP = "Below are the finished body sections"
 _M_CANDIDATES = "CANDIDATE: <one sharp"
 _M_EVOLVE = "sharpening the winning research sub-questions"
+#: WAVE 4's TWO NEW AUDITED CALLS ON THE CRITICAL PATH.
+#:
+#: `_M_ASKS` is the ask-split that now runs BEFORE candidate generation, and
+#: `_M_GENERATE` is `workshop_evolve.evolve_generative` — the per-round
+#: GENERATION step the loop added. Both are separate from `_M_EVOLVE`, which is
+#: still the once-after-the-loop SHARPENING pass; the two evolve calls have a
+#: stated division of labour and answering one with the other's script silently
+#: empties the pool.
+#:
+#: A fake that does not answer these does not merely lose coverage: the prompts
+#: land in `unexpected` and every `assert not audited.unexpected` in this file
+#: fails, which is precisely how they were found.
+_M_ASKS = "DISTINCT ASKS it contains"
+_M_GENERATE = "widening and sharpening the set of research questions"
 _M_DISTILLER = "You are a claim distiller."
 
 #: The 240-character truncation `gates._gate_batch`, `grouping._cluster_block`
@@ -741,6 +755,20 @@ class _ScriptedProvidersAudited:
                 })]
             )
 
+        # ORDERED MOST SPECIFIC FIRST. The ask-split prompt and the candidate
+        # prompt BOTH carry "lines go here" and both end in a fenced block, so
+        # the ask marker has to be tested before the candidate marker.
+        if _M_ASKS in prompt:
+            self._book("workshop_asks")
+            return _FakeMessage(
+                [_FakeTextBlock(self._answer_asks())], stop_reason="end_turn"
+            )
+        if _M_GENERATE in prompt:
+            self._book("workshop_generative_evolve")
+            return _FakeMessage(
+                [_FakeTextBlock(self._answer_generative(prompt))],
+                stop_reason="end_turn",
+            )
         if _M_CANDIDATES in prompt:
             self._book("workshop_candidates")
             return _FakeMessage(
@@ -798,6 +826,38 @@ class _ScriptedProvidersAudited:
         lines += [f"CANDIDATE: {text} | PARENT: {_CLIENT_QUESTION}" for text in _CANDIDATES]
         lines.append(_workshop_mod._CANDIDATES_END)
         return "\n".join(lines)
+
+    def _answer_asks(self) -> str:
+        """ONE ask. This brief carries exactly one client question.
+
+        Splitting it into several asks would change the candidate count and make
+        every downstream count in this file depend on a number the fake invented,
+        rather than on the engine.
+        """
+        return "\n".join([
+            _workshop_mod._ASPECTS_START,
+            f"ASK: 1 | {_CLIENT_QUESTION}",
+            _workshop_mod._ASPECTS_END,
+        ])
+
+    def _answer_generative(self, prompt: str) -> str:
+        """PROPOSE NOTHING. An EMPTY fence is a valid, parseable answer.
+
+        WHY EMPTY RATHER THAN A SCRIPTED CANDIDATE, and it is a deliberate choice
+        rather than laziness. `evolve_generative` runs once PER ROUND, so a fake
+        that proposes a new question every round makes the population grow every
+        round — and criterion 3 (SATURATION) is "the last evolve produced no new
+        entrant to the top N". This run would then never satisfy criterion 3, the
+        loop would spend all ten rounds, and this file's cost, call-count and
+        model-list assertions would all move for a reason that is a property of
+        THE FAKE and not of the engine.
+
+        Whether the generative moves produce GOOD questions is a V-02 judgement
+        that `test_workshop_loop.py` covers with scripted moves at the stage-B
+        seam. What this file must prove is that the loop TERMINATES and that the
+        run still completes end to end, which an empty proposal set does exactly.
+        """
+        return f"{_rank_mod._WINNERS_START}\n{_rank_mod._WINNERS_END}"
 
     def _answer_evolve(self, prompt: str) -> str:
         """Echo each winner unchanged inside the fence, with a language tag.
