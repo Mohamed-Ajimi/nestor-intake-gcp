@@ -559,6 +559,8 @@ async def test_result_matches_the_15_2_13_contract():
         "degradation_reasons",
         "workshop_notes",
         "counts",
+        # WAVE 4 added `loop_rounds` — the per-round ledger the loop writes.
+        "loop_rounds",
     }
     assert result["language"] == "Nederlands"
     assert result["deep_research_prompt"] == "the whole brief, as one prompt"
@@ -584,16 +586,44 @@ async def test_result_matches_the_15_2_13_contract():
         "discovery_cross_cutting",
         "discovery_not_researched",
         "group_coverage_injected",
+        # WAVE 4's six. `rounds` and `loop_born_winners` are the loop's own
+        # accounting; `barred` and `dropped_as_reproposal` are the admission
+        # gate's; `grounded_lookups` and `admitted_angles` are the grounding
+        # stage's. All six are plain ints so the rollup stays JSON-safe.
+        "rounds",
+        "loop_born_winners",
+        "barred",
+        "dropped_as_reproposal",
+        "grounded_lookups",
+        "admitted_angles",
     }
     assert all(isinstance(value, int) for value in result["counts"].values())
     # No Decimal, no UUID, no set anywhere in the contract.
     assert json.loads(json.dumps(result))["counts"]["candidates_in"] == 4
+    # `loop_rounds` IS THE OTHER JSON HAZARD, and the reason it is asserted here
+    # rather than trusted: it is the only part of the contract carrying money.
+    # `cost_usd` is a STRING on purpose — a Decimal serialises to a TypeError and
+    # a float silently loses cents. Round-tripping the WHOLE result above already
+    # covers it, but this names the trap so nobody "tidies" the type.
+    assert isinstance(result["loop_rounds"], list)
+    for entry in result["loop_rounds"]:
+        assert isinstance(entry["round_no"], int)
+        assert isinstance(entry["cost_usd"], str), type(entry["cost_usd"])
     # `groups` is what `divide(..., groups=...)` consumes, so it is never empty
-    # while there is a winner, and its ids are dense from g1.
+    # while there is a winner.
     assert result["groups"]
-    assert [g["group_id"] for g in result["groups"]] == [
-        f"g{i + 1}" for i in range(len(result["groups"]))
+    # MANDATE ids are dense from g1 IN LIST ORDER; the cross-cutting group keeps
+    # `d1`. The previous form asserted density over ALL groups, which contradicts
+    # `_restamp_groups` — it would have gone red the first time a fixture produced
+    # a cross-cutting conflict, and for entirely the wrong reason.
+    mandate_ids = [
+        g["group_id"] for g in result["groups"] if not str(g["group_id"]).startswith("d")
     ]
+    assert mandate_ids == [f"g{i + 1}" for i in range(len(mandate_ids))]
+    discovery_ids = [
+        g["group_id"] for g in result["groups"] if str(g["group_id"]).startswith("d")
+    ]
+    assert discovery_ids in ([], ["d1"]), "there is at most one, and never a d2"
 
 
 async def test_stage_b_never_pauses_and_makes_no_live_call():
@@ -1002,28 +1032,71 @@ def test_the_verbatim_winner_shape_is_one_shape_in_one_place():
     assert set(from_group_guard[0]) == set(from_guard[0])
 
 
-def test_gap_b_an_oversized_host_sheds_riders_never_winners():
+def test_gap_b_an_over_supplied_host_sheds_riders_never_winners():
     """GAP B. When prompt space runs out, DISCOVERY yields — never a winner.
 
-    § 4 requirement 2 caps questions per group because the risk is a provider
-    writing six thin paragraphs instead of one deep report, and D-W3-4 says
-    discovery never borrows from the mandate. So a host of four winners plus two
-    riders at a cap of four keeps all four winners and sheds both riders.
+    REWRITTEN FOR CR-09; THE REQUIREMENT IS UNCHANGED. § 4 requirement 2 still
+    caps questions per group because the risk is a provider writing six thin
+    paragraphs instead of one deep report, and D-W3-4 still says discovery never
+    borrows from the mandate. What changed is WHICH NUMBER ENFORCES IT.
+
+    This test used to drive shedding with `max_size=4` — a TOTAL-SIZE cap that
+    counted winners. That cap was retired because winners alone exhaust it: at the
+    validated configuration a per-question group holds the 5-winner floor plus
+    both cross-cutting winners, so the cap shed every rider and deleted the
+    discovery bracket outright. `max_size` is now READ AND DISCARDED, so the old
+    call sheds nothing and the old assertions could only ever fail.
+
+    Shedding is now the RIDER BUDGET, counted over riders only — which is what
+    makes "never a winner" true by construction instead of by a guard.
     """
     groups, winners = mandate_group(("Q1", 4))
-    riders = [rider(f"a discovered question {i}", "Q1", rank=10 + i) for i in range(2)]
+    riders = [rider(f"a discovered question {i}", "Q1", rank=10 + i) for i in range(4)]
 
     out, shed, notes = question_grouping.attach_discovery_riders(
-        groups, riders, max_size=4
+        groups, riders, max_size=4, max_riders=2
     )
 
-    assert [m["text"] for m in out[0]["members"]] == [w["text"] for w in winners]
-    assert all(m.get("source") != "discovery" for m in out[0]["members"])
+    kept = out[0]["members"]
+    assert [m["text"] for m in kept if m.get("source") != "discovery"] == [
+        w["text"] for w in winners
+    ], "all four winners survive"
     assert len(shed) == 2
-    assert out[0]["riders"] == 0
+    assert all(m.get("source") == "discovery" for m in shed), "a winner was shed"
+    # THE WEAKEST RIDERS GO, and the strongest riders stay — ranks 13 and 12 are
+    # shed, 10 and 11 are kept. Asserted because "sheds two" alone would pass on a
+    # rule that picked arbitrarily.
+    assert sorted(m["rank"] for m in shed) == [12, 13]
+    assert sorted(m["rank"] for m in kept if m.get("source") == "discovery") == [10, 11]
+    assert out[0]["riders"] == 2
     assert notes, "a shed rider is never silent"
     # The client's own question is still fully covered by MEMBERS.
     assert workshop_rank._covered_by_mandate_members(out) == ["Q1"]
+
+
+def test_gap_b_the_winner_count_alone_never_sheds_a_rider():
+    """GAP B's companion — and the CR-09 defect stated directly.
+
+    The rewritten test above CANNOT catch a return to the total-size rule: with
+    four winners and four riders a `len(members)` cap of 7 sheds exactly one rider
+    too, so both rules agree on the observable outcome. Verified by mutation.
+
+    This one separates them. The group is built at the shape that actually broke:
+    seven winners — the 5-winner floor plus the two cross-cutting winners, which
+    ARE parented to a real client label and so land inside a per-question group.
+    Under the retired rule that group was full before a rider arrived. Every rider
+    within budget must now survive regardless of how many winners sit beside it.
+    """
+    groups, winners = mandate_group(("Q1", 7))
+    riders = [rider(f"a discovered question {i}", "Q1", rank=20 + i) for i in range(3)]
+
+    out, shed, _ = question_grouping.attach_discovery_riders(
+        groups, riders, max_size=4, max_riders=3
+    )
+
+    assert shed == [], "a winner count must not be able to shed a rider"
+    assert out[0]["riders"] == 3
+    assert len(out[0]["members"]) == len(winners) + 3
 
 
 def test_discovery_ranks_below_every_winner_after_the_repair_grew_the_list():
