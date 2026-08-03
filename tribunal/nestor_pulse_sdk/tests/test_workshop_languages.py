@@ -1312,16 +1312,57 @@ def test_the_module_exports_everything_its_consumers_code_against():
     )
 
 
-def test_workshop_rank_is_not_edited_by_this_plan():
-    """49. Plan 15.7-09 owns the deletion of the old scope-lock sentence.
+def test_workshop_rank_keeps_the_scoped_lock_and_the_function_local_import():
+    """49. NARROWED, NOT RETIRED — and this is the whole reason it was rewritten.
 
-    Asserted so the two plans cannot race on one file: the old sentence is STILL
-    THERE, and the new module supplies the scoped replacement alongside it rather
-    than in place of it.
+    THE ORIGINAL PREMISE HAS BEEN SPENT. This guard was written by plan 15.7-06 to
+    stop two plans racing on one file while plan 15.7-09's edit was still
+    outstanding, so it asserted that the OLD flat sentence — "Do NOT merge two
+    questions into one, and do NOT broaden one." — was STILL THERE, and that
+    `evolve_generative` appeared nowhere in `workshop_rank.py`. Plan 15.7-09 is
+    the sanctioned editor of both, and Task 1 made exactly those two changes.
+
+    A scope guard that goes red on sanctioned code must be NARROWED to the
+    intent that survives, never deleted: deleting it would retire a real control
+    along with a stale assertion. Two things it was protecting are still true and
+    are now asserted directly:
+
+      1. THE SCOPE LOCK STILL EXISTS, in its SCOPED form. D-R6 replaced a flat ban
+         with a mandate-bracket rule; a careless deletion would have removed the
+         D4 guarantee altogether, so the replacement's presence is the assertion.
+      2. `workshop_evolve` IS STILL IMPORTED FUNCTION-LOCALLY. That was always the
+         real control — `workshop_evolve` imports `workshop_rank`, so a
+         module-level import the other way is an import cycle. It is now checked
+         STRUCTURALLY with `ast` rather than by the absence of a substring, which
+         the phase-base version could only do because the name was absent
+         entirely.
     """
-    assert "Do NOT merge two questions into one, and do NOT broaden one." in _RANK_SRC
-    assert "evolve_generative" not in _RANK_SRC, (
-        "workshop_rank must import this module FUNCTION-LOCALLY (plan 15.7-09), "
-        "never at module level — this module imports workshop_rank"
+    # 1. The flat ban is gone and the scoped rule replaced it.
+    assert (
+        "Do NOT merge two questions into one, and do NOT broaden one."
+        not in _RANK_SRC
+    ), "the flat scope ban is back; D-R6 replaced it with a mandate-bracket rule"
+    assert "MANDATE_SCOPE_LOCK" in _RANK_SRC, (
+        "the scope lock was DELETED rather than SCOPED — D4's mandate guarantee "
+        "depends on it, and a bare deletion removes it silently"
+    )
+
+    # 2. The import is function-local. Asserted on the parse tree: a module-level
+    #    `from ... import workshop_evolve` is the cycle, and only its POSITION
+    #    distinguishes it from the legitimate one inside the function.
+    tree = ast.parse(_RANK_SRC)
+    module_level = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        for alias in (node.names or [])
+    }
+    assert "workshop_evolve" not in module_level, (
+        "workshop_rank imports workshop_evolve AT MODULE LEVEL — that is an "
+        "import cycle, because workshop_evolve imports workshop_rank"
+    )
+    assert "workshop_evolve" in _RANK_SRC, (
+        "the loop no longer reaches workshop_evolve at all, so the generative "
+        "evolve step is not wired in"
     )
     assert "import workshop_rank" in _EVOLVE_SRC or "workshop_rank," in _EVOLVE_SRC
