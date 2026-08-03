@@ -2015,8 +2015,36 @@ def test_the_whole_phase_shape_three_questions_seventeen_winners_reach_a_provide
         w for w in winners
         if str(w.get("critique") or "").upper() == _WEAK and not w.get("cross_cutting")
     ]
-    cross = [w for w in winners if w.get("cross_cutting")]
-    assert len(cross) == 2, len(cross)
+    # NOT A COUNT. `_CROSS_CUTTING_SLOTS` reserves 2 SLOTS; it does not bound how
+    # many winners carry the flag, because a cross-cutting candidate can also win
+    # a per-question floor slot on merit. Measured over 12 seeds of this same
+    # script the count runs 0..8 — `== 2` was a hard number on a value that was
+    # never pinned, and it only ever read 2 because clustering was inert and five
+    # of every six loop-born candidates were being silently deleted (CR-02).
+    # The slot arithmetic is pinned where it can be isolated, on hand-built pools:
+    # `test_select_winners_returns_seventeen_...` and
+    # `test_select_winners_recognises_a_two_label_span_as_cross_cutting`.
+    #
+    # WHAT THIS TEST CAN PIN AND NOTHING ELSE CAN: that a two-client-question span
+    # is EARNED. `cluster_candidates` unions `parents` across merged members, and
+    # since CR-02 that union is live for loop-born candidates for the first time.
+    # An over-merge would show up here as a winner claiming two client questions
+    # with no provenance for the second — inflating cross-cutting AND losing
+    # per-question specificity. That is the regression worth a test.
+    for w in winners:
+        parents = w.get("parents") or []
+        assert parents, w.get("text")
+        assert set(parents) <= set(SEAM_LABELS) | {workshop_loop._DISCOVERY_PARENT}, parents
+        if len([p for p in parents if p in SEAM_LABELS]) >= 2:
+            # a near-duplicate collapse, or an evolve join — never nowhere
+            assert w.get("merged_from") or w.get("source_indices"), (w.get("index"), parents)
+    for w in winners:
+        if w.get("cross_cutting"):
+            assert workshop_loop._is_cross_cutting(w, SEAM_LABELS), w.get("parents")
+    # NON-VACUITY: the traceability rule above is not satisfied by everything
+    # simply being cross-cutting.
+    assert [w for w in winners
+            if len([p for p in (w.get("parents") or []) if p in SEAM_LABELS]) == 1]
     # A floor of five per client question, counted on the parents union so a
     # cross-cutting winner counts for both questions it spans.
     for label in SEAM_LABELS:
