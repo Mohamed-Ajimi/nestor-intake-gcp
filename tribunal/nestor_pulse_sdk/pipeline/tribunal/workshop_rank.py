@@ -2249,6 +2249,22 @@ def _note_discovery_yielded_its_slot(dropped: int, questions: int) -> str:
     )
 
 
+def _note_angle_already_bought(suppressed: int, round_no: int) -> str:
+    """CR-03: re-proposed invented angles that were NOT sent to a paid lookup.
+
+    A NOTE, not a degradation (D-12's alarm-fatigue rule): a suppressed
+    re-proposal means the machinery is WORKING and money was saved. It still has
+    to be a sentence rather than a count, because the number is also the signal
+    that the loop is repeating itself rather than exploring.
+    """
+    return (
+        f"question workshop: round {round_no} re-proposed {suppressed} invented "
+        f"angle(s) this run had already looked up, so no second grounded lookup "
+        f"was bought for them and they took no second discovery slot. An angle is "
+        f"paid for once per run."
+    )
+
+
 def _note_scope_promoted(label: str) -> str:
     return (
         f"question workshop: client question '{label[:80]}' had no winner in the "
@@ -3612,6 +3628,23 @@ def _fill_remaining_discovery_slots(
 
     The ceilings are READ FROM `discovery_bracket`, never redeclared — one set of
     numbers, one authority. Returns `(taken, notes)`.
+
+    IT DEDUPES ON TEXT, MIRRORING `allocate_discovery`'S RULE 5 (CR-03). Without
+    it, the same invented angle re-proposed in a later round appended a SECOND
+    identical entry, and over ten rounds all five discovery slots could hold one
+    question — dispatched as five separate paid research questions. The loop now
+    also refuses to buy a second lookup for an angle it already bought, so this
+    is the braces to that belt; it is here as well because the two guards fail
+    differently and this one is the last thing between a duplicate and dispatch.
+
+    THE KEY IS THE COMPOSED QUESTION TEXT, NOT RULE 5'S
+    `(parent, assumption, world_says)`. `_conflict_from_admitted` writes the
+    INVENT move's own text rather than composing one through
+    `discovery_question_text`'s frame, so the assumption/world-says triple is not
+    this shape's identity — the text is. It is case-folded as well as collapsed,
+    which is STRICTER than Rule 5: a duplicate dropped here costs one discovery
+    slot occupant, a duplicate that gets through costs a whole paid research
+    question, so the failure direction is chosen deliberately.
     """
     notes: list[str] = []
     slots = int(discovery_bracket._DISCOVERY_MAX_SLOTS)
@@ -3620,15 +3653,29 @@ def _fill_remaining_discovery_slots(
     taken: list[dict[str, Any]] = []
     used = len(list(already or []))
     capped = 0
+    duplicated = 0
+
+    def _key(entry: Any) -> str:
+        source = entry.get("text") if isinstance(entry, dict) else entry
+        return discovery_bracket._norm(source).casefold()
+
+    seen: set[str] = {_key(q) for q in (already or [])}
+    seen.discard("")
 
     for entry in admitted_conflicts or []:
         if used + len(taken) >= slots:
             break
+        key = _key(entry)
+        if key and key in seen:
+            duplicated += 1
+            continue
         parent = str(entry.get("parent") or "")
         if counts.get(parent, 0) >= cap:
             capped += 1
             continue
         counts[parent] = counts.get(parent, 0) + 1
+        if key:
+            seen.add(key)
         taken.append(entry)
 
     if capped:
@@ -3636,6 +3683,12 @@ def _fill_remaining_discovery_slots(
             f"question workshop: {capped} admitted invented angle(s) exceeded the "
             f"per-parent maximum of {cap} discovered question(s) and were reported "
             f"rather than researched — discovery never borrows from the mandate."
+        )
+    if duplicated:
+        notes.append(
+            f"question workshop: {duplicated} admitted invented angle(s) repeated a "
+            f"question already holding a discovery slot and were not given a second "
+            f"one, so the freed slot stays available to a genuinely new question."
         )
     return taken, notes
 
@@ -4087,6 +4140,62 @@ async def run_workshop_stage_b(
                 c for c in new_candidates
                 if isinstance(c, dict) and not c.get("pending_admission")
             ]
+
+            # AN ANGLE IS PAID FOR ONCE PER RUN, AND THIS IS THE GATE THAT MAKES
+            # THAT TRUE (CR-03). It sits ABOVE `admit_invented_angles` on purpose:
+            # every layer that used to guard this sat below the spend.
+            #
+            # THE HOLE IT CLOSES, IN BOTH DIRECTIONS. An angle the gate ADMITTED
+            # leaves `new_candidates` for `admitted_angles`, never joins
+            # `population`, is never seen by `cluster_candidates` and never enters
+            # the register — so round 3's prompt had no record it exists, and
+            # re-inventing it bought a SECOND paid grounded lookup and appended a
+            # SECOND identical entry to the discovery slots. And an angle the gate
+            # DROPPED is barred, but the bar's enforcing layer is the semantic drop
+            # inside `cluster_candidates`, WHICH THE INVENT PATH DOES NOT GO
+            # THROUGH — so that half was only ever protected by the prompt, and
+            # `barred_block`'s own docstring says the prompt layer will not hold.
+            #
+            # Identity is `workshop_register._key` — the run's ONE authority on
+            # what counts as the same question (case-folded, whitespace-collapsed,
+            # 600 chars), reused rather than retyped so a bar and this gate can
+            # never disagree about what a re-proposal is.
+            #
+            # WHAT THIS DOES NOT CLOSE, STATED: a REWORDED re-invention. String
+            # identity cannot catch one, and the layer that could — the semantic
+            # drop — is not on this path. That is the standing warning about the
+            # INVENT path bypassing `cluster_candidates`, and it is a separate
+            # change; this gate is the exact-text floor beneath it.
+            if invented:
+                already_bought = {
+                    workshop_register._key(a.get("text"))
+                    for a in admitted_angles
+                    if isinstance(a, dict)
+                }
+                already_bought.discard("")
+                already_bought |= {
+                    str(e.get("key") or "")
+                    for e in (register.get("barred") or [])
+                    if isinstance(e, dict)
+                }
+                already_bought.discard("")
+                fresh = [
+                    c for c in invented
+                    if workshop_register._key(c.get("text")) not in already_bought
+                ]
+                suppressed = len(invented) - len(fresh)
+                if suppressed:
+                    log.info(
+                        "workshop_rank: %d re-proposed invented angle(s) in round "
+                        "%d were not sent to a paid grounded lookup — this run has "
+                        "already bought or barred them",
+                        suppressed,
+                        round_no,
+                    )
+                    loop_notes.append(
+                        _note_angle_already_bought(suppressed, round_no)
+                    )
+                invented = fresh
 
             if invented:
                 admitted, dropped, admission_notes = await workshop_admission.admit_invented_angles(
