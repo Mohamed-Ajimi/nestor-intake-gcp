@@ -1315,6 +1315,7 @@ async def _engine_run(
     serpapi_key: Optional[str] = "scripted-key",
     max_winners: int = 1,
     max_group_size: Optional[int] = None,
+    max_riders: Optional[int] = None,
     grouping_mode: Optional[str] = None,
 ):
     """Drive the real pipeline against `audited`. Returns (result, statements).
@@ -1426,13 +1427,26 @@ async def _engine_run(
     # mandate member that is not among the N strongest winners.
     monkeypatch.setattr(_division_mod, "_D6_MAX_WINNERS", int(max_winners))
     # `max_group_size` is left ALONE unless a caller asks, so the production default
-    # is what every other test sees. The one caller that lowers it needs the size cap
-    # to BITE, and D-W3-4 says discovery is what yields when prompt space runs out —
-    # a winner is never shed. Set as a module attribute for the reason the block above
-    # gives: the constant is resolved at import time from the environment.
+    # is what every other test sees. It bounds `clamp_groups`, and NOTHING ELSE —
+    # see `max_riders` directly below. Set as a module attribute for the reason the
+    # block above gives: the constant is resolved at import time from the environment.
     if max_group_size is not None:
         monkeypatch.setattr(
             _grouping_mod_qg, "_D6_MAX_GROUP_SIZE", int(max_group_size)
+        )
+    # THE KNOB THAT ACTUALLY GOVERNS SHEDDING, and the reason it is a separate one.
+    # `attach_discovery_riders` used to shed while `len(members) > max_size`, so a
+    # caller lowered `max_group_size` to make the cap bite. CR-09 replaced that with
+    # a RIDER BUDGET: `max_size` is still accepted, is explicitly discarded, and NO
+    # LONGER BINDS — a group full of winners must never shed the rider it just
+    # attached. Steering shedding through `max_group_size` therefore silently stopped
+    # building the scenario at all, which is exactly how the shed test below started
+    # asserting against a run where nothing was shed. Production passes only
+    # `max_size`, so the effective budget is always `_D6_MAX_RIDERS_PER_GROUP`; a test
+    # that wants the shed must lower THAT.
+    if max_riders is not None:
+        monkeypatch.setattr(
+            _grouping_mod_qg, "_D6_MAX_RIDERS_PER_GROUP", int(max_riders)
         )
     # THE GROUPING MODE. Left ALONE by default, so every test sees the
     # PRODUCTION primary path (`per-question`, D-W4-4a) — deterministic, no LLM
@@ -2811,7 +2825,7 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
 ):
     """The other half of `annotate_conflicts`' contract, end to end.
 
-    The size cap is lowered so the ride-along has no room. D-W3-4: discovery NEVER
+    The RIDER BUDGET is lowered so the ride-along has no room. D-W3-4: discovery NEVER
     borrows from the mandate, so DISCOVERY is what yields — a winner is never shed and
     a rider never displaces a client question's sub-question. The question still
     reaches the client, because a conflict with no `researched_as` renders as a plain
@@ -2821,13 +2835,29 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
     ANNOTATING IT ANYWAY WOULD BE THE LIE. It would tell the client a question was
     researched when no provider was ever asked it — and that document is the Art. 12
     audit trail.
+
+    IT IS `max_riders`, NOT `max_group_size`, AND THAT IS THE WHOLE HISTORY OF THIS
+    TEST. It used to lower `max_group_size`, because `attach_discovery_riders` once
+    shed while `len(members) > max_size`. CR-09 replaced that total-size cap with a
+    rider budget precisely so that a group already full of WINNERS cannot shed the
+    rider it just attached — `max_size` is now accepted, discarded, and non-binding.
+    The knob kept steering, the scenario silently stopped happening, and this test
+    began asserting "nothing was shed" against a run in which the rider had ridden
+    along perfectly correctly. The assertions below are unchanged; only the knob is.
+
+    THE THREE GUARDS AGAINST THAT RECURRING are marked NON-VACUITY below. A run in
+    which discovery framed no question at all would satisfy the central assertion
+    trivially, which is the failure mode this file is most prone to.
     """
     audited = _ScriptedProvidersAudited()
     result, statements = await _engine_run(
         audited,
         monkeypatch=monkeypatch,
         max_winners=len(_CANDIDATES),
-        max_group_size=len(_CANDIDATES),
+        # ZERO, not "small": the fixture raises exactly ONE discovery question, so a
+        # budget of 0 is the only value that makes this group's share of discovery
+        # run out. Any positive budget admits the single rider and sheds nothing.
+        max_riders=0,
     )
 
     assert not audited.unexpected, f"unrouted prompt(s): {audited.unexpected}"
@@ -2845,6 +2875,15 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
         f"a discovery question that was SHED for prompt space is reported to the "
         f"client as researched: {bullets[0]!r}. No provider was ever asked it."
     )
+    # NON-VACUITY 1. A run that framed NO discovery question would satisfy the
+    # assertion above trivially — there would be nothing to annotate and nothing to
+    # shed. Reusing production's own frame (never a retyped literal) proves a
+    # question DID exist to be shed.
+    framed = _discovery_mod.discovery_question_text(conflict)
+    assert framed, (
+        "the discovery frame produced no question from a conflict that has both "
+        "halves and an http(s) source, so this test would pass with nothing shed"
+    )
     # AND THE CLIENT'S OWN QUESTIONS WERE ALL KEPT — the half of D-W3-4 that makes
     # shedding the rider the correct trade rather than a loss.
     items = _division_items(statements)
@@ -2852,7 +2891,26 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
     assert "rode along" not in header, (
         f"the feed reports a ride-along on a run where the rider was shed: {header!r}"
     )
+    # NON-VACUITY 2. The feed names the DISPATCHED discovery questions. Its absence,
+    # taken together with NON-VACUITY 1, is the positive statement that the question
+    # was framed and then NOT dispatched — i.e. that the shed actually happened. The
+    # shed itself is not otherwise observable: `attach_discovery_riders`' note reaches
+    # `workshop_notes`, which `pipeline.py` only logs and never persists.
+    assert "the evidence raised that the client did not ask" not in header, (
+        f"the feed reports a dispatched discovery question on a run where the rider "
+        f"was shed: {header!r}"
+    )
     prompts = " ".join((row.get("prompt") or "") for row in items[1:])
+    # NON-VACUITY 3, and the assertion that carries the Art. 12 claim: NO PROVIDER
+    # WAS ASKED IT. This is discriminating rather than trivially true — at the
+    # production rider budget the same fixture puts this exact text INTO an angle
+    # prompt, so a regression that stops shedding fails here as well as above.
+    assert framed[:60] not in prompts, (
+        f"the shed discovery question was dispatched to a provider after all: "
+        f"{framed[:60]!r}. The report omits its `researched_as` clause while the "
+        f"engine did research it, which is the mirror image of the lie this test "
+        f"exists to prevent."
+    )
     for candidate in _CANDIDATES:
         assert candidate[:60] in prompts, (
             f"a client sub-question was shed to make room for a discovered one: "
