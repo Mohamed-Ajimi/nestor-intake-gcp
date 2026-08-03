@@ -274,15 +274,25 @@ def test_later_rounds_pair_by_standing_and_avoid_rematches():
 
 
 async def test_odd_count_gives_exactly_one_bye_per_round_to_the_lowest_standing():
-    """4. One bye per odd round, spread evenly, scoring a win with no Elo change."""
-    state = entries(7)
+    """4. One bye per odd round, spread evenly, scoring a win with no Elo change.
+
+    THE ROUND COUNT IS DERIVED, not the 4 this used to walk. Under D-R9 a field
+    of 7 runs `min(MAX, max(MIN, ceil(log2 7)), 7 - 1)` = 6 rounds, so the totals
+    that follow are 6 byes and 24 wins rather than 4 and 16. Every number below
+    is computed from `tournament_rounds` and the field size so that raising the
+    floor, the ceiling or the field changes the expectation automatically.
+    """
+    field = 7
+    rounds = workshop_loop.tournament_rounds(field)
+    matches_per_round = field // 2
+    state = entries(field)
     by_index = {e["index"]: e for e in state}
     seen: set[tuple[int, int]] = set()
     byes: list[int] = []
 
-    for round_no in range(1, 5):
+    for round_no in range(1, rounds + 1):
         pairs, bye = workshop_rank._pair_round(state, round_no, seen)
-        assert len(pairs) == 3, (round_no, pairs)
+        assert len(pairs) == matches_per_round, (round_no, pairs)
         assert bye is not None
         byes.append(bye)
         by_index[bye]["wins"] += 1
@@ -291,15 +301,21 @@ async def test_odd_count_gives_exactly_one_bye_per_round_to_the_lowest_standing(
             seen.add((low, high))
             by_index[low]["wins"] += 1
 
-    assert len(set(byes)) == 4, "a candidate took a second bye too early"
+    # No candidate may take a second bye while another has none. With `rounds`
+    # at or below the field size that means every bye goes to a fresh candidate.
+    assert rounds <= field, "the spread claim below assumes no forced second bye"
+    assert len(set(byes)) == rounds, "a candidate took a second bye too early"
     counts = [e["byes"] for e in state]
     assert max(counts) - min(counts) <= 1
 
-    # And through the real thing: 4 rounds x 3 matches + 4 byes = 16 wins, and
-    # Elo stays zero-sum because a bye never moves it.
-    ranked, _ = await tournament(JudgeAudited(flash_responder()), population(7, parents=7))
-    assert sum(w["byes"] for w in ranked) == 4
-    assert sum(w["wins"] for w in ranked) == 16
+    # And through the real thing: `rounds` x `matches_per_round` wins from the
+    # pairings plus one per bye, and Elo stays zero-sum because a bye never
+    # moves it.
+    ranked, _ = await tournament(
+        JudgeAudited(flash_responder()), population(field, parents=field)
+    )
+    assert sum(w["byes"] for w in ranked) == rounds
+    assert sum(w["wins"] for w in ranked) == rounds * matches_per_round + rounds
     assert sum(w["elo"] for w in ranked) == pytest.approx(
         7 * workshop_rank._ELO_START, abs=0.05
     )
@@ -498,6 +514,10 @@ async def test_tournament_is_deterministic_over_a_fixed_script():
     The recorded prompts are compared as SORTED lists: what determinism promises
     is that the same match-ups are asked in the same words, not that a
     concurrent fan-out records them in a fixed arrival order.
+
+    THE CALL COUNT IS DERIVED. It read `== 8, "4 rounds x 2 batches"`; under D-R9
+    the rounds come from the field, so it is 6 rounds and 12 calls. Both factors
+    are computed from the module's own constants so neither can drift silently.
     """
     candidates = population(24, parents=6)
 
@@ -513,7 +533,11 @@ async def test_tournament_is_deterministic_over_a_fixed_script():
     second, second_prompts = await _run()
 
     assert first == second
-    assert len(first_prompts) == 8, "4 rounds x 2 batches"
+    rounds = workshop_loop.tournament_rounds(24)
+    batches_per_round = -(-(24 // 2) // workshop_rank._MATCHES_PER_CALL)
+    assert len(first_prompts) == rounds * batches_per_round, len(first_prompts)
+    # The fan-out this test exists to exercise must actually be a fan-out.
+    assert batches_per_round > 1, "one call a round would not interleave at all"
     assert sorted(first_prompts) == sorted(second_prompts)
 
 
@@ -709,7 +733,16 @@ async def test_the_closing_line_names_candidates_rounds_and_winners(monkeypatch)
     summary = recorder.of_kind("summary")[0]
     assert summary["text"] == "", "a summary row is composed from its meta"
     assert summary["meta"]["items"] == winners
-    assert summary["meta"]["actions"] == 48, "4 rounds x 12 match-ups"
+    # DERIVED, NEVER A HARD NUMBER. This read `== 48, "4 rounds x 12 match-ups"`
+    # and D-R9 made the round count a FUNCTION OF THE FIELD
+    # (`_TOURNAMENT_ROUNDS` now defaults to "0" = DERIVE), so 24 candidates give
+    # 6 rounds and 72 actions, not 4 and 48. Re-pinning 72 would just be the same
+    # mistake with a fresher number — the population grows every loop round,
+    # which is exactly how the shipped 4 became wrong with nobody changing it.
+    assert summary["meta"]["actions"] == rounds * (24 // 2), summary["meta"]["actions"]
+    # NON-VACUITY: `rounds` must really be the derived value and not something
+    # that happens to make the product right.
+    assert rounds == workshop_loop.tournament_rounds(24) > 1
     assert isinstance(summary["meta"]["cost"], str)
 
 
