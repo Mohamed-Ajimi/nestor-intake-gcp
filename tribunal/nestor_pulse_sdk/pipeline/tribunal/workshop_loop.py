@@ -169,21 +169,36 @@ def tournament_rounds(n_candidates: Any, *, override: Any = 0) -> int:
 
     The arithmetic:
       * fewer than 2 candidates -> 0. There is nothing to rank.
-      * a positive `override` wins outright. `workshop_rank` owns the env knob
-        `NESTOR_TRIBUNAL_WORKSHOP_ROUNDS` and passes it in, so an explicit
-        operator setting is honoured without the formula being duplicated there.
+      * a positive `override` REPLACES THE DERIVED FLOOR AND NOTHING ELSE. It is
+        still bounded by `min(MAX, n - 1)`, exactly like the derived path.
+        `workshop_rank` owns the env knob `NESTOR_TRIBUNAL_WORKSHOP_ROUNDS` and
+        passes it in, so an explicit operator setting is honoured without the
+        formula being duplicated there — but it CANNOT buy unbounded rounds.
       * otherwise `min(MAX, max(MIN, ceil(log2 n)), n - 1)`.
 
     `n - 1` is a hard bound and it BEATS the floor: a field of 3 has only 2
     distinct opponents, and scheduling four rematches to reach a floor of 6
     would buy nothing but flash calls.
+
+    WHY THE OVERRIDE IS BOUNDED TOO, AND WHY THAT IS NOT AN INSULT TO THE
+    OPERATOR (CR-04). It used to `return explicit` directly, skipping BOTH
+    ceilings: measured, `tournament_rounds(30, override=10**9)` returned
+    `1000000000` and `tournament_rounds(3, override=50)` returned `50`. Every
+    round is a real batch of LLM calls and this function is called inside a loop
+    that runs up to `_LOOP_MAX_ROUNDS` times, so the realistic trigger is not an
+    attacker but an OPERATOR TYPO in `NESTOR_TRIBUNAL_WORKSHOP_ROUNDS` — a
+    trailing zero is a denial of wallet. `_TOURNAMENT_ROUNDS_MAX`'s comment above
+    calls itself "a runaway guard"; before this fix that claim was FALSE on the
+    override path, which is the only path an operator can actually reach.
+    An override below the ceiling is still honoured EXACTLY, which is the whole
+    point of having the knob.
     """
     total = _safe_int(n_candidates, 0)
     if total < 2:
         return 0
     explicit = _safe_int(override, 0)
     if explicit > 0:
-        return explicit
+        return max(0, min(_TOURNAMENT_ROUNDS_MAX, explicit, total - 1))
     floor = max(_TOURNAMENT_ROUNDS_MIN, _ceil_log2(total))
     return max(0, min(_TOURNAMENT_ROUNDS_MAX, floor, total - 1))
 
@@ -264,10 +279,20 @@ def _as_entries(ranked: Any) -> list[dict[str, Any]]:
     module, and an input shape nobody expected is not a licence to start
     deleting positions from a pool that another stage is going to reconcile
     against.
+
+    A `str`/`bytes` INPUT IS NOT A POOL OF ONE-CHARACTER CANDIDATES, IT IS A
+    WRONG-TYPE INPUT, and it returns `[]`. This used to return
+    `[{} for _ in range(len(ranked))]`, so `select_winners("abcdef", ...)`
+    fabricated SIX TEXTLESS CANDIDATES and handed every one of them on as a
+    winner — positions with no question in them, bound for a paid provider. The
+    never-drop rule protects real candidates from being DELETED; it is not a
+    licence to INVENT them, and inventing is the strictly worse failure, because
+    a dropped candidate is still recoverable from the pool while a fabricated one
+    is indistinguishable from a real one downstream. The sibling readers
+    `_clean_labels` and `_parents_of` already return `[]` for a `str` for exactly
+    this reason; this function was the odd one out.
     """
     if ranked is None or isinstance(ranked, (str, bytes, dict)):
-        if isinstance(ranked, (str, bytes)):
-            return [{} for _ in range(len(ranked))]
         return []
     try:
         raw_items = list(ranked)
