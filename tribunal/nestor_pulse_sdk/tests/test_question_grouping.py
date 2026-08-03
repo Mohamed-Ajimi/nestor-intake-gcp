@@ -318,13 +318,21 @@ def test_the_env_knob_raises_the_ceiling_as_well_as_lowers_it(monkeypatch):
 def test_the_group_size_cap_defaults_to_seven_and_cannot_go_below_the_feasibility_floor(
     monkeypatch,
 ):
-    """7 = D-W4-5's floor of 5 winners per client question + 2 discovery riders.
+    """The value is unchanged at 7; WHAT IT MEANS CHANGED, and the old reason was wrong.
 
-    The old default of 4 came from `_D6_MAX_WINNERS / _D6_MAX_GROUPS` = 15 / 5 = 3
-    plus slack. Under D-W4-5 a mandate group carries a whole client question's five
-    winners, so 4 would shed EVERY rider on arrival and silently delete the discovery
-    bracket. The floor of 3 is unchanged in meaning: a cap that low cannot hold a
-    client question's sub-question set at all.
+    THE DOCSTRING THIS REPLACES read "7 = D-W4-5's floor of 5 winners per client
+    question + 2 discovery riders". That derivation is precisely the arithmetic
+    CR-09 disproved: it forgot that the 2 cross-cutting winners are parented to a
+    real client label and therefore land INSIDE a per-question group, so the group
+    already holds 5 + 2 = 7 WINNERS and the "+ 2 riders" never fit. A total-size cap
+    can always be exhausted by winners, so it was retired as a shedding threshold.
+
+    `_D6_MAX_GROUP_SIZE` now survives ONLY as the size hint `clamp_groups` uses when
+    it SPLITS a model-proposed grouping — a job that rebalances winners between
+    groups and never deletes anything. Shedding is `_D6_MAX_RIDERS_PER_GROUP`.
+
+    The floor of 3 is unchanged in meaning: a cap that low cannot hold a client
+    question's sub-question set at all.
     """
     import importlib
 
@@ -335,6 +343,31 @@ def test_the_group_size_cap_defaults_to_seven_and_cannot_go_below_the_feasibilit
     assert importlib.reload(qg)._D6_MAX_GROUP_SIZE == 3
 
     monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_GROUP_SIZE", raising=False)
+    importlib.reload(qg)
+
+
+def test_the_rider_budget_is_a_separate_constant_from_the_group_size_cap(monkeypatch):
+    """THE TWO NUMBERS MUST NOT BE RE-FUSED. That fusion WAS the CR-09 defect.
+
+    `_D6_MAX_RIDERS_PER_GROUP` derives from discovery's own per-parent cap (3), not
+    from any total size, so that a rider is shed only when the discovery stage has
+    already over-allocated against its own rule. If someone "simplifies" by pointing
+    the rider budget back at `_D6_MAX_GROUP_SIZE`, the winner count starts shedding
+    riders again — and the group-size test above would still pass.
+    """
+    import importlib
+
+    monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_RIDERS_PER_GROUP", raising=False)
+    reloaded = importlib.reload(qg)
+    assert reloaded._D6_MAX_RIDERS_PER_GROUP == 3
+
+    # Independently settable — the proof they are not one value behind two names.
+    monkeypatch.setenv("NESTOR_TRIBUNAL_D6_MAX_RIDERS_PER_GROUP", "1")
+    reloaded = importlib.reload(qg)
+    assert reloaded._D6_MAX_RIDERS_PER_GROUP == 1
+    assert reloaded._D6_MAX_GROUP_SIZE == 7
+
+    monkeypatch.delenv("NESTOR_TRIBUNAL_D6_MAX_RIDERS_PER_GROUP", raising=False)
     importlib.reload(qg)
 
 
@@ -700,33 +733,79 @@ def test_a_rider_whose_parent_matches_no_group_is_shed_rather_than_re_homed():
     assert any("reported but was not researched" in note for note in notes)
 
 
-def test_the_size_cap_sheds_the_weakest_riders_and_never_a_winner():
+def test_the_rider_budget_sheds_the_weakest_riders_and_never_a_winner():
     """D-W3-4: discovery never borrows from the mandate, so discovery is what yields.
+
+    REWRITTEN FOR CR-09. The purpose is unchanged and is re-proved here; only the
+    MECHANISM moved. This test used to drive shedding with `max_size=4` — a
+    TOTAL-SIZE cap. That cap was removed because it could be exhausted by winners
+    alone: at the validated 17-winner configuration a per-question group holds the
+    5-winner floor plus BOTH cross-cutting winners (a cross-cutting winner is
+    parented to a real client label), so `_D6_MAX_GROUP_SIZE = 7` shed every rider
+    before one arrived. Shedding is now driven by `max_riders` /
+    `_D6_MAX_RIDERS_PER_GROUP`, counted over RIDERS ONLY, which is what makes the
+    guarantee independent of the winner count.
 
     THE RANKS ARE ARRANGED SO THE WEAKEST MEMBER OF THE GROUP IS A WINNER, not a
     rider. Shedding "the weakest member" and shedding "the weakest RIDER" then give
     different answers, which is the only way this test can tell them apart — with
     riders ranked last, both rules shed the same thing and the assertion proves
-    nothing.
+    nothing. Rank 99 is deliberately far worse than every rider.
+
+    IT ALSO PINS THAT `max_size` NO LONGER BINDS: a size of 4 against a group of
+    four winners would, under the old rule, have shed every rider. Three survive.
     """
     pool = [
         win(0, "Q1", rank=1),
         win(1, "Q1", rank=2),
         win(2, "Q1", rank=3),
-        win(3, "Q1", rank=9),  # the weakest member of the group is a WINNER
+        win(3, "Q1", rank=99),  # the weakest member of the group is a WINNER
     ]
     groups = qg.build_groups([[0, 1, 2, 3]], pool)
 
+    # Four riders against a budget of three: exactly one must go, and it must be
+    # the weakest RIDER (rank 7) — never the rank-99 winner.
     attached, shed, notes = qg.attach_discovery_riders(
-        groups, [ride("Q1", 4), ride("Q1", 5)], max_size=4
+        groups,
+        [ride("Q1", 4), ride("Q1", 5), ride("Q1", 6), ride("Q1", 7)],
+        max_size=4,
+        max_riders=3,
     )
 
     kept = [m for m in attached[0]["members"] if m["source"] != "discovery"]
     assert len(kept) == 4, "all four of the client's sub-questions survive"
-    assert len(shed) == 2
+    assert sorted(m["rank"] for m in kept) == [1, 2, 3, 99]
+    assert len(shed) == 1, [m["rank"] for m in shed]
     assert all(member["source"] == "discovery" for member in shed)
-    assert attached[0]["riders"] == 0
+    assert shed[0]["rank"] == 7, "the WEAKEST RIDER, not the weakest member"
+    assert attached[0]["riders"] == 3
     assert any("The client's own questions were kept" in note for note in notes)
+
+
+def test_no_number_of_winners_can_shed_a_rider():
+    """CR-09 STATED AS ITS OWN REGRESSION: the budget is a property of riders only.
+
+    This is the defect that shipped — not "the cap was too low". A group is built
+    at the exact shape that broke it: the 5-winner floor PLUS two cross-cutting
+    winners, i.e. seven winners, which is `_D6_MAX_GROUP_SIZE` exactly. Under the
+    old total-size rule that group was full before any rider arrived and shed all
+    of them. Under the rider budget every rider inside the budget survives, no
+    matter how many winners sit beside it.
+
+    If `attach_discovery_riders`' shedding loop ever counts `len(members)` again,
+    this test goes red while the rewritten test above could still pass.
+    """
+    pool = [win(i, "Q1", rank=i + 1) for i in range(qg._D6_MAX_GROUP_SIZE)]
+    groups = qg.build_groups([list(range(qg._D6_MAX_GROUP_SIZE))], pool)
+
+    riders = [ride("Q1", 50 + i) for i in range(qg._D6_MAX_RIDERS_PER_GROUP)]
+    attached, shed, _ = qg.attach_discovery_riders(groups, riders, max_size=4)
+
+    assert shed == [], "a winner count must not be able to shed a rider"
+    assert attached[0]["riders"] == qg._D6_MAX_RIDERS_PER_GROUP
+    assert len(attached[0]["members"]) == (
+        qg._D6_MAX_GROUP_SIZE + qg._D6_MAX_RIDERS_PER_GROUP
+    )
 
 
 def test_a_group_with_room_keeps_its_rider():
@@ -1475,9 +1554,18 @@ def test_this_test_file_needs_no_database_and_no_network():
     # Deliberately an IMPORT scan and not a text grep. A grep for a connection-string
     # env var name would match this very assertion and could therefore never pass —
     # a check that cannot go green is not a check.
+    # THE EXACT-SET FORM IS THE CONTROL AND IS KEPT DELIBERATELY. Relaxing this to
+    # "no banned root" would let the next sibling plan add a real dependency here
+    # unnoticed, which is the whole failure mode this guard exists for — the
+    # banned list can only ever catch what someone already thought of.
+    #
+    # `logging` and `os` were added at module scope this phase, by the
+    # `_GROUPING_MODE` tests (which read env and assert on log output). Both are
+    # stdlib, neither is banned, and neither reaches a database or the network, so
+    # the guard's purpose is intact.
     assert roots <= {
-        "__future__", "ast", "importlib", "pathlib", "uuid", "typing",
-        "nestor_pulse_sdk",
+        "__future__", "ast", "importlib", "logging", "os", "pathlib", "uuid",
+        "typing", "nestor_pulse_sdk",
     }, roots
 
 
