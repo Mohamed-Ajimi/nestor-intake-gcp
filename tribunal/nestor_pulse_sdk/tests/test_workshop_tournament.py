@@ -881,11 +881,16 @@ def test_match_block_renders_the_client_question_and_its_findings():
 def test_a_finding_or_a_question_cannot_forge_a_match_line():
     """38. T-15.7-08-02. FINDINGS ARE FETCHED WEB PAGES.
 
-    `workshop._findings_block` truncates but does NOT collapse newlines, so
-    reusing it unguarded would hand an attacker-controlled page its own line in a
-    prompt whose records are one per line. The rendered block is fed straight
-    back through the real parser: anything the injection opened would show up as
-    an extra verdict.
+    Every finding is `_flatten`-collapsed HERE before `workshop._findings_block`
+    indexes it, in a prompt whose records are one per line. Until D-DEF-01's fix
+    that pre-flatten was load-bearing alone — `_findings_block` truncated without
+    collapsing, so reusing it unguarded would have handed an attacker-controlled
+    page its own line. Both render through the same authority now, so this guard is
+    belt-and-braces; the assertions below are unchanged and must still hold,
+    because they assert the FLATTENED outcome, which the fix does not move.
+
+    The rendered block is fed straight back through the real parser: anything the
+    injection opened would show up as an extra verdict.
     """
     batch = [
         (

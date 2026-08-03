@@ -1375,9 +1375,16 @@ def _question_and_findings(
       * every finding is `_flatten`-collapsed and bounded by
         `workshop._FINDING_PROMPT_CHARS` BEFORE `workshop._findings_block` indexes
         it. The block is reused rather than reimplemented (one renderer, one
-        truncation rule) but it truncates without collapsing, so a finding
-        carrying a newline would otherwise be able to open a line of its own and
-        forge a `1 | A | ...` verdict for a match that is not its own.
+        truncation rule). Until D-DEF-01's fix that pre-flatten was load-bearing
+        ALONE — the block truncated without collapsing, so a finding carrying a
+        newline could open a line of its own and forge a `1 | A | ...` verdict for
+        a match that is not its own. The block now flattens too, through the same
+        authority, so this pass is DEFENCE IN DEPTH and is kept on purpose. It is
+        also idempotent: `_flatten(_flatten(x, N), N) == _flatten(x, N).rstrip(" ")`,
+        so the second pass strips at most one trailing space at a truncation
+        boundary and can add, drop, reorder or re-index nothing.
+        `test_the_rank_path_render_survives_the_second_flatten_intact` in
+        `test_workshop_critique.py` asserts both arms of that.
 
     Only the FIRST parent label of the pair is rendered. A candidate covers one
     client question in the overwhelming majority of cases, and rendering the union
