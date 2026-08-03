@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-07-31T09:28:45.173Z"
-last_activity: 2026-08-03 -- Phase 15.7 complete, reviewed (9 Critical, all fixed), engine gate GREEN 1538/0
+last_updated: "2026-08-03T17:37:11.744Z"
+last_activity: 2026-07-31 -- Phase 15.7 execution started
 progress:
   total_phases: 16
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 109
-  completed_plans: 97
-  percent: 63
+  completed_plans: 106
+  percent: 69
 ---
 
 # Project State
@@ -301,6 +301,7 @@ Recent decisions affecting current work (v1.1):
 
 - [Phase 14]: Tribunal runs as dedicated least-priv tribunal-run SA; tribunal-api invoker=nestor-run ONLY (WR-03/D-04 closed live 2026-07-20)
 - [Phase 14]: D-07 proven live: run b188a83e completed chain=OK cost 1.60usd; 3 negatives pass; absorbs Phase-13 queue-path proof (strike from Phase 16)
+- [Phase ?]: Nestor_Claude_Temp rotation DEFERRED to go-live (operator, 2026-08-03)
 
 ### Pending Todos
 

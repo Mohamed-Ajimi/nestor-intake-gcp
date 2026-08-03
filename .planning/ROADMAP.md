@@ -133,9 +133,12 @@ is built. The trade-off was stated and accepted: with several waves landing toge
 result cannot be attributed to a single change.
 **Absorbs the parked plan `15.4-11`**, which must be RE-SCOPED from "Wave 1 alone" to the full redesign
 before it executes — including V-01 comparison rows for the later waves.
-**Blocking pre-conditions:** rotate `Nestor_Claude_Temp` (it transited a chat in plaintext 2026-07-27
-and is live on both Tribunal services); settle plan 15.4-07's `gpt-5.6-sol` cost row; and prove alembic
-`0016` with the literal `Running upgrade 0015 -> 0016` line, never exit 0.
+**Blocking pre-conditions:** settle plan 15.4-07's `gpt-5.6-sol` cost row; and prove alembic `0016`
+with the literal `Running upgrade 0015 -> 0016` line, never exit 0.
+**NO LONGER BLOCKING — `Nestor_Claude_Temp` rotation is DEFERRED TO GO-LIVE (operator, 2026-08-03).**
+The key transited a chat in plaintext 2026-07-27 and is live on both Tribunal services; that risk is
+**deliberately accepted** for the pre-go-live period. **Do not rotate it early, and do not re-raise it
+as a gap or a blocker** — it is a decision, not an oversight. Rotate at go-live.
 **Requirements**: none
 **Plans:** 0 plans
 
