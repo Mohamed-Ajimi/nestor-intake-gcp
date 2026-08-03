@@ -3443,6 +3443,74 @@ async def _stage_b_feed_finish(
         log.warning("workshop_rank: stage B summary write failed: %r", exc)
 
 
+def _next_free_index(population: Sequence[dict[str, Any]]) -> int:
+    """One past the highest `index` in the population. Never raises.
+
+    THE LOOP OWNS INDEX ASSIGNMENT AND NOBODY ELSE DOES, and this is the counter
+    that makes that true. `run_tournament` RENUMBERS the whole field from zero the
+    moment it sees a duplicate index (`run_tournament`, at its
+    "carry duplicate indices" branch), and a renumber mid-loop would silently
+    detach EVERY carried standing — every `wins`, `elo`, `byes` and `matches` in
+    the carried `standings["by_index"]` is keyed by index, so a renumber
+    re-points all of them at the wrong candidates while the tournament reports a
+    perfectly ordinary ranking. That is threat T-15.7-09-05, and it fails silent
+    and green.
+
+    So new candidates NEVER reuse an index: the counter is monotonic across the
+    whole run, not per round, and `evolve_generative`'s own `-1` placeholder (it
+    stamps `index: -1` and documents that "the caller renumbers the pool") is
+    replaced here rather than anywhere downstream.
+    """
+    highest = -1
+    for entry in population or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            value = entry.get("index")
+            current = int(value) if value is not None else -1
+        except (TypeError, ValueError):
+            current = -1
+        if current > highest:
+            highest = current
+    return highest + 1
+
+
+def _stamp_loop_candidates(
+    new_candidates: Sequence[dict[str, Any]],
+    *,
+    start_index: int,
+    born_round: int,
+) -> list[dict[str, Any]]:
+    """Give each new candidate a globally unique index and its `born_round`.
+
+    `born_round` IS THE ROUND THE CANDIDATE FIRST COMPETES IN, NOT THE ROUND THAT
+    WROTE IT, and the whole of exit criterion 3 turns on that one sentence.
+
+    Criterion 3 is SATURATION — "the last evolve pass produced no new entrant to
+    the top N" — and `workshop_loop.exit_verdict` tests it as
+    `winner["born_round"] == round_no` over the winners SELECTED IN THAT ROUND.
+    Selection happens BEFORE evolve inside a round, so a candidate written by
+    round N's evolve cannot possibly appear in round N's winner set. Stamping it
+    `N` would therefore make `new_entrants` permanently zero and criterion 3
+    permanently TRUE — a criterion that always passes is not a criterion, and the
+    loop would exit the first time coverage and quality happened to align.
+
+    Stamping `N + 1` — the round in which the candidate is first ranked and first
+    eligible for a slot — makes the test mean exactly what its docstring says.
+    """
+    stamped: list[dict[str, Any]] = []
+    cursor = int(start_index)
+    for entry in new_candidates or []:
+        if not isinstance(entry, dict):
+            continue
+        row = dict(entry)
+        row["index"] = cursor
+        row["born_round"] = int(born_round)
+        cursor += 1
+        stamped.append(row)
+    return stamped
+
+
 async def run_workshop_stage_b(
     *,
     stage_a: dict[str, Any],
@@ -3527,7 +3595,13 @@ async def run_workshop_stage_b(
                                       groups / mandate_groups / discovery_questions
                                       / discovery_riders / discovery_cross_cutting
                                       / discovery_not_researched /
-                                      group_coverage_injected.
+                                      group_coverage_injected, plus the WAVE 4
+                                      LOOP's own numbers: `rounds` (how many loop
+                                      rounds actually ran) and
+                                      `loop_born_winners` (how many of the final
+                                      winners were written by the loop rather
+                                      than by stage A). EVERY ONE OF THESE IS
+                                      PRESENT ON THE CRASH PATH TOO.
 
     NO DISCOVERY QUESTION EVER ENTERS `winners`. They live only as group MEMBERS.
     `research_division.build_mission_brief_from_winners` derives the report's
@@ -3567,38 +3641,235 @@ async def run_workshop_stage_b(
 
     try:
         candidates_in = list(source.get("candidates") or [])
+
+        # ==================================================================
+        # THE WAVE 4 LOOP. This middle used to be a straight line — critique,
+        # tournament, cut, evolve — and is now a CYCLE, up to
+        # `workshop_loop._LOOP_MAX_ROUNDS` times:
+        #
+        #     critique -> rank (carrying standings) -> select -> meta-review
+        #       -> evolve generatively -> exit-check
+        #
+        # THE TAIL AFTER THE LOOP IS UNCHANGED, deliberately and completely:
+        # scope guard, discovery allocation, GAP A, grouping, riders, the
+        # cross-cutting group, group coverage, discovery ranks, `_stage_b_result`.
+        # The loop grows and ranks the POOL; nothing about how a winner becomes a
+        # dispatched research question moved.
+        #
+        # THE DIVISION OF LABOUR BETWEEN THE TWO EVOLVE STEPS, STATED ONCE HERE
+        # SO IT IS NEVER TWO UNSTATED AUTHORITIES (this phase has already paid for
+        # that defect twice):
+        #
+        #   `workshop_evolve.evolve_generative`  runs ONCE PER ROUND, INSIDE the
+        #       loop, and its job is GENERATION — it grows the population with new
+        #       questions built by the five moves. It never touches the winners it
+        #       was given.
+        #   `evolve_winners` (this module)       runs ONCE, AFTER the loop, over
+        #       the FINAL chosen winners, and its job is SHARPENING — the final
+        #       wording and, critically, D7 `langs`.
+        #
+        # `langs` IS WHY THE SECOND ONE SURVIVES AT ALL. It is written only by
+        # `evolve_winners` via `_normalise_langs`, and plan 15.2-13 builds its
+        # angle-query language sentence only when `langs` is non-empty — so a loop
+        # that routed around it would ship D7-less winners while every other
+        # assertion in this phase read green. The `_normalise_langs` sweep below
+        # the scope guard is the belt to that pair of braces.
+        # ==================================================================
         critique_stats: dict[str, Any] = {}
-        screened, critique_reasons = await critique_candidates(
-            candidates=candidates_in,
-            decision_context=decision_context,
-            audited=audited,
-            run_id=run_id,
-            tenant_id=tenant_id,
-            feed=feed,
-            breaker=breaker,
-            stats=critique_stats,
-        )
-
         tourney_stats: dict[str, Any] = {}
-        ranked, tourney_reasons = await run_tournament(
-            candidates=screened,
-            decision_context=decision_context,
-            audited=audited,
-            run_id=run_id,
-            tenant_id=tenant_id,
-            feed=feed,
-            breaker=breaker,
-            stats=tourney_stats,
-            parent_texts=texts,
-            findings_by_label=findings_by_label,
+        evolve_stats: dict[str, Any] = {}
+        meta_stats: dict[str, Any] = {}
+        generative_stats: dict[str, Any] = {}
+
+        # Function-local, and it has to be: `workshop_evolve` imports THIS module
+        # at module level, so a module-level import the other way is a cycle.
+        # `citations/extractor.py:937` uses the same technique.
+        from nestor_pulse_sdk.pipeline.tribunal import (  # noqa: PLC0415
+            workshop_evolve,
         )
 
-        cut = winner_count(len(ranked))
-        top = ranked[:cut]
+        population: list[dict[str, Any]] = [
+            dict(c) for c in candidates_in if isinstance(c, dict)
+        ]
+        next_index = _next_free_index(population)
 
-        evolve_stats: dict[str, Any] = {}
+        # The carried tournament state (D-W4-3). Ratings, wins, byes and match
+        # counts persist ACROSS rounds, which is what makes `catch_up_matches`
+        # meaningful for a candidate born in a late round.
+        standings: dict[str, Any] = {}
+
+        ranked: list[dict[str, Any]] = []
+        selected: list[dict[str, Any]] = []
+        round_records: list[dict[str, Any]] = []
+        critique_reasons: list[str] = []
+        tourney_reasons: list[str] = []
+        generative_reasons: list[str] = []
+        loop_reasons: list[str] = []
+        loop_notes: list[str] = []
+        guidance = ""
+        verdict: dict[str, Any] = {}
+        max_rounds = max(1, int(workshop_loop._LOOP_MAX_ROUNDS))
+        rounds_run = 0
+        loop_born_winners = 0
+
+        for round_no in range(1, max_rounds + 1):
+            rounds_run = round_no
+            population_in = len(population)
+
+            # --- 1. CRITIQUE the whole current population.
+            screened, round_critique_reasons = await critique_candidates(
+                candidates=population,
+                decision_context=decision_context,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                feed=feed,
+                breaker=breaker,
+                stats=critique_stats,
+            )
+            critique_reasons = round_critique_reasons
+
+            # --- 2. RANK it, carrying the standings forward (D-W4-3, D-R9).
+            ranked, round_tourney_reasons = await run_tournament(
+                candidates=screened,
+                decision_context=decision_context,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                feed=feed,
+                breaker=breaker,
+                stats=tourney_stats,
+                parent_texts=texts,
+                findings_by_label=findings_by_label,
+                standings=standings,
+            )
+            tourney_reasons = round_tourney_reasons
+
+            # --- 3. SELECT at the cut (D-W4-5): a floor per client question plus
+            # the cross-cutting slots, prefer-KEEP applied at every step.
+            # `default_cut` carries `winner_count` for the NO-CLIENT-QUESTIONS
+            # case only — the formula stays owned here and is not duplicated in
+            # `workshop_loop`.
+            selected, _below_cut = workshop_loop.select_winners(
+                ranked,
+                client_questions=labels,
+                default_cut=winner_count(len(ranked)),
+            )
+
+            # --- 4. META-REVIEW: this round's own criticism becomes the next
+            # round's brief.
+            round_flaws = [
+                str(entry.get("flaw") or "")
+                for entry in ranked
+                if isinstance(entry, dict) and entry.get("flaw")
+            ]
+            judge_reasons = list(
+                (tourney_stats.get("judge_reasons") or {}).values()
+            )
+            guidance, meta_reasons = await workshop_evolve.meta_review(
+                flaws=round_flaws,
+                judge_reasons=judge_reasons,
+                decision_context=decision_context,
+                round_no=round_no,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                breaker=breaker,
+                stats=meta_stats,
+            )
+            loop_reasons += list(meta_reasons)
+
+            # --- 5. EVOLVE GENERATIVELY: grow the pool from this round's winners.
+            new_candidates, round_generative_reasons = await workshop_evolve.evolve_generative(
+                winners=selected,
+                findings_by_label=findings_by_label,
+                client_questions=labels,
+                guidance=guidance,
+                round_no=round_no,
+                decision_context=decision_context,
+                run_language=run_language,
+                audited=audited,
+                run_id=run_id,
+                tenant_id=tenant_id,
+                feed=feed,
+                breaker=breaker,
+                stats=generative_stats,
+            )
+            generative_reasons = round_generative_reasons
+            loop_reasons += list(round_generative_reasons)
+
+            # THE LOOP OWNS INDEX AND `born_round` ASSIGNMENT — see
+            # `_stamp_loop_candidates` for why `born_round` is the round the
+            # candidate FIRST COMPETES IN, and `_next_free_index` for why a
+            # collision here would silently detach every carried standing.
+            stamped = _stamp_loop_candidates(
+                new_candidates, start_index=next_index, born_round=round_no + 1
+            )
+            next_index += len(stamped)
+
+            # --- 6. EXIT CHECK — all three criteria, gating each other in turn.
+            verdict = workshop_loop.exit_verdict(
+                winners=selected,
+                client_questions=labels,
+                round_no=round_no,
+                max_rounds=max_rounds,
+            )
+
+            round_records.append(
+                workshop_loop.round_metrics(
+                    round_no=round_no,
+                    candidates_in=population_in,
+                    new_candidates=len(stamped),
+                    winners=len(selected),
+                    weak_winners=verdict.get("weak_winners") or 0,
+                    barred=0,
+                    dropped_as_reproposal=0,
+                    lookups=0,
+                    calls=0,
+                    cost_usd=0,
+                )
+            )
+
+            if verdict.get("should_exit"):
+                log.info(
+                    "workshop_rank: the loop exited on its own criteria in round "
+                    "%d of at most %d — coverage=%s quality=%s saturation=%s",
+                    round_no,
+                    max_rounds,
+                    verdict.get("coverage_ok"),
+                    verdict.get("quality_ok"),
+                    verdict.get("saturation_ok"),
+                )
+                break
+
+            population = population + stamped
+
+        # AT THE CAP THE LOOP SHIPS AND SAYS SO (D-12: degraded means honest, not
+        # broken). `exit_verdict` composes the sentence and names the count.
+        if verdict and not verdict.get("should_exit"):
+            cap_sentence = str(verdict.get("degradation_reason") or "").strip()
+            if cap_sentence:
+                loop_reasons.append(cap_sentence)
+            log.warning(
+                "workshop_rank: the loop reached its round cap of %d without "
+                "meeting all three exit criteria — coverage=%s quality=%s "
+                "saturation=%s; the run SHIPS with %d winner(s)",
+                max_rounds,
+                verdict.get("coverage_ok"),
+                verdict.get("quality_ok"),
+                verdict.get("saturation_ok"),
+                len(selected),
+            )
+
+        loop_born_winners = len(
+            [w for w in selected if isinstance(w, dict) and w.get("born_round")]
+        )
+
+        # --- AFTER THE LOOP: the final SHARPENING pass. This is `evolve_winners`'
+        # surviving job, and D7 `langs` is why it survives — see the division of
+        # labour stated at the top of the loop.
         evolved, evolve_reasons = await evolve_winners(
-            winners=top,
+            winners=selected,
             decision_context=decision_context,
             run_language=run_language,
             audited=audited,
@@ -3609,6 +3880,10 @@ async def run_workshop_stage_b(
             stats=evolve_stats,
         )
 
+        # THE FULL RANKED LIST FROM THE FINAL ROUND, not the winners — the repair
+        # ladder PROMOTES a below-the-cut candidate before it falls back to
+        # injecting a client question verbatim, so a loser must stay reachable
+        # after however many rounds of barring (T-15.7-09-02).
         final, notes, injected = enforce_scope_guard(
             winners=evolved,
             client_questions=labels,
@@ -3803,6 +4078,10 @@ async def run_workshop_stage_b(
         )
         reasons = list(upstream) + list(critique_reasons) + list(tourney_reasons)
         reasons += list(evolve_reasons)
+        # The loop's own reasons: a failed meta-review, a barren generative
+        # evolve, and — the one that matters most to an operator — the cap
+        # sentence naming how many winners could not be sharpened past WEAK.
+        reasons += list(loop_reasons)
         # A grouping FULL fallback DEGRADES — shared groundwork gets searched once
         # per question instead of once per topic, so the deliverable is complete but
         # the run is worse. A coverage repair only NOTES, because the question IS
@@ -3828,11 +4107,18 @@ async def run_workshop_stage_b(
             int(critique_stats.get("calls") or 0)
             + int(tourney_stats.get("calls") or 0)
             + int(evolve_stats.get("calls") or 0)
+            + int(generative_stats.get("calls") or 0)
+            + int(meta_stats.get("meta_calls") or 0)
             + int(group_stats.get("calls") or 0)
         )
         cost = Decimal("0")
-        for stats in (critique_stats, tourney_stats, evolve_stats):
+        for stats in (critique_stats, tourney_stats, evolve_stats, generative_stats):
             cost = _add_cost(cost, stats.get("cost_usd"))
+        # The meta-review keeps its spend under its own key, the same way
+        # `group_winners` does — reading the wrong key would under-report every
+        # meta call as zero, and the budget governor is inert by decision, so the
+        # reported number is the only spend signal there is.
+        cost = _add_cost(cost, meta_stats.get("meta_cost_usd"))
         # `group_winners` accumulates a DECIMAL under `cost` (its own accounting
         # shape), not a string under `cost_usd`. Reading the wrong key here would
         # silently under-report every grouping call's spend as zero, and the budget
@@ -3869,6 +4155,9 @@ async def run_workshop_stage_b(
                 "discovery_cross_cutting": len(cross_cutting),
                 "discovery_not_researched": len(not_researched),
                 "group_coverage_injected": len(cov_injected),
+                # --- the loop's numbers (D-W4-7: recorded, never enforced) ---
+                "rounds": int(rounds_run),
+                "loop_born_winners": int(loop_born_winners),
             },
         )
 
@@ -3931,6 +4220,12 @@ async def run_workshop_stage_b(
                 "discovery_cross_cutting": 0,
                 "discovery_not_researched": 0,
                 "group_coverage_injected": 0,
+                # PRESENT ON THE CRASH PATH TOO. A counts key that exists on the
+                # happy path and vanishes on the degraded one is how a caller
+                # learns to reach for `.get()` and then stops noticing the
+                # difference — the same rule the three list keys above follow.
+                "rounds": 0,
+                "loop_born_winners": 0,
             },
         )
 
