@@ -5,7 +5,7 @@ milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
 last_updated: "2026-07-31T09:28:45.173Z"
-last_activity: 2026-07-31 -- Phase 15.7 execution started
+last_activity: 2026-08-03 -- Phase 15.7 complete, reviewed (9 Critical, all fixed), engine gate GREEN 1538/0
 progress:
   total_phases: 16
   completed_phases: 10
@@ -21,22 +21,40 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.7 — research-engine-redesign-creative-workshop-loop-wave-4
+**Current focus:** Phase 15.7 COMPLETE + gate green (1538/0) — next is VERIFICATION, then phase 15.8 (deploy + the one measuring run)
 
 ## Current Position
 
-Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — EXECUTING
-Plan: 1 of 9
-  ⚠ READ FIRST before planning 15.7: `.planning/phases/15.7-*/15.7-OPEN-ITEMS.md` — three rulings that
-  ENGINE-REDESIGN-SPEC § 5 does not read like on its face (the tournament STAYS; the loop must DISCOVER,
-  not only sharpen; Elo carries with median seeding for newcomers), plus four open items needing an
-  operator ruling — chief among them an exit rule that as written fires NEVER, making the 10-round cap
-  the normal cost rather than the ceiling.
+Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — **COMPLETE, REVIEWED, FIXED,
+GATE GREEN. NOT VERIFIED, NOT DEPLOYED.**
+Plan: 9 of 9
+  **NEXT: verification** — the `gsd-verifier` agent, writing `15.7-VERIFICATION.md` (see `15.5-`/
+  `15.6-VERIFICATION.md` for shape). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier
+  handoffs instructed it and it was carried forward unverified across two sessions. Then phase 15.8.
+  Full state + the four open operator calls: `.planning/phases/15.7-*/.continue-here.md`.
 
-Gates (15.6, current — these SUPERSEDE the 15.5 numbers a previous entry carried here):
-  Engine `cloudbuild.test-engine.yaml` build **dfdcae3d** = **1293 passed / 0 failed / 13 skipped**,
-  `collecting: 35 of 35 expected files`. Gates `cloudbuild.test-gates.yaml` build **2eae97e6** =
-  **187 passed**, 2 deselected.
+Gates (15.7, current — these SUPERSEDE the 15.6 numbers below):
+  Engine `cloudbuild.test-engine.yaml` build **7c89be5c** = **1538 passed / 0 failed / 13 skipped**,
+  `collecting: 36 of 36 expected files`. **THE FIRST FULLY GREEN ENGINE GATE IN THE PROJECT'S HISTORY**
+  — and the suite had **never been executed anywhere** before 2026-08-03. Run history, each number a
+  real discovery: **29 → 18 → 22 → 4 → 0**. One run in between **EXPIRED in the Cloud Build queue**;
+  an EXPIRED build is visually identical to QUEUED and **is not a result**.
+  Fixed this session: **D-DEF-01** (prompt injection) + **CR-01…CR-09** from `15.7-REVIEW.md`, plus two
+  found while fixing — `workshop.cluster_candidates` assigning rather than accumulating its call count,
+  and **three test helpers defined TWICE** in `test_workshop_critique.py` (Python keeps the last, and
+  the shadowed versions had been silently degrading fixtures on tests that still **passed**).
+  ⛔ **THE VERIFICATION LESSON, above any single defect:** the `ast`-lift harness all nine plans used
+  **injects module globals**, so it MANUFACTURED `DISCOVERY_PARENT` — a name `workshop_admission` never
+  imported and used at four sites. That collapsed the **entire workshop** to verbatim client questions
+  at runtime while reading green through nine plans, `py_compile`, and *"38 lifted tests green"*. **The
+  instrument was lying, not the tests.** Prefer real imports; use the lift for behaviour only, never
+  name resolution; run the static undefined-global check (CLEAN across all 20 `pipeline/tribunal/*.py`,
+  non-vacuous). Corollary, proved four times in one day: **the harness lies before the code does.**
+  Gates `cloudbuild.test-gates.yaml` last known build **2eae97e6** = **187 passed**, 2 deselected —
+  NOT re-run this session.
+
+Gates (15.6, superseded, kept for the reasoning):
+  Engine build **dfdcae3d** = **1293 passed / 0 failed / 13 skipped**, `collecting: 35 of 35`.
   The engine count rose 1118 → 1293 (+175: +165 from the seven plans, +10 from the critical-fix pass)
   and EXPECTED_FILES 33 → 35, so the new tests RAN rather than being silently skipped.
   The gates count did NOT rise and that is CORRECT, not a skip: that config runs a fixed set of 13
