@@ -711,6 +711,18 @@ def test_the_module_reaches_only_the_standard_library():
             modules.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             modules.add((node.module or "").split(".")[0])
+    # LANDMINE (recorded by 15.8-11's test-file review, 2026-08-04; NOT changed).
+    # The docstring's justification is scoped to the phase that wrote it: "this
+    # plan is the only owner". That is still TRUE at 15.8 -- no plan in this phase
+    # edits discovery_bracket.py, and this assertion was re-verified GREEN against
+    # the merged wave-1+wave-2 tree. The condition that trips it: ANY future plan
+    # adding a single import to discovery_bracket.py from a PARALLEL WORKTREE,
+    # which cannot see this line. That is the exact 15.5-01/15.5-02 shape -- three
+    # green verifications, a passed plan-check and three executors reporting
+    # success, with only the merged tree red.
+    # Kept as an exact set on purpose: relaxing it to the banned-list below would
+    # let a real dependency in unnoticed, and the banned list can only ever catch
+    # what someone already thought of.
     assert modules == {"logging", "os", "typing"}, modules
     for banned in ("sqlalchemy", "psycopg", "httpx", "requests", "google.", "anthropic"):
         assert banned not in _SRC, banned

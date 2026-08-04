@@ -57,11 +57,41 @@ def _claim(text, found_by, group_id, facet="Q1", fact_source="fact_list", urls=(
     }
 
 
+#: The field contract, written out so a reader can see it without chasing a
+#: signature. It is NOT the authority -- see `_emitter_keywords()` below, which
+#: reads the real one.
 _FIELDS = {
     "provider", "group_id", "client_question", "parent_kind", "stakes",
     "fact_list_parsed", "retry_used", "claims_kept", "resolvable_sources",
     "cost_usd", "duration_s",
 }
+
+
+def _emitter_keywords() -> set[str]:
+    """The KEYWORD-ONLY parameters of `record_assignment`, read from the function.
+
+    THE AUTHORITY IS THE EMITTER, NOT THE LITERAL ABOVE. `record_assignment_safe`
+    does `await record_assignment(run_id, tenant_id, **built)`, so the set of keys
+    this module's row builder produces must equal that function's keyword-only
+    parameters or the call raises `TypeError` -- which the emitter catches and
+    logs, leaving an EMPTY TABLE behind a green run.
+
+    `record_assignment` lives in `runs/yield_records.py`, which plan 15.8-05 owns,
+    while `_assignment_yield_rows` lives in `pipeline.py`, which 15.8-09 owns.
+    Those were written in SEPARATE worktrees that could not see each other, so a
+    hand-copied literal here would agree with the emitter only by luck and would
+    go on agreeing with itself forever after the emitter changed.
+    """
+    import inspect
+
+    from nestor_pulse_sdk.runs import yield_records
+
+    params = inspect.signature(yield_records.record_assignment).parameters
+    return {
+        name
+        for name, p in params.items()
+        if p.kind is inspect.Parameter.KEYWORD_ONLY
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -89,10 +119,27 @@ def test_every_row_carries_exactly_the_emitter_keyword_set():
     The emitter swallows it and logs a warning, so the failure mode is an EMPTY
     TABLE with a green run — the inert-instrumentation class this phase exists
     to end.
+
+    THE COMPARISON IS AGAINST THE EMITTER'S REAL SIGNATURE, not against the
+    `_FIELDS` literal alone. Asserting only `set(rows[0]) == _FIELDS` compares
+    this module against a copy of the contract that lives in the same file: both
+    sides move together, so the assertion stays green precisely when
+    `record_assignment` has changed underneath it — the failure this test names
+    in its own first line. The literal is kept as a THIRD party, pinned to both,
+    which is what makes a disagreement attributable rather than merely visible.
     """
     rows = _pipeline_mod._assignment_yield_rows([_result("gemini", "g1", "Q1")], [])
+    emitter = _emitter_keywords()
 
-    assert set(rows[0]) == _FIELDS
+    assert set(rows[0]) == emitter, (
+        "the row builder and `record_assignment` disagree -- `**built` will "
+        f"raise TypeError. builder-only={sorted(set(rows[0]) - emitter)}, "
+        f"emitter-only={sorted(emitter - set(rows[0]))}"
+    )
+    assert emitter == _FIELDS, (
+        "the emitter's keyword set changed and the documented contract in this "
+        f"file was not updated with it: {sorted(emitter ^ _FIELDS)}"
+    )
 
 
 # ---------------------------------------------------------------------------
