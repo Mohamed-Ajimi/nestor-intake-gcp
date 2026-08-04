@@ -1048,7 +1048,7 @@ def fallback_groups(winners: Any, client_questions: Any) -> tuple[list[list[int]
 
 
 def attach_discovery_riders(
-    groups: Any, riders: Any, *, max_size: Any = None, max_riders: Any = None
+    groups: Any, riders: Any, *, max_riders: Any = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """Ride discovery questions along inside their host mandate group. NEVER RAISES.
 
@@ -1082,12 +1082,19 @@ def attach_discovery_riders(
     own per-parent cap, so a rider is shed only when the discovery stage has
     already over-allocated against its own rule.
 
-    `max_size` IS ACCEPTED AND NO LONGER BINDS. It is kept in the signature because
-    live callers still pass it positionally by keyword, and REMOVING it would be a
-    silent TypeError in a stage that must never raise. It is deliberately not
-    re-purposed as a rider budget: a total-size number reinterpreted as a rider
-    number is exactly the restated-premise mistake that produced CR-09. Pass
-    `max_riders` to control shedding.
+    THERE IS NO `max_size` PARAMETER, AND IT WAS REMOVED ON PURPOSE — operator
+    ruling D-W4-10, 2026-08-04. It had bound nothing since CR-09; it survived only
+    because live callers still passed it and dropping it would have been a silent
+    TypeError in a stage that must never raise. It was removed caller-first, and
+    an AST walk over `tribunal/**/*.py` proved every one of the 20 call sites had
+    stopped passing it BEFORE the signature changed. DO NOT RESTORE IT: a
+    total-size number re-purposed as a rider budget is exactly the restated-premise
+    mistake that produced CR-09, so if a caller ever wants to control shedding the
+    parameter it wants is `max_riders` — the only one that binds.
+
+    `clamp_groups` HAS ITS OWN `max_size` AND THAT ONE IS LEGITIMATE. It is a
+    different function with a real binding parameter and 14 live call sites.
+    Nobody should "finish the job" by removing it too.
 
     `parent`, `rank` and `client_parents` are left FROZEN from the mandate members. A
     rider must not steal its host's facet, and `client_parents` is what decides
@@ -1105,9 +1112,6 @@ def attach_discovery_riders(
     shed: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
     try:
-        # `max_size` is READ AND DISCARDED — see the docstring. Coerced anyway so a
-        # garbage value from a caller cannot sit unexamined in the signature.
-        _ = max_size
         try:
             rider_budget = (
                 _D6_MAX_RIDERS_PER_GROUP if max_riders is None else int(max_riders)

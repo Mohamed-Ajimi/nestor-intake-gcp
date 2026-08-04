@@ -768,7 +768,6 @@ def test_a_discovery_rider_inside_q1s_own_group_does_not_satisfy_q1():
     groups, winners = mandate_group(("Q1", 1))
     groups, shed, _ = question_grouping.attach_discovery_riders(
         groups, [rider("a question the evidence raised about Q1", "Q1", rank=9)],
-        max_size=4,
     )
     assert shed == [] and groups[0]["riders"] == 1
 
@@ -1044,8 +1043,9 @@ def test_gap_b_an_over_supplied_host_sheds_riders_never_winners():
     counted winners. That cap was retired because winners alone exhaust it: at the
     validated configuration a per-question group holds the 5-winner floor plus
     both cross-cutting winners, so the cap shed every rider and deleted the
-    discovery bracket outright. `max_size` is now READ AND DISCARDED, so the old
-    call sheds nothing and the old assertions could only ever fail.
+    discovery bracket outright. CR-09 made `max_size` inert, and D-W4-10
+    (2026-08-04) removed it from the signature altogether — so the old call no
+    longer sheds anything and can no longer even be written.
 
     Shedding is now the RIDER BUDGET, counted over riders only — which is what
     makes "never a winner" true by construction instead of by a guard.
@@ -1054,7 +1054,7 @@ def test_gap_b_an_over_supplied_host_sheds_riders_never_winners():
     riders = [rider(f"a discovered question {i}", "Q1", rank=10 + i) for i in range(4)]
 
     out, shed, notes = question_grouping.attach_discovery_riders(
-        groups, riders, max_size=4, max_riders=2
+        groups, riders, max_riders=2
     )
 
     kept = out[0]["members"]
@@ -1091,7 +1091,7 @@ def test_gap_b_the_winner_count_alone_never_sheds_a_rider():
     riders = [rider(f"a discovered question {i}", "Q1", rank=20 + i) for i in range(3)]
 
     out, shed, _ = question_grouping.attach_discovery_riders(
-        groups, riders, max_size=4, max_riders=3
+        groups, riders, max_riders=3
     )
 
     assert shed == [], "a winner count must not be able to shed a rider"
@@ -1108,7 +1108,7 @@ def test_discovery_ranks_below_every_winner_after_the_repair_grew_the_list():
     """
     groups, winners = mandate_group(("Q1", 3))
     groups, _, _ = question_grouping.attach_discovery_riders(
-        groups, [rider("a discovered question about Q1", "Q1", rank=4)], max_size=4
+        groups, [rider("a discovered question about Q1", "Q1", rank=4)]
     )
     dispatched = [rider("a discovered question about Q1", "Q1", rank=4)]
 

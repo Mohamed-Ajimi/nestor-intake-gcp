@@ -4811,8 +4811,16 @@ async def run_workshop_stage_b(
         # RIDERS FIRST, THEN THE CROSS-CUTTING GROUP — in that order, because a shed
         # rider must be known before the dispatched set (and therefore the report's
         # `researched_as` annotation) can be built.
+        # NEITHER BOUND IS RESTATED HERE, AND THAT IS DELIBERATE (D-W4-10). The
+        # rider budget is `_D6_MAX_RIDERS_PER_GROUP`, which `question_grouping`
+        # DERIVES from `discovery_bracket._DISCOVERY_PER_PARENT_CAP` — so a rider
+        # is shed only when the discovery stage has already over-allocated
+        # against its own rule. Naming that number at this call site would make
+        # it a second authority, which is the exact defect class this phase keeps
+        # paying for. `max_size` was removed by operator ruling on 2026-08-04; it
+        # had bound nothing since CR-09.
         groups, shed_riders, rider_notes = question_grouping.attach_discovery_riders(
-            groups, riders, max_size=question_grouping._D6_MAX_GROUP_SIZE
+            groups, riders
         )
         if cross_cutting:
             # ONE group, and its id is the literal `d1`. There is never a `d2`.

@@ -1008,7 +1008,6 @@ def test_the_spanning_warning_does_not_cry_wolf_over_a_discovery_rider(caplog):
     winners = [_winner("q1 first", 1, "Q1"), _winner("q1 second", 2, "Q1")]
     groups, shed, _notes = qg.attach_discovery_riders(
         _groups(winners, [[0, 1]]), [_rider("a discovered question about Q1", "Q1")],
-        max_size=4,
     )
     assert not shed and len(groups[0]["members"]) == 3, "the fixture's own premise"
     assert groups[0]["parents"] == ["Q1"], "one label, because the rider shares it"
@@ -1046,7 +1045,7 @@ def test_a_rider_that_grows_parents_but_not_client_parents_still_never_warns(cap
     rider = _rider("a discovered question bearing on Q1 and Q2", "Q1")
     rider["parents"] = ["Q1", "Q2"]
     groups, shed, _notes = qg.attach_discovery_riders(
-        _groups(winners, [[0, 1]]), [rider], max_size=4
+        _groups(winners, [[0, 1]]), [rider]
     )
     assert not shed
     assert groups[0]["parents"] == ["Q1", "Q2"], "the fixture's own premise: parents grew"
@@ -1091,7 +1090,6 @@ def test_a_rider_whose_parent_matches_no_group_is_shed_not_re_homed():
     winners = [_winner("q1 first", 1, "Q1"), _winner("q1 second", 2, "Q1")]
     groups, shed, _notes = qg.attach_discovery_riders(
         _groups(winners, [[0, 1]]), [_rider("a discovered question about Q2", "Q2")],
-        max_size=4,
     )
 
     assert len(shed) == 1, "the unmatched rider is shed"

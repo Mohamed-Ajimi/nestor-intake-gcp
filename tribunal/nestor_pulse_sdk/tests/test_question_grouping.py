@@ -378,17 +378,19 @@ def test_a_mandate_group_holding_five_winners_still_accepts_a_discovery_rider():
     with its five winners alone, so `attach_discovery_riders` sheds the rider the
     moment it arrives — the discovery bracket deletes itself, silently, with a note
     nobody reads as an alarm. Driven through the REAL `build_groups` +
-    `attach_discovery_riders` at the REAL `_D6_MAX_GROUP_SIZE`, never a hand-typed
-    group record, so a change to either function's contract fails here too.
+    `attach_discovery_riders`, never a hand-typed group record, so a change to
+    either function's contract fails here too.
+
+    THE CALL PASSES NO SIZE AT ALL, and since D-W4-10 (2026-08-04) it CANNOT:
+    `max_size` was removed from the signature rather than left accepted-and-inert,
+    so shedding is governed only by `_D6_MAX_RIDERS_PER_GROUP`.
     """
     pool = [win(i, "Q1", rank=i + 1) for i in range(5)]
     groups = qg.build_groups([[0, 1, 2, 3, 4]], pool)
     assert len(groups[0]["members"]) == 5, "the fixture's own premise"
 
     rider = ride("Q1", 9)
-    attached, shed, _notes = qg.attach_discovery_riders(
-        groups, [rider], max_size=qg._D6_MAX_GROUP_SIZE
-    )
+    attached, shed, _notes = qg.attach_discovery_riders(groups, [rider])
 
     texts = [member["text"] for member in attached[0]["members"]]
     assert rider["text"] in texts, "5 winners + 1 rider fits under a cap of 7"
@@ -668,9 +670,7 @@ def test_a_rider_joins_its_host_group_and_costs_no_extra_call():
     pool = [win(0, "Q1", rank=1), win(1, "Q2", rank=2), win(2, "Q2", rank=3)]
     groups = qg.build_groups([[0], [1, 2]], pool)
 
-    attached, shed, _ = qg.attach_discovery_riders(
-        groups, [ride("Q2", 5)], max_size=4
-    )
+    attached, shed, _ = qg.attach_discovery_riders(groups, [ride("Q2", 5)])
 
     assert len(attached) == len(groups), "a rider creates NO group"
     assert shed == []
@@ -686,7 +686,7 @@ def test_a_ride_along_group_is_not_mixed_so_the_warning_cannot_cry_wolf():
     pool = [win(0, "Q1", rank=1)]
     groups = qg.build_groups([[0]], pool)
 
-    attached, _, _ = qg.attach_discovery_riders(groups, [ride("Q1", 9)], max_size=4)
+    attached, _, _ = qg.attach_discovery_riders(groups, [ride("Q1", 9)])
 
     assert attached[0]["client_parents"] == ["Q1"]
     assert len(attached[0]["client_parents"]) == 1, "never flagged as spanning two"
@@ -709,7 +709,7 @@ def test_attaching_a_rider_grows_parents_but_never_client_parents():
     cross_rider = win(
         901, "Q1", rank=9, source="discovery", parents=["Q1", "__discovery__"]
     )
-    attached, shed, _ = qg.attach_discovery_riders(groups, [cross_rider], max_size=4)
+    attached, shed, _ = qg.attach_discovery_riders(groups, [cross_rider])
 
     assert shed == []
     assert "__discovery__" in attached[0]["parents"], "parents is the research union"
@@ -724,9 +724,7 @@ def test_a_rider_whose_parent_matches_no_group_is_shed_rather_than_re_homed():
     pool = [win(0, "Q1", rank=1), win(1, "Q2", rank=2)]
     groups = qg.build_groups([[0], [1]], pool)
 
-    attached, shed, notes = qg.attach_discovery_riders(
-        groups, [ride("Q9", 5)], max_size=4
-    )
+    attached, shed, notes = qg.attach_discovery_riders(groups, [ride("Q9", 5)])
 
     assert len(shed) == 1, "inventing a host would be a fabricated attribution"
     assert sum(group["riders"] for group in attached) == 0
@@ -752,8 +750,11 @@ def test_the_rider_budget_sheds_the_weakest_riders_and_never_a_winner():
     riders ranked last, both rules shed the same thing and the assertion proves
     nothing. Rank 99 is deliberately far worse than every rider.
 
-    IT ALSO PINS THAT `max_size` NO LONGER BINDS: a size of 4 against a group of
-    four winners would, under the old rule, have shed every rider. Three survive.
+    THIS USED TO PIN THAT `max_size` NO LONGER BOUND, by passing a size of 4
+    against a group of four winners and showing three riders survived. Since
+    D-W4-10 (2026-08-04) the parameter is GONE from the signature rather than
+    merely inert, so there is nothing left to pin: the call cannot express the old
+    rule at all. `max_riders=3` below is now the only bound in play.
     """
     pool = [
         win(0, "Q1", rank=1),
@@ -768,7 +769,6 @@ def test_the_rider_budget_sheds_the_weakest_riders_and_never_a_winner():
     attached, shed, notes = qg.attach_discovery_riders(
         groups,
         [ride("Q1", 4), ride("Q1", 5), ride("Q1", 6), ride("Q1", 7)],
-        max_size=4,
         max_riders=3,
     )
 
@@ -799,7 +799,7 @@ def test_no_number_of_winners_can_shed_a_rider():
     groups = qg.build_groups([list(range(qg._D6_MAX_GROUP_SIZE))], pool)
 
     riders = [ride("Q1", 50 + i) for i in range(qg._D6_MAX_RIDERS_PER_GROUP)]
-    attached, shed, _ = qg.attach_discovery_riders(groups, riders, max_size=4)
+    attached, shed, _ = qg.attach_discovery_riders(groups, riders)
 
     assert shed == [], "a winner count must not be able to shed a rider"
     assert attached[0]["riders"] == qg._D6_MAX_RIDERS_PER_GROUP
@@ -812,9 +812,7 @@ def test_a_group_with_room_keeps_its_rider():
     pool = [win(0, "Q1", rank=1), win(1, "Q1", rank=2)]
     groups = qg.build_groups([[0, 1]], pool)
 
-    attached, shed, _ = qg.attach_discovery_riders(
-        groups, [ride("Q1", 7)], max_size=4
-    )
+    attached, shed, _ = qg.attach_discovery_riders(groups, [ride("Q1", 7)])
 
     assert len(attached[0]["members"]) == 3
     assert shed == []
@@ -832,9 +830,7 @@ def test_a_rider_joins_the_group_holding_its_parents_highest_ranked_winner():
     for _attempt in range(2):
         # Group A's best rank is 4; group B's best rank is 1.
         groups = qg.build_groups([[1, 3], [0, 2]], pool)
-        attached, shed, _ = qg.attach_discovery_riders(
-            groups, [ride("Q1", 9)], max_size=9
-        )
+        attached, shed, _ = qg.attach_discovery_riders(groups, [ride("Q1", 9)])
 
         hosts = [group["group_id"] for group in attached if group["riders"] == 1]
         best = min(
@@ -881,7 +877,7 @@ def test_with_riders_only_and_no_cross_cutting_question_every_id_starts_with_g()
     pool = [win(0, "Q1", rank=1), win(1, "Q2", rank=2)]
     groups = qg.build_groups([[0], [1]], pool)
 
-    attached, _, _ = qg.attach_discovery_riders(groups, [ride("Q1", 6)], max_size=4)
+    attached, _, _ = qg.attach_discovery_riders(groups, [ride("Q1", 6)])
 
     assert [group["group_id"] for group in attached] == ["g1", "g2"]
     assert all(group["bracket"] == qg.GROUP_BRACKET_MANDATE for group in attached)
@@ -1074,9 +1070,9 @@ def test_clamp_and_build_and_fallback_never_raise_over_hostile_assignments():
         assignment, reason = qg.fallback_groups(bad_winners, ["Q1"])
         assert isinstance(assignment, list) and isinstance(reason, str)
 
-    attached, shed, notes = qg.attach_discovery_riders(None, None, max_size=4)
+    attached, shed, notes = qg.attach_discovery_riders(None, None)
     assert attached == [] and shed == [] and notes == []
-    attached, shed, _ = qg.attach_discovery_riders(["not a group"], ["not a rider"], max_size=4)
+    attached, shed, _ = qg.attach_discovery_riders(["not a group"], ["not a rider"])
     assert attached == [] and shed == []
 
 

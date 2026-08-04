@@ -1461,13 +1461,13 @@ async def _engine_run(
     # THE KNOB THAT ACTUALLY GOVERNS SHEDDING, and the reason it is a separate one.
     # `attach_discovery_riders` used to shed while `len(members) > max_size`, so a
     # caller lowered `max_group_size` to make the cap bite. CR-09 replaced that with
-    # a RIDER BUDGET: `max_size` is still accepted, is explicitly discarded, and NO
-    # LONGER BINDS — a group full of winners must never shed the rider it just
-    # attached. Steering shedding through `max_group_size` therefore silently stopped
-    # building the scenario at all, which is exactly how the shed test below started
-    # asserting against a run where nothing was shed. Production passes only
-    # `max_size`, so the effective budget is always `_D6_MAX_RIDERS_PER_GROUP`; a test
-    # that wants the shed must lower THAT.
+    # a RIDER BUDGET, and D-W4-10 (2026-08-04) then removed `max_size` from the
+    # signature altogether — a group full of winners must never shed the rider it
+    # just attached. Steering shedding through `max_group_size` therefore silently
+    # stopped building the scenario at all, which is exactly how the shed test below
+    # started asserting against a run where nothing was shed. Production now passes
+    # NEITHER bound, so the effective budget is the `_D6_MAX_RIDERS_PER_GROUP`
+    # default; a test that wants the shed must lower THAT.
     if max_riders is not None:
         monkeypatch.setattr(
             _grouping_mod_qg, "_D6_MAX_RIDERS_PER_GROUP", int(max_riders)
@@ -2864,7 +2864,8 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
     TEST. It used to lower `max_group_size`, because `attach_discovery_riders` once
     shed while `len(members) > max_size`. CR-09 replaced that total-size cap with a
     rider budget precisely so that a group already full of WINNERS cannot shed the
-    rider it just attached — `max_size` is now accepted, discarded, and non-binding.
+    rider it just attached, and D-W4-10 (2026-08-04) removed `max_size` from the
+    signature entirely — production passes neither bound now.
     The knob kept steering, the scenario silently stopped happening, and this test
     began asserting "nothing was shed" against a run in which the rider had ridden
     along perfectly correctly. The assertions below are unchanged; only the knob is.
