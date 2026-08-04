@@ -119,7 +119,7 @@ from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     with_retry,
 )
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import _content_to_serialisable
-from nestor_pulse_sdk.runs import run_events
+from nestor_pulse_sdk.runs import run_events, yield_records
 from nestor_pulse_sdk.runs.stage_feed import truncate_task_prompt
 
 if TYPE_CHECKING:
@@ -1270,7 +1270,8 @@ def _catch_up_pairs(
     own docstring says in capitals, so median-seed and flat-1200 produce
     BYTE-IDENTICAL output. A newcomer's disadvantage is FEWER MATCHES AND
     THEREFORE FEWER WINS. So D-W4-3 fixes the SCHEDULE, not the sort: a new
-    candidate simply plays the matches it missed. Measured, perfect judge, 8
+    candidate plays the matches it missed **whenever the low median is above
+    0** — see THE BOUNDARY below. Measured, perfect judge, 8
     rounds, newcomer entering round 6, chance of reaching the top N:
 
         median seed (D-R11 as ruled)      STRONG 1.5%   MEDIAN 1.5%   WEAK 0.0%
@@ -1298,8 +1299,38 @@ def _catch_up_pairs(
     Returns pairs keyed by ORIGINAL index, lower first, and mutates nothing —
     `seen` is copied, and the caller owns every counter, exactly as with
     `_pair_round`.
+
+    ⚠ THE BOUNDARY (15.8-06 ruling `1a`). This schedule is a NO-OP EXACTLY WHEN
+    THE LOW MEDIAN IS 0, which — because `catch_up_matches` takes the low median
+    of the WHOLE field, newcomers included — happens exactly when NEWCOMERS ARE
+    AT LEAST HALF THE FIELD. At the validated configuration at most 6 newcomers
+    enter a field of ~36, so the median is 6 and THE SCHEDULE FIRES; D-W4-3 is
+    honestly delivered and it was the unconditional phrasing in this docstring,
+    not the code, that overpromised. The behaviour is deliberately unchanged.
+
+    The no-op is no longer silent: the guard below WARNS when it returns empty
+    while a zero-match entry is present.
     """
     if median <= 0:
+        # A 0 median with EVERY entry at 0 is just an empty or brand-new field
+        # and is unremarkable. A 0 median while some entry HAS matches cannot
+        # happen (the low median would exceed 0), so the case worth reporting is
+        # the one where a newcomer wanted a catch-up and got none. Logged at
+        # WARNING rather than INFO because the schedule silently not firing is
+        # what made this look like a solved problem for a whole wave; the
+        # existing `log.info` sits inside `if catch_up:` and therefore says
+        # nothing at all on the no-op path. 15.8-15 can grep for this line.
+        newcomers = sum(1 for entry in entries if entry.get("matches") == 0)
+        if newcomers:
+            log.warning(
+                "workshop_rank: the D-W4-3 catch-up schedule is a NO-OP this "
+                "round — the low median match count is 0 across a field of %d "
+                "with %d newcomer(s) at zero matches, i.e. newcomers are at "
+                "least half the field, so nobody catches up and a late entrant "
+                "keeps its fewer-wins disadvantage",
+                len(entries),
+                newcomers,
+            )
         return []
     standing = sorted(entries, key=lambda e: (-e["wins"], -e["elo"], e["index"]))
     order = [e["index"] for e in standing]
@@ -1865,6 +1896,103 @@ def _emit_tournament_summary(
             },
         ),
     )
+
+
+async def _persist_round_yield(run_id: Any, tenant_id: Any, record: Any) -> None:
+    """One `workshop_round_yield` row from one `round_metrics` record. D-R8.
+
+    THE MAPPING (D-W5-1's column set is FROZEN and owned by 15.8-05; this fills
+    it and may not add, rename or reorder a column):
+
+        round_no           <- record["round_no"]
+        candidates_in      <- record["candidates_in"]        (population_in)
+        new_candidates     <- record["new_candidates"]       (len(stamped))
+        keep_count         <- record["keep_count"]
+        weak_count         <- record["weak_count"]
+        kill_count         <- record["kill_count"]
+        new_entrants_top_n <- record["new_entrants_top_n"]   (from exit_verdict)
+        barred_drops       <- record["dropped_as_reproposal"]
+        round_cost_usd     <- record["cost_usd"]             (a STRING by
+                                                              D-W4-7's design;
+                                                              the emitter makes
+                                                              it a Decimal)
+
+    ⚠ THE TWO BINDINGS THAT LOOK RIGHT AND ARE WRONG.
+
+    `keep_count` COMES FROM `record["keep_count"]` AND NEVER FROM
+    `record["winners"]` (D-W5-11). `winners` is the size of the CUT;
+    `keep_count` is the KEEP CRITIQUE count over the whole population. They are
+    DIFFERENT DENOMINATORS, they differ whenever the cut sits below the KEEP
+    count, and binding one to the other's column is a SILENT mis-measurement —
+    it would read as a plausible number that nothing downstream contradicts.
+    The same holds for `weak_count` vs `weak_winners`.
+
+    `barred_drops` COMES FROM `record["dropped_as_reproposal"]` AND NEVER FROM
+    `record["barred"]`. `round_metrics` emits both as SEPARATE keys and
+    `barred` means BARS CREATED this round, which is a different quantity from
+    a barred-duplicate DROP.
+
+    ⚠ THE DICT IS BUILT INSIDE `build=lambda:`, AND MUST STAY THERE. The rule
+    `run_events.emit_safe` states and `yield_records`' `_safe` trio repeats
+    verbatim:
+
+        A CALLER'S ARGUMENTS ARE EVALUATED BEFORE THE CALLEE IS ENTERED.
+
+    So hoisting the mapping into a local above the call moves its evaluation
+    OUT of every protecting `try` — and a raise there does not merely lose a
+    telemetry row. `run_workshop_stage_b`'s outer `except Exception` DOES NOT
+    MERELY LOG: IT RETURNS `_fallback_winners`. An escaping instrumentation
+    exception would therefore SILENTLY REPLACE THE ENTIRE WORKSHOP'S OUTPUT
+    WITH VERBATIM CLIENT QUESTIONS in the one ~$45 measuring run. "Tidying" the
+    hoist back out reintroduces the whole defect while looking correct.
+
+    ONLY THE `_safe` ENTRY POINT MAY BE CALLED, and never with a retry.
+
+    NO COERCION HAPPENS HERE. `.get(...)` yields `None` for an absent key and
+    `None` is passed through as `None` — "not recorded" and "measured zero" must
+    stay distinguishable (D-W5-10), and the coercion authority is 15.8-05's
+    emitter and nobody else. In particular `workshop_loop._count_of` returns 0
+    and is the WRONG tool for a nullable measured value.
+
+    DELIBERATELY NOT PERSISTED, named here so 15.8-15 does not discover it while
+    reading the table: `winners`, `weak_winners`, `barred`, `lookups` and
+    `calls`. D-W5-1's frozen column set has no home for them and this plan does
+    not own that schema. All five survive per-run in `_stage_b_result`'s
+    `loop_rounds`. THE CONSEQUENCE: WEAK-WINNERS-PER-ROUND IS NOT CROSS-RUN
+    QUERYABLE after this phase — `weak_count` is the WEAK CRITIQUE count, not
+    the winner-scoped one. That is a known limit, not an oversight.
+    """
+    # BELT AND BRACES, ON PURPOSE. `record_round_safe` already swallows its own
+    # failures — but it lives in `runs/yield_records.py`, a file THIS PLAN DOES
+    # NOT OWN AND MAY NOT EDIT. Depending solely on a sibling module's internal
+    # discipline to protect a ~$45 run is the wrong dependency: one refactor
+    # there, invisible from here, and an exception starts reaching
+    # `run_workshop_stage_b`'s outer handler, which RETURNS `_fallback_winners`
+    # rather than merely logging. The cost of this `try` is nothing; the cost of
+    # not having it is the entire workshop's output, silently.
+    try:
+        await yield_records.record_round_safe(
+            run_id,
+            tenant_id,
+            build=lambda: {
+                "round_no": record.get("round_no"),
+                "candidates_in": record.get("candidates_in"),
+                "new_candidates": record.get("new_candidates"),
+                "keep_count": record.get("keep_count"),
+                "weak_count": record.get("weak_count"),
+                "kill_count": record.get("kill_count"),
+                "new_entrants_top_n": record.get("new_entrants_top_n"),
+                "barred_drops": record.get("dropped_as_reproposal"),
+                "round_cost_usd": record.get("cost_usd"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — telemetry may never fail a paid run
+        log.warning(
+            "workshop_rank: persisting the round yield raised %s — row lost, "
+            "NOT retried; the round and the run are unaffected",
+            type(exc).__name__,
+        )
+    return None
 
 
 async def run_tournament(
@@ -4366,6 +4494,36 @@ async def run_workshop_stage_b(
             )
             critique_reasons = round_critique_reasons
 
+            # --- THE ROUND'S CRITIQUE TRIPLE (D-W5-17). All three are
+            # CRITIQUE-scoped: they count the verdicts the critique pass
+            # returned over the WHOLE population it saw, which is why
+            # `keep + weak + kill == population_in` by construction — both of
+            # `critique_candidates`' coverage guards put a rescued candidate
+            # back into `screened` as KEEP *and* reconcile it out of
+            # `killed_out`, so the two lists partition the population exactly.
+            #
+            # THEY ARE COMPUTED HERE, NOT AT THE RECORD, FOR TWO REASONS. First,
+            # `killed_out` is reconciled by `critique_candidates` itself, so it
+            # must be read after that call and before anything else touches it.
+            # Second, the two bar loops immediately below REBIND the name
+            # `killed`, and reading a shadowed name at the record site is the
+            # kind of quiet wrong number this whole table exists to prevent.
+            #
+            # ⚠ NOT winner statistics. `winners`/`weak_winners` are
+            # WINNER-scoped and stay separate — see `round_metrics`' THE TWO
+            # DENOMINATORS paragraph, and D-W5-11.
+            keep_this_round = sum(
+                1
+                for entry in screened
+                if str(entry.get("critique") or "").upper() == _KEEP
+            )
+            weak_this_round = sum(
+                1
+                for entry in screened
+                if str(entry.get("critique") or "").upper() == _WEAK
+            )
+            kill_this_round = len(killed_out)
+
             # --- 1a. BAR CAUSE ONE: a KILL that names a DEFECT. A KILL that names
             # a RESTATEMENT does NOT bar — see `_kill_is_a_restatement` for the
             # structural test and for why the failure direction is towards NOT
@@ -4644,7 +4802,31 @@ async def run_workshop_stage_b(
             # dedup strangling discovery — and stamping every drop round 0 destroys
             # the one distinction it was built to make. That failure is silent and
             # every test stays green.
-            drops_before = len(register.get("drops") or [])
+            # ⚠ CAUSE-FILTERED, NEVER A BARE LENGTH (D-W5-6). `record_drop`
+            # appends BOTH causes to ONE list, `register["drops"]`, by design.
+            # A bare `len(...)` was accidentally correct only for as long as
+            # `DROP_CLUSTERED_ONTO_LIVE` had no production writer — 15.8-04
+            # landed one at the near-duplicate merge site, and LIVE MERGES ARE
+            # THE COMMON CASE. From that moment a bare length makes
+            # `dropped_as_reproposal` — the "the loop is SPINNING" metric —
+            # silently absorb ordinary near-copy merges, i.e. the OPPOSITE
+            # failure D-W4-1 built the drop log to distinguish. It then flows
+            # into `workshop_round_yield.barred_drops`, which 15.8-15 reads as
+            # THE ONE MEASUREMENT, and an inflated value there is not
+            # recoverable. `workshop_register.count_drops` is the replacement;
+            # DO NOT "simplify" it back to a length.
+            #
+            # THE DELTA SHAPE IS KEPT ON PURPOSE. `count_drops` also offers a
+            # `round_no=` filter and a single round-filtered call would be
+            # shorter — rejected: the delta measures what THIS round's
+            # `cluster_candidates` actually appended and stays correct even if a
+            # drop is ever stamped with an unexpected round, where the filter
+            # would silently return zero. Sites 1 and 2 are a MATCHED PAIR and
+            # use the IDENTICAL call expression; a delta between two different
+            # denominators is worse than two wrong numbers.
+            drops_before = workshop_register.count_drops(
+                register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+            )
             if stamped:
                 stamped, cluster_reasons = await workshop.cluster_candidates(
                     candidates=stamped,
@@ -4657,7 +4839,14 @@ async def run_workshop_stage_b(
                     round_no=round_no,
                 )
                 loop_reasons += list(cluster_reasons)
-            dropped_this_round = len(register.get("drops") or []) - drops_before
+            # Swap site 2 — the other half of the matched pair. The call
+            # expression is IDENTICAL to `drops_before`'s above, by requirement.
+            dropped_this_round = (
+                workshop_register.count_drops(
+                    register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+                )
+                - drops_before
+            )
 
             # A dropped re-proposal means the register is WORKING, so the summary
             # is a NOTE and never a degradation (D-12's alarm-fatigue rule).
@@ -4687,6 +4876,16 @@ async def run_workshop_stage_b(
                     round_no=round_no,
                     candidates_in=population_in,
                     new_candidates=len(stamped),
+                    # CRITIQUE-scoped (D-W5-17), computed above the bar loops.
+                    keep_count=keep_this_round,
+                    weak_count=weak_this_round,
+                    kill_count=kill_this_round,
+                    # THE COUNTER THE LOOP'S JUSTIFICATION RESTS ON, read
+                    # STRAIGHT OFF THE VERDICT. `exit_verdict` computed it four
+                    # lines above for criterion 3 and is its ONE AUTHORITY;
+                    # recomputing it here would be the second authority the
+                    # floor was moved INTO `exit_verdict` to avoid.
+                    new_entrants_top_n=verdict.get("new_entrants") or 0,
                     winners=len(selected),
                     weak_winners=verdict.get("weak_winners") or 0,
                     barred=barred_this_round,
@@ -4705,6 +4904,22 @@ async def run_workshop_stage_b(
                     ),
                 )
             )
+
+            # PERSIST THIS ROUND'S YIELD (D-R8), per ROUND and not after the
+            # loop, so a run that dies in round 7 keeps rounds 1-6 — the
+            # durability half of the same argument that made 15.8-05 write
+            # `assignment_yield` at research-resolve rather than at the end. The
+            # record written is the one JUST APPENDED, so the table and
+            # `loop_rounds` can never disagree.
+            #
+            # ⚠ THIS MAY NEVER RAISE, and the usual "the stage catches it
+            # anyway" reasoning is WRONG HERE: `run_workshop_stage_b`'s outer
+            # handler does not merely log, IT RETURNS `_fallback_winners`. An
+            # escaping instrumentation exception would silently replace the
+            # whole workshop's output with verbatim client questions in the ONE
+            # measuring run. Hence the `_safe` entry point, the dict built
+            # inside `build`, and no retry.
+            await _persist_round_yield(run_id, tenant_id, round_records[-1])
 
             # The floor HELD: every criterion was satisfied and the loop is
             # continuing anyway (D-W4-9). Read straight off the verdict — nothing
@@ -5097,7 +5312,32 @@ async def run_workshop_stage_b(
             # same way `meta_review` and `group_winners` do, so reading `calls`
             # here would have silently under-reported every one of them as zero.
             + int(admission_stats.get("admission_calls") or 0)
-            + int(admission_stats.get("admission_resolver_calls") or 0)
+            # `admission_resolver_calls` IS DELIBERATELY NOT SUMMED HERE
+            # (15.8-06 ruling `2-remove`). It counts a batched HTTP REDIRECT
+            # RESOLUTION, not a model call — one per `admit_invented_angles`
+            # invocation, so at most once per loop round and 4-10 per run
+            # against a total in the dozens to low hundreds. D-W5-14 sharpens
+            # it: `resolver_calls = 1` is assigned BEFORE the await and
+            # regardless of the kill switch, so it can count an operation that
+            # issued zero HTTP requests.
+            #
+            # ⚠ `actions` WAS NEVER THE RUN'S SPEND SIGNAL, and both
+            # `15.8-CONTEXT.md` and `15.7-VERIFICATION.md` describe this
+            # imprecisely. `cost_usd` travels as a SEPARATE argument on the same
+            # `_stage_b_feed_finish` call and the resolver records no cost of
+            # its own, so THE DOLLAR FIGURE WAS UNCONTAMINATED — only the COUNT
+            # was. With this line gone, `actions` means exactly "calls that went
+            # to a model".
+            #
+            # This reverses ONE line of the CR-07 fix, and CR-07's concern
+            # survives intact: `admission_calls`, `classify_calls`,
+            # `cluster_stats["calls"]`, `admission_cost_usd` and
+            # `grounded_lookups` are all still read. The resolver keeps its own
+            # `admission_stats` key and its own log line — nothing was deleted
+            # but this summand.
+            #
+            # ⚠ FOR 15.8-15: THE 15.8 `actions` FIGURE IS NOT COMPARABLE TO A
+            # PRE-15.8 ONE without noting that the definition changed.
             + int(admission_stats.get("classify_calls") or 0)
             + int(cluster_stats.get("calls") or 0)
         )
@@ -5153,8 +5393,15 @@ async def run_workshop_stage_b(
                 # --- the loop's numbers (D-W4-7: recorded, never enforced) ---
                 "rounds": int(rounds_run),
                 "loop_born_winners": int(loop_born_winners),
+                # `barred` is bars CREATED and stays a bare length — a bar and a
+                # barred-duplicate DROP are different quantities and this plan
+                # keeps them apart.
                 "barred": len(register.get("barred") or []),
-                "dropped_as_reproposal": len(register.get("drops") or []),
+                # Swap site 3 (D-W5-6). Named for the barred cause, so it counts
+                # the barred cause. See the comment at `drops_before` above.
+                "dropped_as_reproposal": workshop_register.count_drops(
+                    register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+                ),
                 "grounded_lookups": int(
                     admission_stats.get("grounded_lookups") or 0
                 ),
