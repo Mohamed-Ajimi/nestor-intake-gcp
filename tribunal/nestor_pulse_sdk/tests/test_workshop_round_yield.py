@@ -329,6 +329,58 @@ def _stage_b_source() -> str:
     return ast.get_source_segment(src, fn) or ""
 
 
+def test_new_entrants_top_n_is_passed_through_without_an_or_zero() -> None:
+    """WR-04, AT THE CALL SITE. RED on unfixed source (`... or 0` was there).
+
+    AN `ast` CHECK AND NOT A GREP. `round_metrics` gives its four D-W5-17
+    counters NO DEFAULTS so that a forgotten wiring is a `TypeError` rather than
+    a number; an `or 0` at the only production call site supplies exactly the
+    confident zero that design exists to refuse — and it does it for the counter
+    ENGINE-REDESIGN-SPEC section 6 says can retire the whole loop. `0` must mean
+    MEASURED ZERO here and nothing else.
+
+    The assertion is on the NODE TYPE, so any short-circuit default (`or 0`,
+    `or 0 if ...`, a nested `or`) fails it, not just the one spelling. It does
+    NOT forbid the `.get` itself: a `verdict` without the key must still reach
+    the column as NULL rather than raise inside a paid run.
+    """
+    path = Path(wr.__file__)
+    src = path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "run_workshop_stage_b"
+    ][0]
+
+    calls = [
+        c
+        for c in ast.walk(fn)
+        if isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Attribute)
+        and c.func.attr == "round_metrics"
+    ]
+    assert len(calls) == 1, (
+        f"expected exactly ONE round_metrics call site, found {len(calls)} — "
+        "a second producer is the two-authorities defect this phase keeps closing"
+    )
+
+    kwargs = {k.arg: k.value for k in calls[0].keywords if k.arg}
+    assert "new_entrants_top_n" in kwargs, "the counter must still be wired"
+    assert not isinstance(kwargs["new_entrants_top_n"], ast.BoolOp), (
+        "an `or 0` here turns an ABSENT measurement into a MEASURED ZERO in the "
+        "counter that decides whether the loop is worth its money"
+    )
+    # POSITIVE CONTROL: this check can go red. `weak_winners` next door still
+    # carries its `or 0` — it is WINNER-scoped, not a D-W5-17 column, and was
+    # deliberately left alone. If this assertion ever fails, the AST walk stopped
+    # seeing BoolOps and the assertion above became vacuous.
+    assert isinstance(kwargs.get("weak_winners"), ast.BoolOp), (
+        "the positive control disappeared — re-derive whether the check above "
+        "still detects anything at all before trusting it"
+    )
+
+
 def test_all_three_drop_reads_are_cause_filtered_in_the_committed_source() -> None:
     """D-W5-6: ALL THREE OR NONE. A SOURCE-TEXT test, and it says so.
 

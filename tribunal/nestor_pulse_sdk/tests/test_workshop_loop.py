@@ -1082,6 +1082,50 @@ def test_round_metrics_records_the_four_counters_and_enforces_nothing_on_them(
         assert original in metrics
 
 
+def test_an_absent_four_counter_records_NULL_and_never_a_confident_zero() -> None:
+    """WR-04. RED on unfixed source: every one of these read `0`.
+
+    `workshop_round_yield` and migration 0018 both describe these four columns
+    with one sentence — NULL means NOT RECORDED, 0 means MEASURED ZERO, and the
+    two must stay distinguishable — and `yield_records._coerce_int` returns
+    `None` and NEVER `0` so the distinction survives the write. Under `_count_of`
+    (floor `_safe_int(value, 0)`) no producer could hand it a value it would
+    translate that way, so the NULL was unwritable and the doctrine decorative.
+
+    It matters most for `new_entrants_top_n`: ENGINE-REDESIGN-SPEC section 6 says
+    that if round 7+ never produces a new entrant across several runs, drop the
+    cap and keep the money. A confident zero from a wiring failure is
+    indistinguishable from a measured zero, so the run could retire the loop on
+    an artefact.
+    """
+    for counter in ("keep_count", "weak_count", "kill_count", "new_entrants_top_n"):
+        assert _metrics(**{counter: None})[counter] is None, counter
+        # An UNREADABLE value is equally not-a-measurement.
+        assert _metrics(**{counter: object()})[counter] is None, counter
+        # ...and a REAL zero is still a real zero. Without this half the fix
+        # could be "always None", which loses the measurement instead.
+        measured = _metrics(**{counter: 0})[counter]
+        assert measured == 0 and measured is not None, counter
+
+
+def test_the_other_ten_counters_still_floor_to_an_int() -> None:
+    """THE ROW WHOSE EXPECTED RESULT IS THAT NOTHING WENT RED.
+
+    WR-04 changed FOUR counters and deliberately left the other ten on
+    `_count_of`. Those feed `_stage_b_result`'s `loop_rounds`, which is
+    prose-adjacent and reads better with a hard int; they are not D-W5-17
+    columns and no doctrine about NULL applies to them. If this test starts
+    failing, the fix was applied wider than it was scoped.
+    """
+    for counter in ("round_no", "candidates_in", "new_candidates", "winners",
+                    "weak_winners", "barred", "dropped_as_reproposal",
+                    "lookups", "calls"):
+        assert _metrics(**{counter: None})[counter] == 0, counter
+    # And the list convenience the four kept as well: a caller who passes the
+    # collection rather than its length still gets the length, not a NULL.
+    assert _metrics(keep_count=[{}, {}, {}])["keep_count"] == 3
+
+
 # ===========================================================================
 # THE SEAM: the loop driven END TO END through the REAL `run_workshop_stage_b`.
 #

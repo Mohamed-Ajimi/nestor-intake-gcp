@@ -833,6 +833,47 @@ def _count_of(value: Any) -> int:
         return _safe_int(value, 0)
 
 
+def _count_or_none(value: Any) -> int | None:
+    """`_count_of`, except that AN UNREADABLE VALUE IS `None` AND NEVER `0`.
+
+    WR-04. `_count_of` closes with `_safe_int(value, 0)`, so it can NEVER return
+    `None` — which makes a NULL unwritable in every column it feeds, and defeats
+    the one rule `workshop_round_yield` and migration 0018 are both built on:
+    *NULL means NOT RECORDED, 0 means MEASURED ZERO, and the two must stay
+    distinguishable*. `runs.yield_records._coerce_int` honours that rule and
+    returns `None`, never `0`; before this function existed, nothing could ever
+    hand it a value it would translate that way.
+
+    It matters most for `new_entrants_top_n`. ENGINE-REDESIGN-SPEC section 6 says
+    that if round 7+ never produces a new entrant across several runs, DROP THE
+    CAP AND KEEP THE MONEY — so a confident `0` from a wiring failure, being
+    indistinguishable from a measured zero, could retire the loop on an artefact.
+
+    THE LIST CONVENIENCE IS KEPT DELIBERATELY. A caller who passes the winner
+    LIST rather than its length still gets the length: that is a real mistake this
+    has caught, and turning it into a NULL would trade a fabricated number for a
+    lost one. What changes is only the FLOOR — a value that can be read yields a
+    count, and a value that cannot yields `None`.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (str, bytes)):
+        # NOT `_safe_int`: its floor is `0`, which is the very value this
+        # function exists to stop fabricating.
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    try:
+        return len(value)
+    except TypeError:
+        return None
+
+
 def _cost_str(value: Any) -> str:
     """Spend as a STRING, the same idiom `workshop_rank` uses for `stats`.
 
@@ -922,6 +963,26 @@ def round_metrics(
     D-W5-1 chose a cross-run table over a per-run feed. Its one authority is
     `exit_verdict`, which already computes it for criterion 3 (SATURATION); this
     function RECORDS it and must never be handed a recomputation.
+
+    THE FOUR D-W5-17 COUNTERS CAN BE `None`, AND THE OTHER TEN CANNOT (WR-04).
+    ------------------------------------------------------------------------
+    `keep_count`, `weak_count`, `kill_count` and `new_entrants_top_n` go through
+    `_count_or_none`; everything else still goes through `_count_of`. The reason
+    is the destination, not the value. Those four are the columns
+    `workshop_round_yield` and migration 0018 both describe with the same
+    sentence — *NULL means not recorded, 0 means measured zero, and the two must
+    stay distinguishable* — and `runs.yield_records._coerce_int` is written to
+    return `None` and NEVER `0` so that the distinction survives the write. Under
+    `_count_of`, whose floor is `_safe_int(value, 0)`, no producer could ever hand
+    it a value it would translate that way: a NULL was UNWRITABLE and the doctrine
+    was decorative. The remaining ten feed `_stage_b_result`'s `loop_rounds`,
+    which is prose-adjacent and reads better with a hard int.
+
+    This is DEFENCE IN DEPTH, stated plainly rather than dressed up: today
+    `exit_verdict` has ONE return statement and it always carries an `int`
+    `new_entrants`, so nothing is currently mis-recorded. What changes is that a
+    future absence becomes VISIBLE rather than becoming a zero — which is the
+    only reason the column is nullable in the first place.
     """
     return {
         "round_no": _count_of(round_no),
@@ -929,10 +990,16 @@ def round_metrics(
         "new_candidates": _count_of(new_candidates),
         # --- CRITIQUE-scoped, in D-W5-1's column order. See THE TWO
         # DENOMINATORS above before reading any of these as a winner statistic.
-        "keep_count": _count_of(keep_count),
-        "weak_count": _count_of(weak_count),
-        "kill_count": _count_of(kill_count),
-        "new_entrants_top_n": _count_of(new_entrants_top_n),
+        #
+        # `_count_or_none`, NOT `_count_of` (WR-04). These four are the D-W5-17
+        # columns, and their table's whole doctrine is that NULL means NOT
+        # RECORDED while 0 means MEASURED ZERO. `_count_of` cannot return `None`,
+        # so under it that distinction was unreachable and a wiring failure would
+        # have read as a confident zero — see the NULL paragraph below.
+        "keep_count": _count_or_none(keep_count),
+        "weak_count": _count_or_none(weak_count),
+        "kill_count": _count_or_none(kill_count),
+        "new_entrants_top_n": _count_or_none(new_entrants_top_n),
         # --- WINNER-scoped from here down; unchanged, and read by
         # `_stage_b_result`'s `loop_rounds`.
         "winners": _count_of(winners),

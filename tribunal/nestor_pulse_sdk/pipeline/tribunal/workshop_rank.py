@@ -4885,7 +4885,17 @@ async def run_workshop_stage_b(
                     # lines above for criterion 3 and is its ONE AUTHORITY;
                     # recomputing it here would be the second authority the
                     # floor was moved INTO `exit_verdict` to avoid.
-                    new_entrants_top_n=verdict.get("new_entrants") or 0,
+                    #
+                    # ⚠ NO `or 0` (WR-04). `round_metrics` gives its four D-W5-17
+                    # counters NO DEFAULTS precisely so that a forgotten wiring is
+                    # a `TypeError` rather than a number; an `or 0` HERE handed
+                    # back the confident zero that design exists to refuse, and it
+                    # did it for the one counter that can retire the whole loop.
+                    # A missing key must reach the column as NULL — "not
+                    # recorded" — and never as "measured zero". Note this is
+                    # DEFENCE IN DEPTH: `exit_verdict` has a single return and
+                    # always carries an int today.
+                    new_entrants_top_n=verdict.get("new_entrants"),
                     winners=len(selected),
                     weak_winners=verdict.get("weak_winners") or 0,
                     barred=barred_this_round,
