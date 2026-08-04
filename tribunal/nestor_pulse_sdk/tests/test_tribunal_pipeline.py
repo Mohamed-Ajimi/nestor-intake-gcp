@@ -584,6 +584,19 @@ def test_tribunal_pipeline_does_not_call_extract_and_persist_citations():
                     "TribunalPipeline must NOT call extract_and_persist_citations"
 
     # Confirm persist_tribunal_claims IS present (either imported or called)
+    #
+    # LANDMINE (recorded by 15.8-11's test-file review, 2026-08-04; NOT changed).
+    # This is a RAW-TEXT match over the unparsed file, while the two assertions
+    # above it walk the AST. The condition that trips it: remove the real call
+    # and leave behind any COMMENT, DOCSTRING or string literal containing the
+    # name -- e.g. `# we no longer use persist_tribunal_claims` -- and this stays
+    # GREEN while the fine-grained persistence path is gone. It is correct TODAY
+    # only because pipeline.py genuinely calls it.
+    #
+    # Deliberately not hardened here: no gate runs this file (it is absent from
+    # BOTH cloudbuild.test-engine.yaml and cloudbuild.test-gates.yaml), so a
+    # change would be unverifiable by CI. If 15.8-13 registers this file, tighten
+    # this to an ast.Call/ImportFrom check mirroring the walks above.
     assert "persist_tribunal_claims" in source, \
         "TribunalPipeline must use persist_tribunal_claims (fine-grained path)"
 
