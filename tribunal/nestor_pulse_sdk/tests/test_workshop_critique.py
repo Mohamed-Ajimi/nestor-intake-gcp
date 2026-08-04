@@ -2162,6 +2162,12 @@ def test_the_entry_cap_bites_and_states_its_overflow_rather_than_hiding_it():
     The overflow is STATED, not silently dropped — a prompt that quietly forgets
     two-thirds of what is barred is a prompt nobody can debug. The notice line
     carries no pipe, so it can never be mistaken for an addressable record.
+
+    THE WINDOW TAKES THE NEWEST END OF THE LIST, NOT THE OLDEST, and that is the
+    half this test gained in 15.8-04. Under a cap the recent bars are worth more
+    than the old ones: the bars a model has just earned are exactly the ones it
+    is about to re-propose, so showing it the first 24 and hiding the last 6
+    makes the block least useful precisely when it starts to matter.
     """
     reg = workshop_register.new_register()
     _bar_n(reg, 30)
@@ -2170,10 +2176,76 @@ def test_the_entry_cap_bites_and_states_its_overflow_rather_than_hiding_it():
     assert len(_record_lines(block)) == 3, block
     assert "27" in block, f"the overflow count is not stated: {block!r}"
 
+    # The LAST three barred, not the first three.
+    for i in (27, 28, 29):
+        assert f"number {i} about" in block, block
+    assert "number 0 about" not in block, block
+    notice = [line for line in block.splitlines() if "|" not in line]
+    assert len(notice) == 1 and "|" not in notice[0], block
+
     uncapped = workshop_register.barred_block(reg)
     assert len(_record_lines(uncapped)) == 24, (
         "the DEFAULT entry cap must bite too, not only an explicit one"
     )
+
+
+def test_the_barred_window_takes_the_newest_entries_and_not_the_oldest():
+    """Past 24 bars the DEFAULT cap must show the bars just earned (15.8-04).
+
+    `barred_block` rendered `entries[:limit]`, so once a run passed
+    `_BARRED_MAX_ENTRIES` the prompt carried the OLDEST 24 bars and hid the
+    NEWEST. A ten-round loop over a ~36-candidate population reaches that, and
+    the entries it hides are the ones the model is most likely to re-propose —
+    the block is at its least useful exactly when it begins to matter.
+
+    Index numbering still starts at 0 for the first RENDERED record: the numbers
+    address slots in this block, not positions in the register.
+    """
+    reg = workshop_register.new_register()
+    _bar_n(reg, 30)
+
+    block = workshop_register.barred_block(reg)
+    lines = _record_lines(block)
+    assert len(lines) == 24, block
+
+    # The window is entries 6..29 — the newest 24.
+    assert "number 29 about" in block, block
+    assert "number 6 about" in block, block
+    assert "number 0 about" not in block, block
+    assert "number 5 about" not in block, block
+    assert "6" in block, f"the overflow count is not stated: {block!r}"
+
+    # Contiguous, zero-based addressing over the rendered window.
+    assert lines[0].startswith("0 | "), lines[0]
+    assert lines[-1].startswith("23 | "), lines[-1]
+
+
+def test_a_zero_entry_cap_renders_zero_records_and_never_the_whole_list():
+    """THE MUTANT-CATCHER FOR THE NAIVE `entries[-limit:]` (15.8-04).
+
+    `entries[-0:]` is `entries[:]` — the WHOLE list. A newest-first slice written
+    as a bare negative index therefore INVERTS the bound `_BARRED_MAX_ENTRIES`
+    exists to enforce: ask for zero entries and get every one of them. `limit`
+    reaches 0 legitimately, both through an explicit `cap_entries=0` and through
+    `limit = max(0, limit)` clamping a negative or garbled cap.
+
+    An unbounded barred block inflates every generate and evolve call for the
+    rest of a ten-round run and can push a prompt past its provider limit, so
+    this is a self-inflicted denial of service, not a cosmetic slip.
+    """
+    reg = workshop_register.new_register()
+    _bar_n(reg, 30)
+
+    block = workshop_register.barred_block(reg, cap_entries=0)
+    assert _record_lines(block) == [], block
+    assert "number 29" not in block, block
+    assert "number 0 about" not in block, block
+    # All 30 are hidden, and the notice says so.
+    assert "30" in block, block
+
+    # A negative cap clamps to zero through the same guard, not around it.
+    negative = workshop_register.barred_block(reg, cap_entries=-5)
+    assert _record_lines(negative) == [], negative
 
 
 def test_the_character_cap_bites_on_both_the_text_and_the_flaw():
