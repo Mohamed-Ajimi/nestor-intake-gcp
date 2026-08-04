@@ -893,6 +893,15 @@ def _metrics(**overrides: Any) -> dict[str, Any]:
         "lookups": 2,
         "calls": 97,
         "cost_usd": 0.24,
+        # The four CRITIQUE-scoped counters (D-W5-17). They were added to this
+        # helper DELIBERATELY, not by drift: `round_metrics` gained four REQUIRED
+        # keyword-only parameters, so every call in this module had to grow them
+        # or raise `TypeError`. Note `keep_count` (20) differs from `winners`
+        # (17) on purpose — the fixture itself refuses the D-W5-11 conflation.
+        "keep_count": 20,
+        "weak_count": 10,
+        "kill_count": 4,
+        "new_entrants_top_n": 2,
     }
     kwargs.update(overrides)
     return round_metrics(**kwargs)
@@ -961,11 +970,116 @@ def test_round_metrics_never_raises_on_hostile_input() -> None:
             lookups=battery,
             calls=battery,
             cost_usd=battery,
+            # The four new counters take the hostile battery too — this explicit
+            # call had to grow them because they are REQUIRED (D-W5-17). A
+            # deliberate, named edit, not drift.
+            keep_count=battery,
+            weak_count=battery,
+            kill_count=battery,
+            new_entrants_top_n=battery,
         )
         assert isinstance(metrics, dict)
         json.dumps(metrics)
         for value in metrics.values():
             assert not isinstance(value, float)
+
+
+def test_round_metrics_requires_each_of_the_four_critique_counters() -> None:
+    """Not one of the four may have a default. A default FABRICATES a number.
+
+    `round_metrics` has exactly ONE production caller. A default of `0` would
+    turn "the wiring was forgotten" into a confident zero in the ONE measuring
+    run — the fabricated-measurement failure `workshop_round_yield` exists to
+    prevent. A missing kwarg must be a `TypeError`, loudly, at import-time cost
+    to nobody. This matches the function's own convention: all ten original
+    parameters are already required keyword-only with no default.
+
+    NO `pytest.raises` HERE, DELIBERATELY. This module's docstring forbids
+    `import pytest` outright, and that is not stylistic: it is what keeps every
+    function in this file drivable by a twenty-line loader on the one
+    stdlib-only interpreter this machine has. A bare try/except asserts exactly
+    the same thing and keeps the property.
+    """
+    complete: dict[str, Any] = {
+        "round_no": 1,
+        "candidates_in": 1,
+        "new_candidates": 0,
+        "winners": 1,
+        "weak_winners": 0,
+        "barred": 0,
+        "dropped_as_reproposal": 0,
+        "lookups": 0,
+        "calls": 0,
+        "cost_usd": 0,
+        "keep_count": 1,
+        "weak_count": 0,
+        "kill_count": 0,
+        "new_entrants_top_n": 0,
+    }
+    # POSITIVE CONTROL FIRST: the complete call must succeed, otherwise every
+    # `TypeError` below could be raised by something entirely unrelated and the
+    # loop would pass vacuously.
+    assert isinstance(round_metrics(**complete), dict)
+
+    for missing in ("keep_count", "weak_count", "kill_count", "new_entrants_top_n"):
+        kwargs = {k: v for k, v in complete.items() if k != missing}
+        raised = False
+        try:
+            round_metrics(**kwargs)
+        except TypeError:
+            raised = True
+        assert raised, f"{missing} must be REQUIRED — a default fabricates a zero"
+
+
+def test_round_metrics_keeps_winners_and_keep_count_as_different_numbers() -> None:
+    """D-W5-11: `winners` is NOT `keep_count`. They are different denominators.
+
+    `winners` is WINNER-scoped — the size of the cut. `keep_count` is
+    CRITIQUE-scoped — how many of the whole population the critique pass marked
+    KEEP. Whenever the cut sits below the KEEP count the two differ, and the
+    record must be able to SHOW that difference rather than collapse it.
+
+    Binding `winners` to the `keep_count` column would be a silent
+    mis-measurement: it would read as a plausible number in the one measuring
+    run and nothing would ever contradict it. That is why this test exists at
+    the record level as well as at the binding site.
+    """
+    metrics = _metrics(winners=17, keep_count=20)
+    assert metrics["winners"] == 17
+    assert metrics["keep_count"] == 20
+    assert metrics["winners"] != metrics["keep_count"]
+    # And the critique triple shares ONE denominator, which `winners` does not.
+    assert (
+        metrics["keep_count"] + metrics["weak_count"] + metrics["kill_count"]
+        == metrics["candidates_in"]
+    )
+
+
+def test_round_metrics_records_the_four_counters_and_enforces_nothing_on_them(
+) -> None:
+    """The four are recorded faithfully and no ceiling is applied to any of them.
+
+    `new_entrants_top_n` is the counter ENGINE-REDESIGN-SPEC section 6 calls the
+    loop's entire justification, so an absurd value must survive to the record
+    rather than be clamped into plausibility.
+    """
+    metrics = _metrics(keep_count=20, weak_count=10, kill_count=4, new_entrants_top_n=2)
+    assert metrics["keep_count"] == 20
+    assert metrics["weak_count"] == 10
+    assert metrics["kill_count"] == 4
+    assert metrics["new_entrants_top_n"] == 2
+
+    absurd = _metrics(new_entrants_top_n=9_999, kill_count=1_000_000)
+    assert absurd["new_entrants_top_n"] == 9_999
+    assert absurd["kill_count"] == 1_000_000
+
+    # Fourteen keys, and the ten original ones are all still present.
+    assert len(metrics) == 14
+    for original in (
+        "round_no", "candidates_in", "new_candidates", "winners", "weak_winners",
+        "barred", "dropped_as_reproposal", "lookups", "calls", "cost_usd",
+    ):
+        assert original in metrics
 
 
 # ===========================================================================
