@@ -5,7 +5,7 @@ milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
 last_updated: "2026-08-03T17:37:11.744Z"
-last_activity: 2026-07-31 -- Phase 15.7 execution started
+last_activity: 2026-08-04 -- Quick task 260804-dbd: three operator rulings closed 15.7 BLOCKER
 progress:
   total_phases: 16
   completed_phases: 11
@@ -21,17 +21,56 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.7 COMPLETE + gate green (1538/0) — next is VERIFICATION, then phase 15.8 (deploy + the one measuring run)
+**Current focus:** Phase 15.7 COMPLETE + gate green (1538/0) + VERIFIED (`gaps_found`, 57/58); its BLOCKER closed 2026-08-04 by operator rulings D-W4-9/10/11 (UNGATED — 3 commits owe a Cloud Build run). Next is phase 15.8 (yield instrumentation, then the ONE deploy + ONE measuring run)
 
 ## Current Position
 
 Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — **COMPLETE, REVIEWED, FIXED,
-GATE GREEN. NOT VERIFIED, NOT DEPLOYED.**
-Plan: 9 of 9
-  **NEXT: verification** — the `gsd-verifier` agent, writing `15.7-VERIFICATION.md` (see `15.5-`/
-  `15.6-VERIFICATION.md` for shape). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier
-  handoffs instructed it and it was carried forward unverified across two sessions. Then phase 15.8.
-  Full state + the four open operator calls: `.planning/phases/15.7-*/.continue-here.md`.
+GATE GREEN, VERIFIED (`gaps_found`, 57/58). NOT DEPLOYED.** Verification ran 2026-08-03 at `94a7647`
+(`15.7-VERIFICATION.md`). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier handoffs
+instructed it and it was carried forward unverified across two sessions — the `gsd-verifier` agent
+is the real mechanism.
+
+  **THE BLOCKER VERIFICATION FOUND IS NOW CLOSED** (quick task `260804-dbd`, 2026-08-04, commits
+  8eff424 / 868775b / 9f5a120). `exit_verdict`'s criterion 3 (SATURATION) was VACUOUSLY TRUE in
+  round 1 — no candidate carries a `born_round` yet and there was no minimum-round floor — so on a
+  KEEP-heavy brief coverage+quality+saturation all held at the end of round 1 and the loop BROKE
+  AFTER ONE PASS: nothing loop-born, no COMBINE, no cross-question synthesis, meta-review guidance
+  unused, no INVENT reaching the evidence gate, and the 2 cross-cutting slots filled by ordinary
+  single-parent candidates. The count stayed 17; the validated SHAPE did not. Wave 4 degenerated
+  into the straight line it was built to replace, and 15.8's single measuring run would have
+  measured a loop that ran once. Operator ruled `round_no >= 4` (D-W4-9). Two more rulings landed
+  with it: D-W4-10 (dead `max_size` removed) and D-W4-11 (`workshop_notes` persisted as run events).
+
+  ⚠ **THOSE THREE COMMITS ARE UNGATED.** No pytest exists on this machine. Baseline to beat in
+  15.8's Cloud Build (`tribunal/cloudbuild.test-engine.yaml`): `7c89be5c` = 1538 passed / 0 failed /
+  13 skipped, `collecting: 36 of 36`. No new test FILE was added, so EXPECTED_FILES stays **36** and
+  the passed count must rise by **exactly 10**. A count that does not rise must be EXPLAINED, not
+  merely noted. Read the build TEXT via `gcloud builds describe` — `builds submit | tail` returns
+  the PIPE's status, so a FAILED build reports exit 0.
+
+  **STILL OPEN in 15.7-VERIFICATION.md** — three gaps and two unruled decisions:
+    - D7 `langs`: the `_normalise_langs` sweep runs 165 lines BEFORE `enforce_group_coverage`, whose
+      two repair rungs both yield empty `langs`. Unreachable in default per-question mode, reachable
+      in `topic` mode. Pre-existing at the phase base (67fce9f), but plan 09 asserts the invariant
+      unconditionally.
+    - `DROP_CLUSTERED_ONTO_LIVE` has NO production writer — only tests write it, so `drop_summary`'s
+      third branch is dead and only HALF of D-W4-1's drop signal (loop SPINNING) can be recorded;
+      the opposite failure (over-eager dedup strangling discovery invisibly) cannot.
+    - `barred_block` renders `entries[:limit]` at `_BARRED_MAX_ENTRIES = 24` — it shows the OLDEST
+      bars and hides the NEWEST, which are exactly the ones the model is about to re-propose.
+      Bites past the 25th bar. Fix is `entries[-limit:]`.
+    - **NOT RULED, awaiting operator:** (a) `catch_up_matches` counts newcomers in its own median —
+      verification CORRECTED the review here: D-W4-3 IS honestly delivered, at most 6 newcomers
+      enter a field of ~36 so the median is 6 and the schedule fires. Do NOT reverse the two
+      committed assertions; document the boundary and warn when it binds. (b) `actions` semantics —
+      `_stage_b_feed_finish(actions=calls)` sums `admission_resolver_calls`, an HTTP redirect
+      resolution, alongside LLM calls (`workshop_rank.py:4920`), and it is the run's ONLY spend signal.
+
+  Full state + the remaining open operator calls: `.planning/phases/15.7-*/.continue-here.md`
+  (written 2026-08-03 18:00, so it PREDATES both the verification and these rulings).
+
+  **NEXT: phase 15.8** (Wave 5 — yield instrumentation, then ONE deploy + ONE measuring run).
 
 Gates (15.7, current — these SUPERSEDE the 15.6 numbers below):
   Engine `cloudbuild.test-engine.yaml` build **7c89be5c** = **1538 passed / 0 failed / 13 skipped**,
@@ -220,7 +259,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-07-31 -- Phase 15.7 execution started
+Last activity: 2026-08-04 -- Quick task 260804-dbd: three operator rulings closed 15.7's BLOCKER (D-W4-9/10/11)
 
 Progress: [██████████] 100%
 
@@ -347,6 +386,7 @@ Recent decisions affecting current work (v1.1):
 | 260729-ji9 | Preserve V-01's 225 gemini citations before they expire (verified complete, not merely non-empty) + answer BOTH gating diagnostics — 1a: the missing FACTS block is FORMAT DRIFT not truncation (gemini's two LONGEST reports carry complete blocks; the block sits ~75% in with 9–15k chars of bibliography after it) so THE Q4 GROUPING GATE IS CLEARED; 1b: the distiller never failed — it returned 278 well-formed coffee claims and the parser dropped every one because gemini wrote the literal string `<TAB>` instead of a tab, while the prompt uses `<TAB>` as a placeholder describing the separator. Produced `.planning/ENGINE-REDESIGN-SPEC.md` (9 decisions, 5 waves) | 2026-07-29 | 7c81e29 | [260729-ji9-v01-diagnostics-and-citations](./quick/260729-ji9-v01-diagnostics-and-citations/) |
 | 260729-eot | V-01 findings (run 7dcf51d5): cross-stream corroboration NEVER operated — merge key is exact-string so 396 claims → 396 keys → 0 merges, AND only 37/396 claims have any cross-provider partner even at Jaccard 0.2. 8 defects D-V01-1…8 incl. stage logging inert in production, a 13× contradiction shipped unflagged, and claims untraceable to their sub-question. Proposed fix specified to its invariants | 2026-07-29 | 9f22adc | [260729-eot-v01-corroboration-findings](./quick/260729-eot-v01-corroboration-findings/) |
 | 260803-g6z | Close D-DEF-01, the prompt-injection channel in `workshop._findings_block` — it truncated but never collapsed `\n`/`|`, so a finding from a FETCHED WEB PAGE forged a second addressable record. Proven non-vacuously against the real committed source (ast-lift + source-text mutation): baseline renders 2 records `['0','1']`; restoring the old slice renders **3**, `['0','9','1']` — the forged record INTERLEAVES between two genuine ones. Fixed via function-local `workshop_rank._flatten` (ONE authority) — the recorded "one-line fix" would have been a CIRCULAR IMPORT. Also fixed the `_asks_block` sibling (`_ASPECT_LINE_RE` captures `(.*)` under `re.DOTALL`, so `|` survived; mutant leaves 3 pipes vs 1). Byte-identical on the already-protected rank path is NOT achievable — bounded instead to one trailing space via the proven identity `_flatten(_flatten(x,N),N) == _flatten(x,N).rstrip(" ")`. Retired 3 rationale comments that cited this defect to justify their own flattening (two-authorities, inverted); `workshop_admission.py` verified still true and untouched. **Survived all of phase 15.7 because its deferral named plans 07 and 09, neither of which owns `workshop.py`** | 2026-08-03 | b65d9b5 | [260803-g6z-findings-block-injection-fix](./quick/260803-g6z-findings-block-injection-fix/) |
+| 260804-dbd | Close three 15.7 verification gaps by operator ruling: **D-W4-9** a minimum-round floor (`_LOOP_MIN_ROUNDS = 4`) enforced INSIDE `exit_verdict` — criterion 3 (SATURATION) was VACUOUSLY TRUE in round 1 because nothing carries a `born_round` yet, so a KEEP-heavy brief broke the loop after ONE pass and Wave 4 degenerated to the straight line it replaced; the floor sits in the verdict (not at the `break`) so `should_exit` stays the single authority, `effective_floor = min(floor, cap)` keeps the cap the sole termination bound, and a new `hold_reason` distinguishes "criteria met, floor not reached" from "criteria not met". **D-W4-10** `attach_discovery_riders`' inert `max_size` REMOVED caller-first (zero remaining callers proved by AST over 20 call sites BEFORE the signature changed; `clamp_groups`' 14 sites untouched). **D-W4-11** every `workshop_note` now persists via `run_events.emit_safe` (`stage="workshop"`, `kind="plan"` — a real member of the closed 12-value `RUN_EVENT_KINDS`, since an out-of-vocabulary kind is DROPPED at `emit` and would have reproduced the very defect); text built INSIDE the `build=` thunk with the loop var default-bound, and the log's `[:4]` cap now NAMES its truncation. ⚠ **PYTEST GATE NOT RUN — OWED AT 15.8** (no Python/pytest here): baseline `7c89be5c` = 1538/0/13, `collecting: 36 of 36`; no new test FILE so EXPECTED_FILES stays 36 and passed must rise by exactly 10 | 2026-08-04 | 9f5a120 | [260804-dbd-close-three-15-7-verification-gaps-round](./quick/260804-dbd-close-three-15-7-verification-gaps-round/) |
 | 260731-dbo | Correct ENGINE-REDESIGN-SPEC § 5 + the 15.7 ledger against local Wave 4 measurement (11 harness experiments, scratchpad only, no source changed). 4 of 5 headline defects had the wrong cause: the "9 of 10 winners WEAK" evidence is an artefact of `_CANDIDATE_PROMPT_CHARS=240` truncating 17 of 18 candidates mid-word; the exit rule fires (rounds 4–9) and needs NO change; population/cost are ~30× below the estimate so the ceilings are not binding; D-R11's median-Elo seed is INERT (wins is the sort key, Elo only the tie-break) → replaced by a catch-up schedule. D-R9 CONFIRMED. Validated config recorded: one global loop + floor of 5 winners/client question + 2 cross-cutting + prefer-KEEP-over-WEAK. Ledger open items 1 & 2 marked answered-by-measurement | 2026-07-31 | ddad00f | [260731-dbo-rewrite-engine-redesign-spec-section-5-w](./quick/260731-dbo-rewrite-engine-redesign-spec-section-5-w/) |
 
 ## Deferred Items
