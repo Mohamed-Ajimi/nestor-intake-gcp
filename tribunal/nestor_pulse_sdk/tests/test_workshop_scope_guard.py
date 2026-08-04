@@ -1155,25 +1155,48 @@ def test_a_whitespace_divergent_member_is_restamped_with_the_fresh_rank():
     member text verbatim, and `research_division._normalise_winners` collapses. Two
     producers agreeing was never a control.
 
-    Under the committed (pre-15.8-03) exact-string join this member kept its STALE
-    rank, which `research_division._stakes_for_rank` would then have priced.
-    """
-    groups, winners = mandate_group(("Q1", 2))
-    member = groups[0]["members"][0]
-    twin = groups[0]["members"][1]
+    Under the committed (pre-15.8-03) exact-string join these members kept their
+    STALE rank, which `research_division._stakes_for_rank` would then have priced.
 
-    # The winner side is untouched; only the member's copy diverges, and only in
-    # whitespace. Collapsed, the two are identical — which is the whole point.
-    member["text"] = winners[0]["text"].replace(" ", "  \n", 1)
-    assert member["text"] != winners[0]["text"]
-    assert member["text"].split() == winners[0]["text"].split()
-    member["rank"] = 99  # the stale number a pre-repair copy carries
-    twin["rank"] = 99
+    BOTH DIRECTIONS OF DIVERGENCE ARE DRIVEN, AND THAT IS THE POINT OF THE TEST.
+    One member diverges from a clean winner; the other is clean while ITS WINNER
+    diverges. A test carrying only the first case PASSES against a ONE-SIDED fix that
+    normalises the lookup and leaves the map key raw — and a one-sided fix is not a
+    weaker version of CR-01, it IS the CR-01 defect. That was not a hypothesis: the
+    single-direction version of this test was written first and read GREEN against a
+    winner-side revert, which is why the second direction exists.
+    """
+    groups, winners = mandate_group(("Q1", 3))
+    member_diverges = groups[0]["members"][0]
+    winner_diverges = groups[0]["members"][1]
+    clean = groups[0]["members"][2]
+
+    # DIRECTION A — the MEMBER's copy carries the odd whitespace, the winner is clean.
+    # This is the coverage-repair / textarea shape: `_verbatim_winner` copies the
+    # client's own wording and `build_groups` copies member text verbatim.
+    member_diverges["text"] = winners[0]["text"].replace(" ", "  \n", 1)
+    assert member_diverges["text"] != winners[0]["text"]
+    assert member_diverges["text"].split() == winners[0]["text"].split()
+
+    # DIRECTION B — the WINNER carries the odd whitespace, the member's copy is clean.
+    # This is the collapsing-producer shape (`_normalise_winners` runs on one side of
+    # a join and not the other). It is the direction a lookup-side-only fix misses.
+    winners[1]["text"] = winners[1]["text"].replace(" ", " \n ", 1)
+    assert winners[1]["text"] != winner_diverges["text"]
+    assert winners[1]["text"].split() == winner_diverges["text"].split()
+
+    for stale in (member_diverges, winner_diverges, clean):
+        stale["rank"] = 99  # the stale number a pre-repair copy carries
 
     workshop_rank._restamp_groups(groups, winners)
 
-    assert member["rank"] == winners[0]["rank"] == 1, "the FRESH rank, not the stale 99"
-    assert twin["rank"] == winners[1]["rank"] == 2, "the exact-match half still works"
+    assert member_diverges["rank"] == winners[0]["rank"] == 1, (
+        "DIRECTION A: the FRESH rank, not the stale 99"
+    )
+    assert winner_diverges["rank"] == winners[1]["rank"] == 2, (
+        "DIRECTION B: a one-sided fix leaves this one stale"
+    )
+    assert clean["rank"] == winners[2]["rank"] == 3, "the exact-match half still works"
     assert groups[0]["rank"] == 1, "the group's own rank follows its min member"
 
 
@@ -1189,28 +1212,47 @@ def test_a_whitespace_divergent_discovery_member_is_restamped_with_the_fresh_ran
     PRE-repair winner count, so it can COLLIDE with a client winner's rank and hand a
     question the client never asked a client question's stakes. D-W3-4 is absolute
     that the mandate is never displaced.
+
+    BOTH DIRECTIONS OF DIVERGENCE ARE DRIVEN, for the reason spelled out in
+    `test_a_whitespace_divergent_member_is_restamped_with_the_fresh_rank`: a
+    single-direction test reads GREEN against a ONE-SIDED fix, and a one-sided fix IS
+    the CR-01 defect.
     """
     groups, winners = mandate_group(("Q1", 2))
-    discovered = rider("a question the evidence raised about Q1", "Q1", rank=4)
+    a = rider("a question the evidence raised about Q1", "Q1", rank=4)
+    b = rider("a second question the evidence raised about Q1", "Q1", rank=5)
     groups, shed, _ = question_grouping.attach_discovery_riders(
-        groups, [dict(discovered)]
+        groups, [dict(a), dict(b)]
     )
     assert shed == []
 
-    member = next(m for m in groups[0]["members"] if m.get("source") == "discovery")
-    member["text"] = discovered["text"].replace(" ", " \t ", 1)
-    assert member["text"] != discovered["text"]
-    assert member["text"].split() == discovered["text"].split()
-    member["rank"] = 99
+    members = [m for m in groups[0]["members"] if m.get("source") == "discovery"]
+    assert len(members) == 2
+    member_diverges = next(m for m in members if m["text"] == a["text"])
+    winner_diverges = next(m for m in members if m["text"] == b["text"])
 
-    dispatched = [dict(discovered)]
+    # DIRECTION A — the group MEMBER's copy carries the odd whitespace.
+    member_diverges["text"] = a["text"].replace(" ", " \t ", 1)
+    assert member_diverges["text"].split() == a["text"].split()
+    # DIRECTION B — the DISPATCHED question carries it and the member's copy is clean.
+    dispatched = [dict(a), dict(b)]
+    dispatched[1]["text"] = b["text"].replace(" ", "  \n", 1)
+    assert dispatched[1]["text"] != winner_diverges["text"]
+    assert dispatched[1]["text"].split() == winner_diverges["text"].split()
+
+    for stale in (member_diverges, winner_diverges):
+        stale["rank"] = 99
+
     workshop_rank._stamp_discovery_ranks(groups, dispatched, base=len(winners))
 
-    fresh = len(winners) + 1
-    assert dispatched[0]["rank"] == fresh
-    assert member["rank"] == fresh, "the FRESH discovery rank, not the stale 99"
+    first, second = len(winners) + 1, len(winners) + 2
+    assert [q["rank"] for q in dispatched] == [first, second]
+    assert member_diverges["rank"] == first, "DIRECTION A: fresh rank, not the stale 99"
+    assert winner_diverges["rank"] == second, (
+        "DIRECTION B: a one-sided fix leaves this one stale"
+    )
     assert all(
-        member["rank"] > w["rank"] for w in winners
+        m["rank"] > w["rank"] for m in members for w in winners
     ), "discovery still ranks below every client winner"
 
 
