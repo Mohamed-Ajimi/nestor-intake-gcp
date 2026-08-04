@@ -1175,8 +1175,15 @@ def assignment_identity(angle: Any) -> dict[str, Any]:
         # (1) The group id. `or None` and never `or ''` — migration 0017 binds an
         # absent key as NULL, because the corroboration queries must tell "no key
         # recorded" apart from "recorded as the empty key".
+        #
+        # A NON-STRING IS TREATED AS ABSENT, AND IS NEVER `str()`-ed. `str()` on an
+        # object with no `__str__` yields `'<object object at 0x7f...>'` — A MEMORY
+        # ADDRESS, different on every run. Writing that into `assignment_yield`
+        # FABRICATES PROVENANCE in the one table nobody can re-run the $45 run to
+        # check, and it is worse than NULL because it looks like a real key and
+        # joins to nothing. NULL is the honest record of "unreadable".
         raw_group = source.get("corroboration_key")
-        group_id = (str(raw_group).strip() if raw_group is not None else "") or None
+        group_id = (raw_group.strip() if isinstance(raw_group, str) else "") or None
 
         # (2) CROSS-CUTTING, DECIDED ON THE BRACKET AND NOTHING ELSE.
         #
@@ -1196,9 +1203,13 @@ def assignment_identity(angle: Any) -> dict[str, Any]:
                 "parent_kind": "cross_cutting",
             }
 
-        # (3) The ordinary label. Same absent-is-NULL rule.
+        # (3) The ordinary label. Same absent-is-NULL rule, and the same
+        # non-string-is-absent rule for the same reason: a `str()`-ed object
+        # identity is non-deterministic, and `client_question` is the column the
+        # yield table groups BY. One fabricated address becomes its own phantom
+        # client question holding a real slice of the run's spend.
         raw_label = source.get("focus_area")
-        client_question = (str(raw_label).strip() if raw_label is not None else "") or None
+        client_question = (raw_label.strip() if isinstance(raw_label, str) else "") or None
 
         # (4) DISCOVERY_RIDER, decided on the RIDER COUNT AGAINST THE MEMBER
         # COUNT — never on the presence of the key. Under D-W3-5.2 a group holding

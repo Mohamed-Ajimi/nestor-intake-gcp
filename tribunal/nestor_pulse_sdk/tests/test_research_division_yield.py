@@ -205,6 +205,52 @@ def test_absent_corroboration_key_is_none_and_never_empty_string(raw):
     assert rd.assignment_identity(_group_angle(corroboration_key=raw))["group_id"] is None
 
 
+@pytest.mark.parametrize("raw", ["", "   ", None])
+def test_absent_focus_area_is_none_and_never_empty_string(raw):
+    """The `client_question` half of the same absent-is-NULL rule.
+
+    The mirror of the test above, and it exists because the two columns are
+    built by the SAME construction — so an absent-is-`''` regression in one
+    would otherwise be caught in one column and ride free in the other.
+    """
+    assert rd.assignment_identity(_group_angle(focus_area=raw))["client_question"] is None
+
+
+# ---------------------------------------------------------------------------
+# AN UNREADABLE VALUE IS ABSENT, AND IS NEVER `str()`-ed INTO THE COLUMN
+#
+# BOTH provenance columns, because both are built by the same expression. The
+# `group_id` half alone was covered before, and the `client_question` half was
+# an unguarded hole in the identical construction one screen below it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("key", "column"),
+    [("corroboration_key", "group_id"), ("focus_area", "client_question")],
+)
+@pytest.mark.parametrize("raw", [object(), 17, ["Q1"], {"q": 1}])
+def test_an_unreadable_value_is_recorded_as_absent_and_never_stringified(key, column, raw):
+    """If this fires, `assignment_yield` gets a provenance value nobody can join.
+
+    `str()` NEVER RAISES. On a plain object it yields `'<object object at
+    0x7f...>'` — A MEMORY ADDRESS, different on every process — and on an int or
+    a list it yields a tidy-looking value that is equally not a group id and
+    equally not a client question. Either way the row LOOKS attributed, joins to
+    nothing, and is believed, over the one ~$45 run that cannot be repeated to
+    check it. NULL is the honest record of "unreadable".
+
+    Asserting `is None` and not merely "no `0x` in the text": the int and dict
+    cases produce no address at all yet are just as fabricated.
+    """
+    identity = rd.assignment_identity(_group_angle(**{key: raw}))
+
+    assert identity[column] is None
+    # And the row is still a complete, writable row — a lost label must never
+    # cost the paid measurement (D-W5-10).
+    assert sorted(identity) == ["client_question", "group_id", "parent_kind"]
+    assert identity["parent_kind"] == "client_question"
+
+
 @pytest.mark.parametrize(
     "angle",
     [
@@ -254,6 +300,11 @@ def test_hostile_input_returns_the_conservative_shape_rather_than_raising(hostil
     assert sorted(identity) == ["client_question", "group_id", "parent_kind"]
     assert identity["parent_kind"] == "client_question"
     assert identity["group_id"] is None
+    # BOTH provenance columns. Every shape above is either label-less or has an
+    # unreadable one, so every one of them must record NULL — and asserting only
+    # the `group_id` half is exactly how the identical `focus_area` construction
+    # went ungated while `hostile5` was already feeding it an `object()`.
+    assert identity["client_question"] is None
 
 
 def test_a_hostile_bracket_does_not_become_cross_cutting():
