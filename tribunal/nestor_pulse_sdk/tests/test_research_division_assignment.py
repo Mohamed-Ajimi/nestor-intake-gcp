@@ -715,9 +715,115 @@ def test_the_bound_stays_pure_and_does_not_raise_on_an_unhashable_member_text():
 
     hostile = {"group_id": "g1", "members": [{"text": ["a", "list"], "parent": "Q1", "rank": 1}]}
     assert rd._bound_groups_to_winners([hostile], {"x"}, ["Q1"]) == []
+    # WR-04. EVERY SHAPE ON THIS ROW IS ITERABLE, which is precisely why this test
+    # passed for a whole phase while the docstring's "never raises" was false.
     for empty in (None, [], [None, 3], [{"members": None}], [{"members": [None]}]):
         assert rd._bound_groups_to_winners(empty, {"x"}, ["Q1"]) == [], repr(empty)
+    # WR-04's own named case and its neighbours: NON-iterable, where `list()` raises
+    # `TypeError` between the paid workshop and the paid angles.
+    for hostile_groups in (17, 3.5, True, object()):
+        assert rd._bound_groups_to_winners(hostile_groups, {"x"}, ["Q1"]) == [], (
+            repr(hostile_groups)
+        )
+    assert rd._bound_groups_to_winners([{"group_id": "g", "members": 17}], {"x"}, ["Q1"]) == []
     assert rd._text_key(None) == "" and rd._text_key(["a", "b"]) == "['a', 'b']"
+
+
+def test_a_broken_winners_bound_fails_CLOSED_and_is_not_blamed_on_a_bad_record(caplog):
+    """WR-04's other half, and the half a "did not raise" test would pass on anyway.
+
+    If `allowed_texts` cannot be read, the bound must admit NOBODY. It is the only
+    real spend control this engine has left (T-15.2-61 — the budget governor is inert
+    under `NESTOR_TRIBUNAL_UNCAPPED=1`), so failing OPEN would buy paid third-party
+    research for exactly the winners it exists to exclude.
+
+    THE CAUSE CHANNEL IS THE ASSERTION THAT DISCRIMINATES, and that is not a
+    stylistic choice. The function's outer backstop catches a raise, counts it as a
+    MALFORMED record and returns `[]` — the very same return value the fail-closed
+    path produces. So a test asserting only `== []` is GREEN on the unfixed source:
+    proved by mutation, reverting the membership test to the raw `allowed_texts`
+    changes the warning from the bound's to MALFORMED and changes the return value
+    not at all. Asserting WHICH cause fired is what makes this test able to fail.
+    """
+    group = {
+        "group_id": "g1", "bracket": "mandate", "why": "w",
+        "members": [{"text": "sub-question 1", "parent": "Q1", "parents": ["Q1"], "rank": 1}],
+        "parents": ["Q1"], "client_parents": ["Q1"], "parent": "Q1", "rank": 1, "riders": 0,
+    }
+    for broken in (None, 17, object()):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            out = rd._bound_groups_to_winners([group], broken, ["Q1"])
+        assert out == [], f"an unreadable bound must admit nobody: {broken!r}"
+        messages = " ".join(r.message for r in caplog.records)
+        assert "MALFORMED" not in messages, (
+            "a broken BOUND is not a malformed RECORD — reverting the membership "
+            "test to the raw `allowed_texts` is caught by the outer backstop and "
+            "misreported as MALFORMED, and this assertion is what catches that"
+        )
+        assert "lost every member" in messages, (
+            "the group is dropped whole, by the bound, and said so"
+        )
+
+    # A `list` or a `tuple` is still a usable bound: membership is all that is asked
+    # of it, and a caller passing one must not silently lose every winner.
+    for usable in (["sub-question 1"], ("sub-question 1",), {"sub-question 1"}):
+        assert rd._bound_groups_to_winners([group], usable, ["Q1"]) == [group], repr(usable)
+
+
+def test_one_malformed_group_does_not_discard_the_healthy_ones(caplog):
+    """The backstop is a BACKSTOP: it must not become the thing doing the work.
+
+    Returning `[]` for one hostile record would drop every healthy group with it and
+    send the run down `_divide_from_winners`' focus-area fallback — throwing away a
+    workshop the run has already PAID for, over one bad record.
+
+    The malformed cause is counted and named apart from the two bound causes for the
+    same reason `dropped_unusable` is: a warning must never send an operator to the
+    winners list when the defect is in whatever built the group.
+    """
+    class _Hostile(dict):
+        def get(self, *args, **kwargs):
+            raise RuntimeError("this record cannot be read")
+
+    healthy = {
+        "group_id": "g2", "bracket": "mandate", "why": "w",
+        "members": [{"text": "sub-question 1", "parent": "Q1", "parents": ["Q1"], "rank": 1}],
+        "parents": ["Q1"], "client_parents": ["Q1"], "parent": "Q1", "rank": 1, "riders": 0,
+    }
+    with caplog.at_level(logging.WARNING):
+        out = rd._bound_groups_to_winners([_Hostile(), healthy], {"sub-question 1"}, ["Q1"])
+
+    assert [g["group_id"] for g in out] == ["g2"], (
+        "the healthy group survives; a paid workshop is not discarded over one bad record"
+    )
+    messages = " ".join(r.message for r in caplog.records)
+    assert "MALFORMED" in messages and "NOT a spend control firing" in messages
+    assert "strongest winners" not in messages, (
+        "nothing was over the bound, so the bound must not be blamed"
+    )
+
+
+def test_the_WR_04_fix_is_reachable_through_the_real_production_entry_point():
+    """A helper-only fix would have been GREEN in a unit test and still fatal live.
+
+    `_divide_from_winners`' step 2 ran the IDENTICAL `list()` over `groups` BEFORE
+    `_bound_groups_to_winners` was ever reached, so with a non-iterable `groups` the
+    CALLER raised first and the helper's fix could never run. That is why the two
+    expressions were fixed in the same commit, and why this test drives `divide()`
+    rather than the helper.
+    """
+    winners = [_winner("sub-question 1", 1, "Q1"), _winner("sub-question 2", 2, "Q1")]
+
+    angles = rd.divide(_wbrief("Q1"), winners=winners, groups=17)
+
+    assert angles, "a non-iterable `groups` must degrade to grouping, never raise"
+    researched: set[str] = set()
+    for angle in angles:
+        researched |= set(angle.get("sub_questions") or [])
+    assert {"sub-question 1", "sub-question 2"} <= researched, (
+        "the run still researches every winner the workshop was paid to produce"
+    )
 
 
 def test_the_high_stakes_boundary_did_not_move_when_the_top_k_knob_died():
