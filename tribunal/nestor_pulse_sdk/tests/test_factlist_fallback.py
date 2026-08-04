@@ -2110,3 +2110,265 @@ async def test_d_r3_a_provider_cannot_write_its_own_sub_question_or_key() -> Non
     for claim in result.claims:
         assert claim["sub_question"] == "the REAL dispatched sub-question"
         assert claim["corroboration_key"] == "w01"
+
+
+# ---------------------------------------------------------------------------
+# Group G — D-R8's PRE-MERGE per-assignment yield (phase 15.8, review CR-01)
+#
+# WHAT BREAKS IN PRODUCTION IF THIS GROUP FIRES. Two of the eleven
+# `assignment_yield` columns — `fact_list_parsed` and `resolvable_sources` — go
+# back to reporting every corroborating provider's evidence as EACH provider's
+# own, in the ONE ~$45 measuring run, with nothing at query time able to tell.
+# They are the two columns that most directly answer D-R8's question ("which
+# provider actually yields surviving claims per dollar"), and the error is
+# systematically FLATTENING: it is worst exactly when corroboration works, which
+# is what the five-wave redesign is for.
+#
+# WHY THE PRODUCER SIDE IS TESTED HERE AND NOT IN `test_pipeline_assignment_yield`.
+# That file drives the pure reader with hand-built results. Only this file can
+# drive the REAL `collect_provider_facts` and let the REAL `_dedupe_claims` merge
+# two streams' claims afterwards — which is the only way to prove the stamped
+# numbers were taken BEFORE the union, rather than to assert it about the source
+# text. No LLM call, no network, no spend: the same fakes as every group above.
+# ---------------------------------------------------------------------------
+
+
+def _yield_stamp(result: dict) -> "tuple[object, object]":
+    """The two D-R8 keys off a `reports` entry, by IMPORTED SYMBOL not literal."""
+    return (
+        result.get(steps.ANGLE_YIELD_FACT_LIST_PARSED),
+        result.get(steps.ANGLE_YIELD_RESOLVABLE_SOURCES),
+    )
+
+
+#: The review's own CR-01 probe shape, widened to THREE streams because that is
+#: what D-R4/D-W3-1 dispatch actually sends. All three state the SAME fact:
+#:
+#:   * gemini  — parses its list, cites THREE distinct urls
+#:   * claude  — parses its list, cites ONE, and it is the shared fact
+#:   * openai  — no block at all, so it reaches the distiller
+#:
+#: `_dedupe_claims` keeps gemini's dict (first in) and merges the other two into
+#: it, so afterwards ONE claim carries all three providers in `found_by` and the
+#: UNION of gemini's and claude's urls. THE UNION IS THE POINT: a capture that
+#: held the claim instead of copying its urls out would read 4 for gemini here.
+_SHARED_CLAIM = "Robusta bean imports rose 12 percent during 2025"
+
+
+def _merging_entries() -> list:
+    return [
+        _entry(
+            "gemini",
+            report=_synthetic_report("gemini", [
+                _fact_line(_SHARED_CLAIM, "https://g-a.example-source.com/one",
+                           "official", "certain", "imports rose 12 percent"),
+                _fact_line("Three roasters hold 61 percent of Benelux volume",
+                           "https://g-b.example-source.com/two",
+                           "press", "single", "hold 61 percent"),
+                _fact_line("Arabica futures closed at 214 cents per pound",
+                           "https://g-c.example-source.com/three",
+                           "press", "certain", "closed at 214 cents"),
+            ]),
+        ),
+        _entry(
+            "claude",
+            report=_synthetic_report("claude", [
+                _fact_line(_SHARED_CLAIM, "https://c-a.example-source.com/one",
+                           "press", "single", "imports rose 12 percent"),
+            ]),
+        ),
+        _entry("openai", report=_NO_BLOCK_REPORT, prompted=False),
+    ]
+
+
+def _merging_audited() -> RecordingAudited:
+    return RecordingAudited(
+        lines_for=lambda name, idx, contents: (
+            "market-position\t%s.\tverbatim evidence span" % _SHARED_CLAIM
+        )
+    )
+
+
+async def test_the_pre_merge_yield_survives_the_cross_provider_merge() -> None:
+    """CR-01's PRODUCER-SIDE PROOF. The exact probe shape from the review.
+
+    After the merge the surviving claim carries ALL THREE providers in `found_by`
+    and the UNION of gemini's and claude's urls, and `_claim_matches_assignment`
+    hands that one dict to all three of their rows. Anything derived from it at
+    that point is the union.
+
+    THIS IS THE VALUE-LEVEL GUARD. Two things keep the numbers honest — the
+    capture copies url STRINGS out (never a claim), and the stamp runs before the
+    dedupe — and the repair holds BOTH so that either alone is survivable.
+    Mutation-verified: replacing the string copy with a held claim reference
+    changes nothing while the stamp stays early; moving the stamp below the
+    dedupe changes nothing while the capture stays by value; doing BOTH makes
+    gemini read 4 — claude's url counted as gemini's — and THIS test is what goes
+    red for it. The source-order tripwire in `test_pipeline_assignment_yield.py`
+    catches the other half.
+    """
+    result = await _collect(_merging_entries(), audited=_merging_audited())
+
+    merged = [c for c in result.claims if len(c["found_by"]) > 1]
+    assert len(merged) == 1, (
+        "the fixture must actually MERGE across providers — without that this "
+        "test is asserting against the single-provider shape that hid CR-01"
+    )
+    assert merged[0]["found_by"] == ["gemini", "claude", "openai"]
+    assert merged[0]["source_urls"] == [
+        "https://g-a.example-source.com/one", "https://c-a.example-source.com/one",
+    ], "the merged claim must hold the UNION — that is what the columns must not"
+
+    stamps = dict(zip([n for n, _ in result.reports],
+                      [_yield_stamp(r) for _, r in result.reports]))
+
+    assert stamps["gemini"] == (True, 3), (
+        "gemini parsed its own fact list and cited three distinct urls. A 4 here "
+        "is claude's url counted as gemini's — the union CR-01 named"
+    )
+    assert stamps["claude"] == (True, 1), (
+        "claude cited exactly one link. A 3 or a 4 here is gemini's citable "
+        "ground reported as claude's, which is the comparison this column is for"
+    )
+    assert stamps["openai"] == (False, None), (
+        "openai had no block and reached the distiller. `False` is its OWN parse "
+        "outcome — deriving the flag from the merged claim gave it gemini's True"
+    )
+
+
+async def test_a_fallen_back_angle_records_null_sources_and_never_a_zero() -> None:
+    """`False` + NULL is the CORRECT fallback shape, and it is not a hole.
+
+    A fallen-back report's claims are produced by the ONE full-extraction
+    `claim_distiller` call that mixes every fallen-back stream together, and that
+    call has already lost the angle — `_normalise_fact_claim` is invoked there
+    with `corroboration_key=None` for the stated reason that passing some other
+    report's loop variable would be a FABRICATED attribution. A `0` would claim
+    this angle cited nothing. The truth is that nobody can say what it cited, and
+    those are different facts in a table whose whole doctrine is that NULL and 0
+    stay distinguishable.
+    """
+    result = await _collect([_entry("claude", report=_NO_BLOCK_REPORT)])
+
+    parsed, sources = _yield_stamp(dict(result.reports)["claude"])
+    assert parsed is False
+    assert sources is None, "an unattributable count must not be reported as 0"
+
+
+async def test_a_report_with_nothing_to_read_records_null_and_not_false() -> None:
+    """NOT RECORDED is not the same fact as "its fact list did not parse".
+
+    An angle whose report is empty never reached a parser, so `False` there would
+    be a fabricated measurement: it would read, at query time, as a provider that
+    ignored the D8 instruction.
+    """
+    entries = [
+        _entry("gemini", report=_synthetic_report("gemini", [
+            _fact_line("A stated fact about the Benelux market",
+                       "https://example-source.com/a",
+                       "official", "certain", "a stated fact"),
+        ])),
+        _entry("openai", report=""),
+    ]
+
+    result = await _collect(entries)
+    stamps = dict(zip([n for n, _ in result.reports],
+                      [_yield_stamp(r) for _, r in result.reports]))
+
+    assert stamps["openai"] == (None, None)
+    assert stamps["gemini"] == (True, 1), "the neighbouring row must be unaffected"
+
+
+async def test_the_stamp_stays_in_lockstep_with_the_reports_it_describes() -> None:
+    """A MISATTRIBUTED measurement is worse than an absent one.
+
+    `reports` is appended at four different sites in the loop, so the risk is not
+    that a value is wrong but that it lands on the wrong assignment. Six mixed
+    entries, every branch of the loop represented, checked positionally.
+    """
+    entries = [
+        _entry("gemini", report=_synthetic_report("gemini", [
+            _fact_line("Robusta bean imports rose 12 percent during 2025",
+                       "https://one.example-source.com/a",
+                       "official", "certain", "imports rose 12 percent"),
+        ])),
+        _entry("openai", report=""),
+        _entry("claude", report=_NO_BLOCK_REPORT),
+        _entry("own", report=None, facts=[{
+            "text": "The own-researcher emitted this through its forced tool",
+            "evidence": "emitted through the forced tool",
+            "source_urls": ["https://own.example-source.com/a",
+                            "https://own.example-source.com/b"],
+        }], prompted=False),
+        _entry("gemini", report=_synthetic_report("gemini", [
+            _fact_line("Three roasters hold 61 percent of the Benelux volume",
+                       "https://two.example-source.com/b",
+                       "press", "single", "hold 61 percent of the Benelux volume"),
+            _fact_line("Arabica futures closed at 214 cents per pound in March",
+                       "https://two.example-source.com/b",
+                       "press", "single", "closed at 214 cents per pound"),
+        ])),
+        _entry("openai", report=_NO_BLOCK_REPORT, prompted=False),
+    ]
+
+    result = await _collect(entries)
+
+    assert len(result.reports) == len(entries), "contract (b): same length, same order"
+    assert [n for n, _ in result.reports] == [n for n, _ in entries]
+    assert [_yield_stamp(r) for _, r in result.reports] == [
+        (True, 1),      # parsed, one url
+        (None, None),   # empty report — nothing was read
+        (False, None),  # no block — the distiller, attribution gone
+        (True, 2),      # forced tool, two urls
+        (True, 1),      # TWO facts citing ONE url — DISTINCT, not a claim count
+        (False, None),  # no block again
+    ]
+
+
+async def test_the_stamp_adds_exactly_two_keys_and_alters_nothing_else() -> None:
+    """Contract (b): `reports` is still a DROP-IN replacement for the results.
+
+    `scrub_research`, `synthesize_report` and both `_extract_sources_for_*` read
+    these dicts, and `_assignment_yield_rows` reads seven other `_`-prefixed keys
+    off the same object. An added key is additive; a dropped or rewritten one is
+    a silent behaviour change in the paid path.
+    """
+    entries = [_entry(
+        "gemini",
+        report=_synthetic_report("gemini", [
+            _fact_line("A stated fact", "https://example-source.com/a",
+                       "official", "certain", "a stated fact"),
+        ]),
+        _corroboration_key="w01",
+        _client_question="Q1",
+        _parent_kind="client_question",
+        _duration_s=12.5,
+        cost_usd="1.25",
+    )]
+    original = dict(entries[0][1])
+
+    result = await _collect(entries)
+    _, stamped = result.reports[0]
+
+    assert set(stamped) - set(original) == {
+        steps.ANGLE_YIELD_FACT_LIST_PARSED,
+        steps.ANGLE_YIELD_RESOLVABLE_SOURCES,
+    }
+    for key, value in original.items():
+        if key == "report":
+            continue  # the fact block is stripped — 15.2-14's own contract
+        assert stamped[key] == value, f"{key} was altered by the yield stamp"
+
+
+async def test_the_yield_stamp_never_breaks_the_distill_stage() -> None:
+    """Telemetry may not end a paid run. Shared pattern 6, applied to D-R8.
+
+    Forced out of lockstep on purpose: the stamper must decline to stamp — NULL
+    columns — and return the reports untouched rather than raise or guess.
+    """
+    reports = [("gemini", {"status": "success"}), ("openai", {"status": "success"})]
+
+    out = steps._stamp_pre_merge_yield(reports, [{"parsed": True, "urls": {"u"}}])
+
+    assert out == reports, "a misaligned capture must be dropped, never attached"
+    assert steps.ANGLE_YIELD_FACT_LIST_PARSED not in out[0][1]

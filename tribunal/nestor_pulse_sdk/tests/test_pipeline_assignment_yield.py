@@ -57,6 +57,23 @@ def _claim(text, found_by, group_id, facet="Q1", fact_source="fact_list", urls=(
     }
 
 
+def _stamped(provider, group_id, client_question, *, parsed, sources, **over):
+    """A result carrying the PRE-MERGE yield `collect_provider_facts` stamps.
+
+    The two key names are IMPORTED from the producer, never spelled here: a
+    literal would agree with `steps.py` by hand-copy, which is the shape that
+    makes a column silently NULL in a run that happens once.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.steps import (
+        ANGLE_YIELD_FACT_LIST_PARSED,
+        ANGLE_YIELD_RESOLVABLE_SOURCES,
+    )
+
+    over[ANGLE_YIELD_FACT_LIST_PARSED] = parsed
+    over[ANGLE_YIELD_RESOLVABLE_SOURCES] = sources
+    return _result(provider, group_id, client_question, **over)
+
+
 #: The field contract, written out so a reader can see it without chasing a
 #: signature. It is NOT the authority -- see `_emitter_keywords()` below, which
 #: reads the real one.
@@ -214,7 +231,7 @@ def test_focus_area_row_requires_a_null_key_and_a_matching_facet():
 
 
 # ---------------------------------------------------------------------------
-# CR-01: `fact_list_parsed` and `resolvable_sources` are NOT RECORDED
+# CR-01: `fact_list_parsed` and `resolvable_sources` come from the RESULT
 #
 # Both columns used to be derived per-provider from the matching claims. Both
 # were WRONG for the shape the redesigned engine actually emits — a claim two
@@ -223,18 +240,27 @@ def test_focus_area_row_requires_a_null_key_and_a_matching_facet():
 # error is systematically FLATTENING: it is worst exactly when corroboration
 # works, which is what the redesign is for.
 #
-# These four tests are the guard on the replacement. THREE OF THEM ARE ABOUT WHY
-# A CHEAPER FIX DOES NOT EXIST, because the obvious cheaper fix looks correct.
+# The repair does NOT live here. `collect_provider_facts` measures both values
+# per assignment BEFORE its dedupe and stamps them on the report; this module
+# only reads them. So these tests guard TWO different things: that the reader
+# passes the stamp through untouched, and that it NEVER falls back to deriving
+# from `matching` — which is three lines above the binding and always wrong.
+#
+# TWO OF THEM ARE ABOUT WHY A CHEAPER REPAIR DOES NOT EXIST, because the obvious
+# cheaper repair looks correct. They were green before the fix and are KEPT
+# deliberately; see their docstrings.
 # ---------------------------------------------------------------------------
 
-def test_the_two_contaminated_columns_are_not_recorded_rather_than_guessed():
+def test_the_two_columns_are_never_derived_from_the_post_merge_claims():
     """THE FABRICATED-MEASUREMENT GUARD. If this fires, the column started lying.
 
-    A NULL is the honest record of "not recorded" in a table read exactly once.
-    A number derived from post-merge claims is a measurement nobody took, and it
-    is indistinguishable from a real one at query time.
+    An UNSTAMPED result — a run restored from a checkpoint written before the
+    stamp existed, or a report that was never read — must record NULL even
+    though `matching` is sitting right there holding a `fact_source` and three
+    URLs. A number derived from post-merge claims is a measurement nobody took,
+    and it is indistinguishable from a real one at query time.
     """
-    results = [_result("gemini", "g1", "Q1")]
+    results = [_result("gemini", "g1", "Q1")]  # NOT stamped
     claims = [
         _claim("a", ["gemini"], "g1", fact_source="fact_list", urls=["u1", "u2"]),
         _claim("b", ["gemini"], "g1", fact_source="distiller_fallback", urls=["u3"]),
@@ -244,44 +270,86 @@ def test_the_two_contaminated_columns_are_not_recorded_rather_than_guessed():
 
     assert row["fact_list_parsed"] is None
     assert row["resolvable_sources"] is None
-    # The columns that ARE recorded must be untouched by the removal.
+    # The columns that ARE recorded must be untouched.
     assert row["claims_kept"] == 2
 
 
-def test_two_providers_sharing_a_merged_claim_do_not_report_each_others_evidence():
-    """CR-01's REGRESSION TEST — RED on unfixed source (both rows read 3 / True).
+def test_two_providers_sharing_a_merged_claim_report_their_own_evidence():
+    """CR-01's REGRESSION TEST — the shape NO fixture in this file had.
 
-    This is the shape D-R4/D-W3-1 dispatch exists to produce and the shape NO
-    fixture in this file had: one claim, `found_by` naming two providers, holding
-    the UNION of their URLs and the FIRST one's `fact_source`. openai here cited
-    one link and fell back to the distiller; before the fix its row read
-    `resolvable_sources=3` and `fact_list_parsed=True` — gemini's evidence,
-    reported as openai's.
+    One claim, `found_by` naming two providers, holding the UNION of their URLs
+    and the FIRST one's `fact_source`. This is what D-R4/D-W3-1 dispatch exists
+    to produce — every group to all three streams so that claims merge — and it
+    is the shape under which the derived columns went wrong.
+
+    gemini cited three links, openai one. Each row must carry ITS OWN count. A
+    row reading 4 is the union; a row reading 3 in openai's slot is gemini's
+    evidence reported as openai's. Both were live before the stamp existed.
     """
-    results = [_result("gemini", "g1", "Q1"), _result("openai", "g1", "Q1")]
+    results = [
+        _stamped("gemini", "g1", "Q1", parsed=True, sources=3),
+        _stamped("openai", "g1", "Q1", parsed=True, sources=1),
+    ]
     merged = _claim(
         "x", ["gemini", "openai"], "g1",
         fact_source="fact_list",
-        urls=["http://g-a", "http://g-b", "http://o-a"],
+        urls=["http://g-a", "http://g-b", "http://g-c", "http://o-a"],
     )
 
     rows = _pipeline_mod._assignment_yield_rows(results, [merged])
 
     assert len(rows) == 2
     assert [r["provider"] for r in rows] == ["gemini", "openai"]
-    for row in rows:
-        assert row["resolvable_sources"] is None, (
-            "both providers were reporting the UNION of everyone's URLs — this "
-            "column existed to compare how much citable ground EACH provider "
-            "covered, and a union answers a different question entirely"
-        )
-        assert row["fact_list_parsed"] is None, (
-            "the merged dict keeps the FIRST provider's fact_source, so a stream "
-            "that fell back to the distiller read True off its partner's D8 block"
-        )
+    assert [r["resolvable_sources"] for r in rows] == [3, 1], (
+        "each provider must report how much citable ground IT covered. 4 is the "
+        "union of everyone's URLs; a matching pair is the flattening CR-01 named"
+    )
+    assert 4 not in {r["resolvable_sources"] for r in rows}
     # The merged claim still counts for BOTH assignments — ruled design,
     # imprecision 2 in the docstring, and NOT what CR-01 changed.
     assert [r["claims_kept"] for r in rows] == [1, 1]
+
+
+def test_a_fallen_back_stream_reads_false_even_when_its_partner_parsed():
+    """The second half of CR-01, and the one that reads plausibly when wrong.
+
+    The merged dict keeps the FIRST occurrence's `fact_source`, so deriving the
+    flag from `matching` gave a stream that fell back to the distiller a `True`
+    off its partner's D8 block. The stamp is that report's OWN parse outcome.
+
+    `False` WITH a NULL source count is the CORRECT shape for a fallback row and
+    not a hole: the claims of a fallen-back angle come out of the one shared
+    full-extraction distiller call, which discards the angle entirely.
+    """
+    results = [
+        _stamped("gemini", "g1", "Q1", parsed=True, sources=3),
+        _stamped("openai", "g1", "Q1", parsed=False, sources=None),
+    ]
+    merged = _claim(
+        "x", ["gemini", "openai"], "g1",
+        fact_source="fact_list", urls=["http://g-a", "http://g-b", "http://g-c"],
+    )
+
+    rows = _pipeline_mod._assignment_yield_rows(results, [merged])
+
+    assert [r["fact_list_parsed"] for r in rows] == [True, False]
+    assert [r["resolvable_sources"] for r in rows] == [3, None]
+
+
+def test_a_measured_zero_sources_survives_as_zero_and_not_as_null():
+    """NULL means "not recorded"; 0 means "this angle cited nothing".
+
+    The whole table is built on that distinction (`assignment_yield.py`), and a
+    falsy-coercion here — `or None`, `or 0`, a truthiness test — collapses it.
+    """
+    rows = _pipeline_mod._assignment_yield_rows(
+        [_stamped("gemini", "g1", "Q1", parsed=True, sources=0)], []
+    )
+
+    assert rows[0]["resolvable_sources"] == 0
+    assert rows[0]["resolvable_sources"] is not None
+    # And the parse flag keeps its own three-way distinction.
+    assert rows[0]["fact_list_parsed"] is True
 
 
 def test_a_shallow_pre_dedupe_snapshot_would_not_have_helped():
@@ -292,9 +360,15 @@ def test_a_shallow_pre_dedupe_snapshot_would_not_have_helped():
     MUTATES the surviving dict IN PLACE, so the snapshot holds the SAME OBJECT
     and shows the merged `found_by` and the unioned `source_urls` afterwards.
 
-    If this test ever goes red because `_dedupe_claims` became non-mutating, the
-    per-provider derivation becomes available again and CR-01 can be reopened
-    properly — that is the point of pinning it here rather than in a comment.
+    STILL LOAD-BEARING AFTER THE REPAIR, AND KEPT ON PURPOSE. The repair does
+    NOT snapshot claims — it captures an AGGREGATE (a bool and a URL-string
+    count) inside `collect_provider_facts`, precisely so that there is nothing
+    left holding a claim for this mutation to reach. This test is what stops the
+    next reader "simplifying" that back into a list copy.
+
+    If it ever goes red because `_dedupe_claims` became non-mutating, a claim-list
+    capture becomes viable again — that is the point of pinning it here rather
+    than in a comment.
     """
     from nestor_pulse_sdk.pipeline.synthesis.steps import _dedupe_claims
 
@@ -319,11 +393,23 @@ def test_the_merge_has_already_run_before_this_module_sees_a_claim():
     and returns the RESULT as `ProviderFactsResult.claims`, which is what
     `pipeline.py` binds. The `_dedupe_claims` call at the merge stage is therefore
     the near-no-op its own comment says it is, and there is no pre-merge claim
-    list in `pipeline.py` at any depth of copy. Restoring the two columns needs
-    `synthesis/steps.py` to carry the pre-merge list out.
+    list in `pipeline.py` at any depth of copy. That is WHY the repair lives in
+    `synthesis/steps.py` and carries a measurement out rather than a list.
 
-    Asserted over the source text because the alternative is driving
-    `collect_provider_facts`, which needs live providers.
+    A STRUCTURAL TRIPWIRE ON THE STAMP ORDER, AND ITS LIMIT IS STATED RATHER
+    THAN IMPLIED. The stamp must run BEFORE `_dedupe_claims`. Moving it below
+    that call is caught here — but ON ITS OWN it changes no value, because the
+    numbers were already computed inside the report loop, and this test would
+    then be guarding a proxy. Mutation-verified, both ways:
+
+      * move the stamp call alone -> this goes RED, every value stays correct;
+      * capture claim REFERENCES instead of copied url strings, keeping the
+        stamp early -> this stays green, every value stays correct;
+      * BOTH -> gemini reads 4 instead of 3, and it is
+        `test_factlist_fallback.py::test_the_pre_merge_yield_survives_the_
+        cross_provider_merge` that catches it, driving the real functions.
+
+    Two independent guards, neither sufficient alone. That is why both exist.
     """
     from nestor_pulse_sdk.pipeline.synthesis import steps as _steps_mod
 
@@ -331,6 +417,15 @@ def test_the_merge_has_already_run_before_this_module_sees_a_claim():
 
     assert "claims = _dedupe_claims(d8_claims + fallback_claims)" in steps_src
     assert "claims=claims" in steps_src, "the deduped list is what is returned"
+
+    stamp_at = steps_src.find("reports_out = _stamp_pre_merge_yield(")
+    dedupe_at = steps_src.find("claims = _dedupe_claims(d8_claims + fallback_claims)")
+    assert stamp_at != -1, "the pre-merge stamp call is gone; both columns are NULL"
+    assert stamp_at < dedupe_at, (
+        "the yield stamp now runs AFTER the merge — `source_urls` is already the "
+        "cross-provider union at that point, so the two columns are back to "
+        "reporting everyone's evidence as each provider's own (CR-01)"
+    )
 
     pipeline_src = _executable_source(_pipeline_mod)
     assert "claims = list(facts_result.claims)" in pipeline_src

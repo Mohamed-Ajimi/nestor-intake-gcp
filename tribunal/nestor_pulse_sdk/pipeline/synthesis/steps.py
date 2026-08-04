@@ -1984,6 +1984,16 @@ class ProviderFactsResult:
         attribution. Entries are ``{"provider": str, "text": str}``, deduped on
         the PAIR (two streams reporting the same gap is two honest rows, not a
         duplicate) and capped by the same ``_NOT_FOUND_TOTAL_MAX``, loudly.
+
+    (e) EACH ENTRY OF ``reports`` ALSO CARRIES TWO PRE-MERGE YIELD KEYS, stamped
+        by this module and read by ``pipeline.tribunal.pipeline``'s D-R8
+        assignment-yield seam: ``ANGLE_YIELD_FACT_LIST_PARSED`` and
+        ``ANGLE_YIELD_RESOLVABLE_SOURCES``. THIS EXTENDS (b) AND DOES NOT ALTER
+        IT — two ``_``-prefixed keys are ADDED to a dict that already carries
+        seven of them from ``run_angles``; every pre-existing key, the length,
+        the order and the tuple/dict shape are untouched, so ``reports`` remains
+        the drop-in replacement (b) promises. See ``_stamp_pre_merge_yield`` for
+        why the values are captured HERE and not derived downstream.
     """
 
     claims: list[dict] = field(default_factory=list)
@@ -1994,6 +2004,148 @@ class ProviderFactsResult:
     #: ADDITIVE (15.2-15). Appended last so every positional construction of this
     #: dataclass that predates it stays valid.
     not_found_by_provider: list[dict] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# D-R8 (phase 15.8, review CR-01 repair): THE PRE-MERGE PER-ASSIGNMENT YIELD
+#
+# `assignment_yield.fact_list_parsed` and `.resolvable_sources` are PER-PROVIDER,
+# PER-ASSIGNMENT questions, and the ONE moment either can be answered honestly is
+# INSIDE the report loop below — before `_dedupe_claims` runs. Downstream of that
+# call the answer no longer exists in any form:
+#
+#   * `_dedupe_claims` keeps the FIRST occurrence's dict WHOLE and MUTATES IT IN
+#     PLACE, appending the second provider to `found_by` and UNIONING
+#     `source_urls`. A `list(claims)` snapshot taken before the call therefore
+#     holds THE SAME OBJECTS and shows the merged values afterwards — a shallow
+#     pre-merge capture is INERT, not a fix.
+#   * `pipeline.py` never sees a pre-merge claim at all: it binds
+#     `ProviderFactsResult.claims`, which is already the dedupe's OUTPUT.
+#
+# So the capture is an AGGREGATE OF VALUES — a bool and a set of URL STRINGS,
+# copied out of each claim as it is normalised — and never a claim reference.
+# That makes the in-place-mutation trap STRUCTURALLY IMPOSSIBLE rather than
+# merely avoided: there is nothing left holding a claim to be mutated.
+#
+# THE TWO KEYS ARE NAMED CONSTANTS AND ARE IMPORTED BY THE READER. The seven
+# other `_`-prefixed keys on this dict are matched by bare string literals in
+# two modules, which is the agree-by-accident-of-construction shape this phase
+# spent three plans closing. A shared symbol makes a rename a compile-time
+# problem instead of a silently-NULL column in a run that happens once.
+# ---------------------------------------------------------------------------
+
+#: Did THIS assignment's own report carry a machine-readable fact list that
+#: parsed? ``True`` / ``False`` / ``None``, and the three are distinct:
+#: ``None`` means NOT RECORDED (there was no report text to read, or the entry
+#: raised), NEVER "no". This is the REAL parse flag and not the inference from
+#: `fact_source` that review CR-01 removed — a fell-back stream now reads
+#: ``False`` even when a corroborating stream's D8 block parsed.
+ANGLE_YIELD_FACT_LIST_PARSED = "_fact_list_parsed"
+
+#: How many DISTINCT non-empty source URLs did this assignment's OWN claims
+#: cite, counted BEFORE any cross-provider union? An int (0 is a measurement:
+#: "this angle cited nothing"), or ``None`` when the attribution genuinely does
+#: not exist — see `_stamp_pre_merge_yield` for the two cases.
+ANGLE_YIELD_RESOLVABLE_SOURCES = "_resolvable_sources"
+
+
+def _collect_claim_urls(sink: "set[str]", claim: dict) -> None:
+    """Copy one claim's source URLs into ``sink`` AS STRINGS. NEVER RAISES.
+
+    VALUES, NOT A REFERENCE — that is the whole point of this function existing
+    rather than the caller stashing the claim. `_dedupe_claims` later mutates a
+    surviving claim's `source_urls` list in place; a copied `str` cannot be
+    reached by that mutation, so the count taken here stays this assignment's own.
+
+    Normalisation is `_assignment_yield_rows`' original, carried verbatim so the
+    column means the same thing it did before CR-01 removed it: DISTINCT,
+    stripped, non-empty, string-only. A source cited by three of this angle's
+    claims is ONE resolvable source — the column compares how much citable ground
+    an assignment covered, not how often it repeated itself.
+    """
+    try:
+        raw_urls = claim.get("source_urls")
+        if not isinstance(raw_urls, (list, tuple)):
+            return
+        for url in raw_urls:
+            if isinstance(url, str) and url.strip():
+                sink.add(url.strip())
+    except Exception:  # noqa: BLE001 — a measurement never costs a claim
+        log.debug("collect_provider_facts: unreadable source_urls on a claim")
+
+
+def _stamp_pre_merge_yield(
+    reports_out: "list[tuple[str, dict]]", entry_yields: "list[dict]"
+) -> "list[tuple[str, dict]]":
+    """Attach each entry's PRE-MERGE yield to its ``reports`` dict. NEVER RAISES.
+
+    ONE STAMP SITE, and an ALIGNMENT GUARD, because the loop below appends to
+    ``reports_out`` at four different places. ``entry_yields`` gains exactly one
+    dict at the TOP of every iteration, so the two lists are in lockstep by
+    construction; if they are ever not, this refuses to stamp rather than attach
+    one assignment's measurement to another's row. A misattributed measurement in
+    a table read once is worse than an absent one — the rule this whole column
+    pair was removed and restored under.
+
+    THE SIX SHAPES, stated here because a reader of the table will ask:
+
+      | what happened to the report        | fact_list_parsed | resolvable_sources |
+      |------------------------------------|------------------|--------------------|
+      | forced-tool facts (own-researcher) | True             | count (0 possible) |
+      | fact list parsed first time        | True             | count (0 possible) |
+      | D-R2 corrective re-ask parsed      | True             | count (0 possible) |
+      | fell back to the distiller         | False            | None               |
+      | no report text and no facts        | None             | None               |
+      | raised BEFORE its list was read    | None             | None               |
+
+    That last row is exact rather than approximate: the probe is written by the
+    branch that decides the outcome, and nothing between that write and the end
+    of the iteration can raise (`_normalise_fact_claim` and `_collect_claim_urls`
+    both swallow everything). So the loop's outer handler sees an untouched probe
+    or none at all — a HALF-COUNTED assignment is not a shape this can produce.
+
+    WHY A FELL-BACK ANGLE RECORDS ``None`` SOURCES RATHER THAN ``0``. Its claims
+    come out of the ONE full-extraction `claim_distiller` call that mixes every
+    fallen-back stream together, and that call has already lost the angle:
+    `_normalise_fact_claim` is invoked there with `corroboration_key=None` and
+    `facet="general"` FOR THE SAME REASON — "passing some other report's loop
+    variable would be a FABRICATED attribution". A `0` would say this angle cited
+    nothing; the truth is that nobody can say what it cited. ``False`` for the
+    parse flag and ``None`` for the count is not an inconsistency, it is the two
+    facts: the list did not parse, AND the sources cannot be attributed back.
+    """
+    try:
+        if len(entry_yields) != len(reports_out):
+            log.warning(
+                "collect_provider_facts: the pre-merge yield capture is out of "
+                "step with the reports it describes (%d vs %d) — NOT stamping, "
+                "so the D-R8 assignment-yield columns record NULL rather than "
+                "another assignment's numbers",
+                len(entry_yields), len(reports_out),
+            )
+            return reports_out
+        return [
+            (
+                name,
+                {
+                    **result,
+                    ANGLE_YIELD_FACT_LIST_PARSED: probe.get("parsed"),
+                    ANGLE_YIELD_RESOLVABLE_SOURCES: (
+                        len(probe["urls"])
+                        if isinstance(probe.get("urls"), set)
+                        else None
+                    ),
+                },
+            )
+            for (name, result), probe in zip(reports_out, entry_yields)
+        ]
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks the distill stage
+        log.warning(
+            "collect_provider_facts: could not stamp the pre-merge yield (%s: %s) "
+            "— the two D-R8 columns record NULL; the run is unaffected",
+            type(exc).__name__, exc,
+        )
+        return reports_out
 
 
 def _normalise_fact_claim(
@@ -2381,6 +2533,16 @@ async def collect_provider_facts(
 
     Both rejected alternatives and the no-double-spend property are pinned by
     ``tests/test_factlist_fallback.py``.
+
+    D-R8 (PHASE 15.8) ADDS A MEASUREMENT AND CHANGES NO BEHAVIOUR. Each entry of
+    the returned ``reports`` gains two ``_``-prefixed keys — see
+    ``ANGLE_YIELD_FACT_LIST_PARSED`` / ``ANGLE_YIELD_RESOLVABLE_SOURCES`` and
+    ``_stamp_pre_merge_yield``. Not one claim, count, note, feed row, record or
+    LLM call differs because of them: the values are read off work this function
+    already does, and the ONLY reason they are captured here is that this is the
+    last place in the pipeline where "what did THIS provider, on THIS assignment,
+    actually cite" still has an answer. `_dedupe_claims` unions it away nine lines
+    from the end.
     """
     reports_out: list[tuple[str, dict]] = []
     records_by_provider: "dict[str, dict]" = {}
@@ -2392,6 +2554,12 @@ async def collect_provider_facts(
     #: ``parsed.not_found`` in the same place, so the two views cannot drift.
     not_found_pairs_raw: list[tuple[str, str]] = []
     unusable_claims = 0
+    #: D-R8: one probe dict per ENTRY, appended at the TOP of each iteration so it
+    #: stays in lockstep with `reports_out` (which is appended exactly once per
+    #: iteration, at four different sites). Holds VALUES ONLY — a bool and a set
+    #: of URL strings — never a claim, so the in-place merge below cannot reach
+    #: it. `_stamp_pre_merge_yield` attaches these after the loop.
+    entry_yields: list[dict] = []
 
     entries = list(provider_reports or [])
 
@@ -2421,6 +2589,9 @@ async def collect_provider_facts(
             "— returning an empty result, no LLM call made",
             len(entries),
         )
+        # Deliberately UNSTAMPED (D-R8): no report was read, so the two yield
+        # keys are absent and `_assignment_yield_rows`' `.get()` records NULL —
+        # "not recorded", which is exactly what happened.
         return ProviderFactsResult(reports=[(n, r) for n, r in (_unpack(e) for e in entries)])
 
     # NOTE: focus-area labels and the run language are NOT resolved here. Their
@@ -2456,6 +2627,14 @@ async def collect_provider_facts(
         name, result = _unpack(entry)
         rec = _rec(name)
         rec["reports_seen"] += 1
+
+        # D-R8, FIRST STATEMENT OF THE ITERATION AND UNCONDITIONAL. `probe` starts
+        # as NOT RECORDED and every branch below that learns something overwrites
+        # it; a branch that learns nothing leaves the honest NULL behind. Appending
+        # here rather than beside each `reports_out.append` is what makes the
+        # lockstep a property of the code shape instead of a thing to remember.
+        probe: dict = {"parsed": None, "urls": None}
+        entry_yields.append(probe)
 
         report_text = ""
         stripped = ""
@@ -2496,6 +2675,10 @@ async def collect_provider_facts(
                 isinstance(f, dict) for f in pre_parsed
             ):
                 kept = 0
+                # D-R8: this stream emitted a structured list through the forced
+                # tool, so its list "parsed" in every sense the column means.
+                probe["parsed"] = True
+                probe["urls"] = set()
                 for raw in pre_parsed:
                     norm = _normalise_fact_claim(
                         raw, provider=name, facet=facet, fact_source="fact_list",
@@ -2506,6 +2689,7 @@ async def collect_provider_facts(
                         unusable_claims += 1
                         continue
                     d8_claims.append(norm)
+                    _collect_claim_urls(probe["urls"], norm)
                     kept += 1
                 rec["reports_with_fact_list"] += 1
                 rec["facts_from_list"] += kept
@@ -2559,6 +2743,12 @@ async def collect_provider_facts(
             if not parsed.needs_distiller_fallback:
                 rec["reports_with_fact_list"] += 1
                 kept = 0
+                # D-R8: the first-pass fact list parsed. This is the REAL flag —
+                # this report's own parse outcome, not an inference from the
+                # `fact_source` of claims that a later merge may have shared with
+                # another stream.
+                probe["parsed"] = True
+                probe["urls"] = set()
                 for raw in parsed.facts:
                     norm = _normalise_fact_claim(
                         raw, provider=name, facet=facet, fact_source="fact_list",
@@ -2569,6 +2759,7 @@ async def collect_provider_facts(
                         unusable_claims += 1
                         continue
                     d8_claims.append(norm)
+                    _collect_claim_urls(probe["urls"], norm)
                     kept += 1
                 rec["facts_from_list"] += kept
             else:
@@ -2624,6 +2815,13 @@ async def collect_provider_facts(
                         (name, item) for item in retried.not_found
                     )
                     kept = 0
+                    # D-R8: same treatment as a first-pass block, for the same
+                    # stated reason. A report the corrective re-ask rescued DID
+                    # produce a machine-readable list of its own and never
+                    # reached the distiller, so `False` here would report a
+                    # fallback that did not happen.
+                    probe["parsed"] = True
+                    probe["urls"] = set()
                     for raw in retried.facts:
                         # D-R3: the SAME angle values as the first pass. This
                         # branch is treated exactly as a first-pass block by
@@ -2641,9 +2839,17 @@ async def collect_provider_facts(
                             unusable_claims += 1
                             continue
                         d8_claims.append(norm)
+                        _collect_claim_urls(probe["urls"], norm)
                         kept += 1
                     rec["facts_from_list"] += kept
                 else:
+                    # D-R8: the fallback. `parsed` is a MEASURED False — this
+                    # report's list genuinely did not parse — while `urls` stays
+                    # None, because this report's claims are about to be mixed
+                    # into the ONE shared distiller call that discards the angle.
+                    # See `_stamp_pre_merge_yield` for why that is not a `0`.
+                    probe["parsed"] = False
+                    probe["urls"] = None
                     rec["reports_fell_back"] += 1
                     if rec["reason"] is None:
                         # 15.2-04's own sentence, carried verbatim — and taken from
@@ -2663,6 +2869,14 @@ async def collect_provider_facts(
             stripped = stripped or report_text or ""
 
         reports_out.append((name, {**result, "report": stripped}))
+
+    # --- D-R8: carry the PRE-MERGE per-assignment yield out on `reports` ------
+    # HERE, above the distiller and above `_dedupe_claims`, because every value
+    # being attached was computed inside the loop from THIS assignment's own
+    # claims. Nothing below this line can change a stamped number: they are a
+    # bool and an int, and no claim object is held. That is the property the
+    # column pair was removed for lacking (review CR-01).
+    reports_out = _stamp_pre_merge_yield(reports_out, entry_yields)
 
     # --- The ONE fallback distillation, over ALL fallback reports at once -----
     # Skipping it entirely when there is nothing to distil IS the no-double-spend
