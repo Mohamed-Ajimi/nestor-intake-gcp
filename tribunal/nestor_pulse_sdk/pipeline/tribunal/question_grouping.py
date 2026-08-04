@@ -113,6 +113,49 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _resolve_ceiling(raw: Any) -> int:
+    """Resolve a group ceiling, distinguishing an ABSENT one from a ZERO one.
+
+    ZERO IS A VALUE, NOT A FALLBACK, AND THAT IS THE WHOLE POINT (WR-05). This replaced
+    a resolution that ran the argument through a FALSY CHECK before clamping it at one,
+    and a falsy check cannot tell `0` from `None`. (The literal defect expression is
+    deliberately not reproduced here: a source-text guard greps for it with `#`
+    comments stripped, and prose quoting it would make that guard read green on its own
+    explanation.) `workshop_rank` computes `_D6_MAX_GROUPS - (1 if cross_cutting else 0)`, so
+    `NESTOR_TRIBUNAL_D6_MAX_GROUPS=1` plus a cross-cutting question hands this function
+    a LEGITIMATE 0 — and `0 or 1` silently bought a mandate group the operator never
+    authorised, turning a dial set to one group (three paid calls) into two (six). The
+    engine must not overrule an operator decision about spend by way of a falsy check.
+
+    A readable integer is taken as given, clamped at 0. Anything that is NOT one —
+    `None`, a bool, a string that will not parse — is the caller breaking the
+    `max_groups: int` contract, so it falls back to 1 LOUDLY rather than guessing a
+    number that spends money. A bool is rejected explicitly because `int(True)` is 1
+    and would otherwise sail through as a deliberate ceiling.
+
+    Same tolerant-read register as `_env_int` above: a bad value must never raise into
+    a stage whose contract is that it never raises.
+    """
+    if raw is None or isinstance(raw, bool):
+        log.warning(
+            "question_grouping: max_groups=%r is not an integer. The caller contract "
+            "is `max_groups: int`, in which 0 means NO mandate group and is a value in "
+            "its own right — not an absent one. Falling back to a ceiling of 1.",
+            raw,
+        )
+        return 1
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        log.warning(
+            "question_grouping: max_groups=%r does not read as an integer, so a "
+            "ceiling of 1 is used instead. The caller contract is `max_groups: int`, "
+            "in which 0 means NO mandate group.",
+            raw,
+        )
+        return 1
+
+
 # How many groups a run may dispatch.
 #
 # ~~D-W3-1 makes 5 a HARD CEILING TAKEN BY THE OPERATOR, so the env knob may only ever
@@ -1488,7 +1531,7 @@ async def group_winners(
     notes: list[str] = []
     labels = _labels_of(client_questions)
     pool = list(winners or [])
-    ceiling = max(1, int(max_groups or 1))
+    ceiling = _resolve_ceiling(max_groups)
 
     def _fallback(trigger: str) -> tuple[list[dict[str, Any]], list[str], list[str]]:
         log.warning(
@@ -1546,6 +1589,55 @@ async def group_winners(
         notes.append(_NOTE_GROUPED_PER_QUESTION)
         _log_grouping_decision(groups)
         return groups, notes, []
+
+    # ------------------------------------------------------------------------
+    # THE ZERO CEILING (WR-05). THE PLACEMENT IS THE DECISION, so it is stated
+    # rather than left to look incidental: this guard sits BELOW the
+    # per-question branch and ABOVE the prompt.
+    #
+    # The primary per-question path is DELIBERATELY NOT clamped to this ceiling
+    # (D-W4-4a — the number follows the client, and `fallback_groups`' docstring
+    # already records the accepted spend consequence). Moving this guard above
+    # that branch would newly clamp the primary path and silently drop the WHOLE
+    # mandate, which is scope creep into a locked operator decision. Plan
+    # 15.8-01's mutation matrix moves it there on purpose, and that mutant must
+    # go red — the placement is pinned, not assumed.
+    #
+    # WHY ZERO MANDATE GROUPS LOSES NO CLIENT QUESTION: `workshop_rank`'s GAP A,
+    # immediately after its `max_mandate_groups` subtraction, restores the full
+    # ceiling and DROPS the cross-cutting question whenever
+    # `len(labels) > max_mandate_groups` — the mandate wins (D-W3-4). So a 0
+    # reaches this function only when `len(labels) == 0`, i.e. when there is no
+    # mandate to lose. That is why returning no group here is the honest answer
+    # and not a question-dropping regression. Recorded, not re-derived: nothing
+    # is imported from `workshop_rank` to assert it, because that file belongs
+    # to sibling plans editing it in parallel worktrees this phase.
+    # ------------------------------------------------------------------------
+    if ceiling <= 0:
+        log.warning(
+            "question_grouping: the group ceiling resolved to %d, so the mandate gets "
+            "NO group and NO research call is made for it — over %d ranked "
+            "question(s). This is NESTOR_TRIBUNAL_D6_MAX_GROUPS (currently %d) minus "
+            "the slot the caller reserved for a cross-cutting question; see "
+            "`max_mandate_groups` in workshop_rank. Nothing failed — the operator's "
+            "dial did this — but a run that really did have winners and gave them no "
+            "group must never be silent.",
+            ceiling,
+            len(pool),
+            _D6_MAX_GROUPS,
+        )
+        notes.append(
+            "This run's limit on the number of research groups left none for the "
+            "client's own questions, so no separate research was commissioned for "
+            "them."
+        )
+        # `degradation_reasons` STAYS EMPTY, and the reason is the same one the
+        # per-question branch above gives for its own case: nothing failed. The
+        # operator's dial produced this, and a cross-cutting question took the
+        # only slot. Marking it degraded would mark a CORRECTLY-CONFIGURED run
+        # degraded — the exact alarm fatigue D-12 forbids. The note and the
+        # warning carry the fact instead.
+        return [], notes, []
 
     prompt = _build_group_prompt(
         pool, decision_context=decision_context, max_groups=ceiling, labels=labels

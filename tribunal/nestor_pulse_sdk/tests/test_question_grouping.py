@@ -1402,6 +1402,96 @@ def test_the_grouping_mode_default_is_per_question():
 
 
 # ===========================================================================
+# WR-05 (phase 15.8 plan 01) — a ceiling of ZERO is a VALUE, not an absent one.
+# ===========================================================================
+
+
+async def test_a_zero_ceiling_on_the_topic_path_yields_no_mandate_group_and_makes_no_call():
+    """`NESTOR_TRIBUNAL_D6_MAX_GROUPS=1` + a cross-cutting question = a real 0.
+
+    THE POOL MUST BE NON-EMPTY, and that is the whole design of this test. With an
+    empty pool the `if not pool` guard returns first, so the test would pass against
+    UNFIXED source and prove nothing at all — it would be measuring the wrong guard.
+    Six winners make the zero ceiling the only thing that can stop the call.
+
+    `ExplodingAudited` is the tripwire, but what carries the proof is the pair its own
+    docstring names — `degradation_reasons == []` AND an untouched `stats` — because
+    `group_winners` swallows exceptions by contract, so a raise alone would surface as
+    the topic fallback rather than as a failure. Before the fix, `0 or 1` made the
+    ceiling 1, the call was attempted, and both of those flip.
+    """
+    pool = winners(6, parents=3)
+    stats: dict[str, Any] = {}
+
+    groups, notes, degradations = await call_group_winners(
+        ExplodingAudited(),  # type: ignore[arg-type]
+        pool,
+        ["Q1", "Q2", "Q3"],
+        max_groups=0,
+        stats=stats,
+    )
+
+    assert groups == [], "a zero ceiling buys no mandate group"
+    assert degradations == [], "nothing failed — the operator's dial did this"
+    assert stats == {}, "no call means no cost and no audit id"
+    assert len(notes) >= 1, "a run that gave its winners no group must not be silent"
+
+
+def test_an_absent_ceiling_is_read_as_one_because_none_is_not_zero():
+    """The distinction `or` could not make, asserted directly on the resolver.
+
+    `0` and `None` are different facts: one is an operator saying "no group", the other
+    is a caller saying nothing. `max(1, int(max_groups or 1))` collapsed them, which is
+    exactly how a dial set to one group dispatched two.
+    """
+    assert qg._resolve_ceiling(None) == 1, "absent means one, as it always did"
+    assert qg._resolve_ceiling(0) == 0, "ZERO IS A VALUE — the whole of WR-05"
+    assert qg._resolve_ceiling(-3) == 0, "a negative ceiling clamps to no groups"
+    assert qg._resolve_ceiling(True) == 1, (
+        "a bool is not a ceiling, even though int(True) is 1"
+    )
+    assert qg._resolve_ceiling("five") == 1, "an unreadable value never raises"
+    assert qg._resolve_ceiling("3") == 3, "a readable string is still a number"
+
+
+async def test_the_primary_path_is_unchanged_at_a_zero_ceiling_because_it_follows_the_client():
+    """THE ANTI-REGRESSION PIN FOR D-W4-4a. Read this before "fixing" what it asserts.
+
+    The per-question path's overshoot at a zero ceiling is DELIBERATE and
+    operator-accepted: the number of groups follows the CLIENT, not the dial, and
+    `fallback_groups`' docstring records the spend consequence in full. The WR-05 guard
+    therefore sits BELOW this branch on purpose. A future reader tempted to "finish the
+    job" by clamping this path too must change the DECISION first, not the code —
+    doing it here would silently drop the client's entire mandate.
+
+    Five distinct parents over six winners, so the committed behaviour is five groups.
+    """
+    pool = [
+        win(0, "Q1", rank=1),
+        win(1, "Q2", rank=2),
+        win(2, "Q1", rank=3),
+        win(3, "Q3", rank=4),
+        win(4, "Q4", rank=5),
+        win(5, "Q5", rank=6),
+    ]
+    stats: dict[str, Any] = {}
+
+    groups, _notes, degradations = await call_group_winners(
+        ExplodingAudited(),  # type: ignore[arg-type]
+        pool,
+        ["Q1", "Q2", "Q3", "Q4", "Q5"],
+        max_groups=0,
+        stats=stats,
+        mode=qg._GROUPING_MODE_PER_QUESTION,
+    )
+
+    assert len(groups) == 5, "one group per distinct client question, ceiling ignored"
+    assert [group["group_id"] for group in groups] == ["g1", "g2", "g3", "g4", "g5"]
+    assert degradations == [], "the primary path is not a degraded path"
+    assert stats == {}, "and it still makes no call"
+
+
+# ===========================================================================
 # `group_winners` on the `topic` path — the four fallback triggers, each
 # asserted separately. Every test below pins `mode=topic` through
 # `call_group_winners`; see that helper's docstring for why.
