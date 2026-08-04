@@ -1194,8 +1194,20 @@ def assignment_identity(angle: Any) -> dict[str, Any]:
         # FABRICATE PROVENANCE in a row whose entire purpose is to be trusted
         # later, by a reader who cannot re-run the $45 run to check it (D-W5-2).
         # NULL is the honest record of "this has no single parent".
+        # WR-03. THE NON-STRING-IS-ABSENT RULE, applied here for the FAILURE
+        # SCOPING and not for the value. A `str()` on `bracket` is harmless in
+        # itself — the result is only ever compared against
+        # `GROUP_BRACKET_DISCOVERY` and never written to a column, so the
+        # fabricated-provenance hazard that steps (1) and (3) guard against does
+        # not apply. What is NOT harmless is that a raise from a hostile `__str__`
+        # lands in the ONE handler at the bottom of this function, which costs the
+        # `group_id` AND the `client_question` this function had ALREADY computed
+        # correctly, two statements up. `_group_angle` stringifies before this
+        # value arrives, so nothing can reach that path today — and "the two sides
+        # agree by accident of construction" is exactly the reasoning phase 15.6's
+        # CR-01 disproved. This function exists to lose as little as possible.
         bracket = source.get("bracket")
-        bracket_text = str(bracket).strip() if bracket is not None else ""
+        bracket_text = bracket.strip() if isinstance(bracket, str) else ""
         if bracket_text == question_grouping.GROUP_BRACKET_DISCOVERY:
             return {
                 "group_id": group_id,

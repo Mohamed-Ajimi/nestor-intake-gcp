@@ -314,6 +314,34 @@ def test_a_hostile_bracket_does_not_become_cross_cutting():
     assert identity["parent_kind"] == "client_question"
 
 
+def test_a_bracket_that_raises_costs_ONLY_the_bracket_and_not_the_two_columns():
+    """WR-03: THE FAILURE SCOPING. RED on unfixed source (all three read None).
+
+    There is ONE `except` for this whole function, so a raise anywhere in the body
+    discards the `group_id` and the `client_question` that were ALREADY computed
+    correctly two statements earlier. The old `str(bracket)` put a caller-supplied
+    `__str__` inside that scope.
+
+    Reachability is nil today because `_group_angle` stringifies the bracket
+    before it arrives — which is "both sides happen to agree by accident of
+    construction", the justification phase 15.6's CR-01 disproved. This function
+    is built around losing as little as possible; it must not lose two good
+    columns to a third one it does not even record.
+    """
+    class _Hostile:
+        def __str__(self):  # noqa: D105
+            raise RuntimeError("a bracket must never be able to do this")
+
+    identity = rd.assignment_identity(
+        _group_angle(bracket=_Hostile(), corroboration_key="g1",
+                     focus_area="How do competitors price?")
+    )
+
+    assert identity["group_id"] == "g1"
+    assert identity["client_question"] == "How do competitors price?"
+    assert identity["parent_kind"] == "client_question"
+
+
 # ---------------------------------------------------------------------------
 # THE VOCABULARY, PINNED BY A TEST RATHER THAN BY AN IMPORT
 # ---------------------------------------------------------------------------
