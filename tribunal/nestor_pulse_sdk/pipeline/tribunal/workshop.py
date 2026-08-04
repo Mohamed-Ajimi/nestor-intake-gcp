@@ -2351,6 +2351,18 @@ async def cluster_candidates(
         )
         return [_as_singleton(c) for c in items], reasons
 
+    # HOISTED ABOVE THE `try:` ON PURPOSE (D-W5-7). The EXCEPTION handler below
+    # now accumulates `calls` instead of assigning zero, so it READS this name —
+    # and the first thing inside the `try` is the chunking block, which reads
+    # `grouping._CLUSTER_MAX_BLOCK` and `_CLUSTER_BATCH` and can raise. Bound
+    # inside the `try`, as it was, the handler would reference an UNBOUND name
+    # and let a `NameError` escape a function whose entire contract is
+    # "clustering never loses a candidate" — a whole round's questions lost to
+    # an error in a guard. The hoist is a correctness requirement, not tidiness,
+    # and it has its own test so it stays pinned independently of the
+    # accumulation. `sem` stays inside: nothing outside the `try` reads it.
+    calls = 0
+
     try:
         # Blob guard and chunk size mirror `grouping._cluster_keys:349-360`.
         if len(items) > grouping._CLUSTER_MAX_BLOCK:
@@ -2369,7 +2381,6 @@ async def cluster_candidates(
             chunks = [list(piece) + shadows for piece in chunks]
 
         sem = asyncio.Semaphore(max(1, grouping._CLUSTER_CONCURRENCY))
-        calls = 0
 
         async def _run_chunk(piece: list[dict[str, Any]]) -> list[int]:
             nonlocal calls
@@ -2584,8 +2595,29 @@ async def cluster_candidates(
             f"kept separately — nothing was lost, the tournament just has more to rank."
         )
         if isinstance(stats, dict):
-            stats["calls"] = 0
+            # ACCUMULATE, NEVER ASSIGN — D-W5-7. The SUCCESS path above was
+            # fixed during 15.7 (CR-06); THIS branch of the same function was
+            # missed, and it ASSIGNED zero. The loop creates ONE `cluster_stats`
+            # per run and calls this function once per round, so an assign here
+            # discarded every earlier round's count outright: one raised
+            # clusterer in one round and the run's call total reads 0.
+            #
+            # THE FAILING ROUND'S OWN ISSUED CALLS ARE COUNTED, NOT DISCARDED.
+            # `_run_chunk` increments `calls` BEFORE it awaits the provider, so
+            # a call counted there was issued and may well have been billed.
+            # `stats["calls"]` is the run's spend signal, and a signal that
+            # silently omits the calls a failing round made under-reports spend
+            # in exactly the situation a reader is most likely to be
+            # investigating. Over-reporting an attempt is recoverable;
+            # under-reporting a spend is the defect being removed.
+            #
+            # `calls` is bound ABOVE the `try:` — see the comment there. The
+            # chunking block can raise before it would otherwise exist.
+            stats["calls"] = int(stats.get("calls") or 0) + calls
         _emit_cluster_thinking(
+            # NOT the run total: this is how many calls THIS invocation reports
+            # to the thinking feed, a different quantity, and changing it would
+            # alter a feed row. Left exactly as it was.
             run_id, before=len(items), after=len(items), calls=0
         )
         return [_as_singleton(c) for c in items], reasons
