@@ -862,10 +862,18 @@ class _ScriptedProvidersAudited:
         ONE question rather than a stream of them, because `evolve_generative`
         runs once PER ROUND. New candidates are stamped `born_round = round + 1`,
         so nothing generated in round 1 can be a winner OF round 1: criterion 3
-        (SATURATION) holds, the loop exits on its own criteria in round 1, and
-        exactly one generative call is made. A fake that proposed on every round
-        would push the run to the cap and move this file's cost, call-count and
-        model-list assertions for a reason that is a property of THE FAKE.
+        (SATURATION) holds and exactly one generative call is made. A fake that
+        proposed on every round would push the run to the cap and move this
+        file's cost, call-count and model-list assertions for a reason that is a
+        property of THE FAKE.
+
+        THE ROUND-1 EXIT IS THIS FILE'S PIN, NOT ENGINE BEHAVIOUR. Corrected
+        2026-08-04 (D-W4-9): production now holds the loop open to
+        `_LOOP_MIN_ROUNDS = 4` regardless of the criteria, so an unpinned run of
+        this fake would NOT stop in round 1. The stub fixture sets
+        `_LOOP_MIN_ROUNDS = 1` — see the comment at that `monkeypatch.setattr` —
+        purely so this file's arithmetic is unchanged. Read the round-1 exit here
+        as a consequence of that pin.
 
         Whether the five moves produce GOOD questions is a V-02 judgement, and
         `test_workshop_loop.py` covers it at the stage-B seam with scripted moves.
@@ -1414,6 +1422,22 @@ async def _engine_run(
     # (SATURATION) and exits on its own criteria well inside this cap — the
     # bound is a safety net, not the thing being measured.
     monkeypatch.setattr(_loop_mod, "_LOOP_MAX_ROUNDS", 2)
+    # AN OVERRIDE, NOT THE PRODUCTION VALUE. Production holds the loop open for
+    # `_LOOP_MIN_ROUNDS = 4` rounds (D-W4-9, operator ruling 2026-08-04) because
+    # criterion 3 (SATURATION) is vacuously true in round 1 and a healthy brief
+    # would otherwise ship after ONE pass.
+    #
+    # PINNED TO 1 HERE FOR A REASON THAT IS A PROPERTY OF THE FAKE, exactly the
+    # hazard this file's own docstring names above: the fake proposes one new
+    # question every round, so under the production floor this run would grind to
+    # its cap and move this file's cost, call-count and model-list assertions
+    # without any engine behaviour having changed. That would make this file
+    # report on the fake instead of on the pipeline.
+    #
+    # THE FLOOR IS NOT TESTED HERE. `test_workshop_loop.py` owns it — see
+    # `test_all_three_criteria_hold_in_round_one_and_the_floor_still_blocks_exit`
+    # and the stage-B arm `test_an_all_keep_script_still_runs_the_full_floor_of_rounds`.
+    monkeypatch.setattr(_loop_mod, "_LOOP_MIN_ROUNDS", 1)
     # ONE winner -> one research group -> exactly one angle per stream in
     # `_D6_STREAMS`, so every stream in the rotation runs once and contributes its
     # own scripted report once. Since D-W3-3 the rotation is THREE streams

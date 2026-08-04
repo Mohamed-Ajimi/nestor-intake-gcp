@@ -532,12 +532,21 @@ def test_exemption_a_a_cross_cutting_winner_never_counts_as_weak() -> None:
     structurally penalises exactly the highest-value questions the loop exists
     to produce — it would be built to reject its own best output. exp9 marked
     both its best questions WEAK for precisely this reason.
+
+    THE ROUND NUMBER MOVED FROM 3 TO THE FLOOR (D-W4-9, 2026-08-04) and the
+    subject of the test did not. `should_exit` now ANDs the minimum-round floor
+    into the three criteria, so a round below `_LOOP_MIN_ROUNDS` would read
+    `False` for a reason that has nothing to do with Exemption A — the assertion
+    would still fail loudly, but it would stop being a statement about criterion
+    2. It reads the constant rather than a hand-typed 4 so it tracks the floor.
     """
     winners = _clean_winners() + [
         _cand(3, Q1, _WEAK, parents=[Q1, Q2], cross_cutting=True)
     ]
     verdict = exit_verdict(
-        winners=winners, client_questions=[Q1, Q2, Q3], round_no=3
+        winners=winners,
+        client_questions=[Q1, Q2, Q3],
+        round_no=workshop_loop._LOOP_MIN_ROUNDS,
     )
     assert verdict["quality_ok"] is True
     assert verdict["weak_winners"] == 0
@@ -681,6 +690,163 @@ def test_no_degradation_sentence_when_the_cap_is_reached_cleanly() -> None:
     assert verdict["should_exit"] is True
 
 
+# ===========================================================================
+# The MINIMUM-ROUND FLOOR — D-W4-9, operator ruling 2026-08-04.
+#
+# THE DEFECT IT CLOSES. Criterion 3 (SATURATION) is VACUOUSLY TRUE IN ROUND 1:
+# `_stamp_loop_candidates` stamps `born_round = round_no + 1`, so round 1's
+# winner set structurally cannot hold a loop-born candidate and `new_entrants`
+# is necessarily 0. On a KEEP-heavy brief coverage and quality also hold, all
+# three criteria are satisfied, and the loop breaks after ONE pass — no COMBINE,
+# no cross-question synthesis, no INVENT through the evidence gate, and the two
+# cross-cutting slots filled by ordinary candidates by rank.
+# ===========================================================================
+
+
+def _unborn_winners() -> list[dict[str, Any]]:
+    """A clean winner set with NO `born_round` at all.
+
+    Distinct from `_clean_winners`, whose members carry `born_round=1`/`2` and
+    would therefore fail criterion 3 in round 1 for an unrelated reason. These
+    tests are about the FLOOR, so the three criteria must genuinely all hold.
+    """
+    return [
+        _cand(0, Q1, _KEEP),
+        _cand(1, Q2, _KEEP),
+        _cand(2, Q3, _KEEP),
+    ]
+
+
+def test_all_three_criteria_hold_in_round_one_and_the_floor_still_blocks_exit() -> None:
+    """THE BLOCKER ITSELF. Every criterion passes; the loop must not stop."""
+    verdict = exit_verdict(
+        winners=_unborn_winners(), client_questions=[Q1, Q2, Q3], round_no=1
+    )
+    assert verdict["coverage_ok"] is True
+    assert verdict["quality_ok"] is True
+    assert verdict["saturation_ok"] is True, "criterion 3 is vacuous in round 1"
+    assert verdict["floor_ok"] is False
+    assert verdict["should_exit"] is False
+    assert verdict["min_rounds"] == workshop_loop._LOOP_MIN_ROUNDS
+
+
+def test_the_same_winner_set_exits_once_the_floor_is_reached() -> None:
+    verdict = exit_verdict(
+        winners=_unborn_winners(),
+        client_questions=[Q1, Q2, Q3],
+        round_no=workshop_loop._LOOP_MIN_ROUNDS,
+    )
+    assert verdict["floor_ok"] is True
+    assert verdict["should_exit"] is True
+    assert verdict["hold_reason"] == ""
+
+
+def test_a_cap_below_the_floor_wins_so_the_loop_can_never_be_unterminable() -> None:
+    """THE TERMINATION GUARANTEE IS UNCHANGED, and this is the proof.
+
+    `effective_floor = min(floor, cap)`. At `round_no == cap` the floor is
+    necessarily satisfied, so the driver's `for round_no in range(1, max_rounds
+    + 1)` remains the SOLE bound on how long the loop runs. A floor that could
+    outrank the cap would be a floor that hangs the engine.
+    """
+    held = exit_verdict(
+        winners=_unborn_winners(),
+        client_questions=[Q1, Q2, Q3],
+        round_no=1,
+        max_rounds=2,
+    )
+    assert held["should_exit"] is False
+    assert held["min_rounds"] == 2, "the floor degrades to the cap, not the reverse"
+
+    at_cap = exit_verdict(
+        winners=_unborn_winners(),
+        client_questions=[Q1, Q2, Q3],
+        round_no=2,
+        max_rounds=2,
+    )
+    assert at_cap["cap_reached"] is True
+    assert at_cap["should_exit"] is True
+
+    degenerate = exit_verdict(
+        winners=_unborn_winners(),
+        client_questions=[Q1, Q2, Q3],
+        round_no=1,
+        max_rounds=1,
+    )
+    assert degenerate["should_exit"] is True, "a cap of 1 must still exit in round 1"
+
+    absurd = exit_verdict(
+        winners=_unborn_winners(),
+        client_questions=[Q1, Q2, Q3],
+        round_no=10,
+        max_rounds=10,
+        min_rounds=10**6,
+    )
+    assert absurd["should_exit"] is True
+    assert absurd["min_rounds"] == 10
+
+
+def test_a_floor_hold_is_distinguishable_from_criteria_not_met() -> None:
+    """A READER OF THE VERDICT MUST BE ABLE TO TELL THE TWO APART.
+
+    Both read `should_exit: False`. Only one of them is the loop being held
+    open by a rule; the other is the loop genuinely not being done. If they
+    were indistinguishable, the audited record could not explain why round 1
+    did not stop.
+    """
+    held = exit_verdict(
+        winners=_unborn_winners(), client_questions=[Q1, Q2, Q3], round_no=1
+    )
+    reason = held["hold_reason"]
+    assert reason, "criteria met but floor not reached must carry a sentence"
+    assert len(reason) > 40, f"hold reason is not a sentence: {reason!r}"
+    assert "1" in reason and str(workshop_loop._LOOP_MIN_ROUNDS) in reason
+
+    not_met = _unborn_winners()
+    not_met[0]["critique"] = _WEAK
+    verdict = exit_verdict(
+        winners=not_met, client_questions=[Q1, Q2, Q3], round_no=1
+    )
+    assert verdict["quality_ok"] is False
+    assert verdict["should_exit"] is False
+    assert verdict["hold_reason"] == "", "criteria NOT met is not a floor hold"
+
+
+def test_a_floor_hold_is_not_a_degradation() -> None:
+    """D-12's alarm-fatigue rule. The driver appends `degradation_reason` to
+    `loop_reasons` as a degradation; a loop working exactly as designed must
+    not raise one."""
+    held = exit_verdict(
+        winners=_unborn_winners(), client_questions=[Q1, Q2, Q3], round_no=1
+    )
+    assert held["hold_reason"] != ""
+    assert held["degradation_reason"] == ""
+
+    # `degradation_reason`'s own composition is untouched: cap reached AND
+    # quality failing is still the only thing that produces one.
+    weak = _unborn_winners() + [_cand(3, Q1, _WEAK)]
+    capped = exit_verdict(
+        winners=weak, client_questions=[Q1, Q2, Q3], round_no=10, max_rounds=10
+    )
+    assert capped["degradation_reason"] != ""
+    assert capped["hold_reason"] == ""
+
+
+def test_the_floor_is_read_from_the_module_constant_at_call_time() -> None:
+    """Monkeypatching the constant must change behaviour, which is what makes
+    `test_engine_e2e_stubbed.py`'s pin to 1 work at all."""
+    original = workshop_loop._LOOP_MIN_ROUNDS
+    try:
+        workshop_loop._LOOP_MIN_ROUNDS = 1
+        verdict = exit_verdict(
+            winners=_unborn_winners(), client_questions=[Q1, Q2, Q3], round_no=1
+        )
+        assert verdict["should_exit"] is True
+        assert verdict["min_rounds"] == 1
+    finally:
+        workshop_loop._LOOP_MIN_ROUNDS = original
+
+
 def test_exit_verdict_never_raises_on_hostile_input() -> None:
     """The 5-shape hostile battery. T-15.7-03-01."""
     batteries: tuple[Any, ...] = (
@@ -692,12 +858,22 @@ def test_exit_verdict_never_raises_on_hostile_input() -> None:
     )
     for battery in batteries:
         for questions in (None, [], [Q1], "not a list"):
-            verdict = exit_verdict(
-                winners=battery, client_questions=questions, round_no=None
-            )
-            assert isinstance(verdict, dict)
-            assert isinstance(verdict["should_exit"], bool)
-            assert isinstance(verdict["degradation_reason"], str)
+            # `min_rounds` joins the battery: a garbled floor must coerce like
+            # every other hostile input rather than raise inside a stage that
+            # has already paid for its LLM calls.
+            for floor in (None, "junk", -5, 0, [], True):
+                verdict = exit_verdict(
+                    winners=battery,
+                    client_questions=questions,
+                    round_no=None,
+                    min_rounds=floor,
+                )
+                assert isinstance(verdict, dict)
+                assert isinstance(verdict["should_exit"], bool)
+                assert isinstance(verdict["floor_ok"], bool)
+                assert isinstance(verdict["hold_reason"], str)
+                assert isinstance(verdict["min_rounds"], int)
+                assert isinstance(verdict["degradation_reason"], str)
 
 
 # ===========================================================================
@@ -863,10 +1039,18 @@ def _script(*, weak_first_rounds: int = 2, generate_rounds: int = 3,
 
     `weak_label`'s candidates are WEAK for the first `weak_first_rounds` rounds,
     so that question's floor slots have no KEEP to prefer and BOTH criterion 1
-    (coverage) and criterion 2 (quality) fail early. That is what makes the loop
-    actually loop: with every candidate KEEP from round 1, prefer-KEEP satisfies
-    all three criteria immediately and the run correctly exits in round 1 —
-    which proves nothing about the loop.
+    (coverage) and criterion 2 (quality) fail early.
+
+    CORRECTED 2026-08-04 (D-W4-9). This paragraph used to say that an all-KEEP
+    script "correctly exits in round 1", and that is no longer true: the
+    minimum-round floor inside `exit_verdict` guarantees at least
+    `_LOOP_MIN_ROUNDS` passes whatever the criteria say, and
+    `test_an_all_keep_script_still_runs_the_full_floor_of_rounds` asserts exactly
+    that. The early WEAK is therefore not what keeps the loop alive any more —
+    but it remains a DIFFERENT and still-necessary thing to exercise, because it
+    is the only arm of this file that drives criteria 1 and 2 through a genuine
+    FAIL and back to a recovery, which is the behaviour the harness measured and
+    which a floor does not produce on its own.
     """
     state: dict[str, int] = {"round": 0, "generate": 0}
     rng = random.Random(seed)
@@ -1010,6 +1194,30 @@ def test_the_loop_exits_on_its_criteria_before_the_cap() -> None:
     # It must actually LOOP. Without this line a run that exited in round 1 would
     # satisfy the assertion above while proving nothing about the loop at all.
     assert all(r >= 2 for r in observed), observed
+
+
+def test_an_all_keep_script_still_runs_the_full_floor_of_rounds() -> None:
+    """D-W4-9 END TO END, and this is the arm the unit tests cannot reach.
+
+    `weak_first_rounds=0` makes every candidate KEEP from round 1, which is the
+    exp11-shaped healthy brief: coverage holds, quality holds, and criterion 3
+    is VACUOUSLY true because `_stamp_loop_candidates` stamps `born_round =
+    round_no + 1` so no round-1 winner can be loop-born. Before the floor this
+    run stopped after ONE pass — no COMBINE, no cross-question synthesis, no
+    INVENT through the evidence gate — which is Wave 4 degenerating into the
+    straight line it was built to replace.
+
+    Asserted as a RANGE, for the same reason `test_the_loop_exits_on_its_
+    criteria_before_the_cap` is: evolve runs at temperature 1.0 and the exact
+    exit round is not a guarantee. What IS guaranteed is the floor and the cap.
+    """
+    result = _run_stage_b(
+        _ScriptedClient(_script(weak_first_rounds=0)), SEAM_LABELS
+    )
+    rounds = result["counts"]["rounds"]
+    assert rounds >= workshop_loop._LOOP_MIN_ROUNDS, rounds
+    assert rounds <= workshop_loop._LOOP_MAX_ROUNDS, rounds
+    assert result["winners"]
 
 
 def test_every_final_winner_carries_a_non_empty_langs_list() -> None:

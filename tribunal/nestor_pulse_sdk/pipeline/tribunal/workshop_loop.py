@@ -96,6 +96,33 @@ def _env_int(name: str, default: int) -> int:
 #                           A CEILING, NOT A TARGET: all three measured global
 #                           configurations exited on the criteria at rounds 4, 6
 #                           and 9, well inside it.
+#   _LOOP_MIN_ROUNDS        the FLOOR on LOOP rounds (D-W4-9, operator ruling
+#                           2026-08-04). 4, because that is where exp11 measured
+#                           convergence — the earliest round any measured global
+#                           configuration exited on its own criteria.
+#
+#                           WHY A FLOOR IS NEEDED AT ALL, AND IT IS NOT A TUNING
+#                           PREFERENCE. Criterion 3 (SATURATION) is VACUOUSLY
+#                           TRUE IN ROUND 1: `_stamp_loop_candidates` stamps
+#                           `born_round = round_no + 1`, so round 1's winner set
+#                           structurally CANNOT contain a loop-born candidate and
+#                           `new_entrants` is necessarily 0. On a KEEP-heavy
+#                           brief coverage and quality also hold at the end of
+#                           round 1, so all three criteria are satisfied and the
+#                           loop breaks after ONE pass.
+#
+#                           WHAT THAT ONE-PASS EXIT COSTS: no COMBINE ever runs,
+#                           no cross-question synthesis happens, the meta-review's
+#                           guidance is produced and never used, no INVENT
+#                           candidate ever reaches the evidence gate, and
+#                           `select_winners` step 2 finds nothing eligible so the
+#                           two `_CROSS_CUTTING_SLOTS` are filled by ordinary
+#                           single-parent candidates by rank. That degenerates
+#                           Wave 4 into the straight line it was built to replace.
+#
+#                           THE CAP ALWAYS WINS over this floor — see
+#                           `exit_verdict`'s `effective_floor` — so a floor can
+#                           never make the loop unterminable.
 #   _FLOOR_PER_QUESTION     research questions guaranteed per client question. 5,
 #                           by operator ruling 2026-07-30.
 #   _CROSS_CUTTING_SLOTS    slots reserved for questions spanning two client
@@ -106,6 +133,7 @@ def _env_int(name: str, default: int) -> int:
 _TOURNAMENT_ROUNDS_MIN = _env_int("NESTOR_TRIBUNAL_WORKSHOP_ROUNDS_MIN", 6)
 _TOURNAMENT_ROUNDS_MAX = _env_int("NESTOR_TRIBUNAL_WORKSHOP_ROUNDS_MAX", 10)
 _LOOP_MAX_ROUNDS = _env_int("NESTOR_TRIBUNAL_WORKSHOP_LOOP_ROUNDS", 10)
+_LOOP_MIN_ROUNDS = _env_int("NESTOR_TRIBUNAL_WORKSHOP_LOOP_MIN_ROUNDS", 4)
 _FLOOR_PER_QUESTION = _env_int("NESTOR_TRIBUNAL_WORKSHOP_FLOOR_PER_Q", 5)
 _CROSS_CUTTING_SLOTS = _env_int("NESTOR_TRIBUNAL_WORKSHOP_CROSS_SLOTS", 2)
 
@@ -561,6 +589,23 @@ def _reason_cap_with_resurrected(resurrected: int, total: int) -> str:
     )
 
 
+def _reason_floor_not_reached(round_no: int, floor: int) -> str:
+    """The HOLD sentence. Not a degradation — see `exit_verdict`'s return.
+
+    A hold is the loop working as designed, so this sentence never joins
+    `degradation_reason`; the driver appends that one to `loop_reasons` as a
+    D-12 degradation and an alarm raised for normal operation is the exact
+    alarm-fatigue D-12 forbids.
+    """
+    return (
+        f"question workshop: all three exit criteria were already met in round "
+        f"{round_no}, but the loop continues to round {floor} because criterion "
+        f"3 (saturation) cannot fail before a loop-born candidate exists, so an "
+        f"exit this early would ship a winner set that no COMBINE, no "
+        f"cross-question synthesis and no invented candidate ever contributed to."
+    )
+
+
 def _exempt_cross_cutting(winner: Any) -> bool:
     """EXEMPTION A, AND IT IS STRUCTURAL ON PURPOSE. Read the whole of this.
 
@@ -603,6 +648,7 @@ def exit_verdict(
     client_questions: Any,
     round_no: Any,
     max_rounds: Optional[int] = None,
+    min_rounds: Optional[int] = None,
 ) -> dict[str, Any]:
     """Should the loop stop? D-W4-6, all three criteria, none removed or reordered.
 
@@ -633,6 +679,20 @@ def exit_verdict(
     AT THE CAP THE LOOP SHIPS AND RECORDS A REASON, matching D-12: degraded means
     honest, not broken. V-01 would have carried a sentence naming 3 of 10 winners
     that could not be sharpened past WEAK — exactly what an operator wants to see.
+
+    THE MINIMUM-ROUND FLOOR (D-W4-9, operator ruling 2026-08-04) LIVES HERE, AND
+    THE PLACE IS THE POINT. `workshop_rank`'s `break` reads `should_exit` and
+    nothing else. A floor applied at the `break` site instead would leave this
+    verdict dict — which the stage feed, the round records and the tests all read
+    — reporting `should_exit: true` while the loop kept running: a lie in an
+    audited record, and the two-authorities defect class this phase has already
+    paid for three times (15.6 CR-01, D-DEF-01, D-W4-8). ONE AUTHORITY, and it is
+    this function.
+
+    THE CAP ALWAYS WINS. `effective_floor = min(floor, cap)`, so at `round_no ==
+    cap` the floor is necessarily satisfied and the driver's
+    `for round_no in range(1, max_rounds + 1)` remains the SOLE termination
+    guarantee. A floor set absurdly high cannot hang the loop.
     """
     entries = _as_entries(winners)
     labels = _clean_labels(client_questions)
@@ -640,6 +700,17 @@ def exit_verdict(
     cap = _LOOP_MAX_ROUNDS if max_rounds is None else _safe_int(
         max_rounds, _LOOP_MAX_ROUNDS
     )
+    floor = max(
+        1,
+        _LOOP_MIN_ROUNDS if min_rounds is None else _safe_int(
+            min_rounds, _LOOP_MIN_ROUNDS
+        ),
+    )
+    # THE CAP WINS. A floor above the cap would otherwise be a floor the loop can
+    # never satisfy, and `should_exit` would be False on every round including the
+    # last one. Degrading the floor to the cap keeps the round range the only
+    # termination guarantee there has ever been.
+    effective_floor = min(floor, max(1, cap))
 
     # --- Criterion 1: COVERAGE. A KEEP winner for every client question.
     covered: set[str] = set()
@@ -669,7 +740,23 @@ def exit_verdict(
     saturation_ok = new_entrants == 0
 
     cap_reached = current >= cap
-    should_exit = bool(coverage_ok and quality_ok and saturation_ok)
+    # "The three criteria" stays a NAMED value. D-W4-6's rule is the conjunction
+    # of criteria 1-3 and nothing else; the floor is a separate gate bolted on
+    # after it, and keeping them separate is what lets `hold_reason` tell a reader
+    # WHICH of the two stopped the exit.
+    criteria_ok = bool(coverage_ok and quality_ok and saturation_ok)
+    floor_ok = current >= effective_floor
+    should_exit = bool(criteria_ok and floor_ok)
+
+    # NOT a degradation, so NOT in `degradation_reason` (see
+    # `_reason_floor_not_reached`). Non-empty ONLY on a floor hold, which is what
+    # makes "criteria met, floor not reached" distinguishable from "criteria not
+    # met" — on the latter this string is empty.
+    hold_reason = (
+        _reason_floor_not_reached(current, effective_floor)
+        if (criteria_ok and not floor_ok)
+        else ""
+    )
 
     sentences: list[str] = []
     if cap_reached and not quality_ok:
@@ -683,11 +770,17 @@ def exit_verdict(
     return {
         "round_no": current,
         "max_rounds": cap,
+        # The EFFECTIVE floor, not the configured one — the record should say
+        # what actually applied. When a cap below the floor degraded it, this is
+        # the number that gated the exit.
+        "min_rounds": int(effective_floor),
         "winner_count": len(entries),
         "coverage_ok": bool(coverage_ok),
         "quality_ok": bool(quality_ok),
         "saturation_ok": bool(saturation_ok),
         "should_exit": should_exit,
+        "floor_ok": bool(floor_ok),
+        "hold_reason": hold_reason,
         "cap_reached": bool(cap_reached),
         "weak_winners": int(weak_winners),
         "resurrected_winners": int(resurrected_winners),

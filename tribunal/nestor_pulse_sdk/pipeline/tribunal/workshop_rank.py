@@ -4195,6 +4195,11 @@ async def run_workshop_stage_b(
         guidance = ""
         verdict: dict[str, Any] = {}
         max_rounds = max(1, int(workshop_loop._LOOP_MAX_ROUNDS))
+        # Read INSIDE the function for the same reason `max_rounds` is (D-W4-9):
+        # a test that monkeypatches the module constant must be picked up at run
+        # time, not frozen at import. The floor is ENFORCED in `exit_verdict`,
+        # never at the `break` below — one authority.
+        min_rounds = max(1, int(workshop_loop._LOOP_MIN_ROUNDS))
         rounds_run = 0
         loop_born_winners = 0
 
@@ -4544,6 +4549,7 @@ async def run_workshop_stage_b(
                 client_questions=labels,
                 round_no=round_no,
                 max_rounds=max_rounds,
+                min_rounds=min_rounds,
             )
 
             # D-W4-7 — RECORDED, AND NOTHING IS ENFORCED ON IT. There is no spend
@@ -4579,6 +4585,22 @@ async def run_workshop_stage_b(
                     ),
                 )
             )
+
+            # The floor HELD: every criterion was satisfied and the loop is
+            # continuing anyway (D-W4-9). Read straight off the verdict — nothing
+            # is recomputed here, because recomputing it would be the second
+            # authority the floor was put inside `exit_verdict` to avoid.
+            if verdict.get("hold_reason"):
+                log.info(
+                    "workshop_rank: the loop met all three exit criteria in "
+                    "round %d but the minimum-round floor of %d holds it open — "
+                    "coverage=%s quality=%s saturation=%s",
+                    round_no,
+                    verdict.get("min_rounds"),
+                    verdict.get("coverage_ok"),
+                    verdict.get("quality_ok"),
+                    verdict.get("saturation_ok"),
+                )
 
             if verdict.get("should_exit"):
                 log.info(
