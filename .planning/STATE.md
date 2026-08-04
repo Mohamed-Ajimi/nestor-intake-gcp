@@ -5,7 +5,7 @@ milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
 last_updated: "2026-08-03T17:37:11.744Z"
-last_activity: 2026-08-04 -- Quick task 260804-dbd: three operator rulings closed 15.7 BLOCKER
+last_activity: 2026-08-04 -- Phase 15.8 PLANNED (15 plans, 6 waves, 20 decisions); 3 rulings owed
 progress:
   total_phases: 16
   completed_phases: 11
@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.7 COMPLETE + gate green (1538/0) + VERIFIED (`gaps_found`, 57/58); its BLOCKER closed 2026-08-04 by operator rulings D-W4-9/10/11 (UNGATED — 3 commits owe a Cloud Build run). Next is phase 15.8 (yield instrumentation, then the ONE deploy + ONE measuring run)
+**Current focus:** Phase 15.8 PLANNED (15 plans, 6 waves, 20 decisions) — 3 operator rulings + 1 blocking pre-condition (the yield tables have no read surface) stand between here and `/gsd-execute-phase 15.8`
 
 ## Current Position
 
@@ -70,7 +70,48 @@ is the real mechanism.
   Full state + the remaining open operator calls: `.planning/phases/15.7-*/.continue-here.md`
   (written 2026-08-03 18:00, so it PREDATES both the verification and these rulings).
 
-  **NEXT: phase 15.8** (Wave 5 — yield instrumentation, then ONE deploy + ONE measuring run).
+  **PHASE 15.8 IS PLANNED** (2026-08-04, `1e6cda2`) — **15 plans, 6 waves, 20 decisions D-W5-1…20**,
+  in `.planning/phases/15.8-*/`. `15.8-CONTEXT.md` is THE AUTHORITY. No RESEARCH.md and no
+  VALIDATION.md exist, deliberately — the operator declined the research agent and the scope was
+  already written down. **Do not record their absence as a gap.**
+
+  Wave 1 = 8 file-disjoint plans (verified, not assumed) · Wave 2 = the two yield writers, each
+  inheriting a file from wave 1 · Wave 3 = test-file review + runbook re-scope · Wave 4 = the gate ·
+  Wave 5 = the ONE deploy · Wave 6 = the ONE ~$45 run. Every debt item in D-W5-3 was reconciled
+  against plan coverage: **no uncovered item.**
+
+  ⛔ **THREE OPERATOR DECISIONS BLOCK EXECUTION** (15.8-06 is a wave-1 decision checkpoint):
+    - **`catch_up_matches`' own-median boundary** (D-W5-8). Recommend **accept + document + warn**.
+      Verification CORRECTED the review here — D-W4-3 IS honestly delivered; option (b) reverses two
+      named committed assertions.
+    - **`actions` semantics** (D-W5-9). Recommend **remove the resolver from the sum**. D-W5-14
+      sharpened this: `resolver_calls = 1` is assigned BEFORE the await and regardless of the kill
+      switch, so the counter means *"the resolver was invoked"* — not work, not spend — and may count
+      an operation issuing **zero** HTTP requests inside the number a reader uses to judge the run.
+    - **Whether to widen the frozen yield columns** (D-W5-17). As frozen, `winners`, `weak_winners`,
+      `barred`, `lookups` and `calls` have **no home**, so **WEAK-winners-per-round is NOT cross-run
+      queryable** — a real gap in D-R8's purpose. Cheap now, expensive once 15.8-05 executes.
+
+  ⛔ **AND ONE BLOCKING PRE-CONDITION FOUND DURING PLANNING (D-W5-18):** the yield tables have **NO
+  READ SURFACE** — no endpoint, no seam verb, no UI, and the only credential-free DB path lacks
+  `roles/logging.logWriter`, so it returns a boolean and not a table. **Wave 5's own § 8 criterion
+  would be unreadable AFTER the $45 is spent.** Ruled into 15.8-15's pre-flight as gate Q-PRE-4.
+
+  Also found in planning, each of which would have produced a phantom result (D-W5-19): the
+  `corroboration_key` check **fails by design at claim level** (distiller-fallback claims are
+  permanently NULL — measure at the ANGLE level); **there are THREE locales, not four**
+  (`_LANGS_MAX = 3`); **V-02 item #6 asks about the `own` stream Wave 3 REMOVED**; and
+  `NESTOR_WORKER_STALE_MINUTES` is **60**, not 525600. And a live redaction defect (15.8-08):
+  `_redact_dict` matches **key names only**, and `upload_audit_body` leaves the **response half
+  unredacted entirely** — audit blobs sit under 7-year retention. If the bucket scan is positive the
+  **SerpApi key must rotate**, and that is NOT covered by the `Nestor_Claude_Temp` deferral.
+
+  **The deploy surface is TWO services, not four** (D-W5-16): `git log 31a7f71..HEAD -- backend/
+  frontend/` returns **0 of 291 commits**. And **`--set-secrets` in the deploy SCRIPTS is CORRECT** —
+  the `--update-secrets` rule governs hand-typed updates; applying it to the scripts would DROP
+  bindings.
+
+  **NEXT: `/gsd-execute-phase 15.8`** once the three decisions are ruled.
 
 Gates (15.7, current — these SUPERSEDE the 15.6 numbers below):
   Engine `cloudbuild.test-engine.yaml` build **7c89be5c** = **1538 passed / 0 failed / 13 skipped**,
