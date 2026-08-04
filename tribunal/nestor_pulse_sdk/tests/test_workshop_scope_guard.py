@@ -1306,6 +1306,69 @@ def test_a_hostile_member_text_cannot_raise_out_of_the_join():
     assert groups[0]["members"][1]["rank"] == 56
 
 
+def test_both_coverage_repair_rungs_yield_empty_langs_and_the_sweep_fills_them():
+    """D7 — the HELPER half, driven on BOTH of `enforce_group_coverage`'s rungs.
+
+    The guard mints repair winners with an EMPTY `langs`: the PROMOTION rung does
+    `entry.setdefault("langs", [])`, and the INJECTION rung returns
+    `_verbatim_winner(...)`, whose 12-key shape sets `"langs": []` outright. The guard
+    has no `run_language` to normalise with and is deliberately not given one — its
+    four-element return contract is pinned, it is documented PURE and NEVER-RAISING,
+    and normalising inside its rungs would put three authorities where the caller
+    needs one.
+
+    THE EMPTY IS ASSERTED BEFORE THE SWEEP, on purpose. A test that only checked the
+    end state would pass just as happily if the rungs stopped producing an empty
+    `langs` for some unrelated reason, and would then be pinning nothing.
+
+    The run language must LAND, not merely make the list truthy: `run_language="Dutch"`
+    must resolve through `_RUN_LANG_CODES` to `["nl"]`. A sweep that fell through to
+    `_DEFAULT_LANGS` would give a non-empty list and a wrong one.
+    """
+    # (a) THE PROMOTION RUNG — `all_ranked` offers a promotable candidate.
+    groups, winners = mandate_group(("Q1", 1))
+    promotable = win(9, "Q2")
+    promotable["langs"] = []
+    _, final, _, injected = workshop_rank.enforce_group_coverage(
+        groups=groups,
+        winners=winners,
+        client_questions=["Q1", "Q2"],
+        all_ranked=[promotable],
+        max_groups=5,
+    )
+    assert injected == ["Q2"], injected
+    promoted = next(w for w in final if w.get("scope_injected"))
+    assert promoted["parent"] == "Q2"
+    assert promoted["langs"] == [], "the promotion rung really does yield an empty"
+
+    workshop_rank._sweep_langs(final, run_language="Dutch")
+    assert promoted["langs"] == ["nl"], promoted["langs"]
+
+    # (b) THE VERBATIM RUNG — no unused candidate at all.
+    groups, winners = mandate_group(("Q1", 1))
+    _, final, _, injected = workshop_rank.enforce_group_coverage(
+        groups=groups,
+        winners=winners,
+        client_questions=["Q1", "Q2"],
+        question_texts={"Q2": "the client's own wording for Q2"},
+        max_groups=5,
+    )
+    assert injected == ["Q2"], injected
+    verbatim = next(w for w in final if w.get("source") == "verbatim")
+    assert verbatim["langs"] == [], "the verbatim rung really does yield an empty"
+
+    workshop_rank._sweep_langs(final, run_language="Dutch")
+    assert verbatim["langs"] == ["nl"], verbatim["langs"]
+    assert all(w["langs"] for w in final), [w["langs"] for w in final]
+
+    # The guard's own contract is untouched by any of this.
+    assert len(
+        workshop_rank.enforce_group_coverage(
+            groups=groups, winners=winners, client_questions=["Q1"], max_groups=5
+        )
+    ) == 4, "enforce_group_coverage still returns a 4-tuple"
+
+
 # ===========================================================================
 # SECTION 4 — grouping and discovery inside run_workshop_stage_b.
 # ===========================================================================
@@ -1657,6 +1720,90 @@ async def test_every_group_member_is_a_winner_or_a_discovered_question():
     assert result["counts"]["group_coverage_injected"] == 0, (
         "the guard finds nothing to repair when the partition is total"
     )
+
+
+async def test_a_coverage_repaired_winner_still_carries_langs_end_to_end(monkeypatch):
+    """D7 — the PLACEMENT half. Phase 15.8 plan 03.
+
+    THE TWO EXISTING D7 TESTS CANNOT REACH THIS PATH, and that is why this one may
+    not be folded into them later: both drive `enforce_scope_guard`'s injection, which
+    PRECEDES the first `_normalise_langs` sweep, so both are satisfied by the sweep
+    that was already there. `enforce_group_coverage` runs AFTER that sweep, and both of
+    its repair rungs mint `langs == []`. Nothing re-normalised, so a coverage-repaired
+    winner reached `_stage_b_result` D7-less while every other assertion read green —
+    and 15.2-13 builds its angle-query language sentence only when `langs` is non-empty.
+
+    WHY A PLAIN "THE MODEL DROPPED Q2" SCRIPT DOES NOT REACH THE GUARD, stated here so
+    nobody "simplifies" this test back into something that never exercises it:
+    `question_grouping.validate_groups` is TOTAL — every winner the grouping model
+    leaves out is placed deterministically by `_place_orphan`, and `clamp_groups` only
+    MERGES and SPLITS, never drops a member. `enforce_group_coverage`'s own docstring
+    calls rung 3 "unreachable while the partition is total" for exactly that reason. So
+    the GROUPS THEMSELVES have to come back short, which means patching
+    `question_grouping.group_winners` — the module attribute `run_workshop_stage_b`
+    calls — with a stub that returns groups covering only some of the labels. The
+    groups it returns are built by production's own `build_groups`, never by hand.
+
+    That is not a contrived shape: it is precisely the "AN LLM DECIDING GROUPING IS AN
+    LLM THAT CAN DROP A QUESTION" scenario the guard exists for.
+
+    RUN IN `topic` MODE, because that is where 15.7's verification recorded this path
+    as REACHABLE (on the default per-question path the repair is not exercised at all,
+    which is an honest "not exercised", not a pass).
+
+    THE REPAIR IS ASSERTED TO HAVE ACTUALLY FIRED before anything is claimed about
+    `langs`. A test that passes because no repair happened proves nothing — which is
+    the specific reason the existing coverage of D7 missed this.
+    """
+    labels = ["Q1", "Q2", "Q3"]
+    real = question_grouping.group_winners
+
+    async def drops_q2(**kwargs: Any):
+        groups, notes, reasons = await real(**kwargs)
+        kept = []
+        for group in groups:
+            members = [m for m in group["members"] if m["parent"] != "Q2"]
+            if not members:
+                continue
+            copy = dict(group)
+            copy["members"] = members
+            copy["client_parents"] = [p for p in group["client_parents"] if p != "Q2"]
+            copy["parents"] = [p for p in group["parents"] if p != "Q2"]
+            kept.append(copy)
+        return kept, notes, reasons
+
+    monkeypatch.setattr(question_grouping, "group_winners", drops_q2)
+
+    with grouping_mode(question_grouping._GROUPING_MODE_TOPIC):
+        result = await stage_b(
+            working_fake(groups=[[1]]),
+            stage_a(labels, labels * 4),
+            run_language="Dutch",
+        )
+
+    # THE REPAIR REALLY FIRED — asserted three ways, because the premise is the test.
+    assert result["counts"]["group_coverage_injected"] >= 1, result["counts"]
+    repaired = [w for w in result["winners"] if w.get("scope_injected")]
+    assert repaired, "no coverage repair fired — this test would prove nothing"
+    assert any("Q2" in note for note in result["workshop_notes"]), (
+        result["workshop_notes"]
+    )
+
+    # D7 — and specifically on the repaired winner, not merely on the population.
+    empty = [w for w in result["winners"] if not w.get("langs")]
+    assert not empty, f"{len(empty)} winner(s) reached the dispatch with EMPTY langs"
+    assert all(w["langs"] for w in repaired), [w["langs"] for w in repaired]
+    # `langs` is non-empty AND well-formed — the two halves 15.2-13 actually reads.
+    # WHICH codes land is deliberately NOT asserted here: a PROMOTED repair may carry
+    # a model-supplied tag of its own, so pinning `["nl"]` end-to-end would pin which
+    # rung fired rather than the invariant. The run-language fall-through is pinned on
+    # both rungs, exactly, in
+    # `test_both_coverage_repair_rungs_yield_empty_langs_and_the_sweep_fills_them`.
+    assert all(
+        isinstance(code, str) and len(code) == 2
+        for w in result["winners"]
+        for code in w["langs"]
+    ), [w["langs"] for w in result["winners"]]
 
 
 # ===========================================================================

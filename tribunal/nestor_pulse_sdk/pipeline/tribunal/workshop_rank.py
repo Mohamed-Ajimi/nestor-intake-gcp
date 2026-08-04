@@ -2409,6 +2409,37 @@ def _normalise_langs(raw: Any, *, run_language: str = "") -> list[str]:
     return codes
 
 
+def _sweep_langs(
+    winners: Sequence[dict[str, Any]], *, run_language: str
+) -> None:
+    """Stamp `_normalise_langs` over every winner in a list. IN PLACE, never raises.
+
+    ONE RULE, TWO CALL SITES — which is the whole reason this exists rather than a
+    second hand-written copy of the same loop. `run_workshop_stage_b` has to
+    re-normalise `langs` TWICE (once below `enforce_scope_guard`, once below
+    `enforce_group_coverage`; both call sites state why they are where they are), and
+    two hand-maintained copies of one loop is the single-value-two-authorities shape
+    this phase has already paid for twice.
+
+    Non-dict entries are skipped rather than coerced: this runs over a list that has
+    already survived the guards, so a non-dict there is someone else's bug and
+    turning it into an exception in the most expensive stretch of the pipeline would
+    discard the run's whole spend.
+    """
+    for winner in winners or []:
+        if not isinstance(winner, dict):
+            continue
+        try:
+            winner["langs"] = _normalise_langs(
+                winner.get("langs"), run_language=run_language
+            )
+        except Exception:  # noqa: BLE001 — a sweep never raises into the run
+            log.error(
+                "workshop_rank: the D7 langs sweep failed for one winner",
+                exc_info=True,
+            )
+
+
 _EVOLVE_PROMPT = """\
 You are sharpening the winning research sub-questions for one client's decision
 so a research provider can act on each of them, and saying which languages are
@@ -4783,10 +4814,15 @@ async def run_workshop_stage_b(
         )
         # A promoted or injected winner never went through the evolve step, so it
         # has no model-supplied tag of its own.
-        for winner in final:
-            winner["langs"] = _normalise_langs(
-                winner.get("langs"), run_language=run_language
-            )
+        #
+        # THIS SWEEP DOES NOT MOVE. It has to run HERE, before the grouping call:
+        # `final` is what `group_winners` renders into the grouping prompt, so a
+        # `langs` normalised only at the end would leave the grouping call reading
+        # raw values. The loop-header comment block above names this sweep as "the
+        # belt to that pair of braces" for `evolve_generative` / `evolve_winners`.
+        # The SECOND sweep below `enforce_group_coverage` is an addition, not a
+        # relocation.
+        _sweep_langs(final, run_language=run_language)
 
         # ------------------------------------------------------------------
         # D-W3-4 — THE DISCOVERY BRACKET. Questions the EVIDENCE raised, each
@@ -4981,6 +5017,31 @@ async def run_workshop_stage_b(
             notes.append(
                 _note_discovery_yielded_its_slot(len(coverage_shed), len(labels))
             )
+
+        # D7 AGAIN, BECAUSE THE COVERAGE GUARD MINTS WINNERS WITH AN EMPTY `langs`.
+        # BOTH of `enforce_group_coverage`'s repair rungs do it: the PROMOTION rung
+        # does `entry.setdefault("langs", [])` on the promoted candidate, and the
+        # INJECTION rung returns `_verbatim_winner(...)`, whose 12-key shape sets
+        # `"langs": []` outright. (The unconditional post-condition rescue reaches the
+        # verbatim rung a third time.) The guard itself has no `run_language` to
+        # normalise with, and it is deliberately not given one — its four-element
+        # return contract is pinned by existing tests, it is documented PURE and
+        # NEVER-RAISING, and normalising inside three rungs is three authorities where
+        # the caller needs one. So the caller re-normalises, here.
+        #
+        # WITHOUT THIS CALL A COVERAGE-REPAIRED WINNER SHIPS D7-LESS AND SILENTLY:
+        # plan 15.2-13 builds its angle-query language sentence ONLY when `langs` is
+        # non-empty, so the client's own repaired question gets searched English-only
+        # while every other assertion in the phase reads green.
+        #
+        # WHAT THIS DEFECT IS AND IS NOT, so nobody re-litigates it: it is
+        # PRE-EXISTING AT THE PHASE BASE `67fce9f` — Wave 4 did not introduce it — it
+        # is UNREACHABLE on the default per-question grouping mode and REACHABLE on
+        # `topic`. It is fixed anyway because `run_workshop_stage_b`'s own docstring
+        # promises `langs` is "never empty" and plan 15.7-09 asserts that invariant
+        # UNCONDITIONALLY. A promise the code does not keep is the defect, whichever
+        # mode happens to be configured today.
+        _sweep_langs(final, run_language=run_language)
 
         # The mandate may have grown by a repair, so the discovery ranks are
         # re-stamped from the FINAL winner count — see `_stamp_discovery_ranks`.
