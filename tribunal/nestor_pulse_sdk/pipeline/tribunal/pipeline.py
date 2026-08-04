@@ -122,6 +122,11 @@ from nestor_pulse_sdk.runs.stage_feed import StageFeed
 # arguments are evaluated BEFORE the callee is entered, so wrapping the
 # emitter's body protects nothing about the f-string that fed it.
 from nestor_pulse_sdk.runs import run_events
+# D-R8 (15.8): the per-assignment / per-round yield emitter. Every sqlalchemy and
+# db import inside it is FUNCTION-LOCAL by its own design, so this costs nothing
+# at module load. Only the `_safe` trio may be called from here — see
+# `_assignment_yield_rows` and the two seams in `_run_staged`.
+from nestor_pulse_sdk.runs import yield_records
 from nestor_pulse_sdk.pipeline.synthesis.steps import (
     # D8/D-14 (15.2-14): the per-stream fact-list collector that REPLACED the
     # whole-corpus `claim_distiller` call as this pipeline's primary claim
@@ -2636,6 +2641,64 @@ class TribunalPipeline:
         claims = _dedupe_claims(claims)
         n_dupes_merged = max(0, _n_stream_claims - len(claims))
 
+        # --- D-R8: THE ASSIGNMENT-YIELD INSERT SEAM ----------------------------
+        # WHY HERE, and not inside `run_angles`. `record_assignment` needs
+        # `fact_list_parsed`, `claims_kept` and `resolvable_sources`, and NONE of
+        # the three exists inside `run_angles`: the three live adapters return a
+        # `{status, report}` envelope, and the fact list is parsed later, in
+        # `collect_provider_facts`. So "research resolved" for this table means THE
+        # DISTILL BOUNDARY — the first point at which the research half is complete
+        # and THE LAST POINT BEFORE THE PIPELINE SPENDS ANOTHER CENT. Everything
+        # upstream that this needs (cost, duration, the retry flag, the assignment
+        # identity) travelled here stamped on the enriched result.
+        #
+        # ⚠ AND BEFORE THE `groups` REBIND TWELVE LINES DOWN. That line REBINDS the
+        # name `groups` from the workshop's QUESTION groups to CLAIM groups —
+        # anything below it reading `groups` is reading claim groups. Neither seam
+        # reads `groups` at all, and this one sits above the rebind so that stays
+        # obviously true.
+        #
+        # `claims_kept` and `claims_surviving_verification` deliberately share ONE
+        # DENOMINATOR BASIS: both are counted over POST-`_dedupe_claims` claim
+        # objects. Counting the kept half pre-dedupe and the survivor half
+        # post-dedupe would make the ratio quietly wrong in the one measured run.
+        _yield_rows: list[dict[str, Any]] = []
+        try:
+            _yield_rows = _assignment_yield_rows(provider_results, claims)
+            for _row in _yield_rows:
+                # The row is bound as a DEFAULT ARGUMENT and NEVER captured: a
+                # captured `_row` is looked up when the thunk RUNS, so the
+                # late-binding closure bug would put the LAST row in every call.
+                await yield_records.record_assignment_safe(
+                    run_id, tenant_id, build=lambda _r=_row: _r,
+                )
+            _distinct_keys = {
+                (r.get("provider"), r.get("group_id"), r.get("client_question"))
+                for r in _yield_rows
+            }
+            # A row count ABOVE the distinct-key count is the signal that a RESUME
+            # or `divide()`'s doubled high-stakes fallback copy is in play, and this
+            # is the only place a reader sees it before querying the table. The
+            # duplicates are deliberately NOT collapsed: collapsing would hide the
+            # very condition the completer's not-exactly-one warning exists to
+            # surface. READER-SIDE RULE: dedupe on the natural key before any SUM.
+            log.info(
+                "tribunal_pipeline: D-R8 offered %d assignment_yield row(s) across "
+                "%d distinct natural key(s)%s",
+                len(_yield_rows), len(_distinct_keys),
+                (" — MORE ROWS THAN KEYS: a resumed angle or a doubled high-stakes "
+                 "copy is present; dedupe on (run_id, provider, group_id, "
+                 "client_question) before any SUM"
+                 if len(_yield_rows) > len(_distinct_keys) else ""),
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry may never end a paid run
+            log.warning(
+                "tribunal_pipeline: the assignment-yield INSERT seam failed (%s: "
+                "%s) — the research half of this run's yield measurement is lost; "
+                "the run itself is unaffected",
+                type(exc).__name__, exc,
+            )
+
         # --- LLM half, gated exactly as the clusterer was gated before ----------
         groups: list[dict[str, Any]] = []
         multi = 0
@@ -3430,6 +3493,81 @@ class TribunalPipeline:
                 )
                 dropped = dropped + conflict_losers
                 survivors = kept
+
+        # --- D-R8: THE ASSIGNMENT-YIELD COMPLETION SEAM ------------------------
+        # WHY EXACTLY HERE — the one thing a later reader cannot re-derive.
+        # `survivors` is bound THREE times in this method: by `adjudicate_all`,
+        # again after the coverage re-entry re-adjudicates, and again by conflict
+        # resolution twelve lines up (`survivors = kept`). A seam placed above ANY
+        # of them counts claims the run went on to DISCARD, and would over-count
+        # every assignment that lost a conflict. This is the first line at which
+        # `survivors` is final, and it is above the `rejected_claims` ledger so it
+        # stays that way.
+        #
+        # THE ROW SET IS THE ONE THE INSERT SEAM CAPTURED, and is deliberately NOT
+        # re-derived from `provider_results`: reusing the captured rows is what
+        # GUARANTEES the two halves address the same natural keys. Recomputing
+        # would let any mid-run mutation of `provider_results` silently orphan a
+        # row — and the emitter's "0 rows affected" warning would then read that as
+        # "the INSERT half never landed", a confident and completely wrong
+        # diagnosis in the one run there is.
+        try:
+            if _yield_rows:
+                _survivor_total = 0
+                for _row in _yield_rows:
+                    _n = sum(
+                        1 for _s in survivors
+                        if _claim_matches_assignment(
+                            _s,
+                            provider=_row.get("provider"),
+                            group_id=_row.get("group_id"),
+                            client_question=_row.get("client_question"),
+                        )
+                    )
+                    _survivor_total += _n
+                    # Row and count BOTH bound as default arguments, never
+                    # captured — a captured `_row` is resolved when the thunk runs
+                    # and would put the LAST row in every call.
+                    await yield_records.complete_assignment_safe(
+                        run_id, tenant_id,
+                        build=lambda _r=_row, _c=_n: {
+                            "provider": _r.get("provider"),
+                            "group_id": _r.get("group_id"),
+                            "client_question": _r.get("client_question"),
+                            # A 0 here is a MEASUREMENT: verification DID run for
+                            # this assignment and kept nothing of it. `verified_at`
+                            # being set is precisely what tells that apart from
+                            # "verification never ran".
+                            "claims_surviving_verification": _c,
+                        },
+                    )
+                # The total CAN EXCEED `len(survivors)`, and that is by design: a
+                # claim found by two providers is attributed to BOTH assignments,
+                # consistently with `claims_kept`. Said here so the first person to
+                # compare the two numbers does not file a bug against a decision.
+                log.info(
+                    "tribunal_pipeline: D-R8 completed %d assignment_yield row(s); "
+                    "%d survivor attribution(s) over %d final survivor(s) — the "
+                    "total exceeds the survivor count when a claim was found by "
+                    "more than one provider, by design",
+                    len(_yield_rows), _survivor_total, len(survivors),
+                )
+            else:
+                # An UPDATE with no INSERT is the completer's "0 rows affected"
+                # warning arriving from the wrong direction. Say so here instead.
+                log.warning(
+                    "tribunal_pipeline: no assignment_yield rows were captured at "
+                    "the INSERT seam, so nothing is completed — the verification "
+                    "half of this run's yield measurement is absent, and any 0-row "
+                    "warning from the completer would be misleading",
+                )
+        except Exception as exc:  # noqa: BLE001 — telemetry may never end a paid run
+            log.warning(
+                "tribunal_pipeline: the assignment-yield COMPLETION seam failed "
+                "(%s: %s) — claims_surviving_verification is lost for this run; "
+                "the run itself is unaffected",
+                type(exc).__name__, exc,
+            )
 
         # Rejected-claims ledger — the claims the Tribunal fact-checked and removed
         # (failed live-web verification) or dropped as the weaker side of a conflict.
@@ -4277,6 +4415,165 @@ def _angle_copies(angles: list[dict[str, Any]], angle: dict[str, Any]) -> int:
     if not key:
         return 1
     return sum(1 for a in angles if (a.get("corroboration_key") or "") == key)
+
+
+def _claim_matches_assignment(
+    claim: Any, *, provider: Any, group_id: Any, client_question: Any
+) -> bool:
+    """Does this claim belong to that assignment? PURE, NEVER RAISES.
+
+    ONE rule, in ONE place, because BOTH halves of the `assignment_yield` row use
+    it: `claims_kept` at the distill boundary and `claims_surviving_verification`
+    after the skeptics. If the two halves disagreed about what a claim belongs to,
+    the ratio they exist to produce would be quietly wrong in the one run that
+    gets measured, and nothing would say so.
+
+    THE RULE. The provider must appear in the claim's `found_by`, and then:
+
+      * the assignment HAS a `group_id` -> the claim's `corroboration_key` must
+        equal it, and the `facet` is NOT consulted;
+      * the assignment has NO `group_id` (the focus-area fallback path) -> the
+        claim's `corroboration_key` must be absent AND its `facet` must equal the
+        assignment's `client_question`.
+
+    WHY THE GROUP ID IS TRIED FIRST AND WHY A FACET MATCH ALONE WOULD BE WRONG.
+    A CROSS-CUTTING (`d1`) assignment records `client_question = NULL` by ruling
+    (D-W5-2), while its claims file under `labels[0]` through `_group_angle`'s
+    ORPHAN RULE. Matching on `facet` would therefore attribute the ENTIRE
+    cross-cutting group's claims — and its spend — to client question 1.
+    """
+    try:
+        if not isinstance(claim, dict):
+            return False
+        found_by = claim.get("found_by")
+        if not isinstance(found_by, (list, tuple)):
+            return False
+        if provider not in found_by:
+            return False
+        raw_key = claim.get("corroboration_key")
+        claim_key = raw_key if isinstance(raw_key, str) and raw_key else None
+        if group_id:
+            return claim_key == group_id
+        if claim_key is not None:
+            return False
+        return claim.get("facet") == client_question
+    except Exception:  # noqa: BLE001 — an attribution reader never raises
+        return False
+
+
+def _assignment_yield_rows(provider_results: Any, claims: Any) -> list[dict[str, Any]]:
+    """One `assignment_yield` row per successful assignment. PURE, NEVER RAISES.
+
+    Returns a list of dicts holding EXACTLY the eleven keyword fields
+    `yield_records.record_assignment_safe`'s `build` must return. It reads the
+    `_`-prefixed keys `run_angles` stamped on each enriched result and derives
+    three values from the claims that match the assignment.
+
+    NOTHING HERE IS COERCED, CLAMPED, SCRUBBED OR DEFAULTED. `runs/yield_records`
+    owns every one of those rules — the PII scrub-then-clamp on `client_question`
+    (whose ORDER is load-bearing: clamping first can bisect an email into a
+    fragment the scrubber no longer matches), the label clamps, and the
+    counters-are-`None`-and-never-`0` rule. A SECOND coercion authority here is
+    exactly how two modules end up disagreeing about what a NULL means, and the
+    emitter's natural key is built from ITS normalisation on both paths. Raw
+    values go through untouched.
+
+    ⚠ TWO IMPRECISIONS IN `claims_kept`, STATED HERE RATHER THAN IN A PLAN NOBODY
+    READS AT QUERY TIME. Both are DESIGN, not defects:
+
+      1. `_dedupe_claims` is FIRST-WINS on `corroboration_key` and MERGES
+         `found_by`. A statement found in two groups is therefore counted against
+         the FIRST group only, and SUMMING `claims_kept` across assignments does
+         NOT equal `len(claims)`.
+      2. A claim found by TWO providers counts for BOTH rows, because it really
+         did come out of both assignments. A SUM over providers therefore EXCEEDS
+         the claim count BY DESIGN.
+
+    `fact_list_parsed` IS DERIVED FROM `fact_source`, AND WHY IT IS NOT THE REAL
+    FLAG. A report whose D8 block parsed yields `fact_source="fact_list"` claims;
+    one that fell back yields `"distiller_fallback"`. The per-report
+    `parse_fact_list` OUTCOME is only ever aggregated PER-PROVIDER inside
+    `pipeline/synthesis/steps.py`, which this module does not own, so it cannot be
+    read per-assignment from here. This was DECIDED, not overlooked. The
+    derivation is exact except that it is `None` — never `False` — when the
+    assignment produced NO claims at all: "this assignment produced nothing" is
+    not evidence about whether its fact list parsed, and a `False` there would be
+    a FABRICATED MEASUREMENT in a column read once.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        results = provider_results if isinstance(provider_results, (list, tuple)) else []
+        claim_list = claims if isinstance(claims, (list, tuple)) else []
+        for entry in results:
+            try:
+                if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                    continue
+                provider, result = entry
+                if not isinstance(result, dict):
+                    continue
+
+                group_id = result.get("_corroboration_key")
+                client_question = result.get("_client_question")
+                matching = [
+                    c for c in claim_list
+                    if _claim_matches_assignment(
+                        c, provider=provider, group_id=group_id,
+                        client_question=client_question,
+                    )
+                ]
+
+                # `None` and not `False` when there is nothing to judge. See the
+                # docstring — this is the fabricated-measurement guard.
+                if matching:
+                    fact_list_parsed = any(
+                        c.get("fact_source") == "fact_list" for c in matching
+                    )
+                else:
+                    fact_list_parsed = None
+
+                # DISTINCT non-empty URLs: a source cited by three claims is ONE
+                # resolvable source, and this column exists to compare how much
+                # citable ground a provider actually covered.
+                urls: set[str] = set()
+                for c in matching:
+                    raw_urls = c.get("source_urls")
+                    if not isinstance(raw_urls, (list, tuple)):
+                        continue
+                    for u in raw_urls:
+                        if isinstance(u, str) and u.strip():
+                            urls.add(u.strip())
+
+                rows.append({
+                    "provider": provider,
+                    "group_id": group_id,
+                    "client_question": client_question,
+                    "parent_kind": result.get("_parent_kind"),
+                    "stakes": result.get("_stakes"),
+                    "fact_list_parsed": fact_list_parsed,
+                    "retry_used": result.get("_retry_used"),
+                    # A real 0 here is a MEASUREMENT ("this provider kept no
+                    # claims"), never an absence. The emitter preserves that
+                    # distinction; do not turn it into None.
+                    "claims_kept": len(matching),
+                    "resolvable_sources": len(urls),
+                    "cost_usd": result.get("cost_usd"),
+                    "duration_s": result.get("_duration_s"),
+                })
+            except Exception as exc:  # noqa: BLE001 — one bad result costs ITS row only
+                log.warning(
+                    "tribunal_pipeline._assignment_yield_rows: could not build a "
+                    "yield row for %r (%s: %s) — that assignment's measurement is "
+                    "lost, the rest of the batch is not",
+                    (entry[0] if isinstance(entry, (list, tuple)) and entry else None),
+                    type(exc).__name__, exc,
+                )
+    except Exception as exc:  # noqa: BLE001 — the outer backstop
+        log.warning(
+            "tribunal_pipeline._assignment_yield_rows: aggregation failed (%s: %s) "
+            "— returning the %d row(s) accumulated so far; the run is unaffected",
+            type(exc).__name__, exc, len(rows),
+        )
+    return rows
 
 
 def _intake_detail(mission_brief: dict[str, Any]) -> dict[str, Any]:
