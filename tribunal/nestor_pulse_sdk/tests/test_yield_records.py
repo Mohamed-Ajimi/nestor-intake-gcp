@@ -448,8 +448,12 @@ async def test_scrub_happens_before_clamp_and_the_order_is_the_point(
     test that only asserted "the address is gone" would pass on BOTH orders and
     pin nothing.
     """
+    # The cap is set so the address STRADDLES it (the prefix plus part of the
+    # address exceeds 20) while the SCRUBBED form still fits -- otherwise the
+    # `<redacted>` marker itself would be clipped and the test could no longer
+    # tell "scrubbed then clamped" from "clamped away".
     monkeypatch.setattr(yr, "MAX_QUESTION_CHARS", 20)
-    raw = "x" * 12 + " someone@example.com"
+    raw = "x" * 8 + " someone@example.com"
     run_id, tenant_id = _run()
 
     await yr.record_assignment(run_id, tenant_id, **_assignment(client_question=raw))
@@ -577,7 +581,10 @@ async def test_a_raising_writer_leaves_every_public_function_returning(
 
     # Attempted exactly once each, and never retried.
     assert (writer.count, completer.count, rounds.count) == (1, 1, 1)
-    assert caplog.text.count("the writer is down") == 0  # the repr is logged, not raised
+    # The failure is LOGGED, not swallowed silently: the exception's own repr
+    # reaches the warning, so an operator can see WHAT went wrong. "Never raises"
+    # must not become "never says".
+    assert caplog.text.count("the writer is down") == 3
     assert "record_assignment failed" in caplog.text
     assert "complete_assignment failed" in caplog.text
     assert "record_round failed" in caplog.text
