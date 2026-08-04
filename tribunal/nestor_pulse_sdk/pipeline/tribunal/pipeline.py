@@ -2180,13 +2180,27 @@ class TribunalPipeline:
             if _riders > 0:
                 _riders_by_group[_key] = max(_riders_by_group.get(_key, 0), _riders)
         _rider_questions = sum(_riders_by_group.values())
-        # 3. UNIFORM DISPATCH — the headline of D-R4/D-W3-1. When the number of
-        #    corroboration keys equals the number of groups stage B decided, every
-        #    single group went to every stream and the operator can be told so
-        #    plainly. Any other arithmetic (a trim removed a copy, or `groups` was
-        #    empty because a pre-Wave-3 checkpoint was restored and dispatch fell
-        #    back) keeps the OLD, weaker wording rather than overclaiming.
-        _uniform_dispatch = bool(groups) and _corroborated == len(groups)
+        # 3. UNIFORM DISPATCH — the headline of D-R4/D-W3-1. UNIFORM means every
+        #    group kept every COPY: it went out on all three streams and came back
+        #    on all three. The decision is taken in exactly one place,
+        #    `_dispatch_was_uniform`, and it counts COPIES per corroboration key.
+        #
+        #    COUNTING KEYS CANNOT SEE A TRIM AND THAT IS WHY THIS CHANGED (WR-06).
+        #    `_corroborated` counts DISTINCT keys, so a group trimmed from three
+        #    streams down to one still contributes exactly one key — and this line
+        #    used to print "every one of those N group(s) went to all 3 research
+        #    streams" about precisely that run. The comment that stood here claimed
+        #    a trim "keeps the OLD, weaker wording"; it described the intent, and the
+        #    arithmetic below it did the opposite. Counting copies is what makes the
+        #    sentence true. It matters more than a wording nit because this sentence
+        #    is written into the run's own record and plan 15.8-15 reads that record
+        #    as the measurement of the whole redesign — once, with no second run.
+        #
+        #    THE BOUNDARY THIS DELIBERATELY DOES NOT MOVE: `len(groups)` is stage B's
+        #    PRE-dispatch group count, so a group that `_bound_groups_to_winners`
+        #    dropped whole already makes the counts disagree and already yields the
+        #    weaker wording. That is the conservative direction and it is left alone.
+        _uniform_dispatch = _dispatch_was_uniform(angles, groups)
         _corroboration_clause = (
             f", and every one of those {len(groups)} group(s) went to all "
             f"{len(_D6_STREAMS)} research streams"
@@ -4189,6 +4203,67 @@ def _angle_label(angle: dict[str, Any], idx: int) -> str:
     if provider:
         return f"{base} → {_dr_model_display(provider)} · {stakes}{redacted}"
     return f"{base}{redacted}"
+
+
+def _dispatch_was_uniform(
+    angles: Any, groups: Any, streams: Optional[int] = None
+) -> bool:
+    """Did EVERY group go out on EVERY stream? PURE, never raises. (WR-06.)
+
+    COUNTING KEYS CANNOT ANSWER THIS QUESTION AND THAT WAS THE DEFECT. The feed
+    tested `_corroborated` for EQUALITY WITH the group count, where `_corroborated`
+    is the number of DISTINCT `corroboration_key`s. (The literal expression is
+    deliberately not reproduced here: this file's gate greps for it with `#` comments
+    filtered out, and a docstring is not a `#` comment, so quoting it verbatim would
+    make the gate red on the FIXED source.) A group dispatched on three streams and trimmed
+    back to one still contributes exactly ONE key, so the arithmetic was satisfied
+    and the operator was told "every one of those N group(s) went to all 3 research
+    streams" about a run where one of them went to one. Counting COPIES per key is
+    what makes that sentence true.
+
+    THIS IS NOT A COSMETIC WORDING FIX. That sentence is written into the run's own
+    record, and plan 15.8-15 reads the record as the measurement of the whole
+    five-wave redesign. There is no second run to correct it.
+
+    True only when ALL THREE hold:
+      * `groups` is non-empty — a restored pre-Wave-3 checkpoint dispatches with no
+        groups at all, and an empty `groups` must never read as uniform;
+      * the number of distinct keys equals the number of groups — so a group that
+        produced no surviving angle still yields the weaker wording;
+      * EVERY key carries exactly `streams` copies — the half `_corroborated`
+        could not see.
+
+    `streams` defaults to `len(_D6_STREAMS)`, which `research_division` documents as
+    the ONE place the stream count lives; it is a parameter so a test can pin the
+    arithmetic without reaching for the module global.
+
+    The tolerant iteration is written LOCALLY rather than imported from
+    `research_division`, deliberately: a shared symbol imported across a seam that
+    two plans in the same phase both edit is what turned phase 15.5's merged tree
+    red. The duplication is three lines and it buys seam independence.
+    """
+    try:
+        group_list = list(groups or [])
+        angle_list = list(angles or [])
+    except Exception:  # noqa: BLE001 — a feed header never raises into a paid run
+        return False
+    if not group_list or not angle_list:
+        return False
+    expected = len(_D6_STREAMS) if streams is None else streams
+    copies: dict[str, int] = {}
+    for angle in angle_list:
+        try:
+            if not angle.get("corroboration"):
+                continue
+            key = str(angle.get("corroboration_key") or "")
+        except Exception:  # noqa: BLE001 — model-adjacent data, never trusted
+            continue
+        if not key:
+            continue
+        copies[key] = copies.get(key, 0) + 1
+    if len(copies) != len(group_list):
+        return False
+    return all(count == expected for count in copies.values())
 
 
 def _angle_copies(angles: list[dict[str, Any]], angle: dict[str, Any]) -> int:
