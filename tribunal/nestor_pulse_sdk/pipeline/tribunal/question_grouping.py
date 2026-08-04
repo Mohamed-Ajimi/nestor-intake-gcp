@@ -785,10 +785,34 @@ def clamp_groups(
     construction. The seeded FACET at `steps.py:1627` is the `distiller_fallback` path
     only and does NOT correct this.
 
-    THE PRECEDENCE, applied twice below: the ≤ `max_groups` ceiling is an OPERATOR
-    decision (D-W3-1); the parent split and the size cap are the engine's own derived
-    rules. Both yield to the ceiling — a mixed or oversized group is kept and NOTED,
-    never split into one group past the ceiling.
+    THE PRECEDENCE: the ≤ `max_groups` ceiling is an OPERATOR decision (D-W3-1); the
+    parent split and the size cap are the engine's own derived rules. The ceiling still
+    wins — but the parent split now yields to it AFTER running, not by refusing to run.
+
+    ~~Both yield to the ceiling — a mixed or oversized group is kept and NOTED, never
+    split into one group past the ceiling.~~ REVERSED FOR THE SPLIT by WR-01
+    (phase 15.8 plan 01). The old order measured the remaining room as the ceiling
+    minus the CURRENT group count, BEFORE the merge pass — so a model returning five
+    groups at a ceiling of five, exactly what the grouping prompt asks for, made
+    mandate-strict a NO-OP and shipped a note blaming the ceiling for a split that
+    merging two same-parent groups would have afforded. The healthy case was the broken
+    one. (The literal defect expression is deliberately NOT reproduced in this
+    docstring: a source-text guard greps for it with `#` comments stripped, and prose
+    quoting it here would make that guard read green on its own explanation.)
+
+    THE CONTRACT NOW: step 0 splits UNCONDITIONALLY and may take the count past the
+    ceiling; step 1 immediately merges back down, PREFERRING A SAME-PARENT MERGE, so a
+    mixed group survives only when the parents genuinely outnumber the slots — and when
+    one must, it is the WEAKEST-RANKED pair rather than whichever pair the model
+    proposed. The SIZE CAP is unchanged and still yields the old way (it splits only
+    `while len(work) < ceiling`), because an oversized group costs prompt space whereas
+    a mixed group costs ATTRIBUTION — a claim answering the other client question gets
+    the wrong `facet`, and there is no per-fact facet column to correct it with.
+
+    THIS CANNOT RUN AWAY, and the bound is written here so a later reader need not
+    re-derive it: the temporary expansion is bounded by the number of DISTINCT PARENTS,
+    itself bounded by the pool size; and the merge loop removes exactly one group per
+    iteration, so it terminates at the ceiling (T-15.8-01-02).
 
     Returns `(assignment, notes)`.
     """
@@ -815,8 +839,20 @@ def clamp_groups(
 
         # --- 0. MANDATE STRICT (D-W3-5) ------------------------------------
         # Split any group carrying more than one distinct parent into one group per
-        # parent, ONLY WHILE the ceiling permits. When it does not, keep the mixed
-        # group and NOTE it. When the flag is false this step does nothing at all.
+        # parent, UNCONDITIONALLY. This may temporarily take the count PAST the
+        # ceiling; step 1 brings it back, preferring a same-parent merge, so a mixed
+        # group survives only when the parents genuinely outnumber the slots.
+        #
+        # WR-01: this step used to bound itself by `room = ceiling - len(work)`, a
+        # measurement taken BEFORE the merge that could have paid for the split. A
+        # model returning five groups at a ceiling of five — EXACTLY what the grouping
+        # prompt asks for — got `room = 0`, so the split never ran and the healthy case
+        # was the broken one. Both notes that reported the ceiling as the reason are
+        # gone with it: they asserted a constraint that had not been applied yet, so
+        # they could state a cause that did not occur. The replacement is derived from
+        # the FINAL group list, after the sort in step 3.
+        #
+        # When the flag is false this step does nothing at all.
         if prefer_single_parent:
             position = 0
             while position < len(work):
@@ -834,41 +870,27 @@ def clamp_groups(
                     buckets.items(),
                     key=lambda item: (_group_min_rank(item[1], pool), item[0]),
                 )
-                room = ceiling - len(work)
-                if room <= 0:
-                    notes.append(
-                        "A group had to keep questions from %d different client "
-                        "questions because splitting it would have needed more than "
-                        "the %d groups this run allows."
-                        % (len(buckets), ceiling)
-                    )
-                    position += 1
-                    continue
-
-                taken = ordered[1 : 1 + room]
-                leftover = ordered[1 + room :]
                 work[position] = list(ordered[0][1])
-                for _label, members in taken:
+                for _label, members in ordered[1:]:
                     work.append(list(members))
-                if leftover:
-                    for _label, members in leftover:
-                        work[position].extend(members)
-                    notes.append(
-                        "A group still holds questions from %d different client "
-                        "questions because separating them would have needed more "
-                        "than the %d groups this run allows."
-                        % (1 + len(leftover), ceiling)
-                    )
-                else:
-                    notes.append(
-                        "One group was separated into %d groups so that each covers a "
-                        "single client question." % (1 + len(taken))
-                    )
+                notes.append(
+                    "One group was separated into %d groups so that each covers a "
+                    "single client question." % len(ordered)
+                )
                 position += 1
 
         # --- 1. THE CEILING (D-W3-1) ---------------------------------------
         # Merge the two WEAKEST groups until the count fits. Weakest = highest minimum
         # member rank, ties broken by the LATER position.
+        #
+        # Each of the two notes below is appended AT MOST ONCE per call. The step-0
+        # split now feeds this loop many more merges than it used to — five proposed
+        # three-parent groups take ten — and a note is CLIENT-FACING PROSE in the run
+        # report. Ten copies of one sentence would be a new defect traded for an old
+        # one. The loop still runs as many times as the ceiling needs; only the telling
+        # is deduplicated.
+        merge_note_emitted = False
+        forced_mix_note_emitted = False
         while len(work) > ceiling:
             weakest_first = sorted(
                 range(len(work)),
@@ -903,11 +925,13 @@ def clamp_groups(
             keep, drop = min(chosen), max(chosen)
             work[keep] = work[keep] + work[drop]
             del work[drop]
-            notes.append(
-                "Two groups were merged so the run stays within the %d groups it "
-                "allows." % ceiling
-            )
-            if forced_mix and prefer_single_parent:
+            if not merge_note_emitted:
+                notes.append(
+                    "Two groups were merged so the run stays within the %d groups it "
+                    "allows." % ceiling
+                )
+                merge_note_emitted = True
+            if forced_mix and prefer_single_parent and not forced_mix_note_emitted:
                 # The ONLY way a mandate group may hold two client questions under
                 # D-W3-5. Plan 15.6-03 warns on exactly this condition.
                 notes.append(
@@ -915,6 +939,7 @@ def clamp_groups(
                     "group, because no two groups covering the same client question "
                     "were available to merge instead."
                 )
+                forced_mix_note_emitted = True
 
         # --- 2. THEN SIZE (§ 4 requirement 2) ------------------------------
         # Split the weakest-ranked tail off an oversized group, ONLY WHILE the ceiling
@@ -935,6 +960,22 @@ def clamp_groups(
 
         # --- 3. SORT so g1 holds rank 1. Renumbering happens in build_groups. --
         work.sort(key=lambda group: (_group_min_rank(group, pool), group[:1]))
+
+        # THE CEILING NOTE, DERIVED FROM THE FINAL GROUP LIST (WR-01). Measured here
+        # and nowhere else, because here is the only place the answer is known: the
+        # split has run, the merge has run, and what is still mixed is what could not
+        # be helped. The two notes this replaces were emitted mid-split against a
+        # ceiling that had not been applied yet, so they could — and did — report a
+        # split as impossible when merging two same-parent groups would have paid for
+        # it. Only INTEGERS are interpolated: a note reaches the client-facing run
+        # report, and no model-authored string may ride there (T-15.8-01-03).
+        spanning = sum(1 for group in work if len(_group_parents(group, pool)) > 1)
+        if spanning:
+            notes.append(
+                "%d of the final groups still cover different client questions, "
+                "because this run allows at most %d groups and there are more client "
+                "questions than that." % (spanning, ceiling)
+            )
 
         # The oversized warning is emitted HERE, after the sort, so the group id it
         # names is the id `build_groups` will actually assign.

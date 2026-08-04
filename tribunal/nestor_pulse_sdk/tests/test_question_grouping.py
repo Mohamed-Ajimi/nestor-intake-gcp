@@ -626,6 +626,152 @@ def test_the_split_never_runs_at_all_when_the_flag_is_false():
     assert not any("single client question" in note for note in notes)
 
 
+# ---------------------------------------------------------------------------
+# WR-01 (phase 15.8 plan 01) — mandate-strict AT THE CEILING, which is where the
+# grouping prompt actually lands and where the defect was invisible.
+# ---------------------------------------------------------------------------
+
+
+def test_mandate_strict_still_applies_when_the_model_returns_exactly_the_ceiling():
+    """FIVE GROUPS IS WHAT THE PROMPT ASKS FOR, so the ceiling is the HEALTHY case.
+
+    This is the whole of WR-01. `clamp_groups` used to measure
+    `room = ceiling - len(work)` BEFORE the merge pass, so a model returning exactly
+    the five groups it was asked for got `room = 0` and mandate-strict never ran. A
+    test exercising three or four groups proves nothing here — below the ceiling there
+    is always room and the defect is invisible. The mixed group must be separated,
+    because merging the two Q1 groups pays for the slot.
+    """
+    pool = [
+        win(0, "Q1", rank=1),
+        win(1, "Q2", rank=2),
+        win(2, "Q1", rank=3),
+        win(3, "Q3", rank=4),
+        win(4, "Q4", rank=5),
+        win(5, "Q5", rank=6),
+    ]
+
+    clamped, notes = qg.clamp_groups(
+        [[0, 1], [2], [3], [4], [5]],
+        pool,
+        max_groups=5,
+        max_size=7,
+        prefer_single_parent=True,
+    )
+
+    assert len(clamped) == 5, "the operator's ceiling still holds"
+    assert all(len(parents_in(group, pool)) == 1 for group in clamped), (
+        "the {Q1, Q2} group must be separated — merging the two Q1 groups pays for it"
+    )
+    assert is_partition(clamped, 6)
+    assert not any("would have needed more than" in note for note in notes), (
+        "no note may blame the ceiling for a split the merge could afford"
+    )
+
+
+def test_at_the_ceiling_the_unavoidable_mix_lands_on_the_weakest_ranked_pair():
+    """When the parents genuinely outnumber the slots, WHICH group mixes is the test.
+
+    Six distinct parents cannot fit five groups, so exactly one group must stay mixed.
+    The model proposed mixing its two STRONGEST questions ({Q1, Q2}); the engine must
+    undo that and move the unavoidable mix to where it costs least — the weakest pair.
+    Attribution is what a mixed group costs, so it should be spent on the claims that
+    matter least.
+    """
+    pool = [win(i, "Q%d" % (i + 1), rank=i + 1) for i in range(6)]
+
+    clamped, _notes = qg.clamp_groups(
+        [[0, 1], [2], [3], [4], [5]],
+        pool,
+        max_groups=5,
+        max_size=7,
+        prefer_single_parent=True,
+    )
+
+    assert len(clamped) == 5
+    mixed = [group for group in clamped if len(parents_in(group, pool)) > 1]
+    assert len(mixed) == 1, "exactly one group may be mixed, not two"
+    assert parents_in(mixed[0], pool) == {"Q5", "Q6"}, (
+        "the WEAKEST-ranked pair carries the mix, not the pair the model proposed"
+    )
+    assert all(
+        parents_in(group, pool) != {"Q1", "Q2"} for group in clamped
+    ), "the model's own proposed mix of the two strongest questions is undone"
+    assert is_partition(clamped, 6)
+
+
+def test_the_merge_note_is_emitted_once_however_many_merges_the_ceiling_took():
+    """Ten merges, ONE sentence. Notes are client-facing prose in the run report.
+
+    Five proposed groups of three parents each split into fifteen, which the ceiling
+    merges back to five. Without the one-shot guard the client reads the same sentence
+    ten times — a new defect traded for the old one.
+    """
+    pool = winners(15, parents=5)
+    proposal = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14]]
+
+    clamped, notes = qg.clamp_groups(
+        proposal, pool, max_groups=5, max_size=99, prefer_single_parent=True
+    )
+
+    assert len(clamped) == 5
+    assert all(len(parents_in(group, pool)) == 1 for group in clamped), (
+        "every same-parent merge was available, so nothing need stay mixed"
+    )
+    assert is_partition(clamped, 15)
+    merge_notes = [n for n in notes if "were merged so the run stays within" in n]
+    assert len(merge_notes) == 1, (
+        "ten merges, one note — got %d" % len(merge_notes)
+    )
+
+
+def test_the_ceiling_note_is_derived_from_the_final_groups_not_from_a_guess_made_before_the_merge():
+    """Both halves of WR-01's second defect: the note must never state a false cause.
+
+    The old notes were emitted MID-SPLIT against a ceiling that had not been applied
+    yet, so they reported a split as impossible when it was affordable. The replacement
+    is counted after the split, the merge and the sort — when the answer is actually
+    known.
+    """
+    affordable = [
+        win(0, "Q1", rank=1),
+        win(1, "Q2", rank=2),
+        win(2, "Q1", rank=3),
+        win(3, "Q3", rank=4),
+        win(4, "Q4", rank=5),
+        win(5, "Q5", rank=6),
+    ]
+    _clamped, notes = qg.clamp_groups(
+        [[0, 1], [2], [3], [4], [5]],
+        affordable,
+        max_groups=5,
+        max_size=7,
+        prefer_single_parent=True,
+    )
+    assert not any("different client questions" in note for note in notes), (
+        "nothing ended up mixed, so no note may say anything did"
+    )
+
+    unavoidable = [win(i, "Q%d" % (i + 1), rank=i + 1) for i in range(6)]
+    clamped, notes = qg.clamp_groups(
+        [[0, 1], [2], [3], [4], [5]],
+        unavoidable,
+        max_groups=5,
+        max_size=7,
+        prefer_single_parent=True,
+    )
+    final_state = [
+        n for n in notes if "of the final groups still cover different client" in n
+    ]
+    assert len(final_state) == 1, "one note, derived from the final list"
+    spanning = sum(
+        1 for group in clamped if len(parents_in(group, unavoidable)) > 1
+    )
+    assert "%d of the final groups" % spanning in final_state[0], (
+        "the count in the note is the count in the returned groups"
+    )
+
+
 # ===========================================================================
 # The cross-question prompt rule is DERIVED from arithmetic, never passed.
 # ===========================================================================
@@ -1502,7 +1648,24 @@ async def test_the_model_never_sees_another_groups_why_and_the_list_is_one_based
 
 
 async def test_a_winners_own_why_is_carried_onto_the_group_it_ended_up_in():
-    pool = winners(4, parents=2)
+    """The proposed groups are SINGLE-PARENT, so mandate-strict leaves them alone.
+
+    PREMISE REPAIRED IN PHASE 15.8 PLAN 01 (WR-01), and the reason is worth stating.
+    This test used to use `winners(4, parents=2)`, whose interleaving makes BOTH
+    proposed groups mixed — and it passed only because the WR-01 defect blocked the
+    split: at `max_groups=2` with two proposed groups `room` was 0, so nothing was
+    reshaped and a test named for surviving reshaping never exercised any. With the
+    split now unconditional those two mixed groups are correctly regrouped BY CLIENT
+    QUESTION into `[[0, 2], [1, 3]]`, which cuts across both of the model's groups, and
+    two distinct sentences genuinely cannot both survive that. Single-parent proposals
+    keep the assignment intact, so what is asserted here is the carrying itself.
+    """
+    pool = [
+        win(0, "Q1", rank=1),
+        win(1, "Q1", rank=2),
+        win(2, "Q2", rank=3),
+        win(3, "Q2", rank=4),
+    ]
     audited = FakeGroupingAudited(
         content=tool_use_response(
             {
@@ -1522,6 +1685,43 @@ async def test_a_winners_own_why_is_carried_onto_the_group_it_ended_up_in():
         "alpha groundwork",
         "beta groundwork",
     ]
+
+
+def test_a_reshaped_group_inherits_its_best_ranked_members_sentence():
+    """The other half, pinned rather than left as a surprise (WR-01 consequence).
+
+    When mandate-strict DOES reshape, the new group is not any group the model
+    proposed, so no proposed sentence describes it. `_why_for`'s documented rule is
+    that a group inherits the sentence of its BEST-RANKED member, and two reshaped
+    groups can therefore inherit the SAME sentence — here both, because winners 0 and
+    1 both came from the model's first proposed group.
+
+    This is acceptable ONLY because `why` is log/telemetry text: `build_groups`'
+    docstring records it as bounded and never leaving the log, and the sibling test
+    `test_the_model_never_sees_another_groups_why_and_the_list_is_one_based` pins that
+    it never re-enters a prompt. It reaches no client-facing note. Recorded as a
+    finding in 15.8-01's SUMMARY, not silently accepted.
+    """
+    pool = winners(4, parents=2)
+    whys = qg._whys_by_index(
+        [
+            {"member_numbers": [1, 2], "why_grouped": "alpha groundwork"},
+            {"member_numbers": [3, 4], "why_grouped": "beta groundwork"},
+        ],
+        len(pool),
+    )
+
+    clamped, _notes = qg.clamp_groups(
+        [[0, 1], [2, 3]], pool, max_groups=2, max_size=7, prefer_single_parent=True
+    )
+
+    assert clamped == [[0, 2], [1, 3]], "regrouped by client question, not as proposed"
+    assert all(len(parents_in(group, pool)) == 1 for group in clamped)
+    groups = qg.build_groups(clamped, pool, whys=whys)
+    assert [group["why"] for group in groups] == [
+        "alpha groundwork",
+        "alpha groundwork",
+    ], "each reshaped group inherits its best-ranked member's sentence"
 
 
 # ===========================================================================
