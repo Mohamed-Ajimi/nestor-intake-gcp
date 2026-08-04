@@ -17,6 +17,8 @@ from nestor_pulse_sdk.db.models.research_gap import ResearchGap
 from nestor_pulse_sdk.db.models.audit_log import AuditLog
 from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
 from nestor_pulse_sdk.db.models.run_event import RunEvent
+from nestor_pulse_sdk.db.models.assignment_yield import AssignmentYield
+from nestor_pulse_sdk.db.models.workshop_round_yield import WorkshopRoundYield
 
 __all__ = [
     "Org",
@@ -31,4 +33,6 @@ __all__ = [
     "AuditLog",
     "VerificationVerdict",
     "RunEvent",
+    "AssignmentYield",
+    "WorkshopRoundYield",
 ]
