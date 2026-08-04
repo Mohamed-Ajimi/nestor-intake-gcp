@@ -2409,6 +2409,110 @@ def test_the_renderer_and_the_drop_log_are_total_over_the_hostile_battery():
         json.dumps(reg)
 
 
+def test_count_drops_separates_the_two_halves_of_the_drop_signal():
+    """THE COUNTER `workshop_rank`'s THREE BARE-LENGTH READS NEED (D-W5-6).
+
+    `record_drop` appends BOTH causes to ONE list. That is the module's design —
+    one drop log, a `cause` field, `drop_summary` filtering by cause — and it is
+    the right design. What it means for a CALLER is that `len(register["drops"])`
+    answers a question nobody asked: it is the total of two OPPOSITE measured
+    failures, the loop SPINNING and an over-eager dedup strangling discovery.
+
+    A bare length was ACCIDENTALLY correct while `DROP_CLUSTERED_ONTO_LIVE` had
+    no production writer. 15.8-04 gives it one, so any caller that wants one of
+    D-W4-1's two signals must count BY CAUSE from here on.
+    """
+    reg = workshop_register.new_register()
+    workshop_register.record_drop(
+        reg,
+        text="a re-proposal of something already rejected",
+        clustered_onto="a barred question",
+        cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED,
+        round_no=2,
+    )
+    workshop_register.record_drop(
+        reg,
+        text="an ordinary near copy",
+        clustered_onto="a live candidate on the table",
+        cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE,
+        round_no=2,
+    )
+    workshop_register.record_drop(
+        reg,
+        text="another ordinary near copy",
+        clustered_onto="another live candidate",
+        cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE,
+        round_no=3,
+    )
+
+    # The bare length is the number that would contaminate `barred_drops`.
+    assert len(reg["drops"]) == 3
+    assert workshop_register.count_drops(reg) == 3
+
+    # The two halves, separated.
+    assert (
+        workshop_register.count_drops(
+            reg, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+        )
+        == 1
+    ), "the barred-cause count must exclude ordinary near-copy merges"
+    assert (
+        workshop_register.count_drops(
+            reg, cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE
+        )
+        == 2
+    )
+
+    # Narrowed to one round, and both filters combined.
+    assert workshop_register.count_drops(reg, round_no=2) == 2
+    assert workshop_register.count_drops(reg, round_no=3) == 1
+    assert (
+        workshop_register.count_drops(
+            reg, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED, round_no=3
+        )
+        == 0
+    )
+    assert (
+        workshop_register.count_drops(
+            reg, cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE, round_no=3
+        )
+        == 1
+    )
+
+    # A cause nobody declared counts nothing rather than everything.
+    assert workshop_register.count_drops(reg, cause="invented_cause") == 0
+
+
+def test_count_drops_is_total_over_the_hostile_battery_and_never_raises():
+    """Same contract as every other public function here: it degrades, never raises."""
+    for shape in _HOSTILE:
+        assert workshop_register.count_drops(shape) == 0
+
+    reg = workshop_register.new_register()
+    workshop_register.record_drop(
+        reg,
+        text="one drop",
+        clustered_onto="one thing",
+        cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE,
+        round_no=1,
+    )
+    for shape in _HOSTILE:
+        assert isinstance(workshop_register.count_drops(reg, cause=shape), int)
+        assert isinstance(workshop_register.count_drops(reg, round_no=shape), int)
+        assert isinstance(
+            workshop_register.count_drops(reg, cause=shape, round_no=shape), int
+        )
+
+    # A `round_no` that cannot be read narrows to NOTHING rather than silently
+    # widening to everything — the failure mode that would re-inflate the count.
+    assert workshop_register.count_drops(reg, round_no=object()) == 0
+    assert workshop_register.count_drops(reg, round_no=None) == 1
+
+    # A malformed record in the list is skipped, not counted and not fatal.
+    reg["drops"].append("not a record at all")
+    assert workshop_register.count_drops(reg) == 1
+
+
 # ===========================================================================
 # PLAN 15.7-07 TASK 1 — ASPECT DECOMPOSITION AND THE COVERAGE ASSERTION (D-W4-4b)
 #
@@ -2792,7 +2896,17 @@ def test_a_barred_shadow_never_represents_and_never_contributes_a_parent():
 
 
 def test_a_new_candidate_clustering_onto_another_new_one_is_collapsed_not_barred():
-    """Near-duplicate collapse is NOT a bar — it keeps a representative."""
+    """Near-duplicate collapse is NOT a bar — it keeps a representative.
+
+    AND SINCE 15.8-04 IT IS ALSO RECORDED. The invariant this test guards is
+    unchanged: a collapse keeps a representative where a bar keeps nothing. What
+    changed is that the collapse now writes a `DROP_CLUSTERED_ONTO_LIVE` record,
+    which is the SECOND half of D-W4-1's drop signal and had no production writer
+    at all before this plan. Without it the engine can see the loop SPINNING and
+    is structurally blind to the opposite failure — an over-eager dedup
+    strangling discovery invisibly, which is the one the Wave-4 harness actually
+    measured more of.
+    """
     reg = _barred(("something else entirely", "its flaw"))
     reps, reasons, _ = _cluster_with_stub(
         [
@@ -2806,8 +2920,121 @@ def test_a_new_candidate_clustering_onto_another_new_one_is_collapsed_not_barred
     assert len(reps) == 1
     assert reps[0]["text"] == "a question about density"
     assert reps[0]["merged_from"] == [1]
-    assert reg["drops"] == []
     assert len(reasons) == 1 and "collapsed" in reasons[0]
+
+    # RECORDED, and recorded BY VALUE: what was dropped, and onto what.
+    assert len(reg["drops"]) == 1, reg["drops"]
+    record = reg["drops"][0]
+    assert record["cause"] == workshop_register.DROP_CLUSTERED_ONTO_LIVE
+    assert record["text"] == "another question about density"
+    assert record["clustered_onto"] == "a question about density", (
+        "the surviving REPRESENTATIVE is what it clustered ONTO; a swap would "
+        "make the candidate that stayed on the table look dropped"
+    )
+    # And it is NOT the barred cause — that would report an ordinary merge as
+    # the loop re-proposing its own rejects.
+    assert (
+        workshop_register.count_drops(
+            reg, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+        )
+        == 0
+    )
+
+
+def test_a_three_member_cluster_records_two_live_drops_naming_one_representative():
+    """One record per MERGED member, all naming the same survivor."""
+    reg = workshop_register.new_register()
+    reps, _, _ = _cluster_with_stub(
+        [
+            _cand_plain(0, "a question about density"),
+            _cand_plain(1, "another question about density"),
+            _cand_plain(2, "a third question about density"),
+        ],
+        _by_density,
+        register=reg,
+        round_no=4,
+    )
+    assert len(reps) == 1
+    assert reps[0]["text"] == "a question about density", (
+        "the representative is still the lowest-index member"
+    )
+    assert reps[0]["merged_from"] == [1, 2]
+
+    drops = reg["drops"]
+    assert len(drops) == 2, drops
+    assert {d["text"] for d in drops} == {
+        "another question about density",
+        "a third question about density",
+    }
+    assert {d["clustered_onto"] for d in drops} == {"a question about density"}
+    assert {d["cause"] for d in drops} == {
+        workshop_register.DROP_CLUSTERED_ONTO_LIVE
+    }
+    assert {d["round"] for d in drops} == {4}
+
+
+def test_the_live_only_drop_summary_branch_is_reachable_from_a_real_cluster_call():
+    """THIS BRANCH WAS DEAD CODE BEFORE 15.8-04.
+
+    `drop_summary` has three sentences and its third — "the near-copy filter is
+    doing the work" — could only ever be produced by a HAND-WRITTEN record in the
+    test suite, because `DROP_CLUSTERED_ONTO_LIVE` had no production writer. A
+    summary branch no run can reach is a measurement the engine does not actually
+    take, and 15.8-15 is the ONE measuring run.
+
+    Driven end to end: a real `cluster_candidates` call, then the summary.
+    """
+    reg = workshop_register.new_register()
+    _cluster_with_stub(
+        [
+            _cand_plain(0, "a question about density"),
+            _cand_plain(1, "another question about density"),
+        ],
+        _by_density,
+        register=reg,
+        round_no=2,
+    )
+
+    sentence = workshop_register.drop_summary(reg, 2)
+    assert "near-copy filter is doing the work" in sentence, sentence
+    assert "SPINNING" not in sentence, (
+        "an ordinary near-copy merge must never be reported as the loop "
+        "re-proposing its own rejects"
+    )
+
+
+def test_a_merging_population_with_no_register_records_nothing_and_logs_no_warning(
+    caplog,
+):
+    """THE `register is not None` GUARD IS LOAD-BEARING, NOT DEFENSIVE TIDINESS.
+
+    `run_workshop_stage_a` calls `cluster_candidates` with NO register at all.
+    `record_drop` routes through `workshop_register._slots`, which emits a
+    `log.warning` for every non-dict it is handed. Without the guard, every
+    ordinary stage-A near-duplicate merge would warn about a register nobody
+    passed — log noise that reads like a defect, in the one run this phase
+    exists to read.
+    """
+    population = [
+        _cand_plain(0, "a question about density"),
+        _cand_plain(1, "another question about density"),
+        _cand_plain(2, "a third question about density"),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        with_none, none_reasons, none_calls = _cluster_with_stub(
+            population, _by_density, register=None
+        )
+        warnings = [rec for rec in caplog.records if rec.levelno >= logging.WARNING]
+
+    assert warnings == [], [rec.getMessage() for rec in warnings]
+
+    # And stage A is byte-identical to passing no register argument at all.
+    base, base_reasons, base_calls = _cluster_with_stub(population, _by_density)
+    assert base == with_none
+    assert base_reasons == none_reasons
+    assert base_calls == none_calls
+    assert base[0]["merged_from"] == [1, 2]
 
 
 def test_with_no_register_the_output_is_identical_to_the_phase_base():
