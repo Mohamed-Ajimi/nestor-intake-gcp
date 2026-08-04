@@ -1986,8 +1986,70 @@ class TribunalPipeline:
                 "client's, but the order in which they were researched is less "
                 "trustworthy than normal."
             )
-        for note in (workshop_result.get("workshop_notes") or [])[:4]:
+        # EVERY workshop note is PERSISTED (D-W4-11, operator ruling 2026-08-04).
+        #
+        # THE DEFECT THIS CLOSES is the V-01 inert-logging class: the operator's
+        # only record that a discovered question was dropped, shed or repaired
+        # lived in a `[:4]` log slice. `workshop_rank` folds `loop_notes +
+        # disc_notes + group_notes + rider_notes + cov_notes` into this list IN
+        # THAT ORDER, and `loop_notes` alone contributes up to 10 per-round drop
+        # summaries — so `rider_notes` and `cov_notes` were STRUCTURALLY
+        # unreachable behind the slice. Nothing about that was visible in an
+        # artifact.
+        #
+        # `stage="workshop"` is a real `ENGINE_STAGES["tribunal"]` key (label
+        # "Question workshop"), so `_stage_event_label` renders it. It is a LABEL
+        # ON THE EVENT, not a stage transition — `emit_safe` does not move the
+        # run's open stage.
+        #
+        # `kind="plan"` because `RUN_EVENT_KINDS` is a CLOSED twelve-value
+        # vocabulary and `emit` DROPS a row whose kind is not in it — an invented
+        # kind is a silently discarded event, which would reproduce the very
+        # defect being fixed while every test read green. `plan` is the
+        # vocabulary's decision/routing line, and that is what a workshop note is.
+        # RENDER TARGET: the `plan` icon is drawn in
+        # `docs/design/prototypes/ResearchRunImproved.tsx`, A DESIGN PROTOTYPE
+        # AND NOT A SHIPPED COMPONENT. The shipped
+        # `frontend/src/components/intake/ResearchRunProgress.tsx` renders the
+        # STAGE FEED (`kind: "item" | "summary"`), a different surface. The
+        # run-event stream is fetched by `frontend/src/lib/api/research.ts`
+        # through `backend/app/api/research_routes.py` and types `kind` as a
+        # plain `string` precisely so an unrendered kind still produces a line.
+        # So these events ARE persisted and retrievable; no specific rendering is
+        # claimed.
+        #
+        # `meta=None`: `_META_FIELDS` is an allowlist and there is no honest field
+        # for a note. The text IS the record, and `emit` already bounds it at
+        # `MAX_TEXT_CHARS` with a visible ellipsis.
+        # A `workshop_notes` THAT IS NOT A LIST COSTS THE EVENTS, NEVER THE RUN.
+        # `list("abc")` would silently emit three single-character events and
+        # `list(7)` would raise TypeError here — outside `emit_safe`'s try, which
+        # only ever protects the thunk. The isinstance check is the guard.
+        _raw_notes = workshop_result.get("workshop_notes")
+        _workshop_notes = list(_raw_notes) if isinstance(_raw_notes, list) else []
+        for note in _workshop_notes:
+            # `n=note` BINDS THE LOOP VARIABLE AT DEFINITION. A bare closure over
+            # `note` would capture the LAST iteration's value for every event.
+            # `str()` happens INSIDE the thunk, not at the call site — a caller's
+            # arguments are evaluated before the callee is entered, so anything
+            # built out here is outside `emit_safe`'s protection.
+            run_events.emit_safe(
+                run_id,
+                stage="workshop",
+                kind="plan",
+                build=lambda n=note: (f"Question workshop — {str(n)}", None),
+            )
+        # The log keeps its cap, but a SILENT truncation is the V-01 defect. A
+        # truncation that names itself is honest.
+        for note in _workshop_notes[:4]:
             log.info("tribunal_pipeline: workshop note — %s", note)
+        if len(_workshop_notes) > 4:
+            log.info(
+                "tribunal_pipeline: %d workshop notes in total; the %d not logged "
+                "above were still persisted in full as run events",
+                len(_workshop_notes),
+                len(_workshop_notes) - 4,
+            )
 
         # D-12, reason 3 of 3: a research stream lost before it was ever called.
         _own_lost = own_stream_unavailable_reason()

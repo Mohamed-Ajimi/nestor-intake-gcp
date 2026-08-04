@@ -89,6 +89,7 @@ from nestor_pulse_sdk.pipeline.tribunal.facts import (
 from nestor_pulse_sdk.pipeline.tribunal.pipeline import TribunalPipeline
 from nestor_pulse_sdk.pipeline.tribunal.reliability import terminal_state
 from nestor_pulse_sdk.pipeline.synthesis.steps import _SECTION_STRINGS
+from nestor_pulse_sdk.runs import run_events as _run_events_mod
 from nestor_pulse_sdk.runs.stages import ENGINE_STAGES
 from nestor_pulse_sdk.verification.report import shape_verification_report
 
@@ -2919,8 +2920,11 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
     # NON-VACUITY 2. The feed names the DISPATCHED discovery questions. Its absence,
     # taken together with NON-VACUITY 1, is the positive statement that the question
     # was framed and then NOT dispatched — i.e. that the shed actually happened. The
-    # shed itself is not otherwise observable: `attach_discovery_riders`' note reaches
-    # `workshop_notes`, which `pipeline.py` only logs and never persists.
+    # shed itself is not otherwise observable IN THE FEED: `attach_discovery_riders`'
+    # note reaches `workshop_notes`, which `pipeline.py` renders to the STAGE FEED
+    # nowhere. Since D-W4-11 (2026-08-04) that note IS persisted, as a
+    # `stage="workshop", kind="plan"` RUN EVENT — a different surface from the
+    # `statements` this test reads, so the reasoning above is unchanged.
     assert "the evidence raised that the client did not ask" not in header, (
         f"the feed reports a dispatched discovery question on a run where the rider "
         f"was shed: {header!r}"
@@ -2942,6 +2946,148 @@ async def test_a_shed_discovery_question_is_reported_but_never_claimed_as_resear
             f"{candidate[:60]!r}. D-W3-4 says discovery never borrows from the "
             f"mandate, so the mandate member must be the one that stays."
         )
+
+
+# ===========================================================================
+# D-W4-11 — every `workshop_note` reaches a DURABLE run event, not only a log.
+#
+# THE DEFECT: `pipeline.py` logged `workshop_notes[:4]` and persisted nothing.
+# `workshop_rank` folds `loop_notes + disc_notes + group_notes + rider_notes +
+# cov_notes` into that list in THAT ORDER and `loop_notes` alone contributes up
+# to 10 per-round drop summaries, so `rider_notes` and `cov_notes` were
+# STRUCTURALLY unreachable behind the slice. The operator's only record that a
+# discovered question was dropped was invisible in the run's artifacts — the
+# same inert-logging class as V-01.
+# ===========================================================================
+
+
+class _NoteEventRecorder:
+    """Duck-typed to `run_events.emit`. Records rows; never raises.
+
+    A stand-in for the QUEUE APPEND ONLY. The thunk, `emit_safe`'s try and the
+    2-tuple check are all production code doing their real job, which is what
+    makes this a test of the call site rather than of the recorder.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def __call__(self, run_id, *, stage, kind, text, meta=None):
+        self.events.append(
+            {"run_id": run_id, "stage": stage, "kind": kind, "text": text, "meta": meta}
+        )
+
+    def workshop_notes(self) -> list[dict[str, Any]]:
+        return [e for e in self.events if e["stage"] == "workshop" and e["kind"] == "plan"]
+
+
+def _with_workshop_notes(monkeypatch, notes: Any) -> None:
+    """Run the REAL workshop, then replace its `workshop_notes` with `notes`.
+
+    The note LIST is what is under test, not how the workshop built it, and the
+    stubbed run's own note count is a property of the fixture rather than a
+    guarantee. Injecting a known list is what makes "N > 4" assertable at all.
+    """
+    real = _pipeline_mod.run_question_workshop
+
+    async def _wrapped(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        if isinstance(result, dict):
+            result["workshop_notes"] = notes
+        return result
+
+    monkeypatch.setattr(_pipeline_mod, "run_question_workshop", _wrapped)
+
+
+async def test_every_workshop_note_is_persisted_and_the_record_is_not_capped(
+    monkeypatch,
+):
+    """N notes with N > 4 produce N events. ASSERTED ON THE EMITTED ROWS.
+
+    Asserting on the log would pass against the defect: the `log.info` cap of 4
+    is still there on purpose. What changed is that the PERSISTED record is
+    complete, and only the rows show that.
+    """
+    recorder = _NoteEventRecorder()
+    monkeypatch.setattr(_run_events_mod, "emit", recorder)
+    notes = [f"question workshop: scripted note number {i}" for i in range(9)]
+    _with_workshop_notes(monkeypatch, notes)
+
+    audited = _ScriptedProvidersAudited()
+    await _engine_run(audited, monkeypatch=monkeypatch)
+
+    persisted = recorder.workshop_notes()
+    assert len(persisted) == len(notes), (
+        f"the persisted record is capped: {len(persisted)} event(s) for "
+        f"{len(notes)} note(s). A cap that silently drops notes reproduces the "
+        f"very defect D-W4-11 closes — notes 5..N are the rider and coverage "
+        f"notes, i.e. exactly the record that a discovered question was dropped."
+    )
+    joined = " ".join(str(e["text"]) for e in persisted)
+    for note in notes:
+        assert note in joined, f"a workshop note reached no run event: {note!r}"
+
+
+async def test_every_emitted_kind_is_in_the_closed_run_event_vocabulary(monkeypatch):
+    """AN INVENTED KIND IS A SILENTLY DISCARDED EVENT.
+
+    `run_events.emit` DROPS a row whose kind is not in `RUN_EVENT_KINDS`, so a
+    workshop note emitted under a new kind would vanish while every count-based
+    assertion in this file still read green — the defect being fixed, wearing
+    the fix's clothes. Membership is asserted against the TUPLE, never against a
+    hand-typed string, so the check cannot drift from the vocabulary.
+    """
+    recorder = _NoteEventRecorder()
+    monkeypatch.setattr(_run_events_mod, "emit", recorder)
+    _with_workshop_notes(monkeypatch, ["question workshop: a scripted note"])
+
+    audited = _ScriptedProvidersAudited()
+    await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert recorder.events, "the run emitted nothing at all — the seam is unwired"
+    for event in recorder.events:
+        assert event["kind"] in _run_events_mod.RUN_EVENT_KINDS, (
+            f"kind {event['kind']!r} is outside the closed vocabulary and would be "
+            f"DROPPED at emit: {_run_events_mod.RUN_EVENT_KINDS}"
+        )
+    persisted = recorder.workshop_notes()
+    assert len(persisted) == 1, recorder.events
+    assert persisted[0]["meta"] is None, (
+        "`_META_FIELDS` is an allowlist and there is no honest field for a note; "
+        "the text IS the record"
+    )
+
+
+async def test_a_malformed_note_costs_the_event_and_never_the_run(monkeypatch):
+    """A note that is not a string, and a `workshop_notes` that is not a list."""
+    recorder = _NoteEventRecorder()
+    monkeypatch.setattr(_run_events_mod, "emit", recorder)
+    _with_workshop_notes(monkeypatch, ["a real note", None, 7, {"not": "a string"}])
+
+    audited = _ScriptedProvidersAudited()
+    result, _statements = await _engine_run(audited, monkeypatch=monkeypatch)
+    assert (result.get("output_text") or "").strip(), (
+        "a malformed workshop note broke the run — the note is a record, never a "
+        "reason to lose the deliverable"
+    )
+    assert len(recorder.workshop_notes()) == 4, (
+        "coercion happens INSIDE the thunk, so a non-string note still produces "
+        "its event"
+    )
+
+    # `workshop_notes` NOT A LIST AT ALL. `list("abc")` would silently emit three
+    # single-character events and `list(7)` would raise TypeError OUTSIDE
+    # `emit_safe`'s try, which only ever protects the thunk.
+    recorder2 = _NoteEventRecorder()
+    monkeypatch.setattr(_run_events_mod, "emit", recorder2)
+    _with_workshop_notes(monkeypatch, "not a list")
+
+    audited2 = _ScriptedProvidersAudited()
+    result2, _s2 = await _engine_run(audited2, monkeypatch=monkeypatch)
+    assert (result2.get("output_text") or "").strip(), "the run must still complete"
+    assert recorder2.workshop_notes() == [], (
+        "a non-list `workshop_notes` must cost the events, not produce garbage ones"
+    )
 
 
 async def test_no_angle_is_dispatched_to_own(monkeypatch):
