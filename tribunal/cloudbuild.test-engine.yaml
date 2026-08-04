@@ -39,6 +39,18 @@
 # runs. Drop the assertion and a single mistyped path makes this gate go green
 # having run 29 of 30 files while reporting nothing about the 30th.
 #
+# ⚠ THAT `29 of 30` IS EXEMPT FROM D-W5-15 — do not "helpfully" delete it, and
+# do not "helpfully" update it to match the current EXPECTED_FILES either. It is
+# ARITHMETIC DERIVED FROM THE ASSERTION (N named, one mistyped, N-1 collected),
+# true by construction, illustrating the MECHANISM by which this guard fails. It
+# is not a measurement of anything, so it cannot rot. Proof the distinction is
+# the right one: EXPECTED_FILES has moved twice since that sentence was written
+# and `29 of 30` has ALREADY drifted from the live count while misleading
+# nobody. D-W5-15 governs MEASURED counts only — a grepped import count is a
+# fact that rots and belongs in a dated SUMMARY, not in a comment.
+# cloudbuild.test-gates.yaml carries `12 of 13` in the same sentence for the
+# same reason.
+#
 # OWNERSHIP: this file was owned EXCLUSIVELY by plan 15.2-02 for the main phase.
 # Ownership passed to plan 15.2-20 for the GAP PHASE (plans 15.2-20…26), which
 # is the wave-1 plan and therefore adds all five gap-phase filenames in one edit;
@@ -99,7 +111,10 @@
 #
 # THAT 30 IS THE 15.2 + 15.3 BASELINE AND IS DELIBERATELY LEFT AS
 # HISTORY, not maintained: phase 15.4 adds on top of it (15.4-02
-# -> 31, 15.4-03 -> 32). The ONE number that must track the list is
+# -> 31, 15.4-03 -> 32), then 15.5-01 -> 33, 15.6-07 -> 35 (two
+# files, one edit), 15.7 -> 36, and 15.8-13 -> 43 (seven files, one
+# edit, one owner — see the PHASE 15.8 block further down).
+# The ONE number that must track the list is
 # EXPECTED_FILES below; every other count in these comments is a
 # narrative of how the list was assembled. Corrected 2026-07-29 by
 # plan 15.4-03, because a stale count inside the comments of the
@@ -307,6 +322,122 @@
 # imports, collects and does not error; the harness that RUNS it is
 # cloudbuild.test-critical.yaml, whose DSN is a superuser on a
 # disposable schema. Read the `-rs` skip summary, not the exit status.
+# ---------------------------------------------------------------------------
+# PHASE 15.8 (Wave 5 of the engine redesign) — THIS FILE HAS EXACTLY ONE OWNER
+# THIS PHASE, AND THAT REVERSES THE RULE STATED FOUR TIMES ABOVE. Decision
+# D-W5-5, with D-W5-5a, D-W5-12, D-W5-13, D-W5-15 and D-W5-4. Written by the
+# owning plan, 15.8-13, in wave 4.
+#
+# 1. THE DEVIATION, STATED AS A REVERSAL AND NOT AS A FOOTNOTE. The 15.3 and
+#    15.4 paragraphs above say: "the list and the number are one change, and
+#    splitting them is how a gate goes green having run less than it claims."
+#    PHASE 15.8 DID NOT FOLLOW THAT RULE. Eight wave-1 plans were BARRED from
+#    touching this file. One plan — 15.8-13, in wave 4 — appended all seven new
+#    paths and moved EXPECTED_FILES ONCE, from 36 to 43, derived from the real
+#    file list on the merged tree rather than incremented from memory. This
+#    paragraph exists so that a reader who finds the old rule and the new
+#    behaviour is not reading two authorities that disagree: that shape is what
+#    produced the D-DEF-01 inverted rationale comments (three comments citing a
+#    defect to justify their own flattening) and the 15.6 CR-01 defect.
+#
+# 2. WHY. Eight wave-1 plans would each have bumped the same single
+#    EXPECTED_FILES line — a guaranteed merge conflict, and worse, one that can
+#    silently resolve to a WRONG NUMBER. It is also the trap of an exact-set
+#    allowlist held over a file that a sibling plan also edits, which cost 15.5
+#    a cross-plan regression that three green verifications and a passed
+#    plan-check all missed.
+#
+# 3. THE COST THAT WAS ACCEPTED, stated plainly because it is the honest
+#    weakness of the arrangement. Between wave 1 and wave 4 this repository
+#    contained test files that were NOT in the list below, so THEY DID NOT RUN.
+#    THE COUNT ASSERTION DOES NOT CATCH THAT: the list matched its own count;
+#    the files were simply absent from it. On its first outing that window did
+#    exactly what it was warned it could do — plan 15.8-02 created
+#    test_pipeline_dispatch_clause.py and did not declare it, and it was caught
+#    by the orchestrator tally (D-W5-13), not by this gate.
+#
+# 4. THE CONDITION THAT MAKES IT SAFE, written as a condition and not as a
+#    reassurance: NO GATE RUNS BEFORE 15.8-13. That plan IS the phase gate.
+#    IF ANY FUTURE PHASE ADOPTS SINGLE-OWNER OWNERSHIP OF THIS FILE AND ALSO
+#    PROPOSES RUNNING THIS GATE MID-PHASE, THE ARRANGEMENT BREAKS AND MUST BE
+#    REVISITED BEFORE THAT BUILD IS TRUSTED. Absent that condition, the default
+#    remains the 15.3 / 15.4 rule above: path and count in ONE edit.
+#
+# 5. THE SCOPE FENCE (D-W5-5a). The single-owner deviation applies to THIS
+#    CONFIG ONLY, and only for phase 15.8. cloudbuild.test-gates.yaml KEEPS THE
+#    ORIGINAL ONE-EDIT RULE: a plan that adds a file there adds the path and the
+#    count together, in one edit. A reader who generalises this deviation to
+#    every CI config reproduces the two-authorities trap in a second place. That
+#    file carries the matching sentence, written by plan 15.8-07.
+#
+# 6. WHAT A FLAT COUNT ON THE OTHER GATE MEANS (D-W5-12). STATE.md explains the
+#    flat 15.6 gates count as a fixed set of 13 files, NONE OF WHICH 15.6
+#    TOUCHED. THE SECOND HALF DOES NOT TRANSFER TO 15.8: MOST OF THE FILES THAT
+#    CONFIG NAMES IMPORT THE TRIBUNAL PIPELINE MODULES THIS PHASE EDITS
+#    (criterion: an import of pipeline.tribunal or of nestor_pulse_sdk.pipeline;
+#    plans 15.8-02, 15.8-03, 15.8-09 and 15.8-10 all edit those modules). So an
+#    UNCHANGED pass count there is a genuine REGRESSION PASS over wave-1 and
+#    wave-2 edits — evidence, not insulation. AND A RED THERE IS A REAL SIGNAL
+#    ABOUT THOSE EDITS, NOT A CONFIG TO TUNE. Per D-W5-15 no measured integer is
+#    written here: the CRITERION is stated, and the number is measured at
+#    execution time and recorded in the executing plan SUMMARY, where it is
+#    dated and attributable instead of rotting in a comment that nobody
+#    re-measures.
+#
+# THE TWO INVARIANTS THAT MAKE THIS FILE RECONCILABLE WITH ONE GREP, SAID OUT
+# LOUD SO THE NEXT EDITOR DOES NOT BREAK THEM BY ACCIDENT:
+#   * the package-qualified tests path prefix appears ONLY inside the WANTED
+#     list. Comments name test files by BARE FILENAME (test_stale_reclaim.py),
+#     never with that prefix — which is what makes counting the registered
+#     paths a single grep over the whole file. Keep it that way.
+#   * EXPECTED_FILES followed by an equals sign and digits appears EXACTLY ONCE
+#     in this file. Comments discuss the variable BY NAME, never with a value.
+#
+# D-W5-4 — THE THREE UNGATED COMMITS THIS PHASE OWED. 8eff424, 868775b and
+# 9f5a120 (operator rulings D-W4-9/10/11, 2026-08-04) were proved locally by
+# source-text mutation and a real-module behaviour battery, but NO PYTEST RUN
+# EXISTED for them. They added NO new test FILE, so they contribute ZERO to
+# EXPECTED_FILES and exactly TEN to the passed count. The baseline they must
+# beat: build 7c89be5c = 1538 passed / 0 failed / 13 skipped, at 36 of 36
+# collected.
+#
+# HOW TO READ A RESULT FROM THIS GATE — three traps, each of which has already
+# bitten this project:
+#   * gcloud builds submit piped into tail returns the PIPE exit code, so a
+#     FAILED build reports exit 0. Read the build TEXT instead:
+#     gcloud builds describe BUILD_ID --format=value(status), plus
+#     gcloud builds log BUILD_ID. NEVER a shell exit code.
+#   * SUCCESS and FAILURE are results. QUEUED, WORKING, EXPIRED and CANCELLED
+#     are NOT. An EXPIRED build is visually identical to a QUEUED one; one 15.7
+#     run expired in the queue and was nearly read as pending.
+#   * A count that did not rise must be EXPLAINED with a mechanism, not merely
+#     noted. Read the -rs skip summary, not the exit status: a listed file that
+#     skips cleanly is contract-compliant and IS NOT A PASS.
+#
+# THE SEVEN FILES PHASE 15.8 ADDED AND REGISTERED, all PURE (no Postgres, no
+# provider key, no network), all appended at the END of the list so the diff
+# stays readable and the pre-existing 36 keep their order:
+#     15.8-02 -> test_pipeline_dispatch_clause.py
+#     15.8-05 -> test_yield_schema.py, test_yield_records.py
+#     15.8-09 -> test_pipeline_assignment_yield.py,
+#                test_research_division_yield.py
+#     15.8-10 -> test_workshop_round_yield.py
+#     15.8-11 -> test_suite_hygiene.py
+#
+# ONE NON-REGISTRATION, NAMED RATHER THAN LEFT SILENT — an unnamed exclusion is
+# the same silent skip this config exists to prevent. Plan 15.8-11 reviewed the
+# suite and found a PRE-EXISTING file that is in NEITHER gate config:
+# test_tribunal_pipeline.py. It carries an AST denylist over pipeline.py, a
+# module that BOTH 15.8-02 and 15.8-09 edit this phase, so that guard currently
+# protects nothing because nothing runs it. It was NOT registered here, and the
+# reason is deliberate rather than an oversight: its trailing assertion on the
+# name persist_tribunal_claims is a RAW-TEXT match over the unparsed file, so a
+# comment or a string literal mentioning that name satisfies it vacuously.
+# Registering it as-is would add a guard that can go green for the wrong reason,
+# and could go red for the wrong reason too. TIGHTEN THAT ASSERTION TO AN AST
+# CHECK FIRST, THEN ADD THE PATH AND BUMP THE COUNT IN THE SAME EDIT. Recorded
+# by plan 15.8-13 as OWED, not as done.
+# ---------------------------------------------------------------------------
 # ONE list, read TWICE: `ls` collects from it and the assertion below
 # reconciles against it. The names live in a variable rather than
 # inline in the `ls` so the failure can NAME the path that went
@@ -371,13 +502,20 @@ steps:
                     nestor_pulse_sdk/tests/test_claim_attribution.py \
                     nestor_pulse_sdk/tests/test_question_grouping.py \
                     nestor_pulse_sdk/tests/test_discovery_bracket.py \
-                    nestor_pulse_sdk/tests/test_workshop_loop.py"
+                    nestor_pulse_sdk/tests/test_workshop_loop.py \
+                    nestor_pulse_sdk/tests/test_pipeline_dispatch_clause.py \
+                    nestor_pulse_sdk/tests/test_yield_schema.py \
+                    nestor_pulse_sdk/tests/test_yield_records.py \
+                    nestor_pulse_sdk/tests/test_pipeline_assignment_yield.py \
+                    nestor_pulse_sdk/tests/test_research_division_yield.py \
+                    nestor_pulse_sdk/tests/test_workshop_round_yield.py \
+                    nestor_pulse_sdk/tests/test_suite_hygiene.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=36
+            EXPECTED_FILES=43
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
