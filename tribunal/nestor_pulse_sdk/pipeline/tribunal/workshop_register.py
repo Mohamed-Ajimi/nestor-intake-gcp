@@ -547,6 +547,38 @@ def record_drop(
     number nobody can act on — and it is refused rather than defaulted to a
     blank.
 
+    ⚠ BOTH CAUSES SHARE ONE LIST, SO `len(register["drops"])` IS NOT THE
+    BARRED-CAUSE COUNT. READ THIS BEFORE USING A BARE LENGTH (D-W5-6).
+
+    Every record lands in `register["drops"]` whatever its cause. That is
+    deliberate — one drop log, a `cause` field, and `drop_summary` and
+    `count_drops` filtering on it — but it means a bare length is the TOTAL of
+    two opposite failures, and answers neither question on its own.
+
+    A bare length was ACCIDENTALLY correct for as long as
+    `DROP_CLUSTERED_ONTO_LIVE` had no production writer. 15.8-04 gave it one, at
+    the near-duplicate merge site in `workshop.cluster_candidates`, so ordinary
+    near-copy merges — the COMMON case — now land in the same list. THREE readers
+    in `workshop_rank.py` take that bare length, and every one of them is named
+    for the BARRED cause alone:
+
+      * `drops_before`, captured just before the `cluster_candidates` call in the
+        loop body; and
+      * the delta computed just after it, which feeds
+        `round_metrics(dropped_as_reproposal=…)`; and
+      * `"dropped_as_reproposal"` in the stage-B `counts` block.
+
+    All three must count `cause=DROP_CLUSTERED_ONTO_BARRED` through `count_drops`
+    below. The first two are a MATCHED PAIR — fixing one leaves a delta between
+    two different denominators, which is worse than leaving both wrong — so it is
+    all three or none.
+
+    WHY IT IS NOT COSMETIC: `round_metrics` is persisted to
+    `workshop_round_yield.barred_drops`, which is read as THE measurement of
+    whether the loop is spinning. An inflated `barred_drops` would mean the "loop
+    is SPINNING" metric had silently absorbed the OPPOSITE failure it exists to
+    distinguish, in a run there is no budget to repeat.
+
     Returns True when a record was stored. Never raises.
     """
     slots = _slots(register)
@@ -595,6 +627,56 @@ def record_drop(
         }
     )
     return True
+
+
+def count_drops(
+    register: Any,
+    *,
+    cause: Any = None,
+    round_no: Any = None,
+) -> int:
+    """How many drops were recorded, optionally narrowed to ONE CAUSE and round.
+
+    THE FUNCTION EXISTS BECAUSE THE TWO CAUSES SHARE ONE LIST BY DESIGN, so any
+    caller that wants ONE of D-W4-1's two opposite signals has to count by cause
+    and must never count `len(register["drops"])`. That bare length is the total
+    of a loop SPINNING and a dedup STRANGLING DISCOVERY — the two failures the
+    drop log was built to tell apart — so it is a number nobody can act on, and
+    reporting it under either failure's name is worse than reporting nothing.
+    See the warning in `record_drop` above for the readers this is meant for.
+
+    With no filters it counts every record, which is exactly the bare length and
+    is the honest way to ask for it.
+
+    A `round_no` this function cannot read returns 0 rather than every record: a
+    filter that silently stops filtering is how a count quietly goes back to
+    being the sum of two opposite things. `cause` is compared by VALUE and is not
+    validated against `_DROP_CAUSES` — asking for a cause nothing was recorded
+    under is a legitimate question whose answer is 0.
+
+    Never raises; returns 0 for any register it cannot read.
+    """
+    slots = _slots(register)
+    if slots is None:
+        return 0
+
+    wanted: int | None = None
+    if round_no is not None:
+        try:
+            wanted = int(round_no)
+        except (TypeError, ValueError):
+            return 0
+
+    total = 0
+    for record in slots["drops"]:
+        if not isinstance(record, dict):
+            continue
+        if cause is not None and record.get("cause") != cause:
+            continue
+        if wanted is not None and record.get("round") != wanted:
+            continue
+        total += 1
+    return total
 
 
 def drop_summary(register: Any, round_no: Any) -> str:

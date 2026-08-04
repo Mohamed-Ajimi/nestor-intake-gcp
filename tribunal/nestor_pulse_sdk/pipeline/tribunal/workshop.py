@@ -2477,6 +2477,49 @@ async def cluster_candidates(
             rep = dict(members[0])
             rep["cluster_key"] = key
             rep["merged_from"] = [m.get("index") for m in members[1:]]
+
+            # -- D-W4-1's SECOND drop signal, which had NO PRODUCTION WRITER --
+            # The barred path above records the loop SPINNING — a proposal that
+            # clustered onto something already rejected. This is the OPPOSITE
+            # failure, and until 15.8-04 only the test suite could write it, so
+            # `drop_summary`'s third sentence was unreachable from a real run.
+            # An over-eager dedup strangles discovery INVISIBLY: nothing errors,
+            # the round simply produces less than it could. The Wave-4 harness
+            # measured 6 such drops, and they were not all fair — they killed
+            # SPECIALISE and COMBINE attempts, and killed round 1's ONLY INVENT
+            # before its grounded lookup ever ran.
+            #
+            # `register is not None` IS LOAD-BEARING, NOT DEFENSIVE TIDINESS.
+            # `run_workshop_stage_a` calls this function with no register at all;
+            # `record_drop` routes through `workshop_register._slots`, which logs
+            # a WARNING for every non-dict it is handed. Without the guard every
+            # ordinary stage-A merge would warn about a register nobody passed —
+            # noise that reads like a defect in the one run 15.8 exists to read.
+            #
+            # No per-member `log.info` here, unlike the barred path: a bar is
+            # rare and load-bearing, a live merge is the common case, and a line
+            # per merged member would flood the run log. The aggregate
+            # `_reason_cluster_collapse` sentence below already reports it.
+            if register is not None and len(members) > 1:
+                onto_live = members[0].get("text")
+                for merged in members[1:]:
+                    try:
+                        workshop_register.record_drop(
+                            register,
+                            text=merged.get("text"),
+                            # The REPRESENTATIVE — the candidate that stays on
+                            # the table. Swapping these two would make the
+                            # survivor look dropped.
+                            clustered_onto=onto_live,
+                            cause=workshop_register.DROP_CLUSTERED_ONTO_LIVE,
+                            round_no=round_no,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — instrumentation never fails a paid round
+                        log.warning(
+                            "workshop: the near-copy drop could not be recorded: %r",
+                            exc,
+                        )
+
             parents: list[str] = []
             for member in members:
                 member_parents = member.get("parents") or (
