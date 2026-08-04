@@ -78,6 +78,7 @@ import asyncio
 import logging
 import math
 import os
+import time
 import uuid
 from typing import Any, Awaitable, Callable, Optional, TYPE_CHECKING
 
@@ -1115,6 +1116,131 @@ def _as_list(value: Any) -> list[Any]:
         return []
 
 
+def assignment_identity(angle: Any) -> dict[str, Any]:
+    """The D-W5-2 discriminator for one dispatch assignment. PURE, NEVER RAISES.
+
+    Returns exactly three keys — `group_id`, `client_question`, `parent_kind` —
+    which become three columns of one `assignment_yield` row (D-R8). PUBLIC rather
+    than underscored on purpose: it is the ONE symbol a reader of that table greps
+    for when asking how a row got its discriminator.
+
+    `parent_kind` IS A REAL COLUMN AND MUST NEVER BE INFERRED FROM
+    `client_question IS NULL`
+    ---------------------------------------------------------------------------
+    The two encode DIFFERENT THINGS, and there are two concrete rows that prove
+    it, both of which this engine really produces:
+
+      * a MANDATE group whose label resolves empty writes
+        `client_question = NULL` with `parent_kind = 'client_question'` — the
+        assignment's mandate IS a client question; we merely failed to name it;
+      * a CROSS-CUTTING group with a perfectly good `focus_area` writes
+        `client_question = NULL` with `parent_kind = 'cross_cutting'` — the label
+        is real but it is NOT this assignment's parent.
+
+    A reader deriving one from the other collapses those two rows into one and
+    then reports a naming failure as a cross-cutting group, or vice versa.
+
+    THE VOCABULARY, AND WHY IT IS NOT IMPORTED
+    -------------------------------------------
+    The three return values are D-W5-2's vocabulary and are pinned against
+    `runs.yield_records.PARENT_KINDS` BY A TEST rather than by an import. This
+    module is the angle builder; a DATABASE module has no business being one of
+    its dependencies for nothing more than a naming convenience. The test asserts
+    a SUBSET and not an exact set, so it cannot break if the emitter ever gains a
+    fourth kind — the exact-set-allowlist-over-a-sibling's-file trap that cost
+    phase 15.5 a cross-plan regression.
+
+    WHY A BUG HERE COSTS A DISCRIMINATOR AND NEVER A MEASUREMENT (D-W5-10)
+    ----------------------------------------------------------------------
+    An out-of-vocabulary `parent_kind` is CLAMPED TO A SENTINEL BY THE EMITTER AND
+    THE ROW IS STILL WRITTEN, with `cost_usd`, `claims_kept`, `resolvable_sources`
+    and `duration_s` intact. It is never dropped. So the conservative fallback
+    below is safe: it loses a label, not a paid measurement.
+
+    THE RULE, IN THIS ORDER:
+      1. `group_id` is the angle's `corroboration_key`, stripped, **None when
+         empty** — never `''`. Migration 0017's own rule: "no key recorded" and
+         "recorded as the empty key" are DIFFERENT FACTS.
+      2. CROSS-CUTTING is decided on the BRACKET, against
+         `question_grouping.GROUP_BRACKET_DISCOVERY` — the constant, never the
+         literal. `client_question` is then set to None and the angle's
+         `focus_area` is DISCARDED ENTIRELY.
+      3. Otherwise `client_question` is `focus_area`, stripped, None when empty.
+      4. DISCOVERY_RIDER is decided on the RIDER COUNT against the MEMBER COUNT.
+      5. Otherwise `client_question`.
+    """
+    try:
+        source = angle if isinstance(angle, dict) else {}
+
+        # (1) The group id. `or None` and never `or ''` — migration 0017 binds an
+        # absent key as NULL, because the corroboration queries must tell "no key
+        # recorded" apart from "recorded as the empty key".
+        raw_group = source.get("corroboration_key")
+        group_id = (str(raw_group).strip() if raw_group is not None else "") or None
+
+        # (2) CROSS-CUTTING, DECIDED ON THE BRACKET AND NOTHING ELSE.
+        #
+        # WHY the label is thrown away here: the cross-cutting group genuinely has
+        # no single parent — there is never a `d2` — and `_group_angle`'s ORPHAN
+        # RULE has already put `labels[0]` into `focus_area`, so this angle would
+        # otherwise look exactly like a Q1 assignment. Recording that label would
+        # FABRICATE PROVENANCE in a row whose entire purpose is to be trusted
+        # later, by a reader who cannot re-run the $45 run to check it (D-W5-2).
+        # NULL is the honest record of "this has no single parent".
+        bracket = source.get("bracket")
+        bracket_text = str(bracket).strip() if bracket is not None else ""
+        if bracket_text == question_grouping.GROUP_BRACKET_DISCOVERY:
+            return {
+                "group_id": group_id,
+                "client_question": None,
+                "parent_kind": "cross_cutting",
+            }
+
+        # (3) The ordinary label. Same absent-is-NULL rule.
+        raw_label = source.get("focus_area")
+        client_question = (str(raw_label).strip() if raw_label is not None else "") or None
+
+        # (4) DISCOVERY_RIDER, decided on the RIDER COUNT AGAINST THE MEMBER
+        # COUNT — never on the presence of the key. Under D-W3-5.2 a group holding
+        # one client question PLUS a rider is the INTENDED shape: its mandate is
+        # the client question and the rider rides along, so that group is
+        # `client_question`. Only an ALL-RIDER group has no client mandate of its
+        # own. Both counts are read tolerantly because `discovery_riders` is
+        # telemetry written by `_group_angle` and `sub_questions` is model-adjacent.
+        riders = source.get("discovery_riders")
+        rider_n = riders if isinstance(riders, int) and not isinstance(riders, bool) else 0
+        members = source.get("sub_questions")
+        member_n = len(members) if isinstance(members, (list, tuple)) else 0
+        if rider_n > 0 and rider_n >= member_n:
+            return {
+                "group_id": group_id,
+                "client_question": client_question,
+                "parent_kind": "discovery_rider",
+            }
+
+        # (5) An ordinary mandate assignment. NOTE that we arrive here with
+        # `client_question` possibly None — and that is CORRECT and is the whole
+        # point of the docstring above.
+        return {
+            "group_id": group_id,
+            "client_question": client_question,
+            "parent_kind": "client_question",
+        }
+    except Exception as exc:  # noqa: BLE001 — a classifier never raises into a paid run
+        log.warning(
+            "research_division.assignment_identity: could not read the angle "
+            "(%s: %s) — falling back to group_id=None, client_question=None, "
+            "parent_kind='client_question'. The row is still written and keeps "
+            "its cost and claim counts (D-W5-10); only the discriminator is lost.",
+            type(exc).__name__, exc,
+        )
+        return {
+            "group_id": None,
+            "client_question": None,
+            "parent_kind": "client_question",
+        }
+
+
 def _bound_groups_to_winners(
     groups: Any, allowed_texts: set, labels: list[str]
 ) -> list[dict[str, Any]]:
@@ -2056,6 +2182,27 @@ async def run_angles(
                 "on this attempt",
                 i + 1, provider,
             )
+            # D-R8 / T-15.8-09-06: a restored angle STILL FLOWS TO THE DISTILL
+            # BOUNDARY and therefore still contributes an `assignment_yield` row —
+            # a SECOND row on the natural key `(run_id, provider, group_id,
+            # client_question)` that the original attempt already wrote. The
+            # INSERT is deliberately NOT made idempotent: that would need either a
+            # UNIQUE constraint (ruled out — a uniqueness violation inside a paid
+            # run is worse than a duplicate row) or an edit to `runs/yield_records`
+            # (single owner). So the duplicate is RECORDED here instead, naming the
+            # assignment, because this line is the ONLY way a reader of that table
+            # can tell a resumed run's duplicates apart from `divide()`'s doubled
+            # high-stakes fallback copy. THE READER-SIDE RULE: dedupe on the
+            # natural key before any SUM.
+            log.warning(
+                "run_angles: angle %d (stream %s, corroboration_key %r, "
+                "focus_area %r) was restored, so it will contribute a SECOND "
+                "assignment_yield row on the same natural key — dedupe on "
+                "(run_id, provider, group_id, client_question) before any SUM",
+                i + 1, provider,
+                (result or {}).get("_corroboration_key") if isinstance(result, dict) else None,
+                (result or {}).get("_angle") if isinstance(result, dict) else None,
+            )
             # 15.3-03: an angle that was NOT dispatched must be VISIBLE, not
             # absent. Without this line a resumed run shows a feed with holes in
             # it and no explanation for why those angles never appear.
@@ -2261,12 +2408,26 @@ async def run_angles(
                             )
 
                     runner_kwargs["on_job_started"] = _job_started
+            # D-R8: `duration_s` is measured around the RUNNER AWAIT ONLY, not
+            # around the whole coroutine. Time spent queued behind
+            # `_ANGLE_CONCURRENCY` is not time the provider spent working, and this
+            # column exists to COMPARE PROVIDERS — a queued angle would otherwise
+            # make whichever stream happened to be scheduled last look slow.
+            #
+            # `time.monotonic` and NOT `time.time`: a wall-clock step (an NTP
+            # correction, a DST change, an operator setting the clock) during a
+            # forty-minute deep-research call would produce a negative or absurd
+            # elapsed value, and `duration_s` is `NUMERIC(10, 3)`. A monotonic
+            # clock cannot go backwards by construction.
+            _started = time.monotonic()
+            _elapsed_s: float | None = None
             try:
                 async with asyncio.timeout(timeout):
                     result = await runner(
                         query=query, audited=audited, run_id=run_id, tenant_id=tenant_id,
                         **runner_kwargs,
                     )
+                _elapsed_s = max(0.0, time.monotonic() - _started)
             except Exception as exc:  # timeout or runner error — this angle yields nothing
                 log.warning(
                     "research_division.run_angles: angle %d (%s) failed: %s: %s",
@@ -2306,11 +2467,16 @@ async def run_angles(
             # R3: record this angle the moment it lands, not at the end of the
             # stage. A crash mid-stage must still leave the completed angles
             # recorded, or the resume re-buys them.
+            _identity = assignment_identity(angle)
             _enriched = {
                 **result, "_angle": fa, "_stakes": stakes, "_d8_prompted": prompted,
                 # D-R3 (15.5 wave 2), in THIS literal and not a second dict —
                 # see the paragraph below on why there is exactly one object.
                 "_sub_question": sub_q, "_corroboration_key": corr_key,
+                # D-R8 (15.8 wave 2), in THE SAME literal for the same reason.
+                "_client_question": _identity["client_question"],
+                "_parent_kind": _identity["parent_kind"],
+                "_duration_s": _elapsed_s, "_retry_used": force_provider is not None,
             }
             await _record_result(i, provider, _enriched)
             # `_d8_prompted` is read by `synthesis.steps.collect_provider_facts`
@@ -2328,10 +2494,35 @@ async def run_angles(
             # own corroboration partner. They are recording only — nothing reads
             # them to make a decision in this wave.
             #
+            # THE FOUR D-R8 KEYS (`_client_question`, `_parent_kind`,
+            # `_duration_s`, `_retry_used`) are read by `pipeline.py`'s
+            # `_assignment_yield_rows` at the distill boundary, and become four
+            # columns of one `assignment_yield` row. They obey exactly the rules
+            # the five keys above obey, and three things about them are worth
+            # stating because none is re-derivable from the row later:
+            #
+            #   * They are STAMPED IN PYTHON FROM THE DISPATCH ASSIGNMENT and are
+            #     never parsed out of a provider response — the same T-15.2-60 /
+            #     T-15.5-05 rule. A model-supplied `parent_kind` would let model
+            #     text choose its own provenance in the one table built to be
+            #     trusted after the fact.
+            #   * `_retry_used` means THE COVERAGE RETRY IN THIS FILE — the single
+            #     re-dispatch of an uncovered focus area onto a different enabled
+            #     stream via `force_provider`. It is NOT the D8 fact-list retry
+            #     inside `synthesis.collect_provider_facts`, which is a different
+            #     mechanism in a module this stamp cannot see. Do not conflate the
+            #     two when reading the column.
+            #   * Nothing here enters the frozen audit payload (T-15.2-64): the
+            #     audit `response` is the RAW runner result, built before
+            #     `_enriched` exists.
+            #
             # `_enriched` is returned rather than a second identical literal, so
             # the checkpointed value and the returned value are the SAME object:
             # a restored angle is byte-identical to a freshly researched one, and
-            # `covered_fas` below reads the same `_angle` key on both.
+            # `covered_fas` below reads the same `_angle` key on both. That is ALSO
+            # why a RESTORED angle carries the ORIGINAL attempt's `_duration_s` and
+            # `_retry_used` — which is the honest record: the run paid that cost
+            # once, at that duration.
             return (provider, _enriched)
         reason = result.get("error_message") if isinstance(result, dict) else repr(result)
         log.warning(
