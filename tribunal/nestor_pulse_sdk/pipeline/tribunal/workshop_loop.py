@@ -832,6 +832,19 @@ def round_metrics(
     lookups: Any,
     calls: Any,
     cost_usd: Any,
+    # --- The four CRITIQUE-scoped counters (D-W5-17). NONE OF THEM HAS A
+    # DEFAULT, and that is a correctness requirement rather than a style
+    # choice: this function has exactly ONE production caller, so a default of
+    # `0` would turn "the wiring was forgotten" into a CONFIDENT ZERO in the
+    # one measuring run — the fabricated-measurement failure
+    # `workshop_round_yield` was built to prevent. A missing kwarg must be a
+    # `TypeError`. (`workshop_register.record_drop` states the same rule for
+    # `clustered_onto`; this follows it, and matches the ten parameters above,
+    # which are already required keyword-only.)
+    keep_count: Any,
+    weak_count: Any,
+    kill_count: Any,
+    new_entrants_top_n: Any,
 ) -> dict[str, Any]:
     """One per-round instrumentation record. D-W4-7. IT ENFORCES NOTHING.
 
@@ -851,11 +864,52 @@ def round_metrics(
 
     The record is plain ints and strings so it survives `json.dumps` unchanged
     and carries no float into an audit trail.
+
+    THE TWO DENOMINATORS — READ THIS BEFORE BINDING ANY OF THESE TO A COLUMN.
+    ------------------------------------------------------------------------
+    This record carries TWO FAMILIES OF COUNTER over two DIFFERENT populations,
+    and they are different ON PURPOSE:
+
+      * WINNER-scoped — `winners` is the size of the cut, and `weak_winners` is
+        how many of THE CUT came back WEAK (with `exit_verdict`'s cross-cutting
+        exemption applied). Both are bounded by the cut, so
+        `winners <= candidates_in`.
+
+      * CRITIQUE-scoped — `keep_count`, `weak_count` and `kill_count` are the
+        KEEP / WEAK / KILL verdicts the critique pass returned over THE WHOLE
+        POPULATION it saw, so `keep_count + weak_count + kill_count ==
+        candidates_in`, exactly.
+
+    ⚠ `winners` IS NOT `keep_count`, AND BINDING ONE TO THE OTHER'S COLUMN IS A
+    SILENT MIS-MEASUREMENT (D-W5-11). It would read as a perfectly plausible
+    number and nothing downstream would ever contradict it. The triple is
+    critique-scoped in ALL THREE members because a KILL HAS NO WINNER-SCOPED
+    MEANING AT ALL — a killed candidate is removed before ranking, so there is
+    no such thing as a killed winner. A triple whose third member cannot be
+    winner-scoped must be critique-scoped throughout, or it is three different
+    denominators wearing one name.
+
+    `new_entrants_top_n` IS THE COUNTER THE LOOP'S ENTIRE JUSTIFICATION RESTS
+    ON. It is how many entries reached the top N this round that were not there
+    before, and ENGINE-REDESIGN-SPEC section 6 puts the consequence plainly: if
+    round 7+ never produces a new entrant across several runs, DROP THE CAP AND
+    KEEP THE MONEY. That is a query over MANY RUNS, which is precisely why
+    D-W5-1 chose a cross-run table over a per-run feed. Its one authority is
+    `exit_verdict`, which already computes it for criterion 3 (SATURATION); this
+    function RECORDS it and must never be handed a recomputation.
     """
     return {
         "round_no": _count_of(round_no),
         "candidates_in": _count_of(candidates_in),
         "new_candidates": _count_of(new_candidates),
+        # --- CRITIQUE-scoped, in D-W5-1's column order. See THE TWO
+        # DENOMINATORS above before reading any of these as a winner statistic.
+        "keep_count": _count_of(keep_count),
+        "weak_count": _count_of(weak_count),
+        "kill_count": _count_of(kill_count),
+        "new_entrants_top_n": _count_of(new_entrants_top_n),
+        # --- WINNER-scoped from here down; unchanged, and read by
+        # `_stage_b_result`'s `loop_rounds`.
         "winners": _count_of(winners),
         "weak_winners": _count_of(weak_winners),
         "barred": _count_of(barred),

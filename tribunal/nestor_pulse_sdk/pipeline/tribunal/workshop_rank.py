@@ -4366,6 +4366,36 @@ async def run_workshop_stage_b(
             )
             critique_reasons = round_critique_reasons
 
+            # --- THE ROUND'S CRITIQUE TRIPLE (D-W5-17). All three are
+            # CRITIQUE-scoped: they count the verdicts the critique pass
+            # returned over the WHOLE population it saw, which is why
+            # `keep + weak + kill == population_in` by construction — both of
+            # `critique_candidates`' coverage guards put a rescued candidate
+            # back into `screened` as KEEP *and* reconcile it out of
+            # `killed_out`, so the two lists partition the population exactly.
+            #
+            # THEY ARE COMPUTED HERE, NOT AT THE RECORD, FOR TWO REASONS. First,
+            # `killed_out` is reconciled by `critique_candidates` itself, so it
+            # must be read after that call and before anything else touches it.
+            # Second, the two bar loops immediately below REBIND the name
+            # `killed`, and reading a shadowed name at the record site is the
+            # kind of quiet wrong number this whole table exists to prevent.
+            #
+            # ⚠ NOT winner statistics. `winners`/`weak_winners` are
+            # WINNER-scoped and stay separate — see `round_metrics`' THE TWO
+            # DENOMINATORS paragraph, and D-W5-11.
+            keep_this_round = sum(
+                1
+                for entry in screened
+                if str(entry.get("critique") or "").upper() == _KEEP
+            )
+            weak_this_round = sum(
+                1
+                for entry in screened
+                if str(entry.get("critique") or "").upper() == _WEAK
+            )
+            kill_this_round = len(killed_out)
+
             # --- 1a. BAR CAUSE ONE: a KILL that names a DEFECT. A KILL that names
             # a RESTATEMENT does NOT bar — see `_kill_is_a_restatement` for the
             # structural test and for why the failure direction is towards NOT
@@ -4687,6 +4717,16 @@ async def run_workshop_stage_b(
                     round_no=round_no,
                     candidates_in=population_in,
                     new_candidates=len(stamped),
+                    # CRITIQUE-scoped (D-W5-17), computed above the bar loops.
+                    keep_count=keep_this_round,
+                    weak_count=weak_this_round,
+                    kill_count=kill_this_round,
+                    # THE COUNTER THE LOOP'S JUSTIFICATION RESTS ON, read
+                    # STRAIGHT OFF THE VERDICT. `exit_verdict` computed it four
+                    # lines above for criterion 3 and is its ONE AUTHORITY;
+                    # recomputing it here would be the second authority the
+                    # floor was moved INTO `exit_verdict` to avoid.
+                    new_entrants_top_n=verdict.get("new_entrants") or 0,
                     winners=len(selected),
                     weak_winners=verdict.get("weak_winners") or 0,
                     barred=barred_this_round,
