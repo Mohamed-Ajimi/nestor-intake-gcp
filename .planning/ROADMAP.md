@@ -140,7 +140,16 @@ The key transited a chat in plaintext 2026-07-27 and is live on both Tribunal se
 **deliberately accepted** for the pre-go-live period. **Do not rotate it early, and do not re-raise it
 as a gap or a blocker** — it is a decision, not an oversight. Rotate at go-live.
 **Requirements**: none
-**Plans:** 11/15 plans executed
+**Plans:** 12/15 plans executed (SUMMARYs on disk: 15.8-01…13, minus the never-executed 15.8-08)
+⛔ **THE PHASE GATE (15.8-13) HAS RUN AND IS RED** (2026-08-04, commit `5f62a62`).
+`EXPECTED_FILES` 36 → **43**, `collecting: 43 of 43`, **1 failed / 1753 passed / 13 skipped** — the
+1754 passed floor met exactly. The one failure is a **real production defect** in
+`research_division.assignment_identity` (a memory address written into a provenance column), not a
+config problem. `cloudbuild.test-gates.yaml` is green at **187 passed / 2 deselected**, a genuine
+regression pass over four waves of engine edits (10 of its 13 files import the edited modules).
+The batched mutation debt — including `15.4-05`'s P3 and P4, owed since 2026-07-29 — is **PAID**.
+**15.8-14 (the ONE deploy) and 15.8-15 (the ONE ~$45 run) MUST NOT START until the engine gate is
+green.** Detail: `15.8-13-SUMMARY.md` § FINDING-1 and `.planning/STATE.md` § Gates (15.8).
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 15.8 to break down)

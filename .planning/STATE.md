@@ -5,7 +5,7 @@ milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
 last_updated: "2026-08-04T09:34:36.016Z"
-last_activity: 2026-08-04 -- Phase 15.8 execution started
+last_activity: 2026-08-04 -- 15.8-13 phase gate RUN: engine RED (1 real defect) at 43 of 43, gates 187 green, mutation debt PAID
 progress:
   total_phases: 16
   completed_phases: 11
@@ -26,6 +26,10 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.8 (research-engine-redesign-yield-instrumentation-deploy-one-me) — EXECUTING
+  Plan 15.8-13 (THE PHASE GATE) COMPLETE 2026-08-04, commit 5f62a62. ⛔ **THE GATE IS RED AND
+  15.8-14 IS BLOCKED** on ONE real production defect — see the Gates (15.8) block below.
+  Stopped at: 15.8-13-SUMMARY.md written; next plan is 15.8-14 (the ONE deploy), which must NOT
+  start until the engine gate is green.
 Plan: 1 of 15
 GATE GREEN, VERIFIED (`gaps_found`, 57/58). NOT DEPLOYED.** Verification ran 2026-08-03 at `94a7647`
 (`15.7-VERIFICATION.md`). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier handoffs
@@ -121,7 +125,43 @@ is the real mechanism.
 
   **NEXT: `/gsd-execute-phase 15.8`** once the three decisions are ruled.
 
-Gates (15.7, current — these SUPERSEDE the 15.6 numbers below):
+Gates (15.8, CURRENT — these SUPERSEDE the 15.7 numbers below; plan 15.8-13, 2026-08-04):
+  ⛔ **THE ENGINE GATE IS RED ON THE MERGED TREE, AND IT IS A REAL DEFECT — 15.8-14 IS BLOCKED.**
+  Engine `cloudbuild.test-engine.yaml` build **b1397467** = **1 failed / 1753 passed / 13 skipped**,
+  `collecting: 43 of 43 expected files`. `EXPECTED_FILES` moved 36 → **43** in ONE edit by the phase's
+  single owner (D-W5-5), derived from the merged tree and reconciled three ways (list count / git-diff
+  additions / per-plan stated contributions — all 43, zero deletions, zero renames).
+  **The passed floor of 1754 = 1538 + 10 (D-W5-4) + 176 (7 new files) + 30 (functions added to five
+  ALREADY-REGISTERED files) is met EXACTLY, as 1753 passed + 1 failed.** The +30 term is the one nobody
+  stated until wave 3: new FILES are not the only source of new TESTS.
+  **THE FAILURE, and it is not a config problem:**
+  `test_research_division_yield.py::test_hostile_input_returns_the_conservative_shape_rather_than_raising[hostile5]`
+  — `assert '<object object at 0x…>' is None`. `research_division.assignment_identity:1179`
+  stringifies ANY non-None `corroboration_key`, so a hostile shape writes a **non-deterministic memory
+  address into a provenance column** of `assignment_yield`. The identical shape sits at `:1199` for
+  `client_question` and **no test covers that half**. Candidate fix: accept only `isinstance(str)` at
+  both sites. NOT applied — it is a cross-plan contract decision about a DB column, owned by 15.8-09,
+  one plan before a deploy and a $45 run. **Settles by: fix or rule, then re-run the engine gate and
+  require 43 of 43 with 0 failed.**
+  Gates `cloudbuild.test-gates.yaml` build **68699517** = **187 passed, 2 deselected**,
+  `collecting: 13 of 13 expected files` — 15.8-07's new assertion running for the first time.
+  **A FLAT 187 IS A GENUINE REGRESSION PASS, NOT INSULATION (D-W5-12).** Measured on this tree
+  2026-08-04 with `pipeline\.tribunal|from nestor_pulse_sdk\.pipeline`: **10 of 13** of those files
+  import the modules 15.8-02/-03/-09/-10 all edit; the 3 that do not are `test_fail_loud.py`,
+  `test_verdict_publication.py`, `test_verdict_write_path.py`. The 15.6 note below ("none of which 15.6
+  touched") **does not transfer**. Per D-W5-15 neither config carries that integer — the criterion is in
+  the YAML, the measurement is here.
+  **THE MUTATION DEBT IS PAID, batched, two builds, both FAILURE by design.** Mutant A `b90cbe2a`
+  (5 mutations, 5 distinct symbols, disjoint node sets): 9 failed / 1745 passed at 43 of 43 — every row
+  BITES, **no vacuous test found**. Mutant B `b2ee86d2`: 8 failed / 1746 passed — `15.4-05`'s **P4 is
+  byte-exact** (`recorded 0 done line(s), not 1` × 5) and **P3 is settled in both directions** (its two
+  inverted tests passed clean and went red reverted). Route taken: the TARGETED HELPER mutation, not
+  `git revert 6980fda`. Both P3 and P4 leave `PENDING-CLOUDBUILD` (since 2026-07-29) as **PAID**.
+  Still OWED: `test_tribunal_pipeline.py` is in NEITHER config while guarding `pipeline.py` (which
+  15.8-02 and 15.8-09 both edit) — NOT registered on purpose, its raw-text `persist_tribunal_claims`
+  assertion must be tightened to an AST check FIRST, then path + count in one edit.
+
+Gates (15.7, superseded by the 15.8 block above, kept for the reasoning):
   Engine `cloudbuild.test-engine.yaml` build **7c89be5c** = **1538 passed / 0 failed / 13 skipped**,
   `collecting: 36 of 36 expected files`. **THE FIRST FULLY GREEN ENGINE GATE IN THE PROJECT'S HISTORY**
   — and the suite had **never been executed anywhere** before 2026-08-03. Run history, each number a
@@ -308,7 +348,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-08-04 -- Phase 15.8 execution started
+Last activity: 2026-08-04 -- 15.8-13 phase gate RUN: engine RED (1 real defect) at 43 of 43, gates 187 green, mutation debt PAID
 
 Progress: [██████████] 100%
 
