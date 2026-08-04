@@ -56,6 +56,7 @@ from typing import Any, Optional
 from nestor_pulse_sdk.pipeline.tribunal import (
     discovery_bracket,
     question_grouping,
+    research_division,
     workshop_loop,
     workshop_rank,
 )
@@ -1125,6 +1126,184 @@ def test_discovery_ranks_below_every_winner_after_the_repair_grew_the_list():
         m for g in groups for m in g["members"] if m.get("source") == "discovery"
     ]
     assert members and all(m["rank"] > highest_winner for m in members)
+
+
+# ---------------------------------------------------------------------------
+# Phase 15.8 plan 03 — CR-01's NORMALISATION RULE, at the two remaining
+# comparison sites in `workshop_rank.py`.
+#
+# 15.6's review classified these as a HAZARD, not a proven live trigger: today
+# both sides of both joins happen to be copies of one dict's own string, so they
+# agree by ACCIDENT OF CONSTRUCTION. Nothing enforced it — and CR-01 is the proof
+# that exactly that assumption already failed once, one module over.
+#
+# A miss here does NOT drop a question. It silently leaves a STALE `rank`, and
+# `research_division._stakes_for_rank` derives stakes and stream treatment from
+# `rank` — so the failure mode is a mis-priced run that reads green everywhere
+# else, in the ONE measuring run this engine gets.
+# ---------------------------------------------------------------------------
+
+
+def test_a_whitespace_divergent_member_is_restamped_with_the_fresh_rank():
+    """CR-01 SITE 1 — `_restamp_groups`' `rank_by_text` join.
+
+    THE DIVERGENCE IS BUILT DELIBERATELY: the member's text is the winner's text
+    with an interior newline inserted and a space doubled, and nothing else. That is
+    exactly what a client question typed into a form textarea looks like once ONE
+    side of a join has passed through a collapsing producer — `_verbatim_winner`
+    copies the client's own wording verbatim, `question_grouping.build_groups` copies
+    member text verbatim, and `research_division._normalise_winners` collapses. Two
+    producers agreeing was never a control.
+
+    Under the committed (pre-15.8-03) exact-string join this member kept its STALE
+    rank, which `research_division._stakes_for_rank` would then have priced.
+    """
+    groups, winners = mandate_group(("Q1", 2))
+    member = groups[0]["members"][0]
+    twin = groups[0]["members"][1]
+
+    # The winner side is untouched; only the member's copy diverges, and only in
+    # whitespace. Collapsed, the two are identical — which is the whole point.
+    member["text"] = winners[0]["text"].replace(" ", "  \n", 1)
+    assert member["text"] != winners[0]["text"]
+    assert member["text"].split() == winners[0]["text"].split()
+    member["rank"] = 99  # the stale number a pre-repair copy carries
+    twin["rank"] = 99
+
+    workshop_rank._restamp_groups(groups, winners)
+
+    assert member["rank"] == winners[0]["rank"] == 1, "the FRESH rank, not the stale 99"
+    assert twin["rank"] == winners[1]["rank"] == 2, "the exact-match half still works"
+    assert groups[0]["rank"] == 1, "the group's own rank follows its min member"
+
+
+def test_a_whitespace_divergent_discovery_member_is_restamped_with_the_fresh_rank():
+    """CR-01 SITE 2 — `_stamp_discovery_ranks`' `numbered` join.
+
+    Same deliberate divergence, on the other join. The dispatched question and the
+    group member are two SEPARATE dicts — the member was copied through
+    `attach_discovery_riders` / `build_groups`, which copy member text verbatim — so
+    "both sides are the same engine-copied string" was an assumption, not a control.
+
+    A stale rank here is worse than untidy: the provisional rank is stamped from the
+    PRE-repair winner count, so it can COLLIDE with a client winner's rank and hand a
+    question the client never asked a client question's stakes. D-W3-4 is absolute
+    that the mandate is never displaced.
+    """
+    groups, winners = mandate_group(("Q1", 2))
+    discovered = rider("a question the evidence raised about Q1", "Q1", rank=4)
+    groups, shed, _ = question_grouping.attach_discovery_riders(
+        groups, [dict(discovered)]
+    )
+    assert shed == []
+
+    member = next(m for m in groups[0]["members"] if m.get("source") == "discovery")
+    member["text"] = discovered["text"].replace(" ", " \t ", 1)
+    assert member["text"] != discovered["text"]
+    assert member["text"].split() == discovered["text"].split()
+    member["rank"] = 99
+
+    dispatched = [dict(discovered)]
+    workshop_rank._stamp_discovery_ranks(groups, dispatched, base=len(winners))
+
+    fresh = len(winners) + 1
+    assert dispatched[0]["rank"] == fresh
+    assert member["rank"] == fresh, "the FRESH discovery rank, not the stale 99"
+    assert all(
+        member["rank"] > w["rank"] for w in winners
+    ), "discovery still ranks below every client winner"
+
+
+def test_the_whitespace_insensitive_join_still_refuses_a_non_matching_member():
+    """THE OTHER HALF OF CR-01's CONTRACT — the bound must still bite.
+
+    Whitespace-insensitivity must not quietly become "admits strangers". A member
+    whose COLLAPSED text matches no collapsed winner gets no rank from the join and
+    keeps whatever it carried.
+
+    The second half is why `_flatten` is NOT the key: `_flatten` TRUNCATES to a cap,
+    so two distinct winners sharing a long prefix would collapse onto one another and
+    the join would hand one winner's rank to the other. A prefix is asserted
+    unmatched here so that swapping `_text_key` for `_flatten` cannot pass.
+    """
+    groups, winners = mandate_group(("Q1", 2))
+    stranger = groups[0]["members"][0]
+    prefix = groups[0]["members"][1]
+
+    stranger["text"] = "a question the tournament never ranked at all"
+    stranger["rank"] = 77
+    # A genuine PREFIX of winner 1's text — the shape truncation would merge.
+    prefix["text"] = winners[1]["text"][:20]
+    assert prefix["text"] and prefix["text"] != winners[1]["text"]
+    prefix["rank"] = 78
+
+    workshop_rank._restamp_groups(groups, winners)
+
+    assert stranger["rank"] == 77, "a non-matching member receives no rank"
+    assert prefix["rank"] == 78, "a shared prefix is NOT a match — no truncation"
+
+
+def test_the_two_text_key_copies_cannot_drift_apart():
+    """ANTI-DRIFT — the mechanism that replaces "keep these in sync" as a comment.
+
+    `workshop_rank._text_key` is a deliberate LOCAL copy of
+    `research_division._text_key`: a module-level import the other way risks the cycle
+    `workshop_rank` already documents at its function-local `workshop_evolve` import,
+    and `_is_discovery_member` sets the file's own duplicate-rather-than-import
+    precedent. A test module has no cycle constraint, so the two copies are pinned
+    equal HERE rather than trusted to stay equal.
+    """
+    corpus = [
+        None,
+        "",
+        "   ",
+        "already collapsed",
+        " leading and trailing ",
+        "an interior\nnewline",
+        "an interior\ttab",
+        "a  double  space",
+        "mixed \r\n whitespace \t everywhere ",
+        ["a", "list"],
+        {"a": "dict"},
+        0,
+        12345,
+    ]
+    for value in corpus:
+        assert workshop_rank._text_key(value) == research_division._text_key(value), (
+            value
+        )
+    # And the rule itself, stated once so a change to BOTH copies still goes red.
+    assert workshop_rank._text_key(" a\nb  c ") == "a b c"
+    assert workshop_rank._text_key(None) == ""
+
+
+def test_a_hostile_member_text_cannot_raise_out_of_the_join():
+    """T-15.8-03-03 — a hostile `text` yields an unmatched key, never an exception.
+
+    `_restamp_groups` and `_stamp_discovery_ranks` run inside `run_workshop_stage_b`'s
+    most expensive stretch, after every paid critique/tournament/evolve call has
+    already been made. An exception escaping the join there discards the whole run's
+    spend. `_text_key`'s `try/except` returning `""` is what makes a hostile
+    `__str__` — the one input the previous bare `str(...)` could not survive — a
+    non-match instead of a crash.
+    """
+
+    class Hostile:
+        def __str__(self) -> str:  # pragma: no cover - the raise IS the behaviour
+            raise RuntimeError("a hostile __str__ inside model-adjacent data")
+
+    assert workshop_rank._text_key(Hostile()) == ""
+
+    groups, winners = mandate_group(("Q1", 2))
+    groups[0]["members"][0]["text"] = Hostile()
+    groups[0]["members"][0]["rank"] = 55
+    groups[0]["members"][1]["text"] = {"not": "a string"}
+    groups[0]["members"][1]["rank"] = 56
+
+    workshop_rank._restamp_groups(groups, winners)  # must not raise
+
+    assert groups[0]["members"][0]["rank"] == 55
+    assert groups[0]["members"][1]["rank"] == 56
 
 
 # ===========================================================================

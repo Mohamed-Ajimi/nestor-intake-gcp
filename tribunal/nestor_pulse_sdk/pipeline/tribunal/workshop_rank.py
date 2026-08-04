@@ -3058,6 +3058,53 @@ def _copy_groups(groups: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _text_key(value: Any) -> str:
+    """The JOIN KEY for member <-> winner identity. PURE, NEVER RAISES.
+
+    THE SAME RULE AS `research_division._text_key`, spelled out again here rather
+    than imported, and the two are held in step by a TEST — see
+    `test_the_two_text_key_copies_cannot_drift_apart` in
+    `tests/test_workshop_scope_guard.py`, which asserts them element-wise equal over
+    a shared corpus. A comment saying "keep these in sync" is a wish; that test is
+    the mechanism.
+
+    IT IS A LOCAL COPY ON PURPOSE. A module-level `from ... import research_division`
+    here risks the cycle this file already documents at its function-local
+    `workshop_admission` / `workshop_evolve` import ("`workshop_evolve` imports THIS
+    module at module level, so a module-level import the other way is a cycle"). The
+    duplicate-rather-than-import precedent is `_is_discovery_member`'s, which says so
+    in its own docstring; the difference is that the drift risk here is closed by the
+    parity test rather than by hope.
+
+    IT IS DELIBERATELY NOT `_flatten`, which is right there and is the wrong tool.
+    `_flatten` also rewrites `|`, strips `\\r`, and TRUNCATES to a cap — and
+    truncation would MERGE two distinct winners sharing a long prefix, which is the
+    precise failure `research_division._text_key`'s docstring says this rule must not
+    have. `_flatten` is a PROMPT-INJECTION control; this is an IDENTITY key. The two
+    have opposite tolerances and must not be collapsed into one helper.
+
+    IT IS DELIBERATELY NOTHING MORE THAN THE WHITESPACE COLLAPSE
+    (`" ".join(str(...).split())`) — no case folding, no punctuation stripping, no
+    truncation. Anything wider would start merging winners the tournament ranked
+    apart, which is a strictly worse failure than the stale rank this closes.
+    Returning a `str` also makes the value HASHABLE, so a member whose `text` is a
+    list or a dict yields `""` instead of raising `TypeError: unhashable type` out of
+    the middle of the workshop stage.
+
+    WHAT 15.6's REVIEW ACTUALLY CLASSIFIED THIS AS: a HAZARD, not a proven live
+    trigger. Today both sides of both joins below happen to be copies of one winner
+    dict's own string, so they agree by accident of construction — nothing enforced
+    it. CR-01 is the proof that exactly that assumption already failed once, one
+    module over, where `_normalise_winners` collapsed one side and
+    `question_grouping.build_groups` copied the other verbatim. Do not overstate this
+    as a live defect; do not understate it as tidying.
+    """
+    try:
+        return " ".join(str(value or "").split())
+    except Exception:  # noqa: BLE001 — a hostile __str__ is untrusted input, not an error
+        return ""
+
+
 def _restamp_groups(
     groups: list[dict[str, Any]], winners: Sequence[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -3068,11 +3115,26 @@ def _restamp_groups(
     `research_division._stakes_for_rank` derives stakes and stream treatment from,
     so a stale one is a real quality loss rather than untidiness.
 
-    Members are matched back to the re-ranked winners BY TEXT, first-wins. Text is
-    the only key available: `index` is `-1` on every verbatim injection, so it is
-    not unique. It is the same exact-string join, over the same engine-copied
-    string, that the facet-resolution seam in `claim_attribution` documents — both
-    sides are one winner dict's own `text`, never model-written claim prose.
+    Members are matched back to the re-ranked winners BY TEXT, first-wins.
+    Text is the only key available: `index` is `-1` on every verbatim injection, so
+    it is not unique.
+
+    THE JOIN IS WHITESPACE-INSENSITIVE, ON BOTH SIDES, VIA `_text_key` — CR-01's
+    rule, applied at the COMPARISON SITE so every producer is fixed at once. It used
+    to be an exact-string match justified by "both sides are one winner dict's own
+    engine-copied `text`". THAT JUSTIFICATION WAS NEVER ENFORCED BY ANYTHING: several
+    producers feed these groups (`_verbatim_winner` copies the CLIENT'S own textarea
+    wording, truncated but never collapsed; `question_grouping.build_groups` copies
+    member text VERBATIM by documented design; `enforce_group_coverage` mints repair
+    groups), and a member diverging from its winner by an interior newline or a
+    double space silently missed the join. Both sides now normalise identically BY
+    CONSTRUCTION rather than by two producers happening to agree.
+
+    THE FAILURE THIS CLOSES IS A STALE `rank`, NOT A DROPPED QUESTION. Nothing is
+    deleted by a miss here — the member simply keeps the pre-repair number it was
+    copied with, and `research_division._stakes_for_rank` then derives the WRONG
+    stakes and stream treatment from it. That is a silent mis-pricing of the run, not
+    a visible loss, which is why it needed a test rather than a comment.
 
     Discovery members keep whatever rank they carry here; the caller re-stamps
     them once the winner count is final (see `_stamp_discovery_ranks`).
@@ -3085,9 +3147,16 @@ def _restamp_groups(
     for winner in winners or []:
         if not isinstance(winner, dict):
             continue
-        key = str(winner.get("text") or "")
-        if key and key not in rank_by_text:
-            rank_by_text[key] = _rank_of(winner)
+        # BOTH SIDES OF THIS JOIN NORMALISE THROUGH `_text_key`, AND BOTH SPELL IT
+        # OUT AT THE COMPARISON SITE. That is CR-01's method, and it is why that fix
+        # held: a ONE-SIDED normalisation is not a weaker fix, it IS the defect. The
+        # key is re-spelled at the subscript rather than reusing the local precisely
+        # so that neither line can be read — or grepped — as the one-sided form. The
+        # collapse is a whitespace join over a bounded winners list; do NOT "tidy"
+        # the second call away.
+        key = _text_key(winner.get("text"))
+        if key and key not in rank_by_text:  # FIRST-WINS; a falsy key matches nothing
+            rank_by_text[_text_key(winner.get("text"))] = _rank_of(winner)
 
     mandate_seen = 0
     for group in groups:
@@ -3095,7 +3164,7 @@ def _restamp_groups(
         for member in members:
             if _is_discovery_member(member):
                 continue
-            fresh = rank_by_text.get(str(member.get("text") or ""))
+            fresh = rank_by_text.get(_text_key(member.get("text")))
             if fresh is not None:
                 member["rank"] = fresh
         group["members"] = members
@@ -3423,6 +3492,22 @@ def _stamp_discovery_ranks(
     the numbering is `allocate_discovery`'s allocation order and therefore
     replayable. The same rank is mirrored onto the matching group member, joined by
     `text` — group members are copies, so the two would otherwise drift.
+
+    THE JOIN IS WHITESPACE-INSENSITIVE, ON BOTH SIDES, VIA `_text_key` — CR-01's
+    rule again, applied at the COMPARISON SITE so every producer is fixed at once. It
+    used to be an exact-string match justified by "both sides are the same
+    engine-copied string". NOTHING ENFORCED THAT: the dispatched question and the
+    group member are two separate dicts, the member having been copied through
+    `question_grouping.attach_discovery_riders` / `build_groups`, which copy member
+    text VERBATIM by documented design. Both sides now normalise identically BY
+    CONSTRUCTION rather than by two producers happening to agree.
+
+    THE FAILURE THIS CLOSES IS A STALE `rank`, NOT A DROPPED QUESTION. A miss here
+    deletes nothing — the discovery member simply keeps the provisional rank it was
+    copied with, which is stamped from the PRE-repair winner count and can therefore
+    COLLIDE with a client winner's rank. `research_division._stakes_for_rank` then
+    hands a question the client never asked a client question's stakes, which is the
+    one thing D-W3-4 is absolute about.
     """
     numbered: dict[str, int] = {}
     for offset, question in enumerate(discovery or []):
@@ -3430,9 +3515,13 @@ def _stamp_discovery_ranks(
             continue
         rank = max(1, int(base)) + offset + 1
         question["rank"] = rank
-        key = str(question.get("text") or "")
-        if key and key not in numbered:
-            numbered[key] = rank
+        # BOTH SIDES SPELL `_text_key` OUT AT THE COMPARISON SITE — see the identical
+        # note in `_restamp_groups`. A one-sided normalisation IS the CR-01 defect,
+        # so neither line may be readable as the one-sided form. Do NOT "tidy" the
+        # second call away.
+        key = _text_key(question.get("text"))
+        if key and key not in numbered:  # FIRST-WINS; a falsy key matches nothing
+            numbered[_text_key(question.get("text"))] = rank
 
     for group in groups or []:
         if not isinstance(group, dict):
@@ -3441,7 +3530,7 @@ def _stamp_discovery_ranks(
         for member in members:
             if not _is_discovery_member(member):
                 continue
-            fresh = numbered.get(str(member.get("text") or ""))
+            fresh = numbered.get(_text_key(member.get("text")))
             if fresh is not None:
                 member["rank"] = fresh
         # The group's own `rank` is min(member rank) and the cross-cutting group's
