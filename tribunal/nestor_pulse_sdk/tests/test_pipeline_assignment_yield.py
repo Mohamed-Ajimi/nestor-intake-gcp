@@ -214,52 +214,131 @@ def test_focus_area_row_requires_a_null_key_and_a_matching_facet():
 
 
 # ---------------------------------------------------------------------------
-# `fact_list_parsed`: True / False / **None**
+# CR-01: `fact_list_parsed` and `resolvable_sources` are NOT RECORDED
+#
+# Both columns used to be derived per-provider from the matching claims. Both
+# were WRONG for the shape the redesigned engine actually emits — a claim two
+# streams both found carries a MERGED `found_by` and a UNIONED `source_urls`, and
+# `_claim_matches_assignment` hands that one dict to every provider in it. The
+# error is systematically FLATTENING: it is worst exactly when corroboration
+# works, which is what the redesign is for.
+#
+# These four tests are the guard on the replacement. THREE OF THEM ARE ABOUT WHY
+# A CHEAPER FIX DOES NOT EXIST, because the obvious cheaper fix looks correct.
 # ---------------------------------------------------------------------------
 
-def test_fact_list_parsed_is_true_when_any_matching_claim_came_from_the_fact_list():
+def test_the_two_contaminated_columns_are_not_recorded_rather_than_guessed():
+    """THE FABRICATED-MEASUREMENT GUARD. If this fires, the column started lying.
+
+    A NULL is the honest record of "not recorded" in a table read exactly once.
+    A number derived from post-merge claims is a measurement nobody took, and it
+    is indistinguishable from a real one at query time.
+    """
     results = [_result("gemini", "g1", "Q1")]
     claims = [
-        _claim("a", ["gemini"], "g1", fact_source="distiller_fallback"),
-        _claim("b", ["gemini"], "g1", fact_source="fact_list"),
+        _claim("a", ["gemini"], "g1", fact_source="fact_list", urls=["u1", "u2"]),
+        _claim("b", ["gemini"], "g1", fact_source="distiller_fallback", urls=["u3"]),
     ]
 
-    assert _pipeline_mod._assignment_yield_rows(results, claims)[0]["fact_list_parsed"] is True
+    row = _pipeline_mod._assignment_yield_rows(results, claims)[0]
+
+    assert row["fact_list_parsed"] is None
+    assert row["resolvable_sources"] is None
+    # The columns that ARE recorded must be untouched by the removal.
+    assert row["claims_kept"] == 2
 
 
-def test_fact_list_parsed_is_false_when_claims_exist_and_all_fell_back():
-    results = [_result("gemini", "g1", "Q1")]
-    claims = [_claim("a", ["gemini"], "g1", fact_source="distiller_fallback")]
+def test_two_providers_sharing_a_merged_claim_do_not_report_each_others_evidence():
+    """CR-01's REGRESSION TEST — RED on unfixed source (both rows read 3 / True).
 
-    assert _pipeline_mod._assignment_yield_rows(results, claims)[0]["fact_list_parsed"] is False
-
-
-def test_fact_list_parsed_is_none_and_not_false_when_there_are_no_claims():
-    """THE FABRICATED-MEASUREMENT GUARD. If this fires, the column starts lying.
-
-    "This assignment produced nothing" is NOT evidence about whether its fact list
-    parsed. A `False` there would be a measurement nobody took, in a column read
-    exactly once.
+    This is the shape D-R4/D-W3-1 dispatch exists to produce and the shape NO
+    fixture in this file had: one claim, `found_by` naming two providers, holding
+    the UNION of their URLs and the FIRST one's `fact_source`. openai here cited
+    one link and fell back to the distiller; before the fix its row read
+    `resolvable_sources=3` and `fact_list_parsed=True` — gemini's evidence,
+    reported as openai's.
     """
-    rows = _pipeline_mod._assignment_yield_rows([_result("gemini", "g1", "Q1")], [])
+    results = [_result("gemini", "g1", "Q1"), _result("openai", "g1", "Q1")]
+    merged = _claim(
+        "x", ["gemini", "openai"], "g1",
+        fact_source="fact_list",
+        urls=["http://g-a", "http://g-b", "http://o-a"],
+    )
 
-    assert rows[0]["fact_list_parsed"] is None
+    rows = _pipeline_mod._assignment_yield_rows(results, [merged])
+
+    assert len(rows) == 2
+    assert [r["provider"] for r in rows] == ["gemini", "openai"]
+    for row in rows:
+        assert row["resolvable_sources"] is None, (
+            "both providers were reporting the UNION of everyone's URLs — this "
+            "column existed to compare how much citable ground EACH provider "
+            "covered, and a union answers a different question entirely"
+        )
+        assert row["fact_list_parsed"] is None, (
+            "the merged dict keeps the FIRST provider's fact_source, so a stream "
+            "that fell back to the distiller read True off its partner's D8 block"
+        )
+    # The merged claim still counts for BOTH assignments — ruled design,
+    # imprecision 2 in the docstring, and NOT what CR-01 changed.
+    assert [r["claims_kept"] for r in rows] == [1, 1]
+
+
+def test_a_shallow_pre_dedupe_snapshot_would_not_have_helped():
+    """WHY THE OBVIOUS FIX IS INERT. Drives the REAL `_dedupe_claims`.
+
+    The natural repair is `predupe = list(claims)` before the dedupe call and
+    deriving the two columns from `predupe`. It does nothing: `_dedupe_claims`
+    MUTATES the surviving dict IN PLACE, so the snapshot holds the SAME OBJECT
+    and shows the merged `found_by` and the unioned `source_urls` afterwards.
+
+    If this test ever goes red because `_dedupe_claims` became non-mutating, the
+    per-provider derivation becomes available again and CR-01 can be reopened
+    properly — that is the point of pinning it here rather than in a comment.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis.steps import _dedupe_claims
+
+    gemini = _claim("X fact", ["gemini"], "g1", urls=["http://g-a", "http://g-b"])
+    openai = _claim("X fact.", ["openai"], "g1",
+                    fact_source="distiller_fallback", urls=["http://o-a"])
+    claims = [gemini, openai]
+    snapshot = list(claims)
+
+    out = _dedupe_claims(claims)
+
+    assert len(out) == 1 and out[0] is gemini, "the two texts must actually merge"
+    assert snapshot[0] is gemini, "a shallow copy shares the dicts, by definition"
+    assert snapshot[0]["found_by"] == ["gemini", "openai"]
+    assert snapshot[0]["source_urls"] == ["http://g-a", "http://g-b", "http://o-a"]
+
+
+def test_the_merge_has_already_run_before_this_module_sees_a_claim():
+    """WHY EVEN A DEEP PRE-DEDUPE COPY WOULD NOT HAVE HELPED, read off the source.
+
+    `collect_provider_facts` calls `_dedupe_claims(d8_claims + fallback_claims)`
+    and returns the RESULT as `ProviderFactsResult.claims`, which is what
+    `pipeline.py` binds. The `_dedupe_claims` call at the merge stage is therefore
+    the near-no-op its own comment says it is, and there is no pre-merge claim
+    list in `pipeline.py` at any depth of copy. Restoring the two columns needs
+    `synthesis/steps.py` to carry the pre-merge list out.
+
+    Asserted over the source text because the alternative is driving
+    `collect_provider_facts`, which needs live providers.
+    """
+    from nestor_pulse_sdk.pipeline.synthesis import steps as _steps_mod
+
+    steps_src = _executable_source(_steps_mod)
+
+    assert "claims = _dedupe_claims(d8_claims + fallback_claims)" in steps_src
+    assert "claims=claims" in steps_src, "the deduped list is what is returned"
+
+    pipeline_src = _executable_source(_pipeline_mod)
+    assert "claims = list(facts_result.claims)" in pipeline_src
 
 
 # ---------------------------------------------------------------------------
 # COUNTS
 # ---------------------------------------------------------------------------
-
-def test_resolvable_sources_counts_distinct_urls_only():
-    """A URL cited by three claims is ONE resolvable source."""
-    results = [_result("gemini", "g1", "Q1")]
-    claims = [
-        _claim("a", ["gemini"], "g1", urls=["u1", "u2", "u1"]),
-        _claim("b", ["gemini"], "g1", urls=["u1", "", "   "]),
-    ]
-
-    assert _pipeline_mod._assignment_yield_rows(results, claims)[0]["resolvable_sources"] == 2
-
 
 def test_zero_claims_kept_is_a_measurement_and_the_row_is_still_written():
     """If this fires, "this provider kept nothing" becomes indistinguishable from

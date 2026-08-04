@@ -4489,16 +4489,66 @@ def _assignment_yield_rows(provider_results: Any, claims: Any) -> list[dict[str,
          did come out of both assignments. A SUM over providers therefore EXCEEDS
          the claim count BY DESIGN.
 
-    `fact_list_parsed` IS DERIVED FROM `fact_source`, AND WHY IT IS NOT THE REAL
-    FLAG. A report whose D8 block parsed yields `fact_source="fact_list"` claims;
-    one that fell back yields `"distiller_fallback"`. The per-report
-    `parse_fact_list` OUTCOME is only ever aggregated PER-PROVIDER inside
-    `pipeline/synthesis/steps.py`, which this module does not own, so it cannot be
-    read per-assignment from here. This was DECIDED, not overlooked. The
-    derivation is exact except that it is `None` — never `False` — when the
-    assignment produced NO claims at all: "this assignment produced nothing" is
-    not evidence about whether its fact list parsed, and a `False` there would be
-    a FABRICATED MEASUREMENT in a column read once.
+    ⛔ A FAILED OR TIMED-OUT ANGLE HAS NO ROW AT ALL, SO `SUM(cost_usd)` OVER THIS
+    TABLE IS A LOWER BOUND AND NOT THE TOTAL (WR-02). `research_division._one_angle`
+    returns `(provider, _enriched)` only on the SUCCESS path; a timeout or a runner
+    error falls through, the angle never reaches `all_results`, `provider_results`
+    carries no entry for it and this function emits nothing. A deep-research call
+    that ran for thirty minutes and was then billed and timed out leaves NO TRACE
+    HERE — and a missing ROW is invisible to every diagnostic the three
+    NULL-skipping warnings in `assignment_yield.py`, `yield_records.py` and
+    `0018_yield_instrumentation.py` describe, because those are all about a NULL
+    CELL. This is stated and not fixed: D-W5-1 froze the column set, and a row
+    shape for a failed angle is a schema change this deploy will not take.
+    RECONCILE `COUNT(*)` HERE AGAINST THE DISPATCHED-ANGLE COUNT, and
+    `SUM(cost_usd)` against `run.cost_usd_total`, BEFORE quoting any
+    cost-per-claim figure. A shortfall means paid-but-unrecorded angles.
+
+    ⛔ `fact_list_parsed` AND `resolvable_sources` ARE ALWAYS `None` HERE, AND
+    THAT IS THE HONEST RECORD RATHER THAN A GAP. Both were derived per-provider
+    until review CR-01, and BOTH WERE WRONG in the shape the redesigned engine
+    actually produces. The claims this function receives have ALREADY been through
+    `synthesis/steps.py::_dedupe_claims`, which keeps the FIRST occurrence's dict
+    whole while (a) APPENDING the second provider to `found_by` and (b) UNIONING
+    `source_urls`. `_claim_matches_assignment` then attributes that one merged
+    dict to EVERY provider in `found_by`, so:
+
+      * `resolvable_sources` counted the UNION of every corroborating provider's
+        URLs for EACH of their rows — a stream that cited one link read as having
+        cited four;
+      * `fact_list_parsed` reported the FIRST provider's `fact_source` for BOTH
+        rows — a stream that fell back to the distiller read `True` because a
+        corroborating stream's D8 block parsed.
+
+    Both read plausibly, neither is detectable from the table, and the error grows
+    with the cross-stream duplicate rate — i.e. it is WORST exactly when
+    corroboration works, flattening the per-provider discrimination D-R8 exists to
+    measure. A NUMBER NOBODY MEASURED IS WORSE THAN NO NUMBER: an absent
+    measurement is recoverable, a fabricated one is not.
+
+    WHY THE PER-PROVIDER DERIVATION IS NOT SIMPLY MOVED PRE-DEDUPE. Two reasons,
+    both verified against the running code rather than reasoned about:
+
+      1. `_dedupe_claims` MUTATES THE SURVIVING DICT IN PLACE. A snapshot taken as
+         `list(claims)` before the call therefore holds the SAME OBJECT and shows
+         the merged `found_by` and the unioned `source_urls` afterwards. A shallow
+         pre-dedupe capture is INERT, not a fix. (`test_pipeline_assignment_yield`
+         pins this.)
+      2. THE MERGE HAS ALREADY HAPPENED BEFORE THIS MODULE SEES A CLAIM.
+         `collect_provider_facts` calls `_dedupe_claims(d8_claims +
+         fallback_claims)` and returns the result as `ProviderFactsResult.claims`;
+         `pipeline.py` binds that at the distill stage, so the `_dedupe_claims`
+         call at the merge stage is the documented near-no-op. There is NO
+         pre-merge claim list anywhere in this module, at any depth of copy.
+
+    Restoring these two columns therefore requires `collect_provider_facts` to
+    carry the pre-merge list out — a change in `pipeline/synthesis/steps.py`, which
+    this module does not own. Recorded here rather than in a plan nobody reads at
+    query time, so that whoever wants the columns back knows exactly where to go.
+
+    `claims_kept` IS DELIBERATELY UNCHANGED and still counts over the post-dedupe
+    list: its two imprecisions above are ruled design, and it must keep sharing a
+    denominator basis with `claims_surviving_verification`.
     """
     rows: list[dict[str, Any]] = []
     try:
@@ -4522,26 +4572,15 @@ def _assignment_yield_rows(provider_results: Any, claims: Any) -> list[dict[str,
                     )
                 ]
 
-                # `None` and not `False` when there is nothing to judge. See the
-                # docstring — this is the fabricated-measurement guard.
-                if matching:
-                    fact_list_parsed = any(
-                        c.get("fact_source") == "fact_list" for c in matching
-                    )
-                else:
-                    fact_list_parsed = None
-
-                # DISTINCT non-empty URLs: a source cited by three claims is ONE
-                # resolvable source, and this column exists to compare how much
-                # citable ground a provider actually covered.
-                urls: set[str] = set()
-                for c in matching:
-                    raw_urls = c.get("source_urls")
-                    if not isinstance(raw_urls, (list, tuple)):
-                        continue
-                    for u in raw_urls:
-                        if isinstance(u, str) and u.strip():
-                            urls.add(u.strip())
+                # CR-01. NOT RECORDED, and deliberately not guessed. `matching`
+                # holds POST-MERGE claims whose `found_by` and `source_urls` are
+                # the UNION over every provider that found them, so no
+                # per-provider answer can be read off them. See the docstring for
+                # the two probes and for where the pre-merge list would have to
+                # come from. Writing a plausible number here is the one outcome
+                # this table cannot survive.
+                fact_list_parsed = None
+                resolvable_sources = None
 
                 rows.append({
                     "provider": provider,
@@ -4555,7 +4594,7 @@ def _assignment_yield_rows(provider_results: Any, claims: Any) -> list[dict[str,
                     # claims"), never an absence. The emitter preserves that
                     # distinction; do not turn it into None.
                     "claims_kept": len(matching),
-                    "resolvable_sources": len(urls),
+                    "resolvable_sources": resolvable_sources,
                     "cost_usd": result.get("cost_usd"),
                     "duration_s": result.get("_duration_s"),
                 })
