@@ -14,10 +14,101 @@
 # calibration test would fire a REAL LLM call from CI, against an Anthropic
 # account that is already at its monthly cap (resets 2026-08-01).
 #
-# The file list is built with `ls ... || true` because this config lands in
-# wave 1 while its target test files arrive across waves 1-5: files that do not
-# exist yet are skipped instead of failing pytest collection. The `|| true` is
-# required — under `set -e` a bare `FILES=$(ls missing-file)` aborts the script.
+# ---------------------------------------------------------------------------
+# WHY THE FILE LIST LOOKS THE WAY IT DOES
+#
+# This commentary lives in YAML comments rather than inside the bash script
+# below, because Cloud Build caps a single build-step arg at 10,000 characters
+# and the sibling engine gate has already been broken once by exactly that
+# (13,473 chars, `build step 0 arg 1 too long`, so the gate could not run at
+# all). YAML comments are not part of the arg, so nothing here counts toward
+# that limit — which is why narrative belongs here and not there.
+# ---------------------------------------------------------------------------
+#
+# HISTORY — PRE-REGISTRATION, NOW CLOSED (superseded in place, not deleted).
+# The last three entries in the list below were once PRE-REGISTERED here before
+# they existed: the verdict-publication file was to land in plan 15.1-12, the
+# stage-schema file in 15.1-13 and the verdict-write-path file in 15.1-14. ALL
+# THREE LANDED and that window is shut. This paragraph is kept rather than
+# deleted because this repo supersedes in place: the record of why a guard was
+# written is the reason the guard survives someone tidying it away.
+#
+# The file list was likewise once built with `ls ... 2>/dev/null || true` as a
+# WAVE-ORDERING ACCOMMODATION — this config landed in wave 1 of phase 15.1
+# while its target test files arrived across later waves, so a file that did
+# not exist yet had to be a SKIP rather than a pytest collection error.
+#
+# THAT ARRANGEMENT IS NOW CLOSED (plan 15.8-07, 2026-08-04). All 13 named files
+# exist, verified one by one, so the config ASSERTS ITS OWN COMPLETENESS:
+# EXPECTED_FILES pins how many paths the list names, the script counts what
+# `ls` actually collected, and a mismatch FAILS THE BUILD naming the absent or
+# mistyped path. Until this plan the config had NO completeness assertion at
+# all — a mistyped path was a silent skip with no red build, and an empty
+# collection was rewarded with an early `exit 0` and a reassuring sentence.
+# That early exit is GONE: an empty collection is the worst case of the false
+# green and now fails through the same assertion as every other shortfall.
+#
+# Do not replace the explicit list with a glob. The explicit list is what keeps
+# unrelated suite files, and every DB-bound file, out of this fast gate.
+#
+# BOTH HALVES ARE LOAD-BEARING AND REMOVING EITHER ONE LOOKS REASONABLE:
+#   * the `|| true` prevents a COLLECTION ERROR — under `set -e` a bare
+#     `FILES=$(ls missing-file)` aborts the script, and an aborted script tells
+#     you nothing about the other files;
+#   * the count assertion is what converts the silent SKIP that `|| true`
+#     permits into a RED build.
+# Drop the `|| true` and a single missing file kills the script before pytest
+# runs. Drop the assertion and a single mistyped path makes this gate go green
+# having run 12 of 13 files while reporting nothing about the 13th.
+#
+# ⚠ THAT `12 of 13` IS EXEMPT FROM D-W5-15 — do not "helpfully" delete it.
+# It is not a measurement: it is the arithmetic of the assertion itself (13
+# paths named, one mistyped, 12 collected), true by construction and unable to
+# rot. cloudbuild.test-engine.yaml carries `29 of 30` in the same sentence for
+# the same reason. D-W5-15 governs the MEASURED import count only — see the
+# FLAT COUNT paragraph below, which is the thing that must carry no integer.
+#
+# OWNERSHIP, AND WHICH RULE THIS FILE IS UNDER (D-W5-5a):
+#   * Plan 15.8-07 owns this file in wave 1 of phase 15.8. Plan 15.8-13 is
+#     READ-ONLY on it in wave 4, where it runs the gate and reconciles the count.
+#   * THIS FILE KEEPS THE ORIGINAL ONE-EDIT RULE: a plan that adds a path to the
+#     list adds that path and its EXPECTED_FILES bump as ONE change. The list
+#     and the number are one change, and splitting them is how a gate goes green
+#     having run less than it claims.
+#   * D-W5-5 GIVES `cloudbuild.test-engine.yaml` A SINGLE OWNER FOR PHASE 15.8,
+#     REVERSING THAT RULE THERE — BUT THAT DEVIATION IS SCOPED TO THAT FILE
+#     ALONE AND DOES NOT APPLY HERE (D-W5-5a). It exists only because eight
+#     wave-1 plans would otherwise each bump one line in the engine gate: a
+#     guaranteed conflict, and one that can silently resolve to a wrong number.
+#     No plan adds a test file to THIS config in 15.8. A reader who sees the
+#     deviation recorded in the sibling file must NOT generalise it to this one
+#     — generalising it reproduces the two-authorities trap in a second place.
+#
+# THE FLAT COUNT, EXPLAINED RATHER THAN MERELY NOTED (D-W5-12).
+# Phase 15.8 adds NO file to this list, so EXPECTED_FILES stays where it is and
+# 187 passed / 2 deselected is the number to beat (last known green: build
+# 2eae97e6). A COUNT THAT DID NOT RISE IS NOT AUTOMATICALLY A SKIP — but it has
+# to be EXPLAINED, and this is the explanation: the listed files are a fixed set
+# and this phase adds none to it, BUT MOST OF THEM IMPORT THE TRIBUNAL PIPELINE
+# MODULES THIS PHASE EDITS. So a flat count here is a genuine REGRESSION PASS
+# over wave-1 and wave-2 work — it is evidence, and should be read as such — and
+# a RED here is a REAL SIGNAL ABOUT THE ENGINE EDITS, NOT A CONFIG TO TUNE.
+# Do not make this gate green by editing it. Find what wave 1 or wave 2 broke.
+#
+# ⚠ D-W5-15: the word MOST above is deliberate and NO INTEGER BELONGS IN IT.
+# Two defensible greps gave two different answers for that count, so any number
+# written here is a fact that ROTS — it is wrong the moment an import changes,
+# and nobody re-measures a comment. The criterion is what is load-bearing and it
+# survives the number changing. If you want the number, MEASURE it and put it in
+# a SUMMARY, with the grep pattern that produced it, dated and attributable —
+# never in a comment that outlives its own measurement.
+#
+# HOW TO READ A RESULT — the status is NOT the shell exit code.
+# `gcloud builds submit ... | tail` returns the PIPE exit status, so a FAILED
+# build reports exit 0 to the shell and reads as a pass. Read the build TEXT:
+#   gcloud builds describe <BUILD_ID> --format="value(status)"
+# and require SUCCESS. An EXPIRED build is visually identical to QUEUED in a
+# list view and is NOT a result — it never ran.
 #
 # INVOCATION:
 #   gcloud builds submit tribunal \
@@ -37,35 +128,65 @@ steps:
           python:3.11-slim bash -c '
             set -e
             pip install --no-cache-dir -q -r requirements.txt
-            # The LAST THREE entries below arrive with the 15.1 GAP-CLOSURE
-            # plans (11-15) and are PRE-REGISTERED here before they exist: the
-            # verdict-publication file lands in plan 15.1-12, the stage-schema
-            # file in 15.1-13 and the verdict-write-path file in 15.1-14. All
-            # three are pure (no Postgres, no provider key, no network), so they
-            # belong in THIS config rather than cloudbuild.test-critical.yaml.
-            # Listing them early is safe ONLY because of the "2>/dev/null ||
-            # true" guard below, which drops still-missing paths instead of
-            # aborting collection -- do not tidy that guard away, and do not
-            # replace this explicit list with a glob: the explicit list is what
-            # keeps unrelated suite files out of this fast gate.
-            FILES=$$(ls nestor_pulse_sdk/tests/test_gate_replay.py \
-                        nestor_pulse_sdk/tests/test_gate_selector.py \
-                        nestor_pulse_sdk/tests/test_gate_failure_modes.py \
-                        nestor_pulse_sdk/tests/test_gate_calibration.py \
-                        nestor_pulse_sdk/tests/test_superseded_verdict.py \
-                        nestor_pulse_sdk/tests/test_verification_buckets.py \
-                        nestor_pulse_sdk/tests/test_fail_loud.py \
-                        nestor_pulse_sdk/tests/test_tribunal_grouping.py \
-                        nestor_pulse_sdk/tests/test_claim_distiller.py \
-                        nestor_pulse_sdk/tests/test_tribunal_adjudicate.py \
-                        nestor_pulse_sdk/tests/test_verdict_publication.py \
-                        nestor_pulse_sdk/tests/test_stage_schema.py \
-                        nestor_pulse_sdk/tests/test_verdict_write_path.py 2>/dev/null || true)
-            if [ -z "$$FILES" ]; then
-              echo "no 15.1 gate test files present yet — nothing to run"
-              exit 0
+            # The full rationale for this list — why BOTH the || true and the
+            # count assertion are load-bearing, which ownership rule this file
+            # is under, and how to read a build result — lives in the YAML
+            # comments above `steps:`, deliberately outside this arg so it does
+            # not count toward the 10,000-char Cloud Build cap.
+            #
+            # NO APOSTROPHES ANYWHERE BELOW THIS LINE. Everything from
+            # `bash -c ` to the closing quote is ONE single-quoted shell string,
+            # so a single apostrophe — even inside a comment — closes it early
+            # and the build dies with exit 127 (command not found) long after
+            # pip succeeded. Write "the gate would have run less than it
+            # claims", never the contracted form.
+            WANTED="nestor_pulse_sdk/tests/test_gate_replay.py \
+                    nestor_pulse_sdk/tests/test_gate_selector.py \
+                    nestor_pulse_sdk/tests/test_gate_failure_modes.py \
+                    nestor_pulse_sdk/tests/test_gate_calibration.py \
+                    nestor_pulse_sdk/tests/test_superseded_verdict.py \
+                    nestor_pulse_sdk/tests/test_verification_buckets.py \
+                    nestor_pulse_sdk/tests/test_fail_loud.py \
+                    nestor_pulse_sdk/tests/test_tribunal_grouping.py \
+                    nestor_pulse_sdk/tests/test_claim_distiller.py \
+                    nestor_pulse_sdk/tests/test_tribunal_adjudicate.py \
+                    nestor_pulse_sdk/tests/test_verdict_publication.py \
+                    nestor_pulse_sdk/tests/test_stage_schema.py \
+                    nestor_pulse_sdk/tests/test_verdict_write_path.py"
+            # Change this number and the list above TOGETHER. It is not a
+            # decoration: it is the whole difference between a gate and a green
+            # tick. There is deliberately NO early exit for an empty collection
+            # any more — an empty collection is the WORST case of the false
+            # green, and it now fails here like every other shortfall.
+            EXPECTED_FILES=13
+            FILES=$$(ls $$WANTED 2>/dev/null || true)
+            COLLECTED=$$(echo $$FILES | wc -w)
+            if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
+              echo "############################################################"
+              echo "GATES GATE ASSERTION FAILED"
+              echo "collected $$COLLECTED file(s); this config NAMES $$EXPECTED_FILES."
+              echo ""
+              echo "This is NOT a test failure and it is NOT a pass. It means the"
+              echo "gate would have run LESS than it claims. A pytest summary"
+              echo "printed after this point would describe only the files that"
+              echo "happened to exist, and would say NOTHING about the ones below."
+              echo ""
+              echo "ABSENT OR MISTYPED:"
+              for f in $$WANTED; do
+                [ -f "$$f" ] || echo "    $$f"
+              done
+              echo ""
+              echo "THE FULL EXPECTED LIST ($$EXPECTED_FILES paths):"
+              for f in $$WANTED; do
+                echo "    $$f"
+              done
+              echo ""
+              echo "Fix the path, or add the file, or change BOTH the list and"
+              echo "EXPECTED_FILES deliberately. Do not delete this check."
+              echo "############################################################"
+              exit 1
             fi
-            echo "collecting:"
+            echo "collecting: $$COLLECTED of $$EXPECTED_FILES expected files"
             echo "$$FILES"
             python -m pytest $$FILES -v -rs --tb=short -m "not live"
           '
