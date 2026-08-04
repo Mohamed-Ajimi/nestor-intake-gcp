@@ -1270,7 +1270,8 @@ def _catch_up_pairs(
     own docstring says in capitals, so median-seed and flat-1200 produce
     BYTE-IDENTICAL output. A newcomer's disadvantage is FEWER MATCHES AND
     THEREFORE FEWER WINS. So D-W4-3 fixes the SCHEDULE, not the sort: a new
-    candidate simply plays the matches it missed. Measured, perfect judge, 8
+    candidate plays the matches it missed **whenever the low median is above
+    0** — see THE BOUNDARY below. Measured, perfect judge, 8
     rounds, newcomer entering round 6, chance of reaching the top N:
 
         median seed (D-R11 as ruled)      STRONG 1.5%   MEDIAN 1.5%   WEAK 0.0%
@@ -1298,8 +1299,38 @@ def _catch_up_pairs(
     Returns pairs keyed by ORIGINAL index, lower first, and mutates nothing —
     `seen` is copied, and the caller owns every counter, exactly as with
     `_pair_round`.
+
+    ⚠ THE BOUNDARY (15.8-06 ruling `1a`). This schedule is a NO-OP EXACTLY WHEN
+    THE LOW MEDIAN IS 0, which — because `catch_up_matches` takes the low median
+    of the WHOLE field, newcomers included — happens exactly when NEWCOMERS ARE
+    AT LEAST HALF THE FIELD. At the validated configuration at most 6 newcomers
+    enter a field of ~36, so the median is 6 and THE SCHEDULE FIRES; D-W4-3 is
+    honestly delivered and it was the unconditional phrasing in this docstring,
+    not the code, that overpromised. The behaviour is deliberately unchanged.
+
+    The no-op is no longer silent: the guard below WARNS when it returns empty
+    while a zero-match entry is present.
     """
     if median <= 0:
+        # A 0 median with EVERY entry at 0 is just an empty or brand-new field
+        # and is unremarkable. A 0 median while some entry HAS matches cannot
+        # happen (the low median would exceed 0), so the case worth reporting is
+        # the one where a newcomer wanted a catch-up and got none. Logged at
+        # WARNING rather than INFO because the schedule silently not firing is
+        # what made this look like a solved problem for a whole wave; the
+        # existing `log.info` sits inside `if catch_up:` and therefore says
+        # nothing at all on the no-op path. 15.8-15 can grep for this line.
+        newcomers = sum(1 for entry in entries if entry.get("matches") == 0)
+        if newcomers:
+            log.warning(
+                "workshop_rank: the D-W4-3 catch-up schedule is a NO-OP this "
+                "round — the low median match count is 0 across a field of %d "
+                "with %d newcomer(s) at zero matches, i.e. newcomers are at "
+                "least half the field, so nobody catches up and a late entrant "
+                "keeps its fewer-wins disadvantage",
+                len(entries),
+                newcomers,
+            )
         return []
     standing = sorted(entries, key=lambda e: (-e["wins"], -e["elo"], e["index"]))
     order = [e["index"] for e in standing]
@@ -5281,7 +5312,32 @@ async def run_workshop_stage_b(
             # same way `meta_review` and `group_winners` do, so reading `calls`
             # here would have silently under-reported every one of them as zero.
             + int(admission_stats.get("admission_calls") or 0)
-            + int(admission_stats.get("admission_resolver_calls") or 0)
+            # `admission_resolver_calls` IS DELIBERATELY NOT SUMMED HERE
+            # (15.8-06 ruling `2-remove`). It counts a batched HTTP REDIRECT
+            # RESOLUTION, not a model call — one per `admit_invented_angles`
+            # invocation, so at most once per loop round and 4-10 per run
+            # against a total in the dozens to low hundreds. D-W5-14 sharpens
+            # it: `resolver_calls = 1` is assigned BEFORE the await and
+            # regardless of the kill switch, so it can count an operation that
+            # issued zero HTTP requests.
+            #
+            # ⚠ `actions` WAS NEVER THE RUN'S SPEND SIGNAL, and both
+            # `15.8-CONTEXT.md` and `15.7-VERIFICATION.md` describe this
+            # imprecisely. `cost_usd` travels as a SEPARATE argument on the same
+            # `_stage_b_feed_finish` call and the resolver records no cost of
+            # its own, so THE DOLLAR FIGURE WAS UNCONTAMINATED — only the COUNT
+            # was. With this line gone, `actions` means exactly "calls that went
+            # to a model".
+            #
+            # This reverses ONE line of the CR-07 fix, and CR-07's concern
+            # survives intact: `admission_calls`, `classify_calls`,
+            # `cluster_stats["calls"]`, `admission_cost_usd` and
+            # `grounded_lookups` are all still read. The resolver keeps its own
+            # `admission_stats` key and its own log line — nothing was deleted
+            # but this summand.
+            #
+            # ⚠ FOR 15.8-15: THE 15.8 `actions` FIGURE IS NOT COMPARABLE TO A
+            # PRE-15.8 ONE without noting that the definition changed.
             + int(admission_stats.get("classify_calls") or 0)
             + int(cluster_stats.get("calls") or 0)
         )

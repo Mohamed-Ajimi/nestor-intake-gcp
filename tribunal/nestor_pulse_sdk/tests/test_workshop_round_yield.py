@@ -475,3 +475,76 @@ def test_the_actions_sum_no_longer_counts_the_redirect_resolver() -> None:
         "cluster_stats",
     ):
         assert survivor in executable, f"CR-07 term {survivor} was removed beyond the ruling"
+
+
+# ===========================================================================
+# 15.8-06's RULING, item 1 -- `1a`. Resolved BY OPTION ID.
+# ===========================================================================
+
+
+def _entry(index: int, matches: int, wins: int = 0, elo: float = 1200.0) -> dict[str, Any]:
+    return {"index": index, "matches": matches, "wins": wins, "elo": elo}
+
+
+def test_the_catch_up_no_op_warns_when_a_newcomer_is_present(caplog) -> None:
+    """Ruling `1a`: the no-op stops being SILENT.
+
+    A 0 low median means newcomers are at least half the field, so nobody
+    catches up and a late entrant keeps its fewer-wins disadvantage. That is
+    accepted behaviour -- but it silently looked like a solved problem for a
+    whole wave, and the existing `log.info` sits INSIDE `if catch_up:` so it
+    says nothing at all on this path.
+
+    POSITIVE CONTROL FIRST: the capture must be proved non-vacuous, otherwise an
+    empty `caplog` would satisfy the negative case below for the wrong reason.
+    """
+    import logging
+
+    # --- positive control: the capture works at all.
+    with caplog.at_level(logging.WARNING, logger=wr.log.name):
+        wr.log.warning("positive control")
+    assert any("positive control" in r.message for r in caplog.records)
+    caplog.clear()
+
+    # --- the case worth reporting: median 0 WITH zero-match entries present.
+    entries = [_entry(0, 0), _entry(1, 0), _entry(2, 3)]
+    with caplog.at_level(logging.WARNING, logger=wr.log.name):
+        pairs = wr._catch_up_pairs(entries, 0, set())
+
+    assert pairs == [], "ruling 1a changes NO behaviour -- the no-op still returns []"
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "the no-op must WARN when a newcomer wanted a catch-up"
+    assert "NO-OP" in warnings[0].getMessage()
+
+
+def test_the_catch_up_no_op_is_quiet_on_an_empty_field(caplog) -> None:
+    """No newcomer, nothing to report. An empty field is unremarkable.
+
+    This is the half that keeps the warning from becoming alarm fatigue (D-12):
+    a guard that fires on every ordinary empty call teaches readers to ignore
+    it, and then it is worth nothing on the round that matters.
+    """
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger=wr.log.name):
+        assert wr._catch_up_pairs([], 0, set()) == []
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_catch_up_matches_behaviour_is_unchanged_under_ruling_1a() -> None:
+    """`1a` accepts D-W4-3 AS HONESTLY DELIVERED. No behaviour moved.
+
+    Option `1b` would have taken the median over entries with `matches > 0` and
+    DELIBERATELY REVERSED the two committed assertions
+    (`test_catch_up_matches_returns_the_low_median` 11 -> 12 and
+    `test_catch_up_matches_takes_the_low_side_of_an_even_field` 1 -> 2). It was
+    DECLINED, so both stand as written in `test_workshop_loop.py` and are not
+    touched by this plan. This test restates the low-median contract here so
+    that a future `1b`-shaped change cannot pass unnoticed.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.workshop_loop import catch_up_matches
+
+    # The low median of a field that CONTAINS newcomers -- zeros are counted.
+    assert catch_up_matches([12, 11, 10, 3, 2, 1]) == 3
+    # Half the field at zero -> the schedule is a no-op, by design.
+    assert catch_up_matches([0, 0, 0, 5, 6, 7]) == 0

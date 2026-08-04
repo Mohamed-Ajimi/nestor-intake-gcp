@@ -241,9 +241,10 @@ def catch_up_matches(match_counts: Any) -> int:
     so a newcomer's disadvantage is FEWER MATCHES AND THEREFORE FEWER WINS, not a
     lower rating. Median-seed and flat-1200 produce byte-identical output.
 
-    So the fix is the SCHEDULE, not the sort. A new candidate simply plays the
-    matches it missed, and **the ranking code is not modified at all** — a far
-    smaller blast radius than rewriting the standing rule. Measured with a
+    So the fix is the SCHEDULE, not the sort. A new candidate plays the matches
+    it missed **whenever the low median is above 0**, and **the ranking code is
+    not modified at all** — a far smaller blast radius than rewriting the
+    standing rule. Measured with a
     perfect judge, 8 rounds, newcomer entering round 6, chance of reaching the
     top N:
 
@@ -269,6 +270,30 @@ def catch_up_matches(match_counts: Any) -> int:
     coerced: a negative match count is nonsense, not a low score. An empty or
     wholly unusable input returns 0 — a newcomer with no field to catch up to
     has nothing to catch up.
+
+    ⚠ THE BOUNDARY, STATED EXACTLY (15.8-06 ruling `1a`). The sentence above
+    once read as an UNCONDITIONAL promise — "a new candidate simply plays the
+    matches it missed" — and that promised more than this function delivers.
+    THE SCHEDULE IS A NO-OP EXACTLY WHEN THE LOW MEDIAN IS 0, and because this
+    is the LOW median of the whole field, INCLUDING the newcomers, that happens
+    exactly when NEWCOMERS ARE AT LEAST HALF THE FIELD: with half or more of
+    the entries sitting at 0 matches, `values[(len(values) - 1) // 2]` is 0,
+    every deficit is `0 - 0`, and nobody catches up.
+
+    **D-W4-3 IS HONESTLY DELIVERED, AND THE DEFECT WAS THE DOCSTRING RATHER
+    THAN THE CODE.** Verification's arithmetic stands and CORRECTED the review
+    here: at the validated configuration at most 6 newcomers enter a field of
+    ~36, so the low median is 6 and THE SCHEDULE FIRES. The function is
+    deliberately left byte-unchanged and both committed assertions
+    (`test_catch_up_matches_returns_the_low_median`,
+    `test_catch_up_matches_takes_the_low_side_of_an_even_field`) stand as
+    written — option `1b`, which would have filtered the median to entries with
+    `matches > 0` and reversed both, was declined.
+
+    The no-op is no longer SILENT: `workshop_rank._catch_up_pairs` logs a
+    WARNING when it returns empty on a 0 median while a zero-match entry is
+    present, which is precisely the case where a newcomer wanted a catch-up and
+    got none.
     """
     values: list[int] = []
     if isinstance(match_counts, (str, bytes)) or match_counts is None:
