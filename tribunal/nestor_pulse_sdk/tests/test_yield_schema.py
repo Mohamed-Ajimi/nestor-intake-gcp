@@ -262,6 +262,41 @@ def _created_tables(source: str) -> dict[str, list[tuple[str, str, bool]]]:
     return out
 
 
+def _sql_statements(source: str, *, function: str | None = None) -> list[str]:
+    """Every `op.execute("...")` statement, whitespace-normalised, in order.
+
+    `_alembic_operations` reports an `op.execute` call's first argument -- which
+    is a whole SQL blob, not a table name -- so the raw-SQL half of this
+    migration needs its own reader. Normalising whitespace lets the policy
+    statements be asserted VERBATIM even though they are written as indented
+    triple-quoted literals.
+    """
+    tree: ast.AST = ast.parse(source)
+    if function is not None:
+        matches = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function
+        ]
+        assert len(matches) == 1, f"expected exactly one def {function}()"
+        tree = matches[0]
+
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "execute"):
+            continue
+        if not (isinstance(func.value, ast.Name) and func.value.id == "op"):
+            continue
+        assert node.args and isinstance(node.args[0], ast.Constant), (
+            "op.execute must take a literal SQL string, never a built one"
+        )
+        out.append(" ".join(str(node.args[0].value).split()))
+    return out
+
+
 def _sql_table_names(source: str) -> set[str]:
     """Every table named in a raw-SQL `ALTER TABLE x` / `... ON x` in `source`.
 
@@ -389,37 +424,75 @@ def test_upgrade_creates_exactly_two_tables_two_indexes_and_the_rls_ddl() -> Non
     Six executes: ENABLE + FORCE + CREATE POLICY, twice over.
     """
     code = _executable_source(_load_migration())
+    ops = _alembic_operations(code, function="upgrade")
 
-    assert _alembic_operations(code, function="upgrade") == [
-        ("create_table", "assignment_yield"),
-        ("create_table", "workshop_round_yield"),
-        ("create_index", "idx_assignment_yield_tenant_run"),
-        ("create_index", "idx_workshop_round_yield_tenant_run_round"),
-        ("execute", None),
-        ("execute", None),
-        ("execute", None),
-        ("execute", None),
-        ("execute", None),
-        ("execute", None),
+    assert [name for name, _arg in ops] == [
+        "create_table",
+        "create_table",
+        "create_index",
+        "create_index",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+        "execute",
+    ], ops
+    # The structural operations, by their table / index name.
+    assert [arg for name, arg in ops if name != "execute"] == [
+        "assignment_yield",
+        "workshop_round_yield",
+        "idx_assignment_yield_tenant_run",
+        "idx_workshop_round_yield_tenant_run_round",
+    ]
+    # And the raw SQL, VERBATIM. Asserting the statements rather than merely
+    # counting them is what stops a policy from silently losing its WITH CHECK
+    # half, or from being issued against the wrong table.
+    assert _sql_statements(code, function="upgrade") == [
+        "ALTER TABLE assignment_yield ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE assignment_yield FORCE ROW LEVEL SECURITY",
+        "CREATE POLICY assignment_yield_tenant_isolation ON assignment_yield "
+        "USING (tenant_id = current_setting('app.tenant_id')::uuid) "
+        "WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid)",
+        "ALTER TABLE workshop_round_yield ENABLE ROW LEVEL SECURITY",
+        "ALTER TABLE workshop_round_yield FORCE ROW LEVEL SECURITY",
+        "CREATE POLICY workshop_round_yield_tenant_isolation ON workshop_round_yield "
+        "USING (tenant_id = current_setting('app.tenant_id')::uuid) "
+        "WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid)",
     ]
 
 
 def test_downgrade_is_the_exact_inverse_per_table() -> None:
     """Policy, NO FORCE, DISABLE, index, table -- for each table, in that order."""
     code = _executable_source(_load_migration())
+    ops = _alembic_operations(code, function="downgrade")
 
-    assert _alembic_operations(code, function="downgrade") == [
-        # workshop_round_yield first: the exact inverse of upgrade's order.
-        ("execute", None),  # DROP POLICY workshop_round_yield_tenant_isolation
-        ("execute", None),  # NO FORCE
-        ("execute", None),  # DISABLE
-        ("execute", None),  # DROP POLICY assignment_yield_tenant_isolation
-        ("execute", None),  # NO FORCE
-        ("execute", None),  # DISABLE
-        ("drop_index", "idx_workshop_round_yield_tenant_run_round"),
-        ("drop_index", "idx_assignment_yield_tenant_run"),
-        ("drop_table", "workshop_round_yield"),
-        ("drop_table", "assignment_yield"),
+    assert [name for name, _arg in ops] == [
+        "execute",  # DROP POLICY workshop_round_yield_tenant_isolation
+        "execute",  # NO FORCE
+        "execute",  # DISABLE
+        "execute",  # DROP POLICY assignment_yield_tenant_isolation
+        "execute",  # NO FORCE
+        "execute",  # DISABLE
+        "drop_index",
+        "drop_index",
+        "drop_table",
+        "drop_table",
+    ], ops
+    assert [arg for name, arg in ops if name != "execute"] == [
+        "idx_workshop_round_yield_tenant_run_round",
+        "idx_assignment_yield_tenant_run",
+        "workshop_round_yield",
+        "assignment_yield",
+    ]
+    assert _sql_statements(code, function="downgrade") == [
+        "DROP POLICY IF EXISTS workshop_round_yield_tenant_isolation "
+        "ON workshop_round_yield",
+        "ALTER TABLE workshop_round_yield NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE workshop_round_yield DISABLE ROW LEVEL SECURITY",
+        "DROP POLICY IF EXISTS assignment_yield_tenant_isolation ON assignment_yield",
+        "ALTER TABLE assignment_yield NO FORCE ROW LEVEL SECURITY",
+        "ALTER TABLE assignment_yield DISABLE ROW LEVEL SECURITY",
     ]
 
 
@@ -440,7 +513,11 @@ def test_the_migration_touches_no_existing_table() -> None:
     """
     code = _executable_source(_load_migration())
 
-    operated = {name for _, name in _alembic_operations(code) if name}
+    operated = {
+        name
+        for op_name, name in _alembic_operations(code)
+        if name and op_name != "execute"
+    }
     for existing in _EXISTING_TABLES:
         assert existing not in operated, existing
 
@@ -475,7 +552,7 @@ def test_the_migration_carries_no_check_and_no_unique_constraint() -> None:
         "UniqueConstraint",
         "create_check_constraint",
         "create_unique_constraint",
-        "CHECK (",
+        "unique=True",
         "UNIQUE",
         "UPDATE ",
         "DELETE ",
@@ -483,6 +560,12 @@ def test_the_migration_carries_no_check_and_no_unique_constraint() -> None:
         "GRANT",
     ):
         assert forbidden not in code, forbidden
+
+    # A raw `CHECK (...)` in SQL -- but NOT the `WITH CHECK (...)` half of a
+    # row-level policy, which is REQUIRED here and would make a bare "CHECK ("
+    # substring test fail on correct code. Guarding the invariant rather than a
+    # proxy for it: the negative control below proves this still bites.
+    assert re.search(r"(?<!WITH )\bCHECK\s*\(", code) is None, code
 
     # The prose the scan strips must still STATE the invariants. Deleting the
     # docstring to satisfy the scan would be exactly the wrong way round.
@@ -601,6 +684,33 @@ def test_the_scan_bites_on_a_deliberately_bad_migration(tmp_path: Path) -> None:
     assert "claim" in operated
     assert "claim" in _sql_table_names(code)
     assert not _sql_table_names(code) <= set(_NEW_TABLES)
+
+
+def test_the_check_constraint_guard_bites_without_biting_on_with_check() -> None:
+    """NEGATIVE CONTROL for the `CHECK (` guard, in BOTH directions.
+
+    A guard that also fired on `WITH CHECK (...)` would be red on correct code,
+    and the fix a tired reviewer would reach for is to delete the guard. A guard
+    that skipped everything containing `WITH CHECK` would miss a real constraint
+    in the same statement. Both directions are asserted, so the guard is proved
+    to distinguish rather than merely to pass.
+    """
+    pattern = r"(?<!WITH )\bCHECK\s*\("
+
+    # The real policy shape must NOT trip it.
+    policy = (
+        "CREATE POLICY t_tenant_isolation ON t "
+        "USING (tenant_id = current_setting('app.tenant_id')::uuid) "
+        "WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid)"
+    )
+    assert re.search(pattern, policy) is None
+
+    # A real CHECK constraint must trip it -- including one hiding in the same
+    # statement as a legitimate WITH CHECK.
+    assert re.search(pattern, "CHECK (parent_kind IN ('client_question'))") is not None
+    assert re.search(pattern, policy + ", CHECK (provider <> '')") is not None
+    # And the SQLAlchemy spelling is caught by the substring denylist, not this.
+    assert "CheckConstraint" not in policy
 
 
 def test_the_created_tables_reader_bites_on_a_wrong_column_order(
