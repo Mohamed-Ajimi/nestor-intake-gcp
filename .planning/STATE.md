@@ -4,12 +4,12 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-08-03T17:37:11.744Z"
-last_activity: 2026-08-04 -- Phase 15.8 PLANNED (15 plans, 6 waves, 20 decisions); 3 rulings owed
+last_updated: "2026-08-04T09:34:36.016Z"
+last_activity: 2026-08-04 -- Phase 15.8 execution started
 progress:
   total_phases: 16
   completed_phases: 11
-  total_plans: 109
+  total_plans: 124
   completed_plans: 106
   percent: 69
 ---
@@ -21,11 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 15.8 PLANNED (15 plans, 6 waves, 20 decisions) — 3 operator rulings + 1 blocking pre-condition (the yield tables have no read surface) stand between here and `/gsd-execute-phase 15.8`
+**Current focus:** Phase 15.8 — research-engine-redesign-yield-instrumentation-deploy-one-me
 
 ## Current Position
 
-Phase: 15.7 (research-engine-redesign-creative-workshop-loop-wave-4) — **COMPLETE, REVIEWED, FIXED,
+Phase: 15.8 (research-engine-redesign-yield-instrumentation-deploy-one-me) — EXECUTING
+Plan: 1 of 15
 GATE GREEN, VERIFIED (`gaps_found`, 57/58). NOT DEPLOYED.** Verification ran 2026-08-03 at `94a7647`
 (`15.7-VERIFICATION.md`). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier handoffs
 instructed it and it was carried forward unverified across two sessions — the `gsd-verifier` agent
@@ -50,16 +51,20 @@ is the real mechanism.
   the PIPE's status, so a FAILED build reports exit 0.
 
   **STILL OPEN in 15.7-VERIFICATION.md** — three gaps and two unruled decisions:
+
     - D7 `langs`: the `_normalise_langs` sweep runs 165 lines BEFORE `enforce_group_coverage`, whose
       two repair rungs both yield empty `langs`. Unreachable in default per-question mode, reachable
       in `topic` mode. Pre-existing at the phase base (67fce9f), but plan 09 asserts the invariant
       unconditionally.
+
     - `DROP_CLUSTERED_ONTO_LIVE` has NO production writer — only tests write it, so `drop_summary`'s
       third branch is dead and only HALF of D-W4-1's drop signal (loop SPINNING) can be recorded;
       the opposite failure (over-eager dedup strangling discovery invisibly) cannot.
+
     - `barred_block` renders `entries[:limit]` at `_BARRED_MAX_ENTRIES = 24` — it shows the OLDEST
       bars and hides the NEWEST, which are exactly the ones the model is about to re-propose.
       Bites past the 25th bar. Fix is `entries[-limit:]`.
+
     - **NOT RULED, awaiting operator:** (a) `catch_up_matches` counts newcomers in its own median —
       verification CORRECTED the review here: D-W4-3 IS honestly delivered, at most 6 newcomers
       enter a field of ~36 so the median is 6 and the schedule fires. Do NOT reverse the two
@@ -81,13 +86,16 @@ is the real mechanism.
   against plan coverage: **no uncovered item.**
 
   ⛔ **THREE OPERATOR DECISIONS BLOCK EXECUTION** (15.8-06 is a wave-1 decision checkpoint):
+
     - **`catch_up_matches`' own-median boundary** (D-W5-8). Recommend **accept + document + warn**.
       Verification CORRECTED the review here — D-W4-3 IS honestly delivered; option (b) reverses two
       named committed assertions.
+
     - **`actions` semantics** (D-W5-9). Recommend **remove the resolver from the sum**. D-W5-14
       sharpened this: `resolver_calls = 1` is assigned BEFORE the await and regardless of the kill
       switch, so the counter means *"the resolver was invoked"* — not work, not spend — and may count
       an operation issuing **zero** HTTP requests inside the number a reader uses to judge the run.
+
     - **Whether to widen the frozen yield columns** (D-W5-17). As frozen, `winners`, `weak_winners`,
       `barred`, `lookups` and `calls` have **no home**, so **WEAK-winners-per-round is NOT cross-run
       queryable** — a real gap in D-R8's purpose. Cheap now, expensive once 15.8-05 executes.
@@ -190,7 +198,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Executing Phase 15.7
+Status: Executing Phase 15.8
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -300,7 +308,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-08-04 -- Quick task 260804-dbd: three operator rulings closed 15.7's BLOCKER (D-W4-9/10/11)
+Last activity: 2026-08-04 -- Phase 15.8 execution started
 
 Progress: [██████████] 100%
 

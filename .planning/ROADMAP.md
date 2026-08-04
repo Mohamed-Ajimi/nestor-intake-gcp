@@ -140,7 +140,7 @@ The key transited a chat in plaintext 2026-07-27 and is live on both Tribunal se
 **deliberately accepted** for the pre-go-live period. **Do not rotate it early, and do not re-raise it
 as a gap or a blocker** — it is a decision, not an oversight. Rotate at go-live.
 **Requirements**: none
-**Plans:** 0 plans
+**Plans:** 7/15 plans executed
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 15.8 to break down)
