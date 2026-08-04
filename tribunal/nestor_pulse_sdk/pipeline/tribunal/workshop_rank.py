@@ -119,7 +119,7 @@ from nestor_pulse_sdk.pipeline.tribunal.reliability import (
     with_retry,
 )
 from nestor_pulse_sdk.pipeline.tribunal.skeptic import _content_to_serialisable
-from nestor_pulse_sdk.runs import run_events
+from nestor_pulse_sdk.runs import run_events, yield_records
 from nestor_pulse_sdk.runs.stage_feed import truncate_task_prompt
 
 if TYPE_CHECKING:
@@ -1865,6 +1865,103 @@ def _emit_tournament_summary(
             },
         ),
     )
+
+
+async def _persist_round_yield(run_id: Any, tenant_id: Any, record: Any) -> None:
+    """One `workshop_round_yield` row from one `round_metrics` record. D-R8.
+
+    THE MAPPING (D-W5-1's column set is FROZEN and owned by 15.8-05; this fills
+    it and may not add, rename or reorder a column):
+
+        round_no           <- record["round_no"]
+        candidates_in      <- record["candidates_in"]        (population_in)
+        new_candidates     <- record["new_candidates"]       (len(stamped))
+        keep_count         <- record["keep_count"]
+        weak_count         <- record["weak_count"]
+        kill_count         <- record["kill_count"]
+        new_entrants_top_n <- record["new_entrants_top_n"]   (from exit_verdict)
+        barred_drops       <- record["dropped_as_reproposal"]
+        round_cost_usd     <- record["cost_usd"]             (a STRING by
+                                                              D-W4-7's design;
+                                                              the emitter makes
+                                                              it a Decimal)
+
+    ⚠ THE TWO BINDINGS THAT LOOK RIGHT AND ARE WRONG.
+
+    `keep_count` COMES FROM `record["keep_count"]` AND NEVER FROM
+    `record["winners"]` (D-W5-11). `winners` is the size of the CUT;
+    `keep_count` is the KEEP CRITIQUE count over the whole population. They are
+    DIFFERENT DENOMINATORS, they differ whenever the cut sits below the KEEP
+    count, and binding one to the other's column is a SILENT mis-measurement —
+    it would read as a plausible number that nothing downstream contradicts.
+    The same holds for `weak_count` vs `weak_winners`.
+
+    `barred_drops` COMES FROM `record["dropped_as_reproposal"]` AND NEVER FROM
+    `record["barred"]`. `round_metrics` emits both as SEPARATE keys and
+    `barred` means BARS CREATED this round, which is a different quantity from
+    a barred-duplicate DROP.
+
+    ⚠ THE DICT IS BUILT INSIDE `build=lambda:`, AND MUST STAY THERE. The rule
+    `run_events.emit_safe` states and `yield_records`' `_safe` trio repeats
+    verbatim:
+
+        A CALLER'S ARGUMENTS ARE EVALUATED BEFORE THE CALLEE IS ENTERED.
+
+    So hoisting the mapping into a local above the call moves its evaluation
+    OUT of every protecting `try` — and a raise there does not merely lose a
+    telemetry row. `run_workshop_stage_b`'s outer `except Exception` DOES NOT
+    MERELY LOG: IT RETURNS `_fallback_winners`. An escaping instrumentation
+    exception would therefore SILENTLY REPLACE THE ENTIRE WORKSHOP'S OUTPUT
+    WITH VERBATIM CLIENT QUESTIONS in the one ~$45 measuring run. "Tidying" the
+    hoist back out reintroduces the whole defect while looking correct.
+
+    ONLY THE `_safe` ENTRY POINT MAY BE CALLED, and never with a retry.
+
+    NO COERCION HAPPENS HERE. `.get(...)` yields `None` for an absent key and
+    `None` is passed through as `None` — "not recorded" and "measured zero" must
+    stay distinguishable (D-W5-10), and the coercion authority is 15.8-05's
+    emitter and nobody else. In particular `workshop_loop._count_of` returns 0
+    and is the WRONG tool for a nullable measured value.
+
+    DELIBERATELY NOT PERSISTED, named here so 15.8-15 does not discover it while
+    reading the table: `winners`, `weak_winners`, `barred`, `lookups` and
+    `calls`. D-W5-1's frozen column set has no home for them and this plan does
+    not own that schema. All five survive per-run in `_stage_b_result`'s
+    `loop_rounds`. THE CONSEQUENCE: WEAK-WINNERS-PER-ROUND IS NOT CROSS-RUN
+    QUERYABLE after this phase — `weak_count` is the WEAK CRITIQUE count, not
+    the winner-scoped one. That is a known limit, not an oversight.
+    """
+    # BELT AND BRACES, ON PURPOSE. `record_round_safe` already swallows its own
+    # failures — but it lives in `runs/yield_records.py`, a file THIS PLAN DOES
+    # NOT OWN AND MAY NOT EDIT. Depending solely on a sibling module's internal
+    # discipline to protect a ~$45 run is the wrong dependency: one refactor
+    # there, invisible from here, and an exception starts reaching
+    # `run_workshop_stage_b`'s outer handler, which RETURNS `_fallback_winners`
+    # rather than merely logging. The cost of this `try` is nothing; the cost of
+    # not having it is the entire workshop's output, silently.
+    try:
+        await yield_records.record_round_safe(
+            run_id,
+            tenant_id,
+            build=lambda: {
+                "round_no": record.get("round_no"),
+                "candidates_in": record.get("candidates_in"),
+                "new_candidates": record.get("new_candidates"),
+                "keep_count": record.get("keep_count"),
+                "weak_count": record.get("weak_count"),
+                "kill_count": record.get("kill_count"),
+                "new_entrants_top_n": record.get("new_entrants_top_n"),
+                "barred_drops": record.get("dropped_as_reproposal"),
+                "round_cost_usd": record.get("cost_usd"),
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — telemetry may never fail a paid run
+        log.warning(
+            "workshop_rank: persisting the round yield raised %s — row lost, "
+            "NOT retried; the round and the run are unaffected",
+            type(exc).__name__,
+        )
+    return None
 
 
 async def run_tournament(
@@ -4674,7 +4771,31 @@ async def run_workshop_stage_b(
             # dedup strangling discovery — and stamping every drop round 0 destroys
             # the one distinction it was built to make. That failure is silent and
             # every test stays green.
-            drops_before = len(register.get("drops") or [])
+            # ⚠ CAUSE-FILTERED, NEVER A BARE LENGTH (D-W5-6). `record_drop`
+            # appends BOTH causes to ONE list, `register["drops"]`, by design.
+            # A bare `len(...)` was accidentally correct only for as long as
+            # `DROP_CLUSTERED_ONTO_LIVE` had no production writer — 15.8-04
+            # landed one at the near-duplicate merge site, and LIVE MERGES ARE
+            # THE COMMON CASE. From that moment a bare length makes
+            # `dropped_as_reproposal` — the "the loop is SPINNING" metric —
+            # silently absorb ordinary near-copy merges, i.e. the OPPOSITE
+            # failure D-W4-1 built the drop log to distinguish. It then flows
+            # into `workshop_round_yield.barred_drops`, which 15.8-15 reads as
+            # THE ONE MEASUREMENT, and an inflated value there is not
+            # recoverable. `workshop_register.count_drops` is the replacement;
+            # DO NOT "simplify" it back to a length.
+            #
+            # THE DELTA SHAPE IS KEPT ON PURPOSE. `count_drops` also offers a
+            # `round_no=` filter and a single round-filtered call would be
+            # shorter — rejected: the delta measures what THIS round's
+            # `cluster_candidates` actually appended and stays correct even if a
+            # drop is ever stamped with an unexpected round, where the filter
+            # would silently return zero. Sites 1 and 2 are a MATCHED PAIR and
+            # use the IDENTICAL call expression; a delta between two different
+            # denominators is worse than two wrong numbers.
+            drops_before = workshop_register.count_drops(
+                register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+            )
             if stamped:
                 stamped, cluster_reasons = await workshop.cluster_candidates(
                     candidates=stamped,
@@ -4687,7 +4808,14 @@ async def run_workshop_stage_b(
                     round_no=round_no,
                 )
                 loop_reasons += list(cluster_reasons)
-            dropped_this_round = len(register.get("drops") or []) - drops_before
+            # Swap site 2 — the other half of the matched pair. The call
+            # expression is IDENTICAL to `drops_before`'s above, by requirement.
+            dropped_this_round = (
+                workshop_register.count_drops(
+                    register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+                )
+                - drops_before
+            )
 
             # A dropped re-proposal means the register is WORKING, so the summary
             # is a NOTE and never a degradation (D-12's alarm-fatigue rule).
@@ -4745,6 +4873,22 @@ async def run_workshop_stage_b(
                     ),
                 )
             )
+
+            # PERSIST THIS ROUND'S YIELD (D-R8), per ROUND and not after the
+            # loop, so a run that dies in round 7 keeps rounds 1-6 — the
+            # durability half of the same argument that made 15.8-05 write
+            # `assignment_yield` at research-resolve rather than at the end. The
+            # record written is the one JUST APPENDED, so the table and
+            # `loop_rounds` can never disagree.
+            #
+            # ⚠ THIS MAY NEVER RAISE, and the usual "the stage catches it
+            # anyway" reasoning is WRONG HERE: `run_workshop_stage_b`'s outer
+            # handler does not merely log, IT RETURNS `_fallback_winners`. An
+            # escaping instrumentation exception would silently replace the
+            # whole workshop's output with verbatim client questions in the ONE
+            # measuring run. Hence the `_safe` entry point, the dict built
+            # inside `build`, and no retry.
+            await _persist_round_yield(run_id, tenant_id, round_records[-1])
 
             # The floor HELD: every criterion was satisfied and the loop is
             # continuing anyway (D-W4-9). Read straight off the verdict — nothing
@@ -5193,8 +5337,15 @@ async def run_workshop_stage_b(
                 # --- the loop's numbers (D-W4-7: recorded, never enforced) ---
                 "rounds": int(rounds_run),
                 "loop_born_winners": int(loop_born_winners),
+                # `barred` is bars CREATED and stays a bare length — a bar and a
+                # barred-duplicate DROP are different quantities and this plan
+                # keeps them apart.
                 "barred": len(register.get("barred") or []),
-                "dropped_as_reproposal": len(register.get("drops") or []),
+                # Swap site 3 (D-W5-6). Named for the barred cause, so it counts
+                # the barred cause. See the comment at `drops_before` above.
+                "dropped_as_reproposal": workshop_register.count_drops(
+                    register, cause=workshop_register.DROP_CLUSTERED_ONTO_BARRED
+                ),
                 "grounded_lookups": int(
                     admission_stats.get("grounded_lookups") or 0
                 ),

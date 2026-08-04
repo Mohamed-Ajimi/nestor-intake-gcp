@@ -411,10 +411,25 @@ def test_the_winner_scoped_keys_are_never_read_inside_the_helper() -> None:
         for n in ast.walk(tree)
         if isinstance(n, ast.AsyncFunctionDef) and n.name == "_persist_round_yield"
     ][0]
-    # Only the EXECUTABLE body -- the docstring names all three on purpose.
-    body = ast.get_source_segment(src, fn) or ""
-    doc = ast.get_docstring(fn) or ""
-    executable = body.replace(doc, "")
+    # Only the EXECUTABLE body -- the docstring names all three on purpose, so
+    # it must be excluded or this test can never pass.
+    #
+    # ⚠ THE DOCSTRING IS REMOVED BY ITS OWN SOURCE SEGMENT, *NOT* VIA
+    # `ast.get_docstring()`. That function returns the CLEANED, DEDENTED text,
+    # which does not appear verbatim in the source, so
+    # `body.replace(get_docstring(fn), "")` SILENTLY REPLACES NOTHING -- and the
+    # assertion then runs over the docstring too and fails on prose while the
+    # code is correct. That exact mistake was made writing this file and caught
+    # by running it; it is recorded here so it is not reintroduced.
+    executable = "\n".join(
+        ast.get_source_segment(src, stmt) or ""
+        for stmt in fn.body
+        if not (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and isinstance(stmt.value.value, str)
+        )
+    )
 
     for forbidden in ('"winners"', '"weak_winners"', '"barred"'):
         assert forbidden not in executable, (
