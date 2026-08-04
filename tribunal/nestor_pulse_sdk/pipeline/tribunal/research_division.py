@@ -1090,6 +1090,31 @@ def _text_key(value: Any) -> str:
         return ""
 
 
+def _as_list(value: Any) -> list[Any]:
+    """Read anything as a list. PURE, NEVER RAISES.
+
+    `list(value or [])` was written at four sites in this file and raises
+    `TypeError` on ANY non-iterable — an int, a float, a bare `object()`. Those
+    sites sit BETWEEN the paid workshop and the paid angles, so that raise killed
+    a run whose money was already spent over nothing worse than a data-shape
+    defect in one model-authored record (WR-04).
+
+    ATTEMPTING `list()` FIRST AND ONLY CATCHING THE FAILURE IS DELIBERATE, not a
+    stylistic preference. It preserves EXACTLY today's behaviour for every input
+    that already works — including the two shapes the callers below lean on: a
+    dict iterates its KEYS and then fails the `isinstance(group, dict)` test, and
+    a str iterates its CHARACTERS and fails the same test. Testing types up front
+    instead would have to enumerate what is iterable, and would change one of
+    those two paths the first time it got the list wrong. So this closes the
+    raise and changes nothing else, which is what makes it safe to apply at every
+    one of those sites in a single commit.
+    """
+    try:
+        return list(value or [])
+    except Exception:  # noqa: BLE001 — model-adjacent data, never trusted to be iterable
+        return []
+
+
 def _bound_groups_to_winners(
     groups: Any, allowed_texts: set, labels: list[str]
 ) -> list[dict[str, Any]]:
@@ -1139,59 +1164,115 @@ def _bound_groups_to_winners(
     `group_id`, `bracket` and `why` are preserved verbatim — re-deriving `group_id`
     would renumber a `d1` discovery group into a `g1` mandate one and silently
     change every affected angle's `corroboration_key` mid-run.
+
+    "NEVER RAISES" IS NOW BACKED RATHER THAN MERELY CLAIMED, AND HERE IS HOW.
+    That claim and this body disagreed for a whole phase (WR-04): the docstring
+    said PURE, never raises, while a bare `list()` over `groups` raised `TypeError`
+    on any non-iterable — between the paid workshop and the paid angles. (The
+    literal expression is deliberately NOT reproduced here: this file's gate greps
+    for it with `#` comments filtered out, and a docstring is not a `#` comment, so
+    quoting it verbatim would make the gate red on the FIXED source.) Three layers
+    back the claim now, and none of them touches the whitespace-insensitive join
+    described above:
+
+      1. Every iteration goes through `_as_list`, so a non-iterable `groups` or a
+         non-iterable `members` yields NOTHING rather than raising.
+      2. `allowed_texts` is read ONCE into a local set through the same
+         tolerance, so a broken bound FAILS CLOSED — an unreadable bound admits
+         nobody, every mandate member is dropped, the group is dropped whole and
+         `_divide_from_winners` falls back to the focus-area path. That direction
+         is chosen deliberately: this bound is the only real spend control the
+         engine has left (T-15.2-61), so a bound that failed OPEN would buy paid
+         third-party research for exactly the winners it was built to exclude.
+      3. The per-group loop body carries an outer backstop that SKIPS AND COUNTS
+         a malformed group rather than losing the healthy ones alongside it, and
+         returns the groups accumulated so far — never a bare `[]`. Returning
+         `[]` for one hostile record would discard every healthy group with it
+         and send a paid workshop down the focus-area fallback.
+
+    That third counter is named apart from the other two on purpose, and the same
+    reason governs all three: a warning must never blame the spend control for a
+    data defect. The phase's degradation contract is read off these docstrings —
+    if the body ever stops backing the claim, change the claim in the same commit.
     """
     out: list[dict[str, Any]] = []
     dropped_members = 0
     dropped_unusable = 0
+    dropped_malformed = 0
     dropped_groups: list[str] = []
-    for group in list(groups or []):
-        if not isinstance(group, dict):
+    # THE BOUND, READ ONCE AND TOLERANTLY, SO IT FAILS CLOSED. A non-container
+    # `allowed_texts` used to raise straight out of the `in` test below. Reading it
+    # into a local set through `_as_list` means an unreadable bound becomes an EMPTY
+    # bound: every mandate member fails to match, every group is dropped whole, and
+    # `_divide_from_winners` falls back to the focus-area path. That is the
+    # conservative direction and it is the whole point — this bound is the only real
+    # spend control this engine has left (T-15.2-61: the budget governor is inert
+    # under `NESTOR_TRIBUNAL_UNCAPPED=1`), so a bound that failed OPEN would buy paid
+    # third-party research for precisely the winners it exists to exclude. A `list`
+    # or a `tuple` supplied here still works, because membership is all that is ever
+    # asked of it.
+    allowed: set[Any] = set()
+    for _entry in _as_list(allowed_texts):
+        try:
+            allowed.add(_entry)
+        except Exception:  # noqa: BLE001 — one unhashable entry, not a broken bound
             continue
-        kept: list[dict[str, Any]] = []
-        for member in list(group.get("members") or []):
-            if not isinstance(member, dict):
+    for group in _as_list(groups):
+        # OUTER BACKSTOP: one malformed group record is skipped and COUNTED, never
+        # allowed to take the healthy groups down with it. Counted apart from the
+        # other two causes for the same reason `dropped_unusable` is — so a warning
+        # can never blame the spend control for a data defect.
+        try:
+            if not isinstance(group, dict):
                 continue
-            if _is_discovery_member(member):
-                kept.append(member)
+            kept: list[dict[str, Any]] = []
+            for member in _as_list(group.get("members")):
+                if not isinstance(member, dict):
+                    continue
+                if _is_discovery_member(member):
+                    kept.append(member)
+                    continue
+                key = _text_key(member.get("text"))
+                if not key:
+                    # NOT the winners bound: `_normalise_winners` already dropped every
+                    # empty-text winner, so `allowed_texts` can never contain `""` and a
+                    # textless member could only ever match by accident. Counted apart so
+                    # the warning cannot blame the spend control for a data defect.
+                    dropped_unusable += 1
+                elif key in allowed:
+                    kept.append(member)
+                else:
+                    dropped_members += 1
+            if not kept:
+                dropped_groups.append(str(group.get("group_id") or "?"))
                 continue
-            key = _text_key(member.get("text"))
-            if not key:
-                # NOT the winners bound: `_normalise_winners` already dropped every
-                # empty-text winner, so `allowed_texts` can never contain `""` and a
-                # textless member could only ever match by accident. Counted apart so
-                # the warning cannot blame the spend control for a data defect.
-                dropped_unusable += 1
-            elif key in allowed_texts:
-                kept.append(member)
-            else:
-                dropped_members += 1
-        if not kept:
-            dropped_groups.append(str(group.get("group_id") or "?"))
+            if len(kept) == len(_as_list(group.get("members"))):
+                out.append(group)
+                continue
+            parents: list[str] = []
+            client_parents: list[str] = []
+            riders = 0
+            for member in kept:
+                is_rider = _is_discovery_member(member)
+                riders += 1 if is_rider else 0
+                for label in _member_parents(member):
+                    if label not in parents:
+                        parents.append(label)
+                    if not is_rider and label not in client_parents:
+                        client_parents.append(label)
+            rebuilt = dict(group)
+            rebuilt.update({
+                "members": kept,
+                "parents": parents,
+                "client_parents": client_parents,
+                "parent": str(kept[0].get("parent") or "").strip(),
+                "rank": min(_member_rank(member) for member in kept),
+                "riders": riders,
+            })
+            out.append(rebuilt)
+        except Exception:  # noqa: BLE001 — a malformed record must not kill a paid run
+            dropped_malformed += 1
             continue
-        if len(kept) == len(group.get("members") or []):
-            out.append(group)
-            continue
-        parents: list[str] = []
-        client_parents: list[str] = []
-        riders = 0
-        for member in kept:
-            is_rider = _is_discovery_member(member)
-            riders += 1 if is_rider else 0
-            for label in _member_parents(member):
-                if label not in parents:
-                    parents.append(label)
-                if not is_rider and label not in client_parents:
-                    client_parents.append(label)
-        rebuilt = dict(group)
-        rebuilt.update({
-            "members": kept,
-            "parents": parents,
-            "client_parents": client_parents,
-            "parent": str(kept[0].get("parent") or "").strip(),
-            "rank": min(_member_rank(member) for member in kept),
-            "riders": riders,
-        })
-        out.append(rebuilt)
 
     if dropped_members:
         log.warning(
@@ -1212,6 +1293,16 @@ def _bound_groups_to_winners(
             "no winner because every empty-text winner was already dropped upstream. "
             "Look at whatever built the group, not at the winners list.",
             dropped_unusable, _D6_MAX_WINNERS,
+        )
+    if dropped_malformed:
+        log.warning(
+            "research_division.divide: %d MALFORMED group record(s) could not be "
+            "read and were skipped before dispatch. This is NOT the %d-winner "
+            "bound and NOT a spend control firing — the record's own shape is "
+            "wrong, so look at whatever built the group. The healthy groups in the "
+            "same batch were kept deliberately: discarding them all over one bad "
+            "record would throw away a workshop the run has already paid for.",
+            dropped_malformed, _D6_MAX_WINNERS,
         )
     if dropped_groups:
         log.warning(
@@ -1307,7 +1398,12 @@ def _divide_from_winners(
         ordered = ordered[:_D6_MAX_WINNERS]
 
     # --- 2. RESOLVE THE GROUPS ------------------------------------------------
-    resolved: list[dict[str, Any]] = list(groups or [])
+    # THE SAME EXPRESSION AS THE ONE INSIDE `_bound_groups_to_winners`, AND FIXED IN
+    # THE SAME COMMIT FOR THAT REASON. This `list(groups or [])` ran BEFORE the
+    # helper was ever reached, so a non-iterable `groups` raised HERE and a fix
+    # applied only inside the helper would have been unreachable in production —
+    # green in a unit test, still fatal on the live path (WR-04).
+    resolved: list[dict[str, Any]] = _as_list(groups)
     if not resolved:
         assignment, _reason = question_grouping.fallback_groups(ordered, labels)
         resolved = question_grouping.build_groups(assignment, ordered)
