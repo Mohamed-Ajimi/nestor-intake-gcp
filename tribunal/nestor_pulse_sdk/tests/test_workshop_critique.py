@@ -3083,6 +3083,98 @@ def test_the_exception_path_still_returns_one_singleton_per_candidate():
     assert len(reasons) == 1 and "nothing was lost" in reasons[0]
 
 
+def test_a_raised_clusterer_does_not_zero_the_calls_earlier_rounds_accumulated():
+    """D-W5-7. The SUCCESS path accumulates; the EXCEPTION path ASSIGNED zero.
+
+    Same function, opposite branches, and only one was fixed during 15.7 (CR-06).
+    The Wave-4 loop creates ONE `cluster_stats` per run and calls this function
+    once per round, so a single raised clusterer in a single round discarded
+    every earlier round's count. `stats["calls"]` is the run's call total and
+    therefore its SPEND signal, and it under-reported precisely when something
+    had gone wrong — the moment a reader is most likely to be investigating.
+
+    ⚠ THE BASELINE MUST BE NON-ZERO, AND THAT IS THE WHOLE TEST DESIGN. A
+    version of this test that drives only the exception path from a FRESH
+    `stats` dict PASSES ON THE UNFIXED SOURCE, because `0 == 0`. It would prove
+    nothing while looking like a regression guard. Round 1 below therefore has
+    to really cluster, and its count is asserted before round 2 is allowed to
+    raise.
+    """
+    stats: dict[str, Any] = {}
+
+    # Round 1: a real clustering call. The baseline is now 1, not 0.
+    _cluster_with_stub(
+        [
+            _cand_plain(0, "a question about density"),
+            _cand_plain(1, "another question about density"),
+        ],
+        _by_density,
+        stats=stats,
+    )
+    assert stats["calls"] == 1, stats
+
+    # Round 2: the clusterer raises.
+    def boom(piece):
+        raise RuntimeError("the clusterer exploded in round 2")
+
+    _cluster_with_stub(
+        [_cand_plain(0, "first one"), _cand_plain(1, "second one")],
+        boom,
+        stats=stats,
+    )
+
+    assert stats["calls"] >= 1, (
+        f"a raised clusterer discarded every earlier round's count: {stats!r}"
+    )
+    # AND the failing round's own issued call is counted. `_run_chunk`
+    # increments BEFORE it awaits the provider, so that call was issued and may
+    # well have been billed. Over-reporting an attempt is recoverable;
+    # under-reporting a spend is the defect this test exists to remove.
+    assert stats["calls"] == 2, stats
+
+
+def test_a_raise_before_the_call_counter_is_bound_lets_no_nameerror_escape():
+    """THE HOIST, PINNED INDEPENDENTLY OF THE ACCUMULATION (D-W5-7).
+
+    `calls = 0` used to be bound INSIDE the `try:`, AFTER the chunking block that
+    reads `grouping._CLUSTER_MAX_BLOCK` and `_CLUSTER_BATCH`. So merely swapping
+    the handler's assign for the accumulate form would make it reference an
+    UNBOUND `calls` whenever the chunking guard raised — turning a recoverable
+    clustering failure into a `NameError` escaping a function whose entire
+    contract is *"clustering never loses a candidate"*. That is strictly worse
+    than the defect being fixed, which is why the hoist is a correctness
+    requirement and not tidiness, and why it gets its own test.
+    """
+
+    class _ExplodingWidth:
+        """A block guard the length comparison cannot survive."""
+
+        def __gt__(self, other):
+            raise RuntimeError("the chunking guard exploded")
+
+        def __lt__(self, other):
+            raise RuntimeError("the chunking guard exploded")
+
+    original = grouping._CLUSTER_MAX_BLOCK
+    grouping._CLUSTER_MAX_BLOCK = _ExplodingWidth()
+    try:
+        stats: dict[str, Any] = {}
+        reps, reasons, _ = _cluster_with_stub(
+            [_cand_plain(0, "first one"), _cand_plain(1, "second one")],
+            _by_density,
+            stats=stats,
+        )
+    finally:
+        grouping._CLUSTER_MAX_BLOCK = original
+
+    # It degraded; it did not propagate a NameError.
+    assert [r["text"] for r in reps] == ["first one", "second one"]
+    assert all(r["cluster_key"].startswith("__singleton__:") for r in reps)
+    assert len(reasons) == 1 and "nothing was lost" in reasons[0]
+    # No call was issued before the raise, so nothing is added.
+    assert stats["calls"] == 0, stats
+
+
 def test_the_shadows_join_every_chunk_not_just_one(monkeypatch):
     """A bar that stops working above the block guard is a bar that looks green."""
     monkeypatch.setattr(grouping, "_CLUSTER_MAX_BLOCK", 2)
