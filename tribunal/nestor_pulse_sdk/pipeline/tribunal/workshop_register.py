@@ -172,6 +172,22 @@ _BAR_CAUSES: tuple[str, ...] = (BAR_KILL_DEFECT, BAR_WEAK_TWICE, BAR_LOOKUP_FAIL
 #                        an unbounded barred list would inflate every generate
 #                        and evolve call for the rest of the run; the overflow is
 #                        STATED rather than hidden (see `barred_block`).
+#
+#                        THE WINDOW IS THE MOST RECENT ENTRIES, NOT THE FIRST
+#                        ONES. Until 15.8-04 `barred_block` sliced from the FRONT
+#                        of the list, so past 24 bars a prompt carried the oldest
+#                        24 and hid the newest — and the bars a model has just
+#                        earned are precisely the ones it is about to re-propose.
+#                        A ten-round loop over a ~36-candidate population passes
+#                        24 bars, so this bit.
+#
+#                        AND A CAP OF ZERO MUST RENDER NOTHING. Do NOT "simplify"
+#                        the guard in `barred_block` to a bare `entries[-limit:]`:
+#                        `entries[-0:]` is `entries[:]`, i.e. the WHOLE list, so
+#                        the naive newest-first slice INVERTS the bound this
+#                        constant exists to enforce. `limit` reaches 0 legally,
+#                        through an explicit `cap_entries=0` and through the
+#                        `max(0, limit)` clamp on a negative or garbled cap.
 #   _KEY_CHARS           the width used for IDENTITY only. Wide, because two
 #                        questions that differ only after character 200 are two
 #                        questions and must not collapse onto one bar.
@@ -418,12 +434,19 @@ def barred_block(
     cheap first layer; it is not the guarantee.
 
     BOUNDED OVERALL, AND THE OVERFLOW IS STATED. At most `cap_entries` entries
-    reach any one prompt, OLDEST FIRST, because an unbounded barred list would
-    inflate every generate and evolve call for the rest of a ten-round run. The
-    surplus is announced in a trailing notice rather than silently dropped — a
-    prompt that quietly forgets two-thirds of what is barred is a prompt nobody
-    can debug. That notice deliberately carries NO `|`, so it can never be read
-    as an addressable record.
+    reach any one prompt, and they are the MOST RECENT ones, because an unbounded
+    barred list would inflate every generate and evolve call for the rest of a
+    ten-round run. The newest end is the end worth spending the budget on: the
+    bars a model has just earned are exactly the ones it is about to re-propose,
+    so under a cap a recent bar suppresses more than an old one does. The surplus
+    is announced in a trailing notice rather than silently dropped — a prompt that
+    quietly forgets two-thirds of what is barred is a prompt nobody can debug.
+    That notice deliberately carries NO `|`, so it can never be read as an
+    addressable record.
+
+    A CAP OF ZERO RENDERS ZERO RECORDS, and the guard below says so explicitly
+    rather than relying on a negative slice — `entries[-0:]` is the WHOLE list.
+    See the `_BARRED_MAX_ENTRIES` paragraph in the widths comment block.
 
     Never raises; returns the placeholder for any register it cannot read.
     """
@@ -448,7 +471,12 @@ def barred_block(
     width = max(0, width)
     flaw_width = min(width, _BARRED_FLAW_CHARS)
 
-    shown = entries[:limit]
+    # THE NEWEST `limit` ENTRIES, AND THE ZERO CASE SPELLED OUT. A bare
+    # `entries[-limit:]` would be wrong in the one case that matters: with
+    # `limit == 0` it returns the ENTIRE list, turning the prompt bound into no
+    # bound at all. `limit` reaches 0 through `cap_entries=0` and through the
+    # `max(0, limit)` clamp above, so the zero branch is reachable, not defensive.
+    shown = entries[-limit:] if limit else []
     lines = [
         f"{i} | {_flatten(e.get('text'), width)} | "
         f"FLAW: {_flatten(e.get('flaw'), flaw_width) or 'not recorded'}"
@@ -519,6 +547,38 @@ def record_drop(
     number nobody can act on — and it is refused rather than defaulted to a
     blank.
 
+    ⚠ BOTH CAUSES SHARE ONE LIST, SO `len(register["drops"])` IS NOT THE
+    BARRED-CAUSE COUNT. READ THIS BEFORE USING A BARE LENGTH (D-W5-6).
+
+    Every record lands in `register["drops"]` whatever its cause. That is
+    deliberate — one drop log, a `cause` field, and `drop_summary` and
+    `count_drops` filtering on it — but it means a bare length is the TOTAL of
+    two opposite failures, and answers neither question on its own.
+
+    A bare length was ACCIDENTALLY correct for as long as
+    `DROP_CLUSTERED_ONTO_LIVE` had no production writer. 15.8-04 gave it one, at
+    the near-duplicate merge site in `workshop.cluster_candidates`, so ordinary
+    near-copy merges — the COMMON case — now land in the same list. THREE readers
+    in `workshop_rank.py` take that bare length, and every one of them is named
+    for the BARRED cause alone:
+
+      * `drops_before`, captured just before the `cluster_candidates` call in the
+        loop body; and
+      * the delta computed just after it, which feeds
+        `round_metrics(dropped_as_reproposal=…)`; and
+      * `"dropped_as_reproposal"` in the stage-B `counts` block.
+
+    All three must count `cause=DROP_CLUSTERED_ONTO_BARRED` through `count_drops`
+    below. The first two are a MATCHED PAIR — fixing one leaves a delta between
+    two different denominators, which is worse than leaving both wrong — so it is
+    all three or none.
+
+    WHY IT IS NOT COSMETIC: `round_metrics` is persisted to
+    `workshop_round_yield.barred_drops`, which is read as THE measurement of
+    whether the loop is spinning. An inflated `barred_drops` would mean the "loop
+    is SPINNING" metric had silently absorbed the OPPOSITE failure it exists to
+    distinguish, in a run there is no budget to repeat.
+
     Returns True when a record was stored. Never raises.
     """
     slots = _slots(register)
@@ -567,6 +627,56 @@ def record_drop(
         }
     )
     return True
+
+
+def count_drops(
+    register: Any,
+    *,
+    cause: Any = None,
+    round_no: Any = None,
+) -> int:
+    """How many drops were recorded, optionally narrowed to ONE CAUSE and round.
+
+    THE FUNCTION EXISTS BECAUSE THE TWO CAUSES SHARE ONE LIST BY DESIGN, so any
+    caller that wants ONE of D-W4-1's two opposite signals has to count by cause
+    and must never count `len(register["drops"])`. That bare length is the total
+    of a loop SPINNING and a dedup STRANGLING DISCOVERY — the two failures the
+    drop log was built to tell apart — so it is a number nobody can act on, and
+    reporting it under either failure's name is worse than reporting nothing.
+    See the warning in `record_drop` above for the readers this is meant for.
+
+    With no filters it counts every record, which is exactly the bare length and
+    is the honest way to ask for it.
+
+    A `round_no` this function cannot read returns 0 rather than every record: a
+    filter that silently stops filtering is how a count quietly goes back to
+    being the sum of two opposite things. `cause` is compared by VALUE and is not
+    validated against `_DROP_CAUSES` — asking for a cause nothing was recorded
+    under is a legitimate question whose answer is 0.
+
+    Never raises; returns 0 for any register it cannot read.
+    """
+    slots = _slots(register)
+    if slots is None:
+        return 0
+
+    wanted: int | None = None
+    if round_no is not None:
+        try:
+            wanted = int(round_no)
+        except (TypeError, ValueError):
+            return 0
+
+    total = 0
+    for record in slots["drops"]:
+        if not isinstance(record, dict):
+            continue
+        if cause is not None and record.get("cause") != cause:
+            continue
+        if wanted is not None and record.get("round") != wanted:
+            continue
+        total += 1
+    return total
 
 
 def drop_summary(register: Any, round_no: Any) -> str:
