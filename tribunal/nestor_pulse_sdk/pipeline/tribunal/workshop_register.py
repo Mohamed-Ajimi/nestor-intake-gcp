@@ -172,6 +172,22 @@ _BAR_CAUSES: tuple[str, ...] = (BAR_KILL_DEFECT, BAR_WEAK_TWICE, BAR_LOOKUP_FAIL
 #                        an unbounded barred list would inflate every generate
 #                        and evolve call for the rest of the run; the overflow is
 #                        STATED rather than hidden (see `barred_block`).
+#
+#                        THE WINDOW IS THE MOST RECENT ENTRIES, NOT THE FIRST
+#                        ONES. Until 15.8-04 `barred_block` sliced from the FRONT
+#                        of the list, so past 24 bars a prompt carried the oldest
+#                        24 and hid the newest — and the bars a model has just
+#                        earned are precisely the ones it is about to re-propose.
+#                        A ten-round loop over a ~36-candidate population passes
+#                        24 bars, so this bit.
+#
+#                        AND A CAP OF ZERO MUST RENDER NOTHING. Do NOT "simplify"
+#                        the guard in `barred_block` to a bare `entries[-limit:]`:
+#                        `entries[-0:]` is `entries[:]`, i.e. the WHOLE list, so
+#                        the naive newest-first slice INVERTS the bound this
+#                        constant exists to enforce. `limit` reaches 0 legally,
+#                        through an explicit `cap_entries=0` and through the
+#                        `max(0, limit)` clamp on a negative or garbled cap.
 #   _KEY_CHARS           the width used for IDENTITY only. Wide, because two
 #                        questions that differ only after character 200 are two
 #                        questions and must not collapse onto one bar.
@@ -418,12 +434,19 @@ def barred_block(
     cheap first layer; it is not the guarantee.
 
     BOUNDED OVERALL, AND THE OVERFLOW IS STATED. At most `cap_entries` entries
-    reach any one prompt, OLDEST FIRST, because an unbounded barred list would
-    inflate every generate and evolve call for the rest of a ten-round run. The
-    surplus is announced in a trailing notice rather than silently dropped — a
-    prompt that quietly forgets two-thirds of what is barred is a prompt nobody
-    can debug. That notice deliberately carries NO `|`, so it can never be read
-    as an addressable record.
+    reach any one prompt, and they are the MOST RECENT ones, because an unbounded
+    barred list would inflate every generate and evolve call for the rest of a
+    ten-round run. The newest end is the end worth spending the budget on: the
+    bars a model has just earned are exactly the ones it is about to re-propose,
+    so under a cap a recent bar suppresses more than an old one does. The surplus
+    is announced in a trailing notice rather than silently dropped — a prompt that
+    quietly forgets two-thirds of what is barred is a prompt nobody can debug.
+    That notice deliberately carries NO `|`, so it can never be read as an
+    addressable record.
+
+    A CAP OF ZERO RENDERS ZERO RECORDS, and the guard below says so explicitly
+    rather than relying on a negative slice — `entries[-0:]` is the WHOLE list.
+    See the `_BARRED_MAX_ENTRIES` paragraph in the widths comment block.
 
     Never raises; returns the placeholder for any register it cannot read.
     """
@@ -448,7 +471,12 @@ def barred_block(
     width = max(0, width)
     flaw_width = min(width, _BARRED_FLAW_CHARS)
 
-    shown = entries[:limit]
+    # THE NEWEST `limit` ENTRIES, AND THE ZERO CASE SPELLED OUT. A bare
+    # `entries[-limit:]` would be wrong in the one case that matters: with
+    # `limit == 0` it returns the ENTIRE list, turning the prompt bound into no
+    # bound at all. `limit` reaches 0 through `cap_entries=0` and through the
+    # `max(0, limit)` clamp above, so the zero branch is reachable, not defensive.
+    shown = entries[-limit:] if limit else []
     lines = [
         f"{i} | {_flatten(e.get('text'), width)} | "
         f"FLAW: {_flatten(e.get('flaw'), flaw_width) or 'not recorded'}"
