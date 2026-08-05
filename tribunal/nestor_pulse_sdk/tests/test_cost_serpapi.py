@@ -34,6 +34,7 @@ from typing import Any, Optional
 import pytest
 
 from nestor_pulse_sdk.audit import cost_table as ct
+from nestor_pulse_sdk.audit import gcs_blob
 from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
 from nestor_pulse_sdk.pipeline.tribunal import serpapi
 from nestor_pulse_sdk.pipeline.tribunal.serpapi import SerpApiError, SerpApiPlan
@@ -419,3 +420,439 @@ async def test_failure_records_breaker_writes_failure_row_and_reraises(monkeypat
     # And the 402 hard wall tripped the SerpApi circuit on its first occurrence.
     assert serpapi.unavailable_reason() == "serpapi_breaker_open"
     serpapi.reset_breaker()
+
+
+# ===========================================================================
+# gpt-5.6-sol cost row — the state pin AND its positive control (plan 15.8-08)
+#
+# THESE TWO TESTS ARE A PAIR AND BELONG ADJACENT. Read them together.
+#
+# `compute()` has TWO different failure-ish paths and they are NOT the same:
+#
+#   * key ABSENT from cost_prices.json -> the `key not in prices` branch ->
+#     returns None -> the caller writes NULL cost_usd. This is the HONEST
+#     "we do not know" state.
+#   * key PRESENT with null rates -> `_rate()` maps every None to Decimal("0")
+#     -> compute returns a CONFIDENT Decimal("0"). This is a FABRICATED price.
+#
+# The operator ruled `published-rates` on 2026-08-04, so the key is present
+# with real numbers. The positive control below is what keeps that meaningful:
+# without it, a future "the model is missing, just add the key" fix could land
+# null rates and every assertion here would still pass while the audit record
+# silently priced five deep-research calls at $0.00.
+#
+# NOTE ON ASSERTION STYLE: `Decimal("0")` is FALSY. Every assertion in this pair
+# uses `is None` / `== Decimal(...)` and never truthiness — a truthiness check
+# would pass on exactly the defect being guarded against.
+# ===========================================================================
+
+#: The operator-ruled published rates, USD per 1M tokens (2026-08-04).
+#: THIRD-PARTY figures: openai.com/api/pricing returned HTTP 403, so these come
+#: from four agreeing aggregators. See `_gpt_5_6_sol_source` in cost_prices.json
+#: for the full provenance, the recorded source conflict on `prompt`, and the
+#: 272K long-context meter that makes these rates a FLOOR above that boundary.
+_GPT_5_6_SOL_RATES = {
+    "prompt": Decimal("5.0"),
+    "completion": Decimal("30.0"),
+    "cache_read": Decimal("0.50"),
+    "cache_creation_5m": Decimal("6.25"),
+}
+
+
+def test_gpt_5_6_sol_prices_at_the_published_rate_not_a_fabricated_zero():
+    """STATE PIN: the ruled `published-rates` state, one field at a time.
+
+    `gpt-5.6-sol` is the pinned OPENAI_DEEP_RESEARCH_MODEL default and is called
+    on the deep-research path, so before the 2026-08-04 ruling these calls wrote
+    NULL cost_usd and `SUM(cost_usd)` silently skipped them.
+
+    Each rate is exercised in ISOLATION (1M tokens in exactly one bucket) so a
+    transposed pair in cost_prices.json cannot hide inside a summed total.
+    """
+    # prompt: 1M uncached input tokens.
+    assert ct.compute("openai", "gpt-5.6-sol", 1_000_000, 0, 0) == _GPT_5_6_SOL_RATES[
+        "prompt"
+    ]
+    # completion: 1M output tokens.
+    assert ct.compute("openai", "gpt-5.6-sol", 0, 1_000_000, 0) == _GPT_5_6_SOL_RATES[
+        "completion"
+    ]
+    # cache_read: all 1M input tokens are cache hits, so none bill at `prompt`.
+    assert ct.compute(
+        "openai", "gpt-5.6-sol", 1_000_000, 0, 1_000_000
+    ) == _GPT_5_6_SOL_RATES["cache_read"]
+    # cache_creation_5m: the FIRST non-zero cache-write rate for any openai model
+    # in this file. If this asserts 0, someone "normalised" it to match gpt-4o.
+    assert ct.compute(
+        "openai", "gpt-5.6-sol", 0, 0, 0, 1_000_000
+    ) == _GPT_5_6_SOL_RATES["cache_creation_5m"]
+
+    # The whole point: NOT the fabricated zero, and NOT the unknown-model branch.
+    priced = ct.compute("openai", "gpt-5.6-sol", 1_000_000, 0, 0)
+    assert priced is not None
+    assert priced != Decimal("0")
+
+
+def test_null_rate_entry_returns_confident_zero_not_none(monkeypatch, tmp_path):
+    """POSITIVE CONTROL: this is what a null-rate entry actually does.
+
+    This test does NOT test the shipped price file. It builds a throwaway one in
+    which `openai/gpt-5.6-sol` is PRESENT with all four rates null, and proves
+    `compute` returns a confident `Decimal("0")` rather than None.
+
+    That is the trap the operator ruling exists to avoid: adding the key with
+    nulls would price five deep-research calls at $0.00 and make the run total
+    LOOK complete while still being a floor — strictly worse than the NULL rows
+    it replaced, because NULLs are at least countable via
+    `SELECT count(*) FROM audit_log WHERE run_id = :id AND cost_usd IS NULL`.
+
+    A DISTINCT temp path per test sidesteps `_load_prices`' (path, mtime) cache
+    entirely, which is more honest than trying to invalidate it.
+    """
+    import json as _json
+
+    null_prices = tmp_path / "null_rate_prices.json"
+    null_prices.write_text(
+        _json.dumps(
+            {
+                "openai/gpt-5.6-sol": {
+                    "prompt": None,
+                    "completion": None,
+                    "cache_read": None,
+                    "cache_creation_5m": None,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("COST_PRICES_PATH", str(null_prices))
+
+    fabricated = ct.compute("openai", "gpt-5.6-sol", 1_000_000, 0, 0)
+
+    # The defect, stated as an assertion: a null-rate entry is NOT unknown.
+    assert fabricated is not None
+    assert fabricated == Decimal("0")
+    assert isinstance(fabricated, Decimal)
+
+    # And a MISSING key on the very same file still takes the honest branch —
+    # which is what makes `is None` in the state pin above a real assertion.
+    assert ct.compute("openai", "gpt-4o", 1_000_000, 0, 0) is None
+
+
+def test_missing_key_and_null_rates_are_distinguishable_by_the_caller(
+    monkeypatch, tmp_path
+):
+    """The two paths must stay TYPE-distinguishable, not merely value-distinct.
+
+    A caller deciding whether to write NULL cost_usd branches on `is None`. If
+    the two paths ever collapse to the same value, that decision silently
+    becomes "price everything at zero".
+    """
+    import json as _json
+
+    # Path A: key genuinely absent.
+    empty_prices = tmp_path / "empty_prices.json"
+    empty_prices.write_text(_json.dumps({"_comment": "no models"}), encoding="utf-8")
+    monkeypatch.setenv("COST_PRICES_PATH", str(empty_prices))
+    unknown = ct.compute("openai", "gpt-5.6-sol", 1_000_000, 0, 0)
+
+    # Path B: key present, rates null.
+    null_prices = tmp_path / "null_prices_b.json"
+    null_prices.write_text(
+        _json.dumps({"openai/gpt-5.6-sol": {"prompt": None}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("COST_PRICES_PATH", str(null_prices))
+    fabricated = ct.compute("openai", "gpt-5.6-sol", 1_000_000, 0, 0)
+
+    assert unknown is None
+    assert fabricated is not None
+    assert type(unknown) is not type(fabricated)
+    # Both are falsy. This line is why every assertion in this pair avoids
+    # truthiness: `if not cost:` cannot tell these two apart.
+    assert not unknown and not fabricated
+
+
+# ===========================================================================
+# Credentials in URL QUERY PARAMETERS (plan 15.8-08)
+#
+# This module's docstring already claimed a SerpApi audit row "carr[ies] no
+# credential". These tests make that claim TESTABLE instead of asserted.
+#
+# THE THREAT: audit objects are written under SEVEN-YEAR retention. SerpApi
+# authenticates by QUERY PARAMETER, so a URL is a credential-bearing value. The
+# pre-existing `_redact_dict` matches DICT KEY NAMES ONLY and never inspects a
+# value, so `{"url": "...?api_key=LIVE"}` sailed straight through it. Worse, the
+# RESPONSE half of the blob was a bare `deepcopy` with NO redaction of any kind,
+# while `AuditedLLMClient.write_failure` writes `{"error": str(error)}` there and
+# `serpapi.search` does not wrap its httpx call -- so a transport exception
+# rendering the request URL was frozen verbatim for seven years.
+#
+# These tests assert the BYTES THAT REACH STORAGE via the real
+# `upload_audit_body` + its NESTOR_AUDIT_LOCAL_DIR file:// fallback -- not what a
+# helper returned. A helper's return value is not what gets retained.
+# ===========================================================================
+
+_LIVE_SECRET = "LIVE-KEY-VALUE-do-not-retain-9f3c2a"
+
+
+def _stored_bytes(tmp_dir) -> bytes:
+    """Read back every byte written under the local audit dir."""
+    written = list(tmp_dir.rglob("*.json"))
+    assert written, "upload_audit_body wrote nothing"
+    return b"".join(p.read_bytes() for p in written)
+
+
+async def test_credential_in_request_url_never_reaches_storage(monkeypatch, tmp_path):
+    """Test D: a credential in a REQUEST url is scrubbed in the stored bytes."""
+    monkeypatch.setenv("NESTOR_AUDIT_LOCAL_DIR", str(tmp_path))
+
+    await gcs_blob.upload_audit_body(
+        run_id=_RUN_ID,
+        audit_id=uuid.uuid4(),
+        provider="serpapi",
+        model="google",
+        request_dict={
+            "url": f"https://serpapi.com/search.json?q=coffee&api_key={_LIVE_SECRET}"
+        },
+        response_dict={},
+    )
+
+    body = _stored_bytes(tmp_path)
+    assert _LIVE_SECRET.encode() not in body
+    assert b"[REDACTED]" in body
+    # Not over-redacted: the evidence the record exists to hold survives.
+    assert b"serpapi.com/search.json" in body
+    assert b"q=coffee" in body
+
+
+async def test_credential_in_response_half_never_reaches_storage(monkeypatch, tmp_path):
+    """Test E: THE HALF THAT HAD NO REDACTION AT ALL before plan 15.8-08.
+
+    This is the exact shape `AuditedLLMClient.write_failure` produces.
+    """
+    monkeypatch.setenv("NESTOR_AUDIT_LOCAL_DIR", str(tmp_path))
+
+    await gcs_blob.upload_audit_body(
+        run_id=_RUN_ID,
+        audit_id=uuid.uuid4(),
+        provider="serpapi",
+        model="google",
+        request_dict={},
+        response_dict={
+            "error": (
+                "ConnectError: failed to reach "
+                f"https://serpapi.com/search.json?q=x&api_key={_LIVE_SECRET}"
+            ),
+            "type": "ConnectError",
+        },
+    )
+
+    body = _stored_bytes(tmp_path)
+    assert _LIVE_SECRET.encode() not in body
+    assert b"[REDACTED]" in body
+    # The diagnostic value of the error survives the scrub.
+    assert b"ConnectError" in body
+
+
+async def test_response_half_also_gets_key_name_redaction(monkeypatch, tmp_path):
+    """The response half gains BOTH mechanisms, not just the URL scrub."""
+    monkeypatch.setenv("NESTOR_AUDIT_LOCAL_DIR", str(tmp_path))
+
+    await gcs_blob.upload_audit_body(
+        run_id=_RUN_ID,
+        audit_id=uuid.uuid4(),
+        provider="openai",
+        model="gpt-5.6-sol",
+        request_dict={},
+        response_dict={"echo": {"api_key": _LIVE_SECRET}},
+    )
+
+    body = _stored_bytes(tmp_path)
+    assert _LIVE_SECRET.encode() not in body
+    assert b"[REDACTED]" in body
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"https://a.example/s?api_key={_LIVE_SECRET}",
+        f"https://a.example/s?apikey={_LIVE_SECRET}",
+        f"https://a.example/s?api-key={_LIVE_SECRET}",
+        f"https://a.example/s?key={_LIVE_SECRET}",
+        f"https://a.example/s?token={_LIVE_SECRET}",
+        f"https://a.example/s?access_token={_LIVE_SECRET}",
+        f"https://a.example/s?serpapi_key={_LIVE_SECRET}",
+        # Case-insensitive, and in a trailing `&` position rather than after `?`.
+        f"https://a.example/s?q=1&API_KEY={_LIVE_SECRET}",
+        f"https://a.example/s?q=1&ApiKey={_LIVE_SECRET}&page=2",
+    ],
+)
+def test_every_credential_parameter_spelling_is_scrubbed(url):
+    """Test F: spellings, cases and both `?`/`&` positions."""
+    scrubbed = gcs_blob._scrub_urls_in_value(url)
+    assert _LIVE_SECRET not in scrubbed
+    assert "[REDACTED]" in scrubbed
+    assert scrubbed.startswith("https://a.example/s?")
+    # EXACTLY the credential's value changed and nothing else: substituting the
+    # secret back reconstructs the original URL byte-for-byte. This catches both
+    # over-redaction and a scrubber that rewrites/re-orders the query string.
+    assert scrubbed.replace("[REDACTED]", _LIVE_SECRET) == url
+
+
+def test_scrub_stops_at_the_parameter_boundary():
+    """The value terminator must stop at `&` -- NOT swallow the rest of the query.
+
+    A too-greedy terminator (`[^\\s]*` instead of `[^&\\s]*`) still hides the
+    credential, so every "is the secret gone?" assertion passes while the
+    scrubber silently eats every following parameter. That is over-redaction
+    wearing a passing test, and it destroys audit evidence.
+    """
+    scrubbed = gcs_blob._scrub_urls_in_value(
+        f"https://a.example/s?q=1&api_key={_LIVE_SECRET}&page=2&lang=nl"
+    )
+    assert _LIVE_SECRET not in scrubbed
+    assert scrubbed == "https://a.example/s?q=1&api_key=[REDACTED]&page=2&lang=nl"
+
+
+def test_only_the_credential_parameter_is_touched_among_many():
+    """Two credentials and three innocents in one URL: exactly two get replaced."""
+    scrubbed = gcs_blob._scrub_urls_in_value(
+        f"https://a.example/s?utm=a&api_key={_LIVE_SECRET}&q=b&token={_LIVE_SECRET}&page=9"
+    )
+    assert scrubbed == (
+        "https://a.example/s?utm=a&api_key=[REDACTED]&q=b&token=[REDACTED]&page=9"
+    )
+
+
+def test_every_declared_credential_parameter_is_actually_scrubbed():
+    """THE VOCABULARY ITSELF IS PINNED -- every entry, not just the popular ones.
+
+    Added after a mutation run: deleting `auth_token`, `x_api_key`, `secret` and
+    `password` from `_CREDENTIAL_QUERY_PARAMS` left the whole suite GREEN,
+    because no test named them. An unpinned entry can be dropped by a future
+    edit with nothing going red -- on a 7-year-retention store.
+
+    TWO ASSERTIONS ARE REQUIRED HERE AND THE FIRST IS NOT OPTIONAL. Deriving the
+    cases from the constant alone is SELF-REFERENTIAL: shrink the constant and a
+    derived-only test simply tests less and stays green -- verified by mutation,
+    which is how the explicit floor below came to be written. The literal set is
+    the INVARIANT; the derived loop is the forward-compatibility half that picks
+    up names added later.
+    """
+    # (1) THE FLOOR -- literal, so a deletion cannot go unnoticed.
+    required = {
+        "api_key",
+        "apikey",
+        "key",
+        "token",
+        "access_token",
+        "auth_token",
+        "serpapi_key",
+        "x_api_key",
+        "secret",
+        "password",
+    }
+    missing = required - set(gcs_blob._CREDENTIAL_QUERY_PARAMS)
+    assert not missing, f"credential parameter(s) removed from the vocabulary: {missing}"
+
+    # (2) THE DERIVED HALF -- every declared name genuinely scrubs.
+    for name in gcs_blob._CREDENTIAL_QUERY_PARAMS:
+        url = f"https://a.example/s?{name}={_LIVE_SECRET}&keep=1"
+        scrubbed = gcs_blob._scrub_urls_in_value(url)
+        assert _LIVE_SECRET not in scrubbed, f"{name} was NOT scrubbed"
+        assert scrubbed == f"https://a.example/s?{name}=[REDACTED]&keep=1"
+
+        # And the `-` spelling of the same name is covered by the same entry.
+        dashed = name.replace("_", "-")
+        dashed_url = f"https://a.example/s?{dashed}={_LIVE_SECRET}&keep=1"
+        assert _LIVE_SECRET not in gcs_blob._scrub_urls_in_value(dashed_url), (
+            f"{dashed} was NOT scrubbed"
+        )
+
+
+def test_credential_url_scrubbed_when_nested_in_list_or_subdict():
+    """Test F (cont.): the walker reaches into lists and sub-dicts."""
+    nested = {
+        "outer": [
+            {"inner": {"url": f"https://a.example/s?api_key={_LIVE_SECRET}"}},
+            [f"https://b.example/s?token={_LIVE_SECRET}"],
+        ]
+    }
+    scrubbed = gcs_blob._scrub_urls_in_value(nested)
+    flattened = repr(scrubbed)
+    assert _LIVE_SECRET not in flattened
+    assert flattened.count("[REDACTED]") == 2
+
+
+@pytest.mark.parametrize(
+    "clean_url",
+    [
+        "https://example.com/a?utm_source=x&q=coffee",
+        "https://news.example/article?id=42&page=2",
+        # `monkey` ENDS in `key` and `api_keyx` STARTS with `api_key`: neither is a
+        # credential parameter, and a sloppier pattern would maul both.
+        "https://example.com/s?monkey=banana",
+        "https://example.com/s?api_keyx=notacredential",
+        "https://example.com/path/keyword/token",
+    ],
+)
+def test_clean_urls_are_returned_byte_identical(clean_url):
+    """Test G: NO OVER-REDACTION.
+
+    A scrubber that mangles every URL destroys the audit evidence it exists to
+    protect. Asserted as byte-identity, not as "no [REDACTED]".
+    """
+    assert gcs_blob._scrub_urls_in_value(clean_url) == clean_url
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        42,
+        3.14,
+        True,
+        b"\xff\xfe\x00 undecodable binary",
+        {"deep": [{"deeper": [{"deepest": ["no urls here"]}]}]},
+        "http://[malformed::url?api_key=",
+        "?????&&&&=====",
+        "",
+    ],
+)
+def test_scrubber_never_raises(value):
+    """Test H: this sits in the LIVE audit-write path.
+
+    A redactor that raises turns a failure to redact into a failure to RECORD,
+    which is strictly worse. Same discipline as `serpapi._safe_excerpt`.
+    """
+    gcs_blob._scrub_urls_in_value(value)  # must simply not raise
+
+
+def test_bytes_values_are_scrubbed_and_keep_their_type():
+    """Bytes are NOT inert: `json.dumps(default=str)` stringifies them INTO the blob.
+
+    Found while executing plan 15.8-08 -- the first draft of the scrubber passed
+    bytes through untouched, which would have written a credential to a
+    7-year-retained object via the `default=str` serialiser.
+    """
+    scrubbed = gcs_blob._scrub_urls_in_value(f"x?api_key={_LIVE_SECRET}".encode())
+    assert isinstance(scrubbed, bytes)
+    assert _LIVE_SECRET.encode() not in scrubbed
+    assert b"[REDACTED]" in scrubbed
+
+    # A clean bytes value is returned untouched, and undecodable binary is left
+    # strictly alone rather than corrupted by a lossy decode.
+    assert gcs_blob._scrub_urls_in_value(b"x?q=coffee") == b"x?q=coffee"
+    assert gcs_blob._scrub_urls_in_value(b"\xff\xfe") == b"\xff\xfe"
+
+
+def test_key_name_redaction_still_works_unchanged():
+    """The pre-existing mechanism must not regress -- it is the header control.
+
+    `test_own_researcher.py` also pins this; asserted here so a change to
+    `gcs_blob` that breaks it fails in the module that owns the contract too.
+    """
+    redacted = gcs_blob._redact_dict(
+        {"params": {"api_key": _LIVE_SECRET}}, gcs_blob._DEFAULT_REDACT_KEYS
+    )
+    assert redacted["params"]["api_key"] == "[REDACTED]"

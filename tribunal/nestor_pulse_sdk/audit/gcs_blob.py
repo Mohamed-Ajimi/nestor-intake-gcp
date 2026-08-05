@@ -14,7 +14,22 @@ Design:
   - Per-object retention: 7 years, mode="Unlocked" (NOT Bucket Lock -- Pitfall 7).
     Bucket Lock is irreversible at the bucket level and FORBIDDEN for this project.
     Per-object retention is set on each blob individually via blob.retention + blob.patch().
-  - Provider API keys + auth headers are REDACTED before upload (Security Domain T-07-04).
+  - Credentials are REDACTED before upload (Security Domain T-07-04) by TWO
+    INDEPENDENT MECHANISMS, applied to BOTH the request and the response half:
+      1. `_redact_dict` -- KEY-NAME redaction. Replaces the value of any dict key
+         named like a credential header (`authorization`, `x-api-key`, ...). This
+         catches auth HEADERS, which is the shape most provider SDKs use.
+      2. `_scrub_urls_in_value` -- VALUE-LEVEL redaction. Replaces the value of any
+         URL QUERY PARAMETER named like a credential, anywhere in any string.
+    BOTH ARE REQUIRED AND NEITHER SUBSUMES THE OTHER. Mechanism 1 inspects key
+    names only and never looks at a value, so a credential riding INSIDE a URL --
+    `https://serpapi.com/search.json?q=x&api_key=LIVE` -- is invisible to it. The
+    SerpApi key travels exactly that way. Because objects here are written under
+    SEVEN-YEAR retention, an unredacted body freezes a live credential for seven
+    years, so the response half is redacted too and is NOT a bare deepcopy.
+    (Plan 15.8-08. Before that plan the response half had NO redaction at all,
+    and `AuditedLLMClient.write_failure` writes `{"error": str(error)}` there --
+    a provider exception whose text renders a request URL landed verbatim.)
   - Bucket name: from env var AUDIT_GCS_BUCKET (default: "nestor-audit-prod").
 
 Pitfall 7 -- Object Retention, NOT Bucket Lock:
@@ -28,6 +43,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -54,10 +70,126 @@ _DEFAULT_REDACT_KEYS: frozenset[str] = frozenset({
 })
 
 
+# URL QUERY PARAMETER names whose VALUE is a credential. The sibling of
+# _DEFAULT_REDACT_KEYS above, and deliberately placed next to it so a reader sees
+# the two mechanisms together:
+#
+#   _DEFAULT_REDACT_KEYS  -> matches a DICT KEY NAME  (auth headers)
+#   _CREDENTIAL_QUERY_PARAMS -> matches a QUERY PARAM NAME inside a STRING (URLs)
+#
+# Neither one covers the other's case. SerpApi authenticates by query parameter
+# (`?api_key=...`), so without the second mechanism a live key reaches a
+# 7-year-retention object. Separator-insensitive: each entry below also matches
+# its `-`, `_` and run-together spellings (api_key / api-key / apikey).
+_CREDENTIAL_QUERY_PARAMS: frozenset[str] = frozenset({
+    "api_key",
+    "apikey",
+    "key",
+    "token",
+    "access_token",
+    "auth_token",
+    "serpapi_key",
+    "x_api_key",
+    "secret",
+    "password",
+})
+
+
+def _build_credential_query_pattern(param_names: frozenset[str]) -> "re.Pattern[str]":
+    """Compile the query-parameter credential pattern FROM the constant above.
+
+    Derived rather than hand-written so the frozenset stays the single source of
+    truth -- a hand-maintained second copy of the vocabulary is the
+    two-authorities trap this phase is explicitly guarding against.
+
+    Each name's `_` becomes `[-_]?`, so one entry covers the `-`, `_` and
+    run-together spellings. Alternatives are sorted LONGEST-FIRST because Python
+    regex alternation is leftmost-first: without it, `key` could shadow
+    `serpapi_key` on a pattern that did not anchor the delimiter.
+    """
+    alternatives = sorted(
+        (re.escape(name).replace("_", "[-_]?") for name in param_names),
+        key=len,
+        reverse=True,
+    )
+    # ([?&] or start-of-param) NAME = VALUE
+    # The value runs to the next &, whitespace, quote or bracket -- these URLs are
+    # frequently embedded in JSON blobs and provider exception strings, so the
+    # terminator set must include the characters that end a string literal.
+    return re.compile(
+        r"([?&])(" + "|".join(alternatives) + r")(=)([^&\s\"'<>\\]*)",
+        re.IGNORECASE,
+    )
+
+
+_CREDENTIAL_QUERY_RE = _build_credential_query_pattern(_CREDENTIAL_QUERY_PARAMS)
+
+
+def _scrub_urls_in_value(value, _depth: int = 0):
+    """Replace credential VALUES inside URL query strings, anywhere in `value`.
+
+    Walks strings, dicts and lists; returns anything else untouched. Only the
+    credential parameter's VALUE is replaced -- the scheme, host, path, the
+    parameter NAME and every non-credential parameter survive byte-identical,
+    because the audit record exists to be READ and a scrubber that mangles every
+    URL destroys the evidence it was added to protect.
+
+    Deliberately regex-based rather than urlsplit + parse_qs + urlencode: a
+    round trip through the parser REWRITES the URL (re-orders and re-encodes
+    parameters), which changes evidence, and a malformed URL out of a provider
+    exception string is not guaranteed to survive it at all.
+
+    NEVER RAISES. This sits in the live audit-write path, and a failure to redact
+    must not become a failure to RECORD -- the same discipline as
+    `serpapi._safe_excerpt`. On an unexpected error the value is returned as-is
+    with a WARNING.
+    """
+    # Guard against a self-referential structure; audit bodies are provider JSON
+    # and should never be deep, so a generous cap costs nothing.
+    if _depth > 20:
+        return value
+    try:
+        if isinstance(value, str):
+            return _CREDENTIAL_QUERY_RE.sub(r"\1\2\3[REDACTED]", value)
+        if isinstance(value, (bytes, bytearray)):
+            # Bytes are NOT inert here: upload_audit_body serialises with
+            # `default=str`, so a bytes value is stringified INTO the stored blob
+            # and a credential inside it would reach 7-year retention unscrubbed.
+            # Scrub in place and keep the type; only re-encode when something
+            # actually changed, and leave undecodable binary strictly untouched
+            # rather than corrupting evidence with a lossy decode.
+            try:
+                decoded = bytes(value).decode("utf-8")
+            except UnicodeDecodeError:
+                return value
+            scrubbed = _CREDENTIAL_QUERY_RE.sub(r"\1\2\3[REDACTED]", decoded)
+            return value if scrubbed == decoded else scrubbed.encode("utf-8")
+        if isinstance(value, dict):
+            return {k: _scrub_urls_in_value(v, _depth + 1) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_scrub_urls_in_value(item, _depth + 1) for item in value]
+        if isinstance(value, tuple):
+            return [_scrub_urls_in_value(item, _depth + 1) for item in value]
+        return value
+    except Exception as exc:  # noqa: BLE001 -- redaction must never break the audit write
+        _logger.warning(
+            "URL credential scrub failed (%s: %s) -- value passed through unscrubbed",
+            type(exc).__name__,
+            exc,
+        )
+        return value
+
+
 def _redact_dict(d: dict, redact_keys: frozenset[str]) -> dict:
     """
     Recursively redact sensitive keys from a dict, case-insensitively.
     Replaces values with "[REDACTED]".
+
+    KEY-NAME MECHANISM ONLY -- it never inspects a value. A credential inside a
+    URL query parameter is invisible here BY DESIGN; `_scrub_urls_in_value` is
+    the mechanism that covers that case. Do not "improve" this function to look
+    at values: `test_own_researcher.py` pins this behaviour and it is the correct
+    control for auth headers.
     """
     result = {}
     for k, v in d.items():
@@ -120,9 +252,21 @@ async def upload_audit_body(
       google.cloud.exceptions.GoogleCloudError: on upload failure.
       ImportError: if google-cloud-storage is not installed (caught by caller).
     """
+    # BOTH halves get BOTH mechanisms (plan 15.8-08).
+    #
+    # Key-name redaction catches auth HEADERS; the URL scrub catches credentials
+    # riding in a query parameter, which the key-name pass cannot see because it
+    # never inspects a value. SerpApi authenticates by query parameter.
+    #
+    # The RESPONSE half was a bare `deepcopy` before 15.8-08 -- i.e. no redaction
+    # at all -- while `AuditedLLMClient.write_failure` routes
+    # `{"error": str(error), "type": ...}` through it. `serpapi.search` does not
+    # wrap its httpx `.get()`, so a transport-layer exception carrying the full
+    # request URL propagated raw into a 7-YEAR-RETENTION object. Do not revert
+    # this to a deepcopy.
     redact_set = frozenset(k.lower() for k in redact_keys)
-    safe_request = _redact_dict(deepcopy(request_dict), redact_set)
-    safe_response = deepcopy(response_dict)
+    safe_request = _scrub_urls_in_value(_redact_dict(deepcopy(request_dict), redact_set))
+    safe_response = _scrub_urls_in_value(_redact_dict(deepcopy(response_dict), redact_set))
 
     # Sanitize model name for use in the key (replace "/" and spaces with "-")
     safe_model = model.replace("/", "-").replace(" ", "-")[:64]
