@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-08-04T09:34:36.016Z"
-last_activity: 2026-08-04 -- 15.8-13 phase gate RUN: engine RED (1 real defect) at 43 of 43, gates 187 green, mutation debt PAID
+last_updated: "2026-08-05T11:20:05.455Z"
+last_activity: 2026-08-05 -- 15.8-15 pre-flight PREP written (stop procedure + Q-PRE-0..4 + query set); HALTED at Task 1 blocking checkpoint, no run triggered
 progress:
   total_phases: 16
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 124
-  completed_plans: 106
-  percent: 69
+  completed_plans: 122
+  percent: 75
 ---
 
 # Project State
@@ -26,7 +26,28 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.8 (research-engine-redesign-yield-instrumentation-deploy-one-me) — EXECUTING
-Plan: 14 of 15 complete — **ONLY `15.8-15` REMAINS** (the ONE measuring run, ~$45).
+Plan: **15 of 15 — IN PROGRESS, HALTED AT `15.8-15` TASK 1'S BLOCKING CHECKPOINT.**
+Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
+**NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.
+**No run has been triggered and no measurement exists.** What is done is the credential-free
+preparatory half — the five-point STOP PROCEDURE, the Q-PRE-0…Q-PRE-4 pre-flight command set with
+15.8-14's digest baseline quoted for character-by-character comparison, the cost-floor reading
+discipline, the run-identity skeleton and the eleven-query measurement set — all written into
+`15.8-UAT.md` with `«OPERATOR: …»` fill markers and **zero fabricated values**.
+
+⛔ **The plan is blocked on the operator, in this order (all four are ABORT gates and none costs
+money): Q-PRE-0 account+project → Q-PRE-1 revisions/digests → Q-PRE-2 empty queue → Q-PRE-3 worker
+env → Q-PRE-4 the `logging.logWriter` grant, which is STILL UNPAID.**
+
+<!-- NOTE 2026-08-05: the GSD state tooling rewrote this line to a bare "Plan: 1 of 15" at
+     execute-phase start, which is a regression of a curated position. Restored with the real
+     position rather than committed as-is. -->
+
+⚠️ **Recorded defect in `15.8-15`'s own Task-1 `<automated>` gate:** it greps the WHOLE of
+`15.8-UAT.md` for `TBD` and requires zero, but 15.8-12 deliberately seeded every observed/verdict
+cell with `TBD` as an "owed" marker, and those are filled by Tasks 2–3. The gate is therefore
+unsatisfiable at Task 1 time — the same whole-file-versus-section scoping defect 15.8-14 booked as
+its deviation #9. Task 1's own acceptance criterion is correctly scoped to the run-identity block.
 
   ## ✅ 2026-08-05 — THE ONE DEPLOY IS DONE. FIVE WAVES ARE LIVE.
   Shared SHA **`20260805-111647`**, master `8dc2fa3`, tree clean, no worktrees.
@@ -398,7 +419,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-08-04 -- 15.8-13 phase gate RUN: engine RED (1 real defect) at 43 of 43, gates 187 green, mutation debt PAID
+Last activity: 2026-08-05 -- Phase 15.8 execution started
 
 Progress: [██████████] 100%
 
