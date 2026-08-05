@@ -4144,6 +4144,183 @@ SELECT version_num FROM public.alembic_version;              -- expect: 0013 (un
 
 ---
 
+#### 15.8.j.1 — PREFLIGHT BLOCK (plan 15.8-14 Task 1) · 2026-08-05
+
+**Nothing was built and nothing was deployed to produce this block.** Every line below came from a
+command run in the main working tree or from `gcloud builds describe` build TEXT.
+
+**(a) The tree.**
+
+| Check | Command | Result |
+|---|---|---|
+| Branch | `git rev-parse --abbrev-ref HEAD` | `master` |
+| HEAD | `git log --oneline -1` | `382b5b9 docs(phase-15.8): 15.8-08 complete — both deploy pre-conditions settled` |
+| Clean | `git status --porcelain` | **empty** (whole tree — not even the previously-noted `?? .claude/`) |
+| Clean, build surface | `git status --porcelain tribunal/ infra/ backend/ frontend/` | **empty** |
+| Worktrees | `git worktree list` | one entry only: the main tree at `382b5b9 [master]`. **No stale worktree on disk.** |
+
+**Staleness — asserted by MERGE-BASE, never by `rev-list --count`.** The count reads GREEN while
+stale, because on a stale tree the stale ref usually *is* the merge-base.
+
+| Base | `git merge-base HEAD <BASE>` | Equals `<BASE>`? | (`rev-list --count`, recorded but NOT the proof) |
+|---|---|---|---|
+| `8a6c59f` (phase code base, per 15.8-13) | `8a6c59fce0aa2a5c0db6af20fa4a40d53a0d79fd` | **YES** | 108 |
+| `31a7f71` (last commit that reached a live service) | `31a7f71dd423a25ce0bb859c01e0f93388e57399` | **YES** | 384 |
+
+**(b) POSITIVE-PRESENCE SENTINELS — 26 assertions, one or more per build plan. ZERO MISSES.**
+
+| Plan | Assertion | Result |
+|---|---|---|
+| 15.8-01 | `_resolve_ceiling` in `pipeline/tribunal/question_grouping.py` | 2 matches |
+| 15.8-01 | `test_the_merge_note_is_emitted_once_however_many_merges_the_ceiling_took` in `tests/test_question_grouping.py` | 1 match |
+| 15.8-02 | `_dispatch_was_uniform` in `pipeline/tribunal/pipeline.py` | 3 matches |
+| 15.8-02 | file `tests/test_pipeline_dispatch_clause.py` | present |
+| 15.8-03 | `def _text_key` in `pipeline/tribunal/workshop_rank.py` | 1 match |
+| 15.8-03 | `_sweep_langs` in `pipeline/tribunal/workshop_rank.py` | 3 matches |
+| 15.8-04 | `def count_drops` in `pipeline/tribunal/workshop_register.py` | 1 match |
+| 15.8-04 | `DROP_CLUSTERED_ONTO_LIVE` in `pipeline/tribunal/workshop.py` | 1 match |
+| 15.8-05 | files `alembic/versions/0018_yield_instrumentation.py`, `runs/yield_records.py`, `db/models/assignment_yield.py`, `db/models/workshop_round_yield.py` | all 4 present |
+| 15.8-05 | `down_revision` = `"0017"` in `0018_yield_instrumentation.py` | 1 match |
+| 15.8-06 | file `15.8-06-DECISION-RECORD.md` | present |
+| 15.8-07 | `EXPECTED_FILES` in `tribunal/cloudbuild.test-gates.yaml` | 9 matches |
+| 15.8-08 | `_scrub_urls_in_value` in `audit/gcs_blob.py` | 8 matches |
+| 15.8-08 | `gpt-5.6-sol` in `audit/cost_prices.json` | 3 matches |
+| 15.8-09 | files `tests/test_pipeline_assignment_yield.py`, `tests/test_research_division_yield.py` | both present |
+| 15.8-09 | `yield_records` referenced under `pipeline/tribunal/` | 4 files: `pipeline.py`, `research_division.py`, `workshop_loop.py`, `workshop_rank.py` |
+| 15.8-09 | `parent_kind` referenced under `pipeline/tribunal/` | `pipeline.py` 1, `research_division.py` 13 |
+| 15.8-10 | `new_entrants_top_n` in `pipeline/tribunal/workshop_loop.py` | 5 matches |
+| 15.8-10 | file `tests/test_workshop_round_yield.py` | present |
+| 15.8-10 | `yield_records` imported in `workshop_rank.py` | line 122, `record_round_safe` called at 1974 |
+| 15.8-11 | file `tests/test_suite_hygiene.py` | present |
+| 15.8-13 | `EXPECTED_FILES=43` in `tribunal/cloudbuild.test-engine.yaml` | 1 match |
+| CR-01 restore | `ANGLE_YIELD_RESOLVABLE_SOURCES` in `pipeline/synthesis/steps.py` | 4 matches |
+| CR-01 restore | `ANGLE_YIELD_RESOLVABLE_SOURCES` in `pipeline/tribunal/pipeline.py` | 3 matches |
+| Wave 4 (15.7), carried | `_LOOP_MIN_ROUNDS` in `pipeline/tribunal/workshop_loop.py` | 4 matches |
+
+**The two PAIRED assertions — both halves recorded, because a bare `== 0` is green on an empty file:**
+
+| Paired assertion | Absence half | Presence half |
+|---|---|---|
+| D-W5-6 cause-filtered drop counter (15.8-10) | `grep -c 'len(register.get("drops")' workshop_rank.py` = **0** | `grep -c "count_drops" workshop_rank.py` = **5** |
+| Wave 3 (15.6) discovery-rider cap | `max_size` in `attach_discovery_riders`' signature = **0** | `max_riders` **present** in that same signature: `def attach_discovery_riders(groups: Any, riders: Any, *, max_riders: Any = None)` |
+
+**(c) THE TWO BLOCKING PRE-CONDITIONS — read from `15.8-PRECONDITIONS.md`, asserted as CONTENT.**
+
+| Pre-condition | Gate grep | Occurrences | The settled line, verbatim | State |
+|---|---|---|---|---|
+| 1 — `gpt-5.6-sol` cost row | `grep -q "GPT-5.6-SOL RATE:"` | 1 (line 44) | `**GPT-5.6-SOL RATE: PUBLISHED-RATES ENTERED 2026-08-04**` | ✅ **SETTLED 2026-08-04** — legal state **`published-rates`** (the other legal state being a dated `no-published-rate` ruling). **Not nulls.** Operator ruling, in session. |
+| 2 — audit-blob credential scan | `grep -q "REDACTION: PASS"` | 1 (line 155) | `**REDACTION: PASS**` | ✅ **SETTLED 2026-08-05 by the OPERATOR's own run** — 415 blobs, SCAN 1 query-param class `files: 0 / hits: 0`, positive control `urls-with-querystring: 1724` |
+
+**The SerpApi rotation trigger did NOT fire.** SCAN 1 was a true zero against a corpus proven to
+contain 1,724 query-string URLs, and all 58 SCAN-2 header-class hits decomposed to false positives
+(`sk-` 0, real auth header names 0, the 4 `AIza` hits are base64 attachment substrings of length
+84/54/214/58 where a real key is fixed-length). **`Nestor_SERP` was NOT rotated and did not need to
+be. No rotation is scheduled before the build step.**
+
+⚠ **What that scan does and does not retire (PRECONDITIONS FINDING 2):** V-01 is clean because the
+exposure path **was never triggered in that run** — 0 of 415 blobs carry a non-empty
+`error`/`exception`/`traceback` field, so `write_failure`'s path never fired. The scan retires the
+**historical** question only; `_scrub_urls_in_value` (commit `5c04421`, shipping in this image) is
+what protects future runs.
+
+**`Nestor_Claude_Temp`: CLOSED-BY-DECISION (operator, 2026-08-03) — rotation DEFERRED TO GO-LIVE.**
+It is a decision, not a gap, and it is recorded here once and nowhere else in this record as an open
+item. It still receives its `TRIBUNAL_ANTHROPIC_SECRET` override on every deploy command below.
+
+**(d) THE GATE — ⚠ A DEVIATION FROM THIS PLAN'S OWN TASK 1(d), AND THE REASON IS A REAL FINDING.**
+
+Plan 15.8-14 Task 1(d) instructs: *"the gate is already paid — read 15.8-13's record, do not re-run
+it."* **That criterion is stale, and following it would have shipped an ungated tree.** Two facts,
+both re-derived here rather than recalled:
+
+1. **15.8-13's own recorded gate was RED**, not green — build `b1397467` = **FAILURE**, `1 failed /
+   1753 passed / 13 skipped` (FINDING-1, `assignment_identity` stringifying a hostile
+   `corroboration_key` into a provenance column). Its summary states plainly *"the PHASE GATE is NOT
+   GREEN"*. Read literally, Task 1(d) says **ABORT**.
+2. That defect was closed afterwards by the review-fix cycle and the CR-01 restore — but **the last
+   green engine gate, build `409ecddc` (SUCCESS, created `2026-08-04T13:40:32Z`), predates three
+   `tribunal/` commits that are in HEAD**:
+
+   ```
+   3597e87 2026-08-04T22:51:52+02:00 feat(15.8-08): record published gpt-5.6-sol rates with full provenance
+   5c04421 2026-08-04T22:52:09+02:00 fix(15.8-08): redact credentials in URL query params on BOTH audit blob halves
+   ```
+
+   `git diff --name-only 54a1544..HEAD -- tribunal/` returns exactly three files:
+   `audit/cost_prices.json`, `audit/gcs_blob.py`, `tests/test_cost_serpapi.py`. **One is a production
+   module, one is the cost table the audit record depends on, and one is a test file already
+   registered in the engine gate's 43-path list.** 15.8-08's own summary says so in its own words:
+   *"STILL OWED TO CLOUD BUILD (15.8-13): the full 43-file gate."* — a debt handed to a plan that had
+   already run and could not have paid it.
+
+**So the gates were re-run on HEAD before any spend**, which is also what **§ Step 15.8.b of this
+same runbook instructs at deploy time**. This does not re-litigate 15.8-13; it executes 15.8-12's
+procedure on the tree actually being built.
+
+| Gate | Build id | Status (from `gcloud builds describe`, never a shell status or a pipe) | Tree |
+|---|---|---|---|
+| `cloudbuild.test-engine.yaml` | `3a7a580a-2e36-4a9c-9a35-956e165ea361` | **SUCCESS** | HEAD `382b5b9` |
+| `cloudbuild.test-gates.yaml` | `f1322c33-1f10-4aef-b530-e396b24787d3` | **SUCCESS** | HEAD `382b5b9` |
+
+Both reached a **terminal** status under polling, so neither `EXPIRED` nor `QUEUED` could have been
+misread as a result. **Historical baselines, as builds to beat and not as values to compare
+against:** engine `7c89be5c` = 1538 passed / 0 failed / 13 skipped at `collecting: 36 of 36`; gates
+`2eae97e6` = 187 passed / 2 deselected; last pre-HEAD green engine `409ecddc` = 1777 passed / 0
+failed / 13 skipped at `collecting: 43 of 43`.
+
+**(e) THE DEPLOY SURFACE — computed, not inherited.**
+
+```
+$ git diff --name-only 31a7f71 HEAD | awk -F/ '{print $1}' | sort -u
+.gitattributes
+.gitignore
+.planning
+docs
+infra
+tribunal
+
+$ git diff --stat 31a7f71..HEAD -- backend/ frontend/
+[no output — the diff is empty]
+
+$ git log --oneline 31a7f71..HEAD -- backend/ frontend/
+[no output — no commit touched either directory]
+```
+
+Neither `backend` nor `frontend` appears. **The rebuild condition did not fire.** Resulting surface,
+recorded as a decision with its evidence:
+
+| Deployable | Decision | Evidence |
+|---|---|---|
+| `tribunal-worker` | **REBUILD + DEPLOY** | carries all five waves of engine code |
+| `tribunal-api` | **REBUILD + DEPLOY** | serves the read surfaces over the changed schema; it is the image `tribunal-migrate` is pinned to |
+| `tribunal-migrate` (Job) | **REPIN + EXECUTE** | three unpaid migrations (`0016`, `0017`, `0018`) |
+| `nestor-api` | **CONFIRM-ONLY** | zero-byte diff under `backend/` since `31a7f71`, quoted above |
+| `nestor-frontend` | **CONFIRM-ONLY** | zero-byte diff under `frontend/` since `31a7f71`, quoted above |
+| `nestor-migrate` (Job) | **NOT EXECUTED** | newest `backend/app/db/alembic` revision is `0013_research_run_event_seq.py`; no revision added this phase. INTAKE head stays `0013`. |
+
+**The one residual assumption, stated rather than hidden:** the live frontend image was built at
+SHA A of the 2026-07-28 deploy (a tree at or before `31a7f71`). The evidence that it carries today's
+`frontend/` is that `31a7f71` touched only `backend/`, plus § Step 15.2.k's own record line
+confirming the run page shipped at SHA A. That is inference from two records, not a read of the
+running bundle.
+
+**(f) A CORRECTION TO THIS PLAN'S `user_setup`, recorded because it misdirects every future reader.**
+
+Plan 15.8-14's `user_setup` states: *"The agent has no gcloud credentials, cannot submit a Cloud
+Build, cannot execute a Cloud Run Job and cannot read Cloud SQL."* **That is FALSE.** `gcloud` is
+authenticated as `tools@dotto.be` on `project-cb01b861-cb4a-438d-b9a`
+(`gcloud config list` → `tools@dotto.be  project-cb01b861-cb4a-438d-b9a`), four Cloud Builds were
+submitted by agents during this phase, and the audit bucket was read directly.
+
+⛔ **That correction changes WHO CAN RUN a command. It changes NOTHING about who may CLEAR a gate.**
+A `checkpoint:human-verify` guarding a production deploy is satisfied by a human reading the result
+and signing off — **being able to run the command is not authority to satisfy the gate.** This
+distinction was violated once in this phase (plan 15.8-08, pass token written then withdrawn, commit
+`7c76636`) and the reversal is recorded in `15.8-PRECONDITIONS.md`'s PROCESS NOTE. Both halves are
+recorded here deliberately.
+
+---
+
 ### Step 15.8.k — THE ONE MEASURING RUN: what to read, and where
 
 **ONE live run, on a FRESH intake, in the baseline brief domain. No A/B double-run.**
