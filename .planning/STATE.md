@@ -26,11 +26,61 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 ## Current Position
 
 Phase: 15.8 (research-engine-redesign-yield-instrumentation-deploy-one-me) — EXECUTING
-  Plan 15.8-13 (THE PHASE GATE) COMPLETE 2026-08-04, commit 5f62a62. ⛔ **THE GATE IS RED AND
-  15.8-14 IS BLOCKED** on ONE real production defect — see the Gates (15.8) block below.
-  Stopped at: 15.8-13-SUMMARY.md written; next plan is 15.8-14 (the ONE deploy), which must NOT
-  start until the engine gate is green.
-Plan: 1 of 15
+Plan: 14 of 15 complete — **ONLY `15.8-15` REMAINS** (the ONE measuring run, ~$45).
+
+  ## ✅ 2026-08-05 — THE ONE DEPLOY IS DONE. FIVE WAVES ARE LIVE.
+  Shared SHA **`20260805-111647`**, master `8dc2fa3`, tree clean, no worktrees.
+  `tribunal-api-20260805-111647-115349` + `tribunal-worker-00004-gnv`, both 100%, digest-pinned.
+  `nestor-api-00044-8bz` / `nestor-frontend-00028-q52` CONFIRM-ONLY (empty `backend/`+`frontend/`
+  diff — D-W5-16 vindicated). **All three unpaid migrations PAID** (`tribunal-migrate-gqmtk`, all
+  three literal `Running upgrade` lines). Chain GREEN on DEPLOYED data post-`0018`. Queue proven
+  empty 4×. Worker deployed LAST. `NESTOR_WORKER_STALE_MINUTES=60`; every `NESTOR_TRIBUNAL_WORKSHOP_*`
+  ABSENT (the positive finding — the validated Wave-4 code defaults are what will run).
+
+  **⚠ THE ENTIRE BLOCK BELOW ABOUT A RED GATE IS SUPERSEDED AND KEPT ONLY AS THE ORIGIN RECORD.**
+  The 15.8-13 gate defect was fixed the same day; the gate was then re-run ON THE DEPLOYED TREE at
+  `collecting: 43 of 43`, **1812 passed / 0 failed / 13 skipped** (build `3a7a580a`), gates
+  `13 of 13`, 187 passed / 2 deselected (`f1322c33`). 1777 → 1812 is exactly +35 — the
+  `test_cost_serpapi.py` tests that had never executed in Cloud Build.
+
+  ## ⛔ BEFORE `15.8-15` SPENDS THE ~$45 — Q-PRE-4 IS UNPAID
+  **Grant `roles/logging.logWriter` to `nestor-run@` and prove it with a visible `SELECT 1`.**
+  D-W5-18: the yield tables have NO endpoint, NO seam verb, NO UI, and the only credential-free DB
+  path returns **a boolean in its exit status, not a table of numbers**. Without the grant Wave 5's
+  own § 8 criterion is UNREADABLE AFTER the money is spent. Every value in the deploy record had to
+  be pinned by PAIRED runs for exactly this reason.
+
+  ## Reading discipline for the run — never present a floor as a total
+  `SUM(cost_usd)` is a FLOOR for THREE mechanically distinct reasons: (1) `gpt-5.6-sol` rows that
+  wrote NULL before the cost ruling — `SUM` skips NULLs and the openai branch never sets
+  `cost_pending`; (2) **WR-02** — a failed/timed-out angle emits NO `assignment_yield` row at all, so
+  reconcile row count against dispatched-angle count; (3) the **272K long-context meter** —
+  flat rates under-report 2×/1.5× above it, and 15.8-15 owes a measurement of actual `prompt_tokens`
+  against that boundary. Also: measure `corroboration_key` at the **ANGLE** level (claim-level NULLs
+  are by design); **three locales `en/fr/nl`, not four**; V-02 item #6 is N/A (the `own` stream was
+  removed by design, #5 drops to 3 of 3); and V-01's "9 of 10 winners WEAK" baseline is contaminated
+  by a 240-char truncation.
+
+  ## Four instructions in the deploy path that READ LIKE CHECKS AND CANNOT BE EXECUTED
+  `public.alembic_version` SELECT (refused for BOTH `app_user` and `worker_user` — INTAKE head is
+  recorded NOT OBTAINED, its evidence labelled INFERENCE); the § 15.2.k queue recipe that exists ONLY
+  as prose; `gcloud beta run jobs executions logs read` (dies on bundled-Python self-update — use
+  **`gcloud logging read`** with the execution-name filter); and the run-page UI path —
+  `/admin/pulse/runs/$runId` is deliberately bookmarkable yet **login discards the destination**, and
+  there is no runs list page. UAT items, booked as one class.
+
+  ## Two traps that nearly produced false results
+  **Asserting on a JSON response: assert the KEY EXISTS as a separate arm from its VALUE.** The
+  orchestrator propagated `chain_status` (nestor-api's WRAPPER shape) when `tribunal-api` returns
+  `{"ok","broken_at"}` — three builds failed and read exactly like a red chain.
+  **`gcloud auth login` silently switched account AND project mid-deploy** and overwrote a correction
+  seconds after a live API call had already succeeded. Four accounts on this machine. **Assert account
+  and project immediately before EVERY gcloud operation** — `tools@dotto.be` /
+  `project-cb01b861-cb4a-438d-b9a`. Deploy scripts inherit ambient config and never complain.
+
+---
+
+**SUPERSEDED — origin record only, do not act on it:**
 GATE GREEN, VERIFIED (`gaps_found`, 57/58). NOT DEPLOYED.** Verification ran 2026-08-03 at `94a7647`
 (`15.7-VERIFICATION.md`). **`/gsd-verify-phase` DOES NOT EXIST** and never did; earlier handoffs
 instructed it and it was carried forward unverified across two sessions — the `gsd-verifier` agent
