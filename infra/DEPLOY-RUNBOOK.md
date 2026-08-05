@@ -4121,30 +4121,269 @@ SELECT version_num FROM public.alembic_version;              -- expect: 0013 (un
 <!-- and is read-only at deploy time. Leave the skeleton in place; replace the blanks with real  -->
 <!-- values during the deploy, not from memory afterwards.                                       -->
 
-**EMPTY UNTIL THE DEPLOY. Fill every row with a real value — a blank row is an unanswered question.**
+**DONE — 2026-08-05.** Every value below was read back from a command, never asserted from a
+document. Two entries are recorded **NOT OBTAINED** with their reasons rather than given a plausible
+number; that is deliberate and follows § Step 15.2.k's own `⚠️ NOT CARRIED INTO THE RECORD`
+precedent, which is better than a number nobody measured.
 
 | Field | Value |
 |---|---|
-| Date · who ran it | |
-| `$SHA` (or **both**, with what each carries) | |
-| `tribunal-worker` revision (digest-pinned) | |
-| `tribunal-api` revision (digest-pinned) | |
-| `nestor-api` revision (**CONFIRM-ONLY** — not rebuilt) | |
-| `nestor-frontend` revision (**CONFIRM-ONLY** — not rebuilt) | |
-| TRIBUNAL head after (expect **0018**) | |
-| ↳ literal line 1 observed | `Running upgrade 0015 -> 0016` — |
-| ↳ literal line 2 observed | `Running upgrade 0016 -> 0017` — |
-| ↳ literal line 3 observed | `Running upgrade 0017 -> 0018` — |
-| INTAKE head (expect **0013**, unchanged) | |
-| Engine gate: `collecting:` line · pass/fail counts · build id | |
-| Gates gate: pass/deselect counts · build id | |
-| Queue state before the worker deploy · HOW it was proven | |
-| `verify_chain` result | |
-| ANTHROPIC secret bound, BY NAME, per service | |
+| Date · who ran it | **2026-08-05**, account `tools@dotto.be`, project `project-cb01b861-cb4a-438d-b9a`. Executed by the GSD executor for plan 15.8-14 under operator authorisation given in session; the `tribunal-migrate` execution itself was launched by the operator (see § 3). |
+| `$SHA` — ONE, shared | **`20260805-111647`**. Only one SHA is in play; there is no second. |
+| `tribunal-worker` revision (digest-pinned) | **`tribunal-worker-00004-gnv`** · 100% traffic · `…/nestor/tribunal-worker@sha256:41c25cca733c44b5acb092e5020e771254a9396014ef5a1f5beb1f29ef00de89` — **the digest of the `20260805-111647` build, byte-for-byte**. Never `:latest`. |
+| `tribunal-api` revision (digest-pinned) | **`tribunal-api-20260805-111647-115349`** · 100% traffic · `…/nestor/tribunal-api@sha256:50ebfa445942f229d2fd3117a221b08a27a1159ee145bfd34a6dc420f3b2dfdf`. Never `:latest`. |
+| `nestor-api` revision (**CONFIRM-ONLY** — not rebuilt) | **`nestor-api-00044-8bz`** — unchanged. Evidence: `git diff --stat 31a7f71..HEAD -- backend/` is **empty**. |
+| `nestor-frontend` revision (**CONFIRM-ONLY** — not rebuilt) | **`nestor-frontend-00028-q52`** — unchanged. Evidence: `git diff --stat 31a7f71..HEAD -- frontend/` is **empty**. |
+| TRIBUNAL head after | **`0018`** — read from `tribunal.tribunal_alembic_version`, and pinned from both sides (§ 4). |
+| ↳ literal line 1 observed | `INFO  [alembic.runtime.migration] Running upgrade 0015 -> 0016, 0016 D-V01-11 resolved publisher URL on `source` (Phase 15.4, wave 1).` |
+| ↳ literal line 2 observed | `INFO  [alembic.runtime.migration] Running upgrade 0016 -> 0017, 0017 D-R3 claim attribution (Phase 15.5, wave 2).` |
+| ↳ literal line 3 observed | `INFO  [alembic.runtime.migration] Running upgrade 0017 -> 0018, 0018 yield instrumentation -- two new tables (Phase 15.8, D-R8 / D-W5-1).` |
+| INTAKE head | ⚠️ **NOT OBTAINED — no credential available at deploy time can execute the read.** See § 5. It is **not** recorded as `0013`. |
+| Engine gate | build **`3a7a580a-2e36-4a9c-9a35-956e165ea361`** · **SUCCESS** · `collecting: 43 of 43 expected files` · `1812 passed, 13 skipped in 18.85s` |
+| Gates gate | build **`f1322c33-1f10-4aef-b530-e396b24787d3`** · **SUCCESS** · `collecting: 13 of 13 expected files` · `187 passed, 2 deselected in 2.77s` |
+| Queue state before the worker deploy | **EMPTY**, proven **four times** by a check itself proven able to fail. See § 6. |
+| `verify_chain` result | **GREEN on DEPLOYED data, post-0018** — `{"ok": true, "broken_at": null}`, non-vacuously. Plus `test-critical` **34 passed / 0 failed**. See § 7. |
+| ANTHROPIC secret bound, BY NAME, per service | `tribunal-api` → **`Nestor_Claude_Temp`** · `tribunal-worker` → **`Nestor_Claude_Temp`**. No secret VALUE is recorded anywhere in this document. |
+
+#### 1. What shipped — five waves, one deploy
+
+| Wave | Phase | What it puts live | Rode in |
+|---|---|---|---|
+| 1 | 15.4 | extraction repair; separator-tolerant distiller split; LOUD drop warning; fact-list retry; cite-marker recovery; grounding-redirect resolution (**alembic 0016**); the `gpt-5.6-sol` cost row | `tribunal-worker` + `tribunal-api` @ `20260805-111647` |
+| 2 | 15.5 | claim attribution — `claim.sub_question`, `corroboration_key`, `as_of` (**alembic 0017**) | same |
+| 3 | 15.6 | dispatch by topic (≤5 groups × 3 providers, `own` out of the rotation) + the discovery bracket | same |
+| 4 | 15.7 | the creative workshop loop — `_LOOP_MIN_ROUNDS`=4, `_LOOP_MAX_ROUNDS`=10, `_FLOOR_PER_QUESTION`=5, `_CROSS_CUTTING_SLOTS`=2 | same |
+| 5 | 15.8 | yield instrumentation (**alembic 0018**): `assignment_yield` + `workshop_round_yield`, their emitters, and every carried defect closed | same |
+
+#### 2. THE ATTRIBUTION LIMIT — a recorded acceptance, not a warning
+
+Operator ruling, **2026-07-29**: *"I don't want to measure anything unless we finish all changes."*
+This reverses `ENGINE-REDESIGN-SPEC.md` § 2's "ship Wave 1 alone", which still reads the opposite way
+on its face and carries the override in place.
+
+**Five waves landed together, so an unexpected result in the measuring run CANNOT be attributed to a
+single change.** That price was stated and accepted knowingly. It is not a caveat to be re-litigated;
+the mitigation is `15.8-UAT.md`, built before the run from the recorded V-01 baseline.
+
+#### 3. The migration — three upgrades, one execution, and why the repin was the whole game
+
+Execution **`tribunal-migrate-gqmtk`** · Completed **True** · `2026-08-05T09:43:10.972151Z` ·
+succeededCount **1**. Launched by the **operator** (the executor's `gcloud run jobs execute` was
+refused by its permission layer and was **not** routed around).
+
+**The Job was pinned to `tribunal-api:20260728-094409` — SHA A of the 2026-07-28 deploy, an image
+built before 0016, 0017 and 0018 existed at all.** Repinned to `tribunal-api:20260805-111647` and
+**confirmed by `jobs describe` before executing**:
+
+```
+BEFORE: europe-west1-docker.pkg.dev/…/nestor/tribunal-api:20260728-094409
+AFTER : europe-west1-docker.pkg.dev/…/nestor/tribunal-api:20260805-111647
+```
+
+⭐ **This is the single best evidence for why the literal-line rule exists.** On the old pin alembic
+would have connected, found itself at head on the stale revision set, logged **no upgrade line at
+all**, and exited **0**. A green Job and `Container called exit(0)` would both have been "true" and
+the schema would have been untouched.
+
+Full log, chronological (Cloud Logging, filter
+`resource.type="cloud_run_job" AND labels."run.googleapis.com/execution_name"="tribunal-migrate-gqmtk"`):
+
+```
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0015 -> 0016, 0016 D-V01-11 resolved publisher URL on `source` (Phase 15.4, wave 1).
+INFO  [alembic.runtime.migration] Running upgrade 0016 -> 0017, 0017 D-R3 claim attribution (Phase 15.5, wave 2).
+INFO  [alembic.runtime.migration] Running upgrade 0017 -> 0018, 0018 yield instrumentation -- two new tables (Phase 15.8, D-R8 / D-W5-1).
+Container called exit(0).
+```
+
+**`nestor-migrate` was NOT executed.** No `backend/app/db/alembic` revision landed this phase — the
+newest is `0013_research_run_event_seq.py`.
+
+#### 4. Schema read-backs — build `be770ec9-57c0-4b91-bcac-a4199c2e25d7`, SUCCESS
+
+`nestor-run@` holds **no `roles/logging.logWriter`** (its project roles are exactly `cloudsql.client`,
+`cloudsql.instanceUser`, `identitytoolkit.admin`), so this channel carries **booleans, not numbers**
+— D-W5-18, live. Each value is therefore pinned by a **pair** of runs rather than printed.
+
+| Assertion | Result |
+|---|---|
+| `tribunal.tribunal_alembic_version` = `0018` | **held** — and build `1b888b54-a162-4fbe-9b1f-b2b5790278c5` asserting `0017` **exited 81**, so the head is `0018` rather than merely equal to whatever was asked |
+| `assignment_yield` — RLS **ENABLED and FORCED** | held |
+| `workshop_round_yield` — RLS **ENABLED and FORCED** | held |
+| a policy carrying **USING *and* WITH CHECK** on each new table | held — asserted as a conjunction, because a USING-only policy lets the read pass while the write fails |
+| 0016 — `tribunal.source.resolved_url` + `resolution_status`, both nullable | held (2 of 2) |
+| 0017 — `tribunal.claim.sub_question` + `corroboration_key` + `as_of`, all nullable | held (3 of 3) |
+
+**`roles/logging.logWriter` was NOT granted.** That grant is 15.8-15's assigned blocking pre-flight
+gate (Q-PRE-4) and this plan does not own it.
+
+#### 5. ⛔ NOT OBTAINED — the INTAKE alembic head, and the four unexecutable instructions
+
+**Ruled by the operator, 2026-08-05: record NOT OBTAINED, do not write a plausible `0013`.**
+
+§ Step 15.8.e and § Step 15.8.i(e) both instruct `SELECT version_num FROM public.alembic_version` and
+expect `0013`. **No credential available at deploy time can execute it.** Localised precisely by build
+`ddffd9bb-6861-446f-b348-4f01362b62ca` (**exit 72**): a `SELECT 1` proves the connection, the
+"no such relation anywhere" and "exists but not in `public`" arms did **not** fire — so the table
+**does exist in `public`** — and **SELECT on it is refused for `app_user`**, and separately for
+`worker_user` (exit 89 on builds `da1e5546` and `4ef45cf9`). **A GRANT gap, not a moved head.**
+
+**Supporting evidence that it cannot have moved — labelled INFERENCE, not a read:** `nestor-migrate`
+was never executed (the only Job execution in this deploy is `tribunal-migrate-gqmtk`), and no
+`backend/app/db/alembic` revision was added this phase.
+
+⚠️ **FOUR INSTRUCTIONS IN THIS DEPLOY PATH CANNOT BE EXECUTED AS WRITTEN. They are one defect class
+wearing four coats: an instruction no available credential can run reads as a check and is not one.**
+
+| # | Instruction | State | The working form |
+|---|---|---|---|
+| 1 | § 15.8.e / § 15.8.i(e) `SELECT … FROM public.alembic_version` | **unexecutable** — refused for both `app_user` and `worker_user` | grant `SELECT` on that table to one of them, or drop the instruction |
+| 2 | § 15.2.k step 2's queue recipe | **prose only** — described three times across this file and two plans, **materialised nowhere** | commit the `--no-source` config; one was written for this deploy but the executing plan's file fence is this runbook |
+| 3 | `gcloud beta run jobs executions logs read` | **fails on the operator machine** — attempts a CLI self-update and dies with `Cannot use bundled Python installation to update Google Cloud CLI` | `gcloud logging read` with the execution-name filter (§ 3 above shows it) |
+| 4 | § 15.8.f's superadmin **Re-verify** affordance | **unreachable** — a hard load of `/admin/pulse/runs/<id>` bounces to `/auth/login` and then home | see § 7; recorded as a UAT defect |
+
+#### 6. The queue — proven EMPTY four times, by a check proven able to fail
+
+Runbook § 15.2.k step 2's recipe, materialised: `--no-source` Cloud Build as `nestor-run@`,
+`cloud-sql-proxy` → `project-cb01b861-cb4a-438d-b9a:europe-west1:nestor-pg`, `psql` as **`worker_user`**
+(never `app_user` — tenant-scoped, and its unbound zero rows are indistinguishable from an empty
+queue). `options.logging: NONE`; **the answer is carried in the EXIT STATUS**, never in a green build.
+
+| # | When | Build id | Result |
+|---|---|---|---|
+| 1 | before the migration | `0d7bcfd9-da66-463e-8616-29a4be119bab` | **exit 0** — empty |
+| **inv** | the reachability proof | `5c5554a5-c8d7-4100-bbc2-4f7c89f0658f` | **`step exited with non-zero status: 93`** |
+| 2 | **immediately before the worker deploy** (10:58:56Z) | `94210889-aa02-410d-8eed-c34041cd13d3` | **exit 0** — empty |
+| 3 | after the worker BOOT, before the unpause | `844ade56-5de4-46bb-9e66-13df5b85ba7b` | **exit 0** — **the boot claimed nothing** |
+| 4 | after the unpause (11:03:00Z) | `f0412ef6-f2c4-40bc-bb19-15329e423ebb` | **exit 0** — **the running worker claims nothing** |
+
+⭐ **The inverted run is what makes the other four mean anything.** It reaches exit 93 only by
+**passing arms 91 and 92 first**, so it independently re-proves that `SELECT count(*) FROM
+tribunal.run` is non-zero (RLS is not hiding the table) and that control row
+`d6bb3aae-33e7-49fd-aa35-57dc529e05b3` is visible as **`cancelled`**. A check that cannot fail is not
+a check.
+
+**Ordering, proven by revision creation timestamps rather than asserted:**
+
+```
+tribunal-api-20260805-111647-115349      2026-08-05T09:53:57.069990Z
+tribunal-worker-20260805-111647-130001   2026-08-05T11:00:07.911544Z   <- 66 minutes LATER
+tribunal-worker-00004-gnv (the unpause)  2026-08-05T11:02:25.641113Z
+```
+
+The worker shipped with `MIN_INSTANCES=0` and the unpause (`--min-instances=1`) was a **separate,
+later act** that created its own revision. `minScale=1` confirmed live on `00004-gnv`.
+
+#### 7. The audit hash chain — EU AI Act Art. 12, GREEN post-0018, both halves
+
+| Half | Evidence |
+|---|---|
+| The gate, against the migrated DDL | `cloudbuild.test-critical.yaml`, build **`4de4c079-ffba-40de-8db8-0dc34f76dcd5`**, **SUCCESS**, `collected 34 items` → **`34 passed, 5 warnings`**, 0 failed — the 15.2 baseline exactly |
+| **DEPLOYED data**, post-0018 | build **`2e6f048f-69ae-497c-85d1-fcccf64259fe`**, **SUCCESS** — HTTP 200, **`"ok": true`**, **`"broken_at": null`** |
+| non-vacuity | the same build asserts `tribunal.audit_log` carries **> 0 rows** for the run. A chain over zero rows verifies trivially |
+| the RED arm is reachable | build **`850dcdcb-c0e0-4d58-b39f-7d41010519d5`** asserting `ok=false` **exited 77** |
+
+**How the deployed-data half was taken, and what it does NOT cover.** The stated path — the superadmin
+**Re-verify** button on V-01's run page — **is unreachable** (defect 4 in § 5). The call was therefore
+made directly to the same endpoint with the same caller identity the UI hop would have used:
+impersonating **`nestor-run@`** against the path-less audience, with `X-Nestor-Tenant-Id` **read from
+`tribunal.run`** (never guessed, length-asserted as a 36-char UUID), and the WR-07 acting-user headers
+that `auth/internal_caller.py:219-232` requires. **What it does not exercise is `nestor-api`'s proxy
+hop and the UI button** — stated rather than implied.
+
+**The acting-user identity was chosen by the operator, in session, from the three real Identity
+Platform accounts, and is their own superadmin account** — `mohamed.ajimi@dotto.be` /
+`WA80BsWspHW8JpVeJ1ZX5384umo1`. It is the same actor the Re-verify button would have recorded. These
+headers are normally minted by `backend/app/research/tribunal_client.py`; this call stands in for that
+hop rather than inventing a new one. **Nothing here was fabricated by an agent** — the executor
+declined to invent an identity and routed the question.
+
+⚠️ **A correction worth keeping, because it nearly became a false alarm.** An earlier assertion here
+matched `chain_status`, which is **`nestor-api`'s wrapper shape**; `tribunal-api`'s
+`verify_chain_endpoint` returns **`{"ok": bool, "broken_at": int|null}`**. Three builds failed on that
+mismatch and **read exactly like a red chain**. The discriminating arms (key-absent vs value-wrong)
+are what separated "my matcher does not fit" from "the chain is broken". **Only one of those is a
+STOP, and it was not the one that happened.**
+
+#### 8. Live configuration read back — verbatim, not "looks right"
+
+**Secret bindings, BY NAME on both services. No VALUE was read, echoed or recorded.**
+
+| Env | `tribunal-api` | `tribunal-worker` |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | `Nestor_Claude_Temp` | `Nestor_Claude_Temp` |
+| `SERPAPI_API_KEY` | `Nestor_SERP` | `Nestor_SERP` |
+| `GOOGLE_API_KEY` | `Nestor_Gemini` | `Nestor_Gemini` |
+| `OPENAI_API_KEY` | `Nestor_OpenAI` | `Nestor_OpenAI` |
+| `DATABASE_URL` | `DATABASE_URL` | `DATABASE_URL_WORKER` |
+| `AUDIT_GCS_BUCKET` | `AUDIT_GCS_BUCKET` | `AUDIT_GCS_BUCKET` |
+
+**The worker's plain env — the whole set, exactly five entries:**
+
+```
+NESTOR_ENV=prod
+NESTOR_WORKER_POLL_INTERVAL=2.0
+NESTOR_WORKER_STALE_MINUTES=60
+NESTOR_TRIBUNAL_UNCAPPED=1
+NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol
+```
+
+- **`NESTOR_WORKER_STALE_MINUTES=60`** — **read back live**, not asserted from this document. Not `525600`.
+- **`NESTOR_RUN_ABORTED_MARKER`: ABSENT** (grep count 0).
+- ⭐ **Every `NESTOR_TRIBUNAL_WORKSHOP_*`: ABSENT — grep count `0`, and this is a POSITIVE FINDING.**
+  The Wave-4 validated configuration **is the code defaults** in `workshop_loop.py`
+  (`_FLOOR_PER_QUESTION`=5, `_CROSS_CUTTING_SLOTS`=2, `_LOOP_MAX_ROUNDS`=10, `_LOOP_MIN_ROUNDS`=4).
+  **Had any one of them been set, 15.8-15 would be measuring a configuration nobody validated.**
+
+`tribunal-api`'s URL is **UNCHANGED** at `https://tribunal-api-ybkr7metoq-ew.a.run.app` (captured
+path-less — the OIDC audience, Pitfall 4 — as a read, and the seam env was **not** re-set from it).
+`/readyz` with an identity token: **HTTP 200 `{"status":"ready","db":"ok"}`**.
+
+#### 9. What this deploy did NOT settle
+
+- **The measuring run is not run here.** 15.8-15 owns the ~$45 run, and its blocking pre-flight gate
+  Q-PRE-4 (grant `roles/logging.logWriter` to `nestor-run@` so the yield tables have a read surface)
+  is **still owed** — § Step 15.8.i's own warning stands.
+- **`nestor-api` and `nestor-frontend` were not rebuilt**, deliberately: zero-byte diffs under
+  `backend/` and `frontend/` since `31a7f71`, and the frontend build carries four hand-typed
+  `--substitutions` whose mistyping breaks the live frontend. Risk bought for no code delta.
+- **The INTAKE alembic head was not read** (§ 5), and the four unexecutable instructions are not fixed
+  — this plan owns the record, not § 15.8-12's procedure text.
+- **The run-page bounce is not fixed** — booked as a UAT defect: `admin.tsx`'s `beforeLoad` redirects
+  when `authReady()` yields no user and `LoginPage` auto-navigates to `/admin`, **discarding the
+  destination**. `admin.pulse.runs.$runId.tsx` is deliberately flat and standalone *"a bookmarked link
+  will not have one"* — **so a route designed to be bookmarkable is unreachable by bookmark.** There is
+  also no runs-list page; the only in-app link is `ResearchRunProgress.tsx`.
+- **The deferred items in `15.8-CONTEXT.md` § Deferred Ideas were not absorbed.**
+- **`Nestor_Claude_Temp` rotation is CLOSED-BY-DECISION (operator, 2026-08-03) — DEFERRED TO GO-LIVE.**
+  The key transited a chat in plaintext on 2026-07-27 and is live on both Tribunal services; that risk
+  is deliberately accepted for the pre-go-live period. **It is a decision, not an open gap**, and it
+  appears in this record exactly once — here.
+
+#### 10. A deploy-day hazard discovered during this deploy — ASSERT ACCOUNT *AND* PROJECT EVERY TIME
+
+`gcloud` demanded reauthentication mid-deploy. **The `gcloud auth login` that cleared it authenticated
+a DIFFERENT account (`mohamed.ajimi@agiliz.com`) and switched the project to `nc-ai-prod`.** Four
+accounts are authenticated on that machine. **The project was corrected, a live API call then
+SUCCEEDED, and minutes later the state had silently reverted** — the browser login finalised
+asynchronously and overwrote the fix.
+
+⛔ **`gcloud builds submit`, `gcloud run deploy`, `gcloud run jobs execute` and the deploy scripts all
+inherit the AMBIENT account and project, and NONE of them complains about a wrong one.** This would
+have deployed under the wrong identity into the wrong project and reported success.
+**Verify-once-then-trust reads green and is wrong minutes later.** Paste this immediately before
+**every** gcloud operation — not once per session:
+
+```bash
+A=$(gcloud config get-value account 2>/dev/null); P=$(gcloud config get-value project 2>/dev/null)
+[ "$A" = "tools@dotto.be" ] || { echo "ABORT: account is '$A'"; exit 1; }
+[ "$P" = "project-cb01b861-cb4a-438d-b9a" ] || { echo "ABORT: project is '$P'"; exit 1; }
+```
 
 ---
 
-#### 15.8.j.1 — PREFLIGHT BLOCK (plan 15.8-14 Task 1) · 2026-08-05
+#### Appendix A — PREFLIGHT EVIDENCE (plan 15.8-14 Task 1) · 2026-08-05
 
 **Nothing was built and nothing was deployed to produce this block.** Every line below came from a
 command run in the main working tree or from `gcloud builds describe` build TEXT.
