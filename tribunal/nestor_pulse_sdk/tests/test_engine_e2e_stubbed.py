@@ -3152,3 +3152,139 @@ async def test_no_angle_is_dispatched_to_own(monkeypatch):
         "accepted known gap of D-W3-3, recorded on purpose: if it was closed, close "
         "the deferred item that records it too."
     )
+
+
+# ---------------------------------------------------------------------------
+# THE CLAIM GATE'S DECISION CONTEXT — quick task 260806-o96.
+#
+# G-5, ANSWERED BY MEASUREMENT rather than by reasoning. Read from run
+# 368ff3a0's GCS audit blobs: all 7 gate calls carried an IDENTICAL 576-char
+# decision context against a 1200 cap. The 1200 never bound (624 chars spare).
+# What bound was workshop._LABEL_MAX_CHARS = 120 -- the gate's TEST 2, "does the
+# client's decision actually turn on this claim?", was answered against three
+# questions cut MID-WORD: "...hoe wordt dit operat", "...op koff",
+# "...in de retailmar". Every KEEP/DROP decision in that run was made against
+# half-sentences.
+#
+# The arithmetic these tests pin: 216 fixed overhead + 3 x 120 = 576 (old), and
+# 216 + the three FULL questions = ~1165 (new), which fitted 1200 by only 35
+# characters -- which is why both caps moved in the same commit.
+# ---------------------------------------------------------------------------
+
+_O96_DECISION = (
+    "Investeert LUKOIL primair in geografische uitbreiding naar Duitsland "
+    "(2027-launch), of in margegroei via operational excellence in Benelux "
+    "(dynamic pricing, shop-herpositionering, premium koffie)?"
+)
+
+#: The client's three real questions from run 368ff3a0, transcribed from the
+#: dispatch assignments in the audit bucket (288 / 309 / 352 chars).
+_O96_QUESTIONS = [
+    (
+        "Welke fuel retailers in Europa passen vandaag dynamic pricing toe op "
+        "brandstof en/of shopproducten, hoe wordt dit operationeel en commercieel "
+        "ingezet, welke impact heeft dit aantoonbaar op volume, marge en "
+        "klantgedrag, en welk realistisch implementatiemodel zou relevant zijn "
+        "voor LUKOIL?"
+    ),
+    (
+        "Hoe evolueren de koffiestrategieen van de belangrijkste petroliers in de "
+        "Benelux, welke impact hebben deze gehad op koffieverkoop, traffic en "
+        "merkperceptie in de afgelopen 3 jaar, en onder welke voorwaarden kan een "
+        "eigen kwalitatief koffiemerk van een petrolier succesvol geaccepteerd "
+        "worden door consumenten?"
+    ),
+    (
+        "Nu het competitieve voordeel van een supermarktformule in tankstations "
+        "afneemt door ruimere openingsuren in de retailmarkt, hoe reageren fuel "
+        "retailers in andere landen hier strategisch op, welke alternatieve shop- "
+        "en convenienceconcepten winnen aan belang, en welke concepten bieden het "
+        "grootste potentieel voor differentiatie, traffic en margegroei?"
+    ),
+]
+
+#: The label really is the 120-char prefix -- built the way the engine builds it,
+#: NOT hand-typed, so this fixture cannot drift from `_LABEL_MAX_CHARS`.
+_O96_LABEL_CHARS = _workshop_mod._LABEL_MAX_CHARS
+
+
+def _o96_brief(questions, *, with_full_text: bool = True) -> dict:
+    """A mission brief shaped like run 368ff3a0's: 120-char labels as the keys,
+    the full question carried on `research_prompt` exactly as
+    `_compose_parent_assignment` writes it (question, blank line, brief)."""
+    focus_areas = []
+    for q in questions:
+        entry = {"focus_area": q[:_O96_LABEL_CHARS]}
+        if with_full_text:
+            entry["research_prompt"] = f"{q}\n\n{_O96_DECISION}"
+        focus_areas.append(entry)
+    return {"deep_research_prompt": _O96_DECISION, "focus_areas": focus_areas}
+
+
+def test_the_gate_now_sees_the_whole_question_not_the_join_key():
+    out = _pipeline_mod._gate_decision_context(_o96_brief(_O96_QUESTIONS))
+
+    for q in _O96_QUESTIONS:
+        assert q in out, "the gate is still being handed a truncated question"
+    # The specific mid-word cut the audit recorded must be gone. Asserted as the
+    # END of a joined item, because the fragment is naturally a substring of the
+    # full question and a bare `not in` would be vacuously false.
+    assert "hoe wordt dit operat ·" not in out
+    assert not out.endswith("hoe wordt dit operat")
+
+
+def test_the_recorded_576_becomes_the_recorded_1165():
+    """The measured before/after, asserted rather than narrated."""
+    out = _pipeline_mod._gate_decision_context(_o96_brief(_O96_QUESTIONS))
+    # Bounds rather than an exact int: the fixture drops one accented character
+    # from the live text, so the live value is 1165 and this one is 1164.
+    assert 1150 <= len(out) <= 1200, len(out)
+    assert len(out) <= _pipeline_mod._GATE_DECISION_CONTEXT_CHARS
+
+
+def test_the_label_fallback_reproduces_the_old_behaviour_exactly():
+    """NON-VACUITY, and the strongest arm here. A brief with no `research_prompt`
+    -- an intake.py-built brief, a question-less brief -- must still yield the
+    labels, and it must yield EXACTLY the 576 characters the live run produced.
+    If this ever stops equalling 576 the fixture has drifted from the run."""
+    out = _pipeline_mod._gate_decision_context(
+        _o96_brief(_O96_QUESTIONS, with_full_text=False)
+    )
+
+    assert len(out) == 576, f"expected the recorded 576-char shape, got {len(out)}"
+    assert "hoe wordt dit operat" in out, "the fallback must still emit the label"
+
+
+def test_five_full_questions_fit_under_the_raised_cap():
+    """The intake admits 1 to 5 questions. At the OLD 1200 five full questions
+    measured ~1803 and the tail would have been silently cut -- the whole reason
+    both caps moved in the same commit as the truncation fix."""
+    five = _O96_QUESTIONS + [_O96_QUESTIONS[0], _O96_QUESTIONS[1]]
+    out = _pipeline_mod._gate_decision_context(_o96_brief(five))
+
+    assert len(out) > 1200, "the fixture no longer exercises the old cap"
+    assert len(out) < _pipeline_mod._GATE_DECISION_CONTEXT_CHARS, (
+        "five client questions no longer fit — the cap needs raising again, and "
+        "silently dropping the last question is exactly what this pins shut"
+    )
+
+
+def test_the_two_caps_stay_in_series_order():
+    """A RELATIONSHIP, NOT A VALUE. The two caps truncate the same string one
+    after the other, so raising the pipeline-side one above the gate-side one has
+    NO observable effect: the number changes, the behaviour does not, and it reads
+    as "the cap was not the problem". Pinning the ordering means a future edit to
+    either number cannot silently reintroduce that trap."""
+    assert _gates_mod._CONTEXT_MAX_CHARS >= _pipeline_mod._GATE_DECISION_CONTEXT_CHARS, (
+        "gates._CONTEXT_MAX_CHARS is the SECOND cap in series and is now the "
+        "effective ceiling — raising the pipeline-side constant above it does "
+        "nothing at all"
+    )
+
+
+def test_the_120_join_key_is_untouched():
+    """_LABEL_MAX_CHARS is an IDENTITY key, not a size guard: a dict key, the join
+    key 15.2-11's D4 superset assertion compares on, and the key for
+    assignment_identity.client_question. The fix reads AROUND it; it must never
+    read as licence to widen it. A parked note once called it safe to remove."""
+    assert _workshop_mod._LABEL_MAX_CHARS == 120

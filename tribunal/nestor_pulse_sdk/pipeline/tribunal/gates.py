@@ -79,7 +79,22 @@ _GATE_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GATE_BATCH", "40"))
 _GATE_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GATE_CONCURRENCY", "4"))
 _GATE_RETRIES = int(os.environ.get("NESTOR_TRIBUNAL_GATE_RETRIES", "2"))
 _GATE_BACKOFF_S = float(os.environ.get("NESTOR_TRIBUNAL_GATE_BACKOFF_S", "2.0"))
-_CONTEXT_MAX_CHARS = int(os.environ.get("NESTOR_TRIBUNAL_GATE_CONTEXT_CHARS", "2000"))
+#: ⚠ THE SECOND OF TWO CAPS IN SERIES ON THE SAME STRING.
+#: `pipeline._GATE_DECISION_CONTEXT_CHARS` truncates the decision context first;
+#: this one truncates the result AGAIN. So this value is the EFFECTIVE ceiling
+#: whenever it is the smaller of the two, and raising the pipeline-side constant
+#: above this one has NO OBSERVABLE EFFECT — it changes the number, changes no
+#: behaviour, and reads as "the cap was not the problem". They move together, and
+#: `test_engine_e2e_stubbed.py` asserts the ordering so that trap cannot return.
+#:
+#: 2000 -> 4000 (quick task 260806-o96), in lockstep with the pipeline-side raise.
+#: The reason for the raise lives on that constant: the gate now receives the
+#: client's FULL questions rather than their 120-char join keys, and three full
+#: questions measure 1165 where three keys measured 576.
+#:
+#: ⚠ NOT the same constant as `workshop._CONTEXT_MAX_CHARS`, which is also 2000 and
+#: is unrelated. Three similarly-named caps exist in this tree; grep by module.
+_CONTEXT_MAX_CHARS = int(os.environ.get("NESTOR_TRIBUNAL_GATE_CONTEXT_CHARS", "4000"))
 
 # Decision vocabulary. Every value the parser will accept is enumerated here; a
 # token outside these tuples is treated as garble and falls back to the

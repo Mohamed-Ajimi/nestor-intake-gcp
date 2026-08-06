@@ -151,6 +151,11 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
     # G-10: the DISPLAY-only facet-key resolver. Same rule as the section
     # headings, spelled once in synthesis.steps.
     relabel_facets,
+    # …and the map it is built on. `_gate_decision_context` reads it directly so the
+    # claim gate judges materiality against the client's FULL question instead of
+    # the 120-char join key (quick task 260806-o96). Prompt text, not a key — the
+    # DISPLAY-ONLY contract holds.
+    focus_area_questions,
     conflict_detector,
     scrub_research,
     # D-08 (Phase 15.2): the two report sections are rendered by PYTHON from
@@ -688,11 +693,36 @@ def _corroboration_order(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 #: How much of the client's brief is handed to the gates as `decision_context`.
 #: "Load-bearing" is only meaningful relative to a decision, so the gate must see
-#: one — but a long brief would crowd the claims out of the 4096-token gate
-#: budget, so the text is bounded here (gates.py truncates again at its own
-#: _CONTEXT_MAX_CHARS ceiling; this is the tighter of the two).
+#: one — but the brief is CLIENT-TYPED TEXT going verbatim into a prompt that also
+#: carries `gates._GATE_BATCH` (40) claims, so it is bounded here for two reasons,
+#: neither of which is the one this comment used to give:
+#:
+#:   1. DILUTION — an unbounded brief would dominate the prompt and the 40 claims
+#:      it is supposed to be judging would become the minority of the input;
+#:   2. INJECTION SURFACE — unbounded client text in a prompt is exactly what this
+#:      codebase bounds everywhere else (T-15.2-60, `_SUBQ_CHARS`, `_QUESTION_MAX_CHARS`).
+#:
+#: ⛔ THE OLD JUSTIFICATION WAS WRONG AND IS CORRECTED HERE RATHER THAN CARRIED.
+#: It read "a long brief would crowd the claims out of the 4096-token gate budget".
+#: That 4096 is `max_output_tokens` (`gates.py:_make_config`) — the cap on what the
+#: model WRITES BACK. Input text cannot consume an output budget. The bound is
+#: still right; the stated mechanism was not, and a reader sizing this constant
+#: against 4096 would size it against the wrong number.
+#:
+#: ⚠ THIS CAP AND `gates._CONTEXT_MAX_CHARS` SIT IN SERIES: this one truncates
+#: first, that one truncates the same string AGAIN. Raising this above that one has
+#: NO OBSERVABLE EFFECT — it changes the number, produces no change in behaviour,
+#: and reads as "the cap was not the problem". They move together; a test asserts
+#: the ordering so the trap cannot silently return.
+#:
+#: 1200 -> 4000 (quick task 260806-o96). At 1200 this never bound: measured on run
+#: 368ff3a0, all 7 gate calls carried an identical 576-char context (216 overhead +
+#: 3 x `workshop._LABEL_MAX_CHARS`). It becomes LIVE the moment the labels stop
+#: being truncated — three FULL client questions measure 1165, which fits 1200 by
+#: only 35 characters, and FOUR measure ~1484, which does not. The intake admits up
+#: to five questions.
 _GATE_DECISION_CONTEXT_CHARS = int(
-    os.environ.get("NESTOR_TRIBUNAL_GATE_BRIEF_CHARS", "1200")
+    os.environ.get("NESTOR_TRIBUNAL_GATE_BRIEF_CHARS", "4000")
 )
 
 #: Skeptic sessions per SELECTED claim in the per-claim A/B fallback branch
@@ -723,21 +753,54 @@ def _gate_decision_context(mission_brief: dict[str, Any]) -> str:
     A claim is "load-bearing" only relative to a decision — the blind experiment
     that produced the recorded 456/424 numbers judged materiality against "the
     LUKOIL BeNeLux dynamic-pricing report", not in the abstract. So the gate is
-    handed the sharpened research prompt plus the focus-area labels. Bounded by
-    _GATE_DECISION_CONTEXT_CHARS: a long brief must never crowd the claims out of
-    the gate's own output budget.
+    handed the sharpened research prompt plus the client's questions.
+
+    ⛔ IT USED TO BE HANDED THE 120-CHARACTER JOIN KEYS, AND THAT IS WHAT THIS
+    FUNCTION NOW FIXES. `focus_area` is `normalise_questions`' prefix of the
+    client's question, built to be a stable dict key — and it was being pasted into
+    the prompt as if it were the question. Measured on run 368ff3a0 (all 7 gate
+    calls, identical): the gate's TEST 2 — "does the client's decision actually turn
+    on this claim?" — was answered against three questions cut MID-WORD, reading
+    "...hoe wordt dit operat", "...op koff", "...in de retailmar". Every KEEP/DROP
+    decision in that run was made against half-sentences.
+
+    ONE RESOLVER, NOT A SECOND COPY. `synthesis.steps.focus_area_questions` already
+    maps label -> full question off `focus_areas[*].research_prompt`, using the CR-08
+    prefix rule, and `pipeline.py` already imports from that module for exactly this
+    reason (see the `relabel_facets` call site). Writing a second mapper here would
+    put a second copy of the 120 in the tree.
+
+    ⚠ THAT RESOLVER IS DOCUMENTED "DISPLAY ONLY — the label stays the join key
+    everywhere it is a key", so state plainly why this is not a violation: the gate
+    decision context is PROMPT TEXT. Nothing is keyed, joined or stored by it. The
+    label remains the key in `claims_per_facet`, in `extract_focus_areas`, and in
+    `assignment_identity` — all untouched. This is a read path, which is precisely
+    what that resolver exists to serve.
+
+    Bounded by _GATE_DECISION_CONTEXT_CHARS — see that constant for the two real
+    reasons, for the corrected 4096 claim, and for the in-series relationship with
+    `gates._CONTEXT_MAX_CHARS`.
     """
     parts: list[str] = []
     prompt = (mission_brief.get("deep_research_prompt") or "").strip()
     if prompt:
         parts.append(prompt)
-    labels = [
-        (fa.get("focus_area") or "").strip()
-        for fa in (mission_brief.get("focus_areas") or [])
-    ]
-    labels = [lbl for lbl in labels if lbl]
-    if labels:
-        parts.append("Focus areas: " + " · ".join(labels))
+    # `or {}` is the never-raises guard the resolver already promises; spelled here
+    # so a future edit to it cannot make this function raise inside the gate stage.
+    full_by_label = focus_area_questions(mission_brief) or {}
+    questions = []
+    for fa in (mission_brief.get("focus_areas") or []):
+        label = (fa.get("focus_area") or "").strip()
+        if not label:
+            continue
+        # FALL BACK TO THE LABEL, never to nothing. A brief with no
+        # `research_prompt` (an intake.py-built brief, a question-less brief) yields
+        # `{}` from the resolver, and a truncated question is still far better than
+        # handing the gate no decision context at all — which is the branch
+        # `gates._render_decision_context` has to paper over.
+        questions.append(full_by_label.get(label, label))
+    if questions:
+        parts.append("Focus areas: " + " · ".join(questions))
     return "\n".join(parts).strip()[:_GATE_DECISION_CONTEXT_CHARS]
 
 
