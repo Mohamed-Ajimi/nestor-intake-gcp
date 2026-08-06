@@ -1,5 +1,58 @@
 # CONTINUE HERE — session handoff 2026-08-06
 
+---
+
+## ✅ 2026-08-06T18:1x UTC — **DEPLOYED. THREE SERVICES. THE "NOT DEPLOYED" SECTIONS BELOW ARE SPENT.**
+
+Shared tag **`20260806-175613`**, master `5714498`, tree clean. All three commits of the day
+(`dn8` Opus-5 synthesis · `lvt` report language+size · `o96` full question to the gate) are LIVE.
+
+| service | revision | digest (built == deployed, verified both ends) |
+|---|---|---|
+| `tribunal-api` | `tribunal-api-20260806-175613-180706` | `sha256:55978d5e1fefecf4486e28ca5361298cdc3107358ca4f72ddd5e5c92de03f3bc` |
+| `tribunal-worker` | `tribunal-worker-20260806-175613-180925` | `sha256:ae5722bc7496ccbcf1e2aab77ba1a07cf249049fd276888dda7c674048b66b60` |
+| `nestor-api` | `nestor-api-00045-hdw` | `sha256:a525c6e214e311235ca6db0ee5bd721c03500ebf99b280c76620f403c9d4f06a` |
+
+**⚠ THE DEPLOY SURFACE WAS THREE SERVICES, NOT TWO — D-W5-16 WENT STALE AND NEARLY COST THE WHOLE
+CHANGE.** That note says `nestor-api` is CONFIRM-ONLY because `backend/` had no commits since the
+deploy. `39fec86` touched `backend/`. Had it been skipped, the engine would parse a `[REPORT]` block
+the backend never emits, the form would never show the language question, `mission_brief["language"]`
+would stay empty — **and the fix would have read as deployed while being entirely inert.** Sixth
+inert-instrumentation near-miss in this lineage. **Frontend genuinely unchanged** (0 commits) and
+correctly not rebuilt: `report_language` is a plain radio the existing renderer handles, and
+`intake_canonical.py` serves the template from the image *"with no DB seed"* — so no seed, and no
+migration (no alembic revision was added).
+
+**Gates, both GREEN in Cloud Build before any image was built:**
+- engine `db8171c3` — `collecting: 44 of 44 expected files`, **1877 passed / 0 failed / 14 skipped**
+- backend `05e90efa` — **299 passed / 0 failed / 1 skipped**
+
+**Pre-flight:** queue proven clear TWICE, immediately before the worker deploy — newest audit write
+anywhere in the bucket was `2026-08-05T19:21:31Z`, 20h stale. **The always-on worker is itself the
+canary:** at `minScale=1` polling every 2s, any claimable row would already have been claimed and
+would be writing blobs. It wasn't. Cheaper and stronger than the uncommitted § 15.2.k recipe (G-3),
+which is still not committed.
+
+**Read-backs:** all three `Ready=True`; `nestor-api /readyz` 200; **built digest == deployed digest
+on all three** (read off `status.imageDigest`, never `containers[0].image` — G-1). Worker env carries
+**`NESTOR_TRIBUNAL_UNCAPPED` as its only `NESTOR_TRIBUNAL_*`** — no `GATE_BRIEF_CHARS`, no
+`GATE_CONTEXT_CHARS`, no `WORKSHOP_*`, so the new code defaults (gate caps **4000/4000**) and the
+validated Wave-4 config are what actually run. `ANTHROPIC_API_KEY` on `Nestor_Claude2` on both
+Tribunal services — committed default already matched live, so **no silent repoint** this time.
+
+### ⛔ THE NEXT MEASURED RUN IS A NEW BASELINE, NOT A COMPARISON
+`lvt` changed the report's **shape** and `o96` changed **which claims reach paid verification**.
+Comparability with `368ff3a0` is broken in two independent dimensions. Do not table this run against
+it — say so before anyone builds a comparison.
+
+### Still open after this deploy
+15.8 Task 3 browser UAT · G-7 (deep research bills $0.00) · the `brief_conflicts` reshape ·
+19-dispatched-vs-15-winners · commit the § 15.2.k queue recipe · revoke `logging.logWriter` on
+`nestor-run@` · **push ~800 commits, still never pushed**.
+
+---
+
+
 Supersedes the 2026-07-29 handoff entirely. That one said *"no deploy and no live run until the
 whole engine redesign is built."* **That condition has been met and discharged:** all five waves
 were built, deployed at SHA `20260805-111647`, and **the ONE measuring run has happened**
