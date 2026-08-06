@@ -148,6 +148,9 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
     # is the exact duplication this phase forbids.
     _dedupe_claims,
     synthesize_report,
+    # G-10: the DISPLAY-only facet-key resolver. Same rule as the section
+    # headings, spelled once in synthesis.steps.
+    relabel_facets,
     conflict_detector,
     scrub_research,
     # D-08 (Phase 15.2): the two report sections are rendered by PYTHON from
@@ -4213,7 +4216,11 @@ async def _write_final_report(
         n_contested=v.get("contested_count", 0),
         budget_exceeded=bool(v.get("budget_exceeded")),
         reentry_count=v.get("reentry_count", 0),
-        claims_per_facet=v.get("claims_per_facet") or {},
+        # G-10: the appendix renders these keys as text, so they must carry the
+        # client's full question exactly as the section headings do — one
+        # resolver (`synthesis.steps.focus_area_questions`), not a second copy of
+        # the rule here. Display only: nothing downstream joins on these keys.
+        claims_per_facet=relabel_facets(v.get("claims_per_facet") or {}, mission_brief),
         n_unresolved_cites=n_orphan_cites,
     )
 

@@ -229,6 +229,84 @@ def extract_focus_areas(mission_brief: Optional[dict]) -> list[str]:
     return out
 
 
+def focus_area_questions(mission_brief: Optional[dict]) -> dict[str, str]:
+    """focus-area LABEL -> the client's FULL question, when the brief carries it.
+
+    PURE. NEVER RAISES. DISPLAY ONLY — the label stays the facet / join key
+    everywhere it is a key; see `extract_focus_areas`, which is unchanged.
+
+    G-10 (quick task 260806-dn8). A focus-area label is `normalise_questions`'
+    120-character prefix of the client's question, built to be a stable dict and
+    join key. The delivered report of run `368ff3a0` rendered that key as a
+    `## ` heading, so the section title ended mid-word on
+    `...hoe wordt dit operat`, and the same cut string was reused as a key in the
+    report's own Verification section.
+
+    THE FULL TEXT IS ALREADY HERE — no new plumbing, no new kwarg.
+    `research_division.build_mission_brief_from_winners` writes
+    `focus_areas[i]["research_prompt"] = _compose_parent_assignment(full_question,
+    deep_research_prompt)`, and `_compose_parent_assignment` returns
+    `f"{q}\\n\\n{b}"` after collapsing the whitespace inside EACH half. So the
+    two halves are separated by exactly one blank line and NEITHER half can
+    contain one — which is why splitting on the first `\\n\\n` recovers the
+    client's full, untruncated, whitespace-collapsed question exactly.
+
+    THE PREFIX TEST IS THE MATCHING RULE, and it is what makes this safe on the
+    degenerate briefs that really exist:
+      * `_compose_parent_assignment` returns `q or b` when either half is empty,
+        so on a question-less brief the first paragraph is the BRIEF;
+      * `intake.py`-built briefs carry a `research_prompt` of an entirely
+        different shape (a multi-line assignment).
+    Both fall back to the label under one rule: accept the extracted text only
+    when it STARTS WITH the label. That is `pipeline.py`'s CR-08 rule verbatim —
+    "a label is a PREFIX of its text by construction" — and it is why this
+    function introduces NO second copy of the 120-character constant. The
+    constant can move and nothing here drifts.
+
+    The label's whitespace is collapsed before the comparison because the stored
+    full text is collapsed and the label may not be — a client question typed
+    with an interior newline is ordinary in a form textarea, and comparing a raw
+    label against a collapsed text is precisely the CR-01 defect.
+    """
+    out: dict[str, str] = {}
+    try:
+        raw = (mission_brief or {}).get("focus_areas") or []
+        if not isinstance(raw, list):
+            return {}
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            label = str(entry.get("focus_area") or "")
+            prompt = entry.get("research_prompt")
+            if not label or not isinstance(prompt, str):
+                continue
+            full = prompt.split("\n\n", 1)[0].strip()
+            if not full or full == label:
+                continue
+            if full.startswith(" ".join(label.split())):
+                out[label] = full
+    except Exception:  # noqa: BLE001 — a display helper never breaks a report
+        return {}
+    return out
+
+
+def relabel_facets(counts: dict, mission_brief: Optional[dict]) -> dict:
+    """Re-key a facet-count map onto the full questions, for DISPLAY.
+
+    PURE. NEVER RAISES. Insertion order preserved; a key with no mapping is left
+    exactly as it is. The mapping is `focus_area_questions` — there is ONE
+    implementation of the label -> full-text rule in this change, and this is the
+    thin wrapper that lets `pipeline.py` carry no logic of its own.
+    """
+    try:
+        mapping = focus_area_questions(mission_brief)
+        if not mapping:
+            return counts
+        return {mapping.get(key, key): value for key, value in (counts or {}).items()}
+    except Exception:  # noqa: BLE001 — a display helper never breaks a report
+        return counts
+
+
 def _language_directive(mission_brief: Optional[dict]) -> str:
     """One-language-per-run instruction for every writing step.
 
@@ -1087,6 +1165,11 @@ async def synthesize_report(
     brief_prompt = (mission_brief or {}).get("deep_research_prompt") or ""
     lang_rule = _language_directive(mission_brief)  # ONE language for the whole run
 
+    # G-10: label -> the client's FULL question, resolved ONCE for every section.
+    # DISPLAY ONLY — `fa` stays the key at every site where it IS a key (the
+    # ledger facet, the included_focus_areas filter, the focus_areas list).
+    questions = focus_area_questions(mission_brief)
+
     report_blocks: list[str] = []
     for name, result in provider_reports:
         report_text = (result or {}).get("report") or ""
@@ -1111,6 +1194,8 @@ async def synthesize_report(
     anchors_on = bool(render_fact_ledger(anchor_ledger))
 
     async def _one_section(idx: int, fa: str) -> str:
+        # G-10: what the READER sees. `fa` remains the key below.
+        title = questions.get(fa, fa)
         # Facet-scoped so a 300-600 survivor run does not paste the whole ledger
         # into every section prompt (T-15.2-25 cost control).
         ledger_block = render_fact_ledger(anchor_ledger, facet=fa)
@@ -1119,9 +1204,15 @@ async def synthesize_report(
             f"CLIENT BRIEF / RESEARCH REQUEST:\n{brief_prompt or '(see focus area)'}\n\n"
             f"YOUR ASSIGNMENT: write ONE markdown section of the final report — the "
             f"section that fully answers focus area {idx + 1} of {len(focus_areas)}:\n"
-            f"  \"{fa}\"\n"
+            # `title`, not `fa`: telling the model to head its section with the
+            # full question while handing it the TRUNCATED one to answer is an
+            # internally inconsistent prompt, and "a label is not something a
+            # research provider should be asked to answer" is CR-08's own
+            # sentence. This is the third display site (the scope names the
+            # heading and the Verification key); it is one line to revert.
+            f"  \"{title}\"\n"
             f"{contested_block}\n"
-            f"Section contract (heading first: ## {fa}):\n"
+            f"Section contract (heading first: ## {title}):\n"
             "  1. BOTTOM LINE — open with 2-3 sentences that directly answer this "
             "question. A reader who stops here must already know your conclusion.\n"
             "  2. ANALYSIS — dense paragraphs that develop the answer. Every part of "
@@ -1154,7 +1245,7 @@ async def synthesize_report(
             )
         except Exception as exc:
             log.error("synthesize_report: section %r failed: %s", fa, exc)
-            return f"## {fa}\n\n*(Section generation failed: {exc})*"
+            return f"## {title}\n\n*(Section generation failed: {exc})*"
         text, refused = _synthesis_text(response)
         if refused:
             # T-dn8-05: a refusal can arrive WITH partial content. Route it into
@@ -1180,9 +1271,9 @@ async def synthesize_report(
         text = (text or "").strip()
         if not text:
             log.error("synthesize_report: section %r returned empty text", fa)
-            return f"## {fa}\n\n*(Section generation returned no content.)*"
+            return f"## {title}\n\n*(Section generation returned no content.)*"
         if not text.lstrip().startswith("#"):
-            text = f"## {fa}\n\n{text}"
+            text = f"## {title}\n\n{text}"
         return text
 
     sections = list(

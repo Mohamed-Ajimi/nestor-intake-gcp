@@ -424,6 +424,21 @@
 #     15.8-10 -> test_workshop_round_yield.py
 #     15.8-11 -> test_suite_hygiene.py
 #
+# QUICK TASK 260806-dn8 (2026-08-06) added ONE more, 43 -> 44, path and
+# EXPECTED_FILES in the same edit and the same commit, per the rule above:
+#     260806-dn8 -> test_synthesis_opus5.py  (report synthesis on claude-opus-5:
+#                   the Anthropic call shape asserted as a SET EQUALITY so a
+#                   stray temperature/config fails, the block-text reader, the
+#                   refusal and max_tokens degradations, both output caps read
+#                   OFF THE CAPTURED CALL rather than off the constant, the
+#                   claude-opus-5 price row as a G-7 `is not None` guard, and
+#                   G-10 -- the full client question in the section heading.)
+# It is PURE: a hand-written duck-typed fake, no provider client, no DB, no
+# network. It reads audit/cost_prices.json off disk, which is a repo file.
+# The plan for that task did NOT ask for this registration; it was added
+# because a new test file that no config names is the exact silent skip the
+# whole preamble above exists to prevent.
+#
 # ONE NON-REGISTRATION, NAMED RATHER THAN LEFT SILENT — an unnamed exclusion is
 # the same silent skip this config exists to prevent. Plan 15.8-11 reviewed the
 # suite and found a PRE-EXISTING file that is in NEITHER gate config:
@@ -509,13 +524,14 @@ steps:
                     nestor_pulse_sdk/tests/test_pipeline_assignment_yield.py \
                     nestor_pulse_sdk/tests/test_research_division_yield.py \
                     nestor_pulse_sdk/tests/test_workshop_round_yield.py \
+                    nestor_pulse_sdk/tests/test_synthesis_opus5.py \
                     nestor_pulse_sdk/tests/test_suite_hygiene.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=43
+            EXPECTED_FILES=44
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
