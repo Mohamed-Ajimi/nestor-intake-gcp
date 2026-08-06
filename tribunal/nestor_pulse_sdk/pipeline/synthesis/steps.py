@@ -1066,26 +1066,59 @@ def build_could_not_establish(
 
 
 def _spec_directives(report_spec: Optional[dict]) -> str:
-    """Turn a user report_spec (length / tables / instructions) into a prompt block.
+    """Turn a user report_spec (length / pages / tables / instructions) into a block.
 
     Empty string when no spec — synthesis behaves exactly as before. Focus-area
     SELECTION is handled by the caller (it filters the section list); this only
     carries the cross-cutting style directives into every section + the wrap.
+
+    ``pages`` (quick task 260806-lvt) is OPTIONAL and additive: absent, this function
+    is byte-identical to the one that shipped, which is what the back-compat prompt
+    test pins. It arrives from the intake's own ``output_size`` radio, whose option
+    labels promise the client a page range — see
+    ``backend/app/research/brief.py::_OUTPUT_SIZE_SPEC`` and the test that stops the
+    label and the range drifting apart.
+
+    ⚠ IT IS A TARGET, NOT A CAP, and a reader will over-read it otherwise. The hard
+    ceiling on report length is the per-section token budget times one section per
+    client question — that is what produced a 356,352-character report on run
+    368ff3a0 — and this directive does not touch it.
     """
     if not report_spec:
         return ""
     parts: list[str] = []
     length = report_spec.get("length")
+    pages = str(report_spec.get("pages") or "").strip()
+    length_parts: list[str] = []
     if length == "brief":
-        parts.append(
+        length_parts.append(
             "LENGTH: Keep this TIGHT and decision-first. Prefer the shortest "
             "treatment that still fully answers; cut nice-to-have elaboration."
         )
     elif length == "comprehensive":
-        parts.append(
+        length_parts.append(
             "LENGTH: Be COMPREHENSIVE. Develop every well-supported finding in "
             "depth, include relevant secondary findings and context."
         )
+    if pages:
+        # OPERATOR RULING 2026-08-06 (quick task 260806-lvt): the page target is
+        # carried IN ADDITION TO the keyword, never instead of it. "Be COMPREHENSIVE"
+        # is an adjective a model can satisfy at any size; "approximately 10-20 pages"
+        # is a target it can visibly miss. The intake has always offered the client a
+        # page range and this is the first time one reaches the writer.
+        #
+        # NOTE THE `LENGTH:` PREFIX IS CONDITIONAL. `standard` carries a page target
+        # and NO keyword — it is the default shape, so there is no adjective to add,
+        # but the client was still promised 5-10 pages. Without this branch that case
+        # would emit NOTHING and the whole standard tier would be silently inert,
+        # which is the failure mode this task exists to remove rather than relocate.
+        length_parts.append(
+            ("Target length: approximately %s pages." % pages)
+            if length_parts
+            else ("LENGTH: Target length: approximately %s pages." % pages)
+        )
+    if length_parts:
+        parts.append(" ".join(length_parts))
     tables = report_spec.get("tables")
     if tables == "none":
         parts.append("TABLES: Do NOT use markdown tables — write flowing prose.")

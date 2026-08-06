@@ -1870,6 +1870,45 @@ class TribunalPipeline:
                 )
             deep_research_prompt = parsed.decision
         _no_stated_decision = False
+
+        # D-LVT — THE RUN LANGUAGE, RESOLVED IN THE SAME REGISTER AS THE DECISION
+        # ABOVE, and for the same reason: the client's own choice outranks a
+        # model-authored restatement of it.
+        #
+        #   1. the client's STATED report language, carried across the seam in the
+        #      brief's `[REPORT]` block (the `report_language` intake field);
+        #   2. the workshop's own `language`, when it returned one;
+        #   3. nothing — which stays EMPTY and is now WARNED about, never guessed.
+        #
+        # WHY STEP 3 IS NOT A DETECTOR. Inferring the dominant language of the brief
+        # is confidently wrong in exactly the case that matters — a Dutch-speaking
+        # client who needs an English report for an international board — and the
+        # cost of being wrong is the whole report.
+        #
+        # WHAT THIS UNBLOCKS, measured on run 368ff3a0 rather than argued: this value
+        # is read by `_d7_language_sentence` (every provider assignment) and by
+        # `synthesis/steps.py::_language_directive` (every writing step). It was
+        # EMPTY on that entire run, so both took their weakened branch — all five
+        # dispatch assignments read say "Report all findings in the language of the
+        # assignment above.", and the strong "Write EVERYTHING in {lang} and ONLY
+        # {lang} ... Never mix languages" directive has never fired in production.
+        # `adaptive_intake` was its only producer and D-03 unwired it; nothing has
+        # produced it since.
+        if parsed.language:
+            if run_language and run_language != parsed.language:
+                log.info(
+                    "tribunal_pipeline: the brief states the client's chosen report "
+                    "language (%s), so it outranks the workshop's own value (%s)",
+                    parsed.language, run_language,
+                )
+            run_language = parsed.language
+        if not run_language:
+            log.warning(
+                "tribunal_pipeline: no report language was stated by the client and "
+                "none was returned by the workshop — every provider assignment and "
+                "every synthesis prompt falls back to inferring it from the brief, "
+                "which is a materially weaker one-language-per-run guarantee"
+            )
         if not deep_research_prompt:
             # A value MUST keep flowing: this feeds `_gate_decision_context`, and the
             # gates' load-bearing test is judged AGAINST A DECISION — an empty context
@@ -1975,6 +2014,23 @@ class TribunalPipeline:
             deep_research_prompt=deep_research_prompt,
             parent_prompts=parent_prompts,
         )
+
+        # D-LVT — the client's chosen report SHAPE rides on the mission brief rather
+        # than through a new parameter, because the mission brief is the ONE object
+        # that survives into the synthesis bundle. `_write_final_report` reads it back
+        # off `bundle["mission_brief"]` at the zero-touch call site, so no signature
+        # anywhere between here and there has to learn about it.
+        #
+        # ABSENT STAYS ABSENT: an old intake carries no `[REPORT]` block, `report_spec`
+        # is `{}`, and the read at the far end resolves to `None` — byte-identical to
+        # the report this engine writes today.
+        if parsed.report_spec:
+            mission_brief["report_spec"] = dict(parsed.report_spec)
+            log.info(
+                "tribunal_pipeline: the client chose a report shape (%s) and it will "
+                "reach synthesis as a directive rather than as prose",
+                ", ".join(f"{k}={v}" for k, v in sorted(parsed.report_spec.items())),
+            )
 
         # D-12, reason 1 of 3: everything the workshop itself named. This goes
         # through `_note_degradation` — run()'s ONE accumulator — and includes
@@ -3840,9 +3896,25 @@ class TribunalPipeline:
             log.info("tribunal_pipeline: paused for interactive report shaping")
             return {"needs_report_spec": True, "report_proposal": proposal}
 
-        # Zero-touch default: write the report now with no shaping spec.
+        # Zero-touch default: the client's chosen report shape when the intake
+        # carried one, and None when it did not.
+        #
+        # THIS LINE WAS THE OFF SWITCH (quick task 260806-lvt). It read
+        # `report_spec=None` unconditionally, so `_spec_directives` returned "" on
+        # every seam run and the "REPORT SHAPING (client-chosen - honor these)" block
+        # it already knows how to emit never reached a single prompt. The intake has
+        # asked "Gewenste omvang van het rapport" all along; the answer died here.
+        # Run 368ff3a0 delivered 356,352 characters against a form whose LARGEST
+        # option offers "approx. 10-20 pages" and whose help text reads
+        # "Dikker != beter."
+        #
+        # `or None` is load-bearing: `_spec_directives` treats a falsy spec as "no
+        # spec" and returns "", so an empty dict and None behave identically — but
+        # passing None keeps this call byte-identical to the pre-change one for every
+        # old intake, which is what the back-compat test pins.
         return await _write_final_report(
-            bundle=synthesis_bundle, report_spec=None,
+            bundle=synthesis_bundle,
+            report_spec=(synthesis_bundle.get("mission_brief") or {}).get("report_spec") or None,
             audited=audited, run_id=run_id, tenant_id=tenant_id,
         )
 

@@ -961,3 +961,100 @@ class TestDiscoveryProvenanceClause:
         b = build_disputed_and_changed(brief_conflicts=second, language="Dutch")
         assert a == b
         assert _SECTION_STRINGS["dutch"]["brief_raised_question"] in a
+
+
+# ---------------------------------------------------------------------------
+# REPORT SHAPING — the client's chosen length + language reach the writer.
+# Quick task 260806-lvt.
+#
+# WHY THESE LIVE HERE. `_spec_directives` feeds the section prompts this file
+# already owns, and test_report_sections.py is in cloudbuild.test-engine.yaml's
+# WANTED list. test_synthesize_report.py is NOT in that list, so tests written
+# there would never run in the gate -- the exact silent skip that config's
+# preamble exists to prevent.
+#
+# WHAT WAS BROKEN. pipeline.py's zero-touch path passed report_spec=None
+# unconditionally, so `_spec_directives` returned "" on every seam run and the
+# "REPORT SHAPING (client-chosen - honor these)" block it already knew how to
+# emit never reached a prompt. Run 368ff3a0 delivered 356,352 characters against
+# a form whose largest option offers "approx. 10-20 pages".
+# ---------------------------------------------------------------------------
+
+from nestor_pulse_sdk.pipeline.synthesis.steps import (  # noqa: E402
+    _language_directive,
+    _spec_directives,
+)
+
+
+def test_no_spec_is_byte_identical_to_the_shipped_behaviour():
+    """THE BACK-COMPAT ARM. Old intakes carry no [REPORT] block; pipeline.py resolves
+    that to None and this must return exactly what it always has: nothing."""
+    assert _spec_directives(None) == ""
+    assert _spec_directives({}) == ""
+
+
+def test_comprehensive_carries_both_the_adjective_and_the_number():
+    """OPERATOR RULING: the page target is IN ADDITION TO the keyword, not instead."""
+    out = _spec_directives({"length": "comprehensive", "pages": "10-20"})
+
+    assert "Be COMPREHENSIVE" in out
+    assert "Target length: approximately 10-20 pages." in out
+    assert "REPORT SHAPING (client-chosen" in out
+    # One LENGTH line, not two.
+    assert out.count("LENGTH:") == 1
+
+
+def test_brief_carries_both_too():
+    out = _spec_directives({"length": "brief", "pages": "2-5"})
+    assert "Keep this TIGHT" in out
+    assert "Target length: approximately 2-5 pages." in out
+    assert out.count("LENGTH:") == 1
+
+
+def test_pages_only_still_emits_a_length_line():
+    """THE STANDARD TIER. It has no adjective to add, but the client was promised
+    5-10 pages. Before this change a pages-only spec emitted NOTHING at all, so the
+    whole standard tier would have been silently inert."""
+    out = _spec_directives({"pages": "5-10"})
+
+    assert "LENGTH: Target length: approximately 5-10 pages." in out
+    assert "COMPREHENSIVE" not in out
+    assert "Keep this TIGHT" not in out
+
+
+def test_a_keyword_with_no_pages_is_unchanged():
+    """Non-vacuity for the arm above: the old shape must still produce the old line
+    with no trailing target sentence bolted onto it."""
+    out = _spec_directives({"length": "brief"})
+    assert "Keep this TIGHT" in out
+    assert "Target length" not in out
+
+
+def test_client_free_text_survives_beside_a_length():
+    """The `other` option: the client wrote their own constraint and it must reach
+    the writer as an instruction, with no invented page range beside it."""
+    out = _spec_directives({"instructions": "max. 15 slides voor ExCo"})
+
+    assert "ADDITIONAL CLIENT INSTRUCTIONS (follow these):" in out
+    assert "max. 15 slides voor ExCo" in out
+    assert "Target length" not in out
+
+
+def test_language_directive_is_strong_when_a_language_is_stated():
+    """The whole point of the language half. On run 368ff3a0 this branch never ran:
+    mission_brief["language"] was empty on every call, so every writing step took
+    the weak branch below and nothing said so."""
+    out = _language_directive({"language": "Dutch"})
+
+    assert "Write EVERYTHING in Dutch and ONLY Dutch" in out
+    assert "Translate any source material" in out
+    assert "Never mix languages" in out
+
+
+def test_language_directive_falls_back_when_none_was_stated():
+    """Non-vacuity: the weak branch must still exist and must still be reachable --
+    it is the old-intake path, not dead code."""
+    out = _language_directive({})
+
+    assert "Write the entire output in ONE language" in out
+    assert "ONLY" not in out.split("Never mix")[0].replace("ONE language", "")
