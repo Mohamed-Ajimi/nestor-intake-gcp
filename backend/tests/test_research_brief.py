@@ -237,3 +237,159 @@ def test_string_entries_in_question_lists_are_supported():
     intake = _intake(answers={"research_questions": ["Vraag als platte string?"]})
     result = brief_mod.assemble_brief(intake, None, [])
     assert "Vraag als platte string?" in result
+
+
+# ---------------------------------------------------------------------------
+# The [REPORT] block — client-chosen report language + size (quick 260806-lvt)
+#
+# WHY THESE EXIST. Measured on run 368ff3a0: mission_brief["language"] was EMPTY on
+# every dispatch call, so the strong "Write EVERYTHING in {lang}" directive has never
+# fired in production; and the client's output_size answer was read by nothing at all
+# (length was proxied off question_count). These pin the producer half of the fix.
+# ---------------------------------------------------------------------------
+
+_REPORT_HEADER = "[REPORT]"
+_REPORT_FOOTER = "[END REPORT]"
+
+
+def test_report_block_absent_when_the_client_was_never_asked():
+    """No language and no size answer => NO block at all. This is the OLD-INTAKE path.
+
+    It must stay reachable and must stay EMPTY rather than defaulting: pipeline.py's
+    zero-touch branch passes report_spec=None for exactly this shape, and a block made
+    of whitespace would parse as a client CHOICE of whitespace.
+    """
+    result = brief_mod.assemble_brief(_intake(), _decomp("Samenvatting."), [])
+    assert _REPORT_HEADER not in result
+    assert _REPORT_FOOTER not in result
+
+
+def test_compact_carries_both_the_keyword_and_the_page_range():
+    """OPERATOR RULING: BOTH, never the keyword alone."""
+    intake = _intake(answers={"output_size": "compact", "report_language": "nl"})
+    result = brief_mod.assemble_brief(intake, _decomp("Samenvatting."), [])
+
+    assert _REPORT_HEADER in result and _REPORT_FOOTER in result
+    assert "LANGUAGE: Dutch" in result
+    assert "LENGTH: brief" in result
+    assert "PAGES: 2-5" in result
+
+
+def test_standard_carries_a_page_target_with_no_keyword():
+    """The default shape has no adjective to add, but the client was promised 5-10."""
+    spec = brief_mod.derive_report_spec(_intake(answers={"output_size": "standard"}))
+    assert spec == {"pages": "5-10"}
+
+    result = brief_mod.assemble_brief(
+        _intake(answers={"output_size": "standard"}), _decomp("S."), []
+    )
+    assert "PAGES: 5-10" in result
+    assert "LENGTH:" not in result
+
+
+def test_extended_maps_to_comprehensive_plus_pages():
+    spec = brief_mod.derive_report_spec(_intake(answers={"output_size": "extended"}))
+    assert spec == {"length": "comprehensive", "pages": "10-20"}
+
+
+def test_other_routes_the_clients_own_words_to_instructions_and_invents_no_pages():
+    """The client typed their own constraint; a page range would overrule it.
+
+    Also the SHAPE test: FieldRenderer stores an allow_text radio as
+    {"choice": ..., "text": ...}. Reading it with _first_nonempty would str() the dict
+    into its repr, match no key, and report the answer as unset.
+    """
+    intake = _intake(
+        answers={"output_size": {"choice": "other", "text": "max. 15 slides voor ExCo"}}
+    )
+    spec = brief_mod.derive_report_spec(intake)
+
+    assert spec == {"instructions": "max. 15 slides voor ExCo"}
+    assert "pages" not in spec
+    assert "length" not in spec
+
+    result = brief_mod.assemble_brief(intake, _decomp("S."), [])
+    assert "INSTRUCTIONS: max. 15 slides voor ExCo" in result
+
+
+def test_language_resolves_to_an_english_name_the_engine_can_read_twice():
+    """The engine interpolates this into an English prompt AND maps it to an ISO code."""
+    assert brief_mod.derive_report_language(_intake(answers={"report_language": "nl"})) == "Dutch"
+    assert brief_mod.derive_report_language(_intake(answers={"report_language": "fr"})) == "French"
+    assert brief_mod.derive_report_language(_intake(answers={"report_language": "en"})) == "English"
+    # Unknown / absent must stay EMPTY, never guessed.
+    assert brief_mod.derive_report_language(_intake(answers={"report_language": "xx"})) == ""
+    assert brief_mod.derive_report_language(_intake()) == ""
+
+
+def test_instructions_are_collapsed_to_one_line():
+    """The block is line-oriented; a newline in client text would forge a block line."""
+    intake = _intake(
+        answers={"output_size": {"choice": "other", "text": "max 15 slides\nLENGTH: brief"}}
+    )
+    result = brief_mod.assemble_brief(intake, _decomp("S."), [])
+    block = result.split(_REPORT_HEADER, 1)[1].split(_REPORT_FOOTER, 1)[0]
+    assert "LENGTH:" not in block.split("INSTRUCTIONS:", 1)[0]
+    assert len([ln for ln in block.strip().splitlines() if ln.strip()]) == 1
+
+
+def test_report_block_never_reintroduces_the_interactive_marker():
+    """The block is NOT the interactive gate — the seam must still never opt in."""
+    intake = _intake(answers={"output_size": "extended", "report_language": "en"})
+    result = brief_mod.assemble_brief(intake, _decomp("S."), [])
+    assert _INTERACTIVE_MARKER not in result
+
+
+def test_page_ranges_match_the_labels_the_client_actually_reads():
+    """THE DRIFT GUARD. Two places now show the client a number: the option label on
+    the form and the instruction handed to the writer. If they ever diverge we would
+    be promising one thing and instructing another, and nothing would notice.
+
+    Change a label from 2-5 to 3-6 pages and this goes red until the constant follows.
+    """
+    import json
+    import pathlib
+
+    template = json.loads(
+        (
+            pathlib.Path(brief_mod.__file__).resolve().parents[1]
+            / "data"
+            / "pulse_intake_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    section = next(s for s in template["sections"] if s["id"] == "output_format")
+    field = next(f for f in section["fields"] if f["key"] == "output_size")
+    options = {o["value"]: o for o in field["options"]}
+
+    # Non-vacuity: the mapping must not be silently empty, and every mapped value
+    # must still exist as an option the client can actually pick.
+    assert brief_mod._OUTPUT_SIZE_SPEC, "the size mapping is empty — nothing is pinned"
+    for value, spec in brief_mod._OUTPUT_SIZE_SPEC.items():
+        assert value in options, f"{value} is mapped but is not an option on the form"
+        pages = spec["pages"]
+        for locale in ("nl", "fr", "en"):
+            label = options[value]["label"][locale]
+            assert pages in label, (
+                f"{value}: the {locale} label {label!r} does not contain the mapped "
+                f"page range {pages!r} — the form and the writer now disagree"
+            )
+
+
+def test_report_language_is_a_required_field_on_the_live_template():
+    """The field must exist and be required — nothing may silently default."""
+    import json
+    import pathlib
+
+    template = json.loads(
+        (
+            pathlib.Path(brief_mod.__file__).resolve().parents[1]
+            / "data"
+            / "pulse_intake_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    section = next(s for s in template["sections"] if s["id"] == "output_format")
+    field = next(f for f in section["fields"] if f["key"] == "report_language")
+
+    assert field["required"] is True
+    assert {o["value"] for o in field["options"]} == set(brief_mod._RUN_LANGUAGE_NAMES)

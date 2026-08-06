@@ -640,6 +640,47 @@
           "required": true
         },
         {
+          "key": "report_language",
+          "help": {
+            "nl": "Eén taal voor het hele rapport. Bronnen in andere talen worden vertaald.",
+            "fr": "Une seule langue pour tout le rapport. Les sources dans d'autres langues sont traduites.",
+            "en": "One language for the whole report. Sources in other languages are translated."
+          },
+          "type": "radio",
+          "label": {
+            "nl": "Taal van het rapport",
+            "fr": "Langue du rapport",
+            "en": "Report language"
+          },
+          "options": [
+            {
+              "label": {
+                "nl": "Nederlands",
+                "fr": "Néerlandais",
+                "en": "Dutch"
+              },
+              "value": "nl"
+            },
+            {
+              "label": {
+                "nl": "Frans",
+                "fr": "Français",
+                "en": "French"
+              },
+              "value": "fr"
+            },
+            {
+              "label": {
+                "nl": "Engels",
+                "fr": "Anglais",
+                "en": "English"
+              },
+              "value": "en"
+            }
+          ],
+          "required": true
+        },
+        {
           "key": "output_form",
           "type": "radio",
           "label": {

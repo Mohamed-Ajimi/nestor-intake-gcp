@@ -93,6 +93,65 @@ _DECISION_FIELD_KEYS = (
     "doel_beslissing",
 )
 
+#: Delimiters for the CLIENT-CHOSEN REPORT SHAPE (quick task 260806-lvt). Same seam
+#: contract as the decision block above: the engine's
+#: ``pipeline/tribunal/brief_input.py::parse_brief`` reads exactly these two lines
+#: and lifts the ``KEY: value`` lines between them onto ``ParsedBrief``. Changing
+#: either string is a SEAM CHANGE — the engine-side parser changes in the same commit.
+#:
+#: WHY A BLOCK AND NOT PROSE, because :func:`derive_report_hint` right below already
+#: folds report preferences in as prose and a reader will ask. Prose is exactly what
+#: was broken: it can only nudge the model's inference. ``mission_brief["language"]``
+#: is a STRUCTURED value read by ``synthesis/steps.py::_language_directive`` and by
+#: ``research_division._d7_language_sentence`` — neither can read a sentence. Measured
+#: on run ``368ff3a0``: all five dispatch assignments carried the fallback
+#: "Report all findings in the language of the assignment above." because that value
+#: was empty, and the strong "Write EVERYTHING in {lang} and ONLY {lang}" directive
+#: has therefore never fired in production.
+_REPORT_HEADER = "[REPORT]"
+_REPORT_FOOTER = "[END REPORT]"
+
+#: Keys INSIDE the report block. Spelled once here and parsed by name on the engine
+#: side, so an unknown key is ignorable rather than positional.
+_REPORT_KEY_LANGUAGE = "LANGUAGE"
+_REPORT_KEY_LENGTH = "LENGTH"
+_REPORT_KEY_PAGES = "PAGES"
+_REPORT_KEY_INSTRUCTIONS = "INSTRUCTIONS"
+
+#: Intake answer field keys carrying the client's report language / size choice, in
+#: the same shape as :data:`_SECTOR_FIELD_KEYS`. ``report_language`` / ``output_size``
+#: are the live Pulse template keys; the rest are tolerated aliases.
+_LANGUAGE_FIELD_KEYS = ("report_language", "rapporttaal", "report_lang")
+_OUTPUT_SIZE_FIELD_KEYS = ("output_size", "rapportomvang", "report_size")
+
+#: Report-language code -> the ENGLISH language NAME the engine interpolates.
+#: The engine reads this value twice and both readers want a NAME, not a code:
+#: ``_language_directive`` writes it straight into an English prompt ("Write
+#: EVERYTHING in Dutch and ONLY Dutch"), and ``workshop_rank._RUN_LANG_CODES`` maps
+#: the name back to an ISO code to derive default SEARCH languages. Every name below
+#: is a key of that map (verified 2026-08-06) — an unmapped name would cost the
+#: search-language default while still producing a correct output directive.
+_RUN_LANGUAGE_NAMES: dict[str, str] = {"nl": "Dutch", "fr": "French", "en": "English"}
+
+#: ``output_size`` answer -> the report spec the engine's
+#: ``synthesis/steps.py::_spec_directives`` consumes.
+#:
+#: OPERATOR RULING 2026-08-06: keep BOTH the keyword and the page range. Collapsing
+#: to ``brief``/``comprehensive`` alone was explicitly rejected — a page target is
+#: something the writer can visibly miss, an adjective is not. ``standard`` carries a
+#: target with NO keyword on purpose: it is the default shape so there is no
+#: adjective to add, but the client was still promised 5-10 pages.
+#:
+#: THE PAGE RANGES ARE ASSERTED AGAINST THE TEMPLATE'S OWN OPTION LABELS by
+#: ``test_research_brief.py``. There are now two places the client sees a number —
+#: the label they read on the form and the instruction the writer receives — and
+#: that test is what stops them drifting apart silently.
+_OUTPUT_SIZE_SPEC: dict[str, dict[str, str]] = {
+    "compact": {"length": "brief", "pages": "2-5"},
+    "standard": {"pages": "5-10"},
+    "extended": {"length": "comprehensive", "pages": "10-20"},
+}
+
 #: The context pack's §3 decision line, as written by
 #: ``app.ai.prompts.CONTEXT_PACK_SKILL_PROMPT``:
 #: ``- **Wat moet beslist worden:** [concreet]``. Tolerant of a leading ``-``/``*``
@@ -176,6 +235,97 @@ def _first_nonempty(answers: dict[str, Any], keys: tuple[str, ...]) -> str | Non
         if text:
             return text
     return None
+
+
+def _radio_answer(answers: dict[str, Any], keys: tuple[str, ...]) -> tuple[str, str]:
+    """Return ``(choice, free_text)`` for a radio answer. PURE, never raises.
+
+    THIS READER IS NOT OPTIONAL, and the reason is a real storage shape rather than
+    defensiveness. ``FieldRenderer`` stores a radio option carrying ``allow_text`` as
+    ``{"choice": ..., "text": ...}`` and a plain radio as the bare option value. Both
+    shapes live in the same answer map. :func:`_first_nonempty` would ``str()`` the
+    dict one into ``"{'choice': 'other', 'text': ...}"`` — a truthy string that
+    matches no key of :data:`_OUTPUT_SIZE_SPEC` — so the client's answer would read
+    as "unset" instead of as "other", silently and with no error anywhere.
+
+    Returns ``("", "")`` when nothing resolves.
+    """
+    lowered = {k.lower(): v for k, v in answers.items()}
+    for key in keys:
+        value = lowered.get(key)
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            choice = str(value.get("choice") or "").strip()
+            text = str(value.get("text") or "").strip()
+            if choice or text:
+                return choice, text
+            continue
+        text = str(value).strip()
+        if text:
+            return text, ""
+    return "", ""
+
+
+def derive_report_language(intake: Any) -> str:
+    """Return the client's chosen report language as an ENGLISH NAME, or ``""``.
+
+    PURE, never raises. ``""`` means the client was never asked (an intake predating
+    the ``report_language`` field) — the caller must let that stay empty and say so
+    out loud, NOT substitute a guess. Detecting the brief's dominant language would
+    be confidently wrong in exactly the case that matters: a Dutch-speaking client
+    who needs an English report for an international board.
+    """
+    choice, _ = _radio_answer(_answers_map(intake), _LANGUAGE_FIELD_KEYS)
+    return _RUN_LANGUAGE_NAMES.get(choice.lower(), "")
+
+
+def derive_report_spec(intake: Any) -> dict[str, str]:
+    """Map the client's ``output_size`` answer to a report spec. PURE, never raises.
+
+    Returns ``{}`` when nothing resolves — which is the OLD-INTAKE path and must keep
+    producing today's default report exactly, because ``pipeline.py``'s zero-touch
+    branch passes ``report_spec=None`` for it.
+
+    ``other`` carries no page range by construction: the client wrote their own
+    constraint ("max. 15 slides for ExCo") and it goes to ``instructions``, which
+    ``_spec_directives`` renders under "ADDITIONAL CLIENT INSTRUCTIONS (follow
+    these)". Inventing a page range for it would overrule the thing they typed.
+    """
+    choice, free_text = _radio_answer(_answers_map(intake), _OUTPUT_SIZE_FIELD_KEYS)
+    spec: dict[str, str] = dict(_OUTPUT_SIZE_SPEC.get(choice.lower(), {}))
+    if free_text:
+        spec["instructions"] = free_text
+    return spec
+
+
+def _report_block_lines(intake: Any) -> list[str]:
+    """The ``[REPORT]`` block for this intake, or ``[]`` when nothing resolves.
+
+    Emitted ONLY when at least one value resolves — the same never-emit-an-empty-block
+    rule the decision block applies, and for the same reason: a block made of
+    whitespace parses as a client CHOICE of whitespace, which is worse than no block
+    at all because no block is reported as a named degradation.
+    """
+    language = derive_report_language(intake)
+    spec = derive_report_spec(intake)
+    if not language and not spec:
+        return []
+
+    lines = ["", _REPORT_HEADER]
+    if language:
+        lines.append(f"{_REPORT_KEY_LANGUAGE}: {language}")
+    if spec.get("length"):
+        lines.append(f"{_REPORT_KEY_LENGTH}: {spec['length']}")
+    if spec.get("pages"):
+        lines.append(f"{_REPORT_KEY_PAGES}: {spec['pages']}")
+    if spec.get("instructions"):
+        # Collapsed to ONE line: the block is line-oriented and a client instruction
+        # containing a newline would otherwise forge a block line of its own.
+        instructions = " ".join(str(spec["instructions"]).split())
+        lines.append(f"{_REPORT_KEY_INSTRUCTIONS}: {instructions}")
+    lines.append(_REPORT_FOOTER)
+    return lines
 
 
 def derive_report_hint(intake: Any, question_count: int = 0) -> str:
@@ -381,6 +531,11 @@ def assemble_brief(
        engine side, as a decision made of whitespace. It sits between the questions
        and the hint so the decision reads as part of the ASSIGNMENT rather than as
        one more line of context (D-H, plan 15.2-21);
+    3b. a :data:`_REPORT_HEADER` / :data:`_REPORT_FOOTER` block carrying the client's
+       CHOSEN report language and size (:func:`derive_report_language`,
+       :func:`derive_report_spec`), emitted only when one of them resolves. Parsed
+       values, not prose — see the constants' own comment for why that distinction is
+       the whole point of the block;
     4. the :func:`derive_report_hint` PROSE tail;
     5. a labeled :data:`_CONTEXT_PACK_HEADER` Context section carrying the FULL
        ``context_pack_text`` verbatim (untruncated) — or, when no context pack is
@@ -427,7 +582,19 @@ def assemble_brief(
     if decision:
         sections += ["", _DECISION_HEADER, decision, _DECISION_FOOTER]
 
+    # 3b) The client-chosen report shape (quick task 260806-lvt). Sits AFTER the
+    # decision and BEFORE the prose hint, so the two report-shaping inputs read in
+    # increasing vagueness: the parsed block first, the prose that only nudges
+    # inference second. Emitted only when something resolves.
+    sections += _report_block_lines(intake)
+
     # 4) Report-spec hint prose (never the marker).
+    #
+    # DELIBERATELY KEPT alongside the block above rather than replaced by it. It
+    # carries structuring hints the block does not model (per-sector structure,
+    # goals-as-sections), it is additive, and removing it would change every brief
+    # this seam has ever produced. Retiring it is its own decision, not a side
+    # effect of this one.
     hint = derive_report_hint(intake, question_count=len(ordered))
     sections += ["", hint]
 
