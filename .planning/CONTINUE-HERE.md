@@ -179,15 +179,22 @@ quality effect of the change. One line, trivially revertible.
 
 ## Gaps still open
 
-**G-10 is CLOSED in code** (not yet deployed). The rest stand:
+**G-10 is CLOSED and now DEPLOYED. G-5 is ANSWERED, fixed and DEPLOYED.** Five new gaps opened
+2026-08-06 (G-12…G-16) — see `.planning/SESSION-260806.md` and
+`docs/tribunal-run-reports/run-20260805-368ff3a0-DISPATCH.md` for the evidence behind each.
 
 | id | Gap |
 |---|---|
-| **G-7** | **Deep research bills at exactly $0.00, so the `cost_usd IS NULL` guard no longer detects the floor. Highest priority.** ⚠️ Today's price row did **NOT** fix this — it prevented a *new* instance of the same class on the Opus 5 synthesis calls. G-7 itself is untouched. |
-| **G-5** | Is the 1200-char gate decision context actually binding? **UNMEASURED** — the most interesting open measurement, and it gates decision 3 |
+| **G-7** | **Deep research bills at exactly $0.00, so the `cost_usd IS NULL` guard no longer detects the floor. Highest priority — now the oldest open gap.** ⚠️ The Opus 5 price row did **NOT** fix this; it prevented a *new* instance of the same class. G-7 itself is untouched. |
+| ~~**G-5**~~ | ✅ **ANSWERED 2026-08-06 BY MEASUREMENT, FIXED, DEPLOYED.** All 7 gate calls carried an identical **576 chars against the 1200** — **the cap never bound** (624 spare). **What bound was `_LABEL_MAX_CHARS = 120`**: the gate's TEST 2 judged every KEEP/DROP against questions cut mid-word. Fixed in `260806-o96` by resolving the label to the full question on the READ path; both caps raised to 4000 **together** (they truncate in series, so raising one alone is inert). `_LABEL_MAX_CHARS` untouched and pinned at 120. **The cap everyone suspected was innocent.** |
+| **G-12** | **19 members dispatched vs 15 winners recorded** (7+6+5+1). Nothing reconciles them. ⛔ Measure before fixing — `research_division.py` already logs the per-group member count at dispatch; read that first. Fixing before measuring risks correcting the right number |
+| **G-13** | **A `brief_conflicts` entry was dispatched as a paid research sub-question** (coffee group, member 6) and **cut mid-URL at exactly 600 chars** (`_SUBQ_CHARS`). This IS the feature recorded as *"fired for the first time ever"*. ⚠ Its content had real value — the void-premise finding was the run's headline — so the fix is to turn a conflict into a proper question in the workshop, **not** to suppress it. **Needs an operator ruling: should conflicts be researched at all, or only reported?** |
+| **G-14** | **The `cross_cutting` flag is stamped on the winner dict and NEVER PERSISTED**, so "were both cross-cutting slots filled" is permanently unmeasurable. Observed 1 of 2 — very likely the evidence gate correctly dropping the INVENT candidate (feed event 81), but unprovable either way |
+| **G-15** | **Group 1 sits at the 7-member cap with two near-duplicates** (items 4 and 7: same 2025 German law, same three retailers). One of seven paid slots went to a restatement. Near-duplicate clustering runs earlier and did not catch it; the cheap fix is a dedup pass **inside the assembled group**, where the cap actually binds |
+| **G-16** | **`output_form` (Notion / PDF / other) is asked on the intake and read by NOTHING.** Same four touch points as the size wiring in `260806-lvt`. Asking a client a question and ignoring the answer is worse than not asking |
 | G-1 | `containers[0].image` is a mutable **TAG**, not a digest — read `status.imageDigest` off the revision. Runbook digest-pin proofs (~2311, 2688) flagged, not edited |
 | G-2 | `nestor-frontend` had **no** digest baseline; `nestor-api`'s was truncated to 8 hex chars |
-| G-3 | § 15.2.k queue recipe materialised for the first time; scratchpad only |
+| G-3 | § 15.2.k queue recipe materialised for the first time; scratchpad only — **still uncommitted.** ⭐ **But it is no longer the cheapest queue check.** The always-on worker is its own canary: at `minScale=1` polling every 2s, any claimable row would ALREADY have been claimed and would be writing audit blobs. Listing the audit bucket for the newest write answers *"is anything running or claimable"* **read-only, ~30s, no DB credential, no Cloud Build.** Used twice on the 2026-08-06 deploy |
 | G-4 | `DATABASE_URL_WORKER` parse — strip the query string BEFORE the last path segment (db is `nestor`) |
 | G-6 | Discovery section has a quote but **0 URLs / 0 citations** → provenance FAIL |
 | G-8 | `assignment_yield.cost_usd` NULL on all 12 → D-R8 unanswerable |
