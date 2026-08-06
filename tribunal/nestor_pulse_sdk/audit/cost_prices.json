@@ -15,6 +15,13 @@
     "cache_read": 1.5,
     "cache_creation_5m": 18.75
   },
+  "_claude_opus_5_source": "Quick task 260806-dn8, 2026-08-06. THE REPORT WRITER'S MODEL -- synthesis moved from google/gemini-2.5-pro to anthropic/claude-opus-5 on this date, so this row prices the three most expensive calls of every run. prompt 5.00 and completion 25.00 are the OPERATOR-SUPPLIED published rates as of 2026-08-06. cache_read and cache_creation_5m are NOT independent readings: they are Anthropic's published 0.1x and 1.25x multipliers applied to prompt, which is the IDENTICAL derivation every other anthropic/* row in this file uses (opus-4-5: 15 / 1.5 / 18.75; sonnet-4-6: 3 / 0.30 / 3.75). Recorded that way deliberately -- a derived number presented as a reading is how a cost table stops being auditable. BOTH CACHE FIELDS ARE INERT TODAY: nothing on the synthesis path sends cache_control, so neither rate can be reached by any call the engine currently makes. They exist so that a later prompt-caching change (the obvious lever -- every section call repeats the identical reports_concatenated block) prices CORRECTLY on the day it lands, instead of silently. WHY THIS ROW IS LOAD-BEARING AND NOT COSMETIC: compute() returns None for an unknown model, the caller writes NULL cost_usd, and SUM(cost_usd) silently skips it -- the booked G-7 defect. Verified RED before this row was added: compute(provider='anthropic', model='claude-opus-5', ...) returned None and logged `Unknown LLM model cost ... writing NULL cost_usd`. test_synthesis_opus5.py asserts `is not None` as its own arm, with its own message, so that cannot recur.",
+  "anthropic/claude-opus-5": {
+    "prompt": 5.0,
+    "completion": 25.0,
+    "cache_read": 0.50,
+    "cache_creation_5m": 6.25
+  },
   "anthropic/claude-sonnet-4-6": {
     "prompt": 3.0,
     "completion": 15.0,
