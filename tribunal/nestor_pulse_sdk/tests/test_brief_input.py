@@ -624,3 +624,184 @@ def test_the_parser_still_works_after_an_event_could_not_be_built():
     assert parsed.questions == _CLIENT_QUESTIONS
     assert parsed.decision == _DECISION
     assert parsed.source == "structured"
+
+
+# ---------------------------------------------------------------------------
+# The [REPORT] block — consumer half of quick task 260806-lvt.
+#
+# WHY. On run 368ff3a0 `mission_brief["language"]` was EMPTY on every dispatch
+# call, measured by reading `request.query` out of the audit blobs: all five
+# assignments carried "Report all findings in the language of the assignment
+# above.", the branch that fires only when the value is empty. Nothing was wrong
+# with the consumers — nobody was producing the value. These pin the reader.
+# ---------------------------------------------------------------------------
+
+
+def _brief_with_report_block(body: str) -> str:
+    """A minimal seam-shaped brief carrying `body` as its [REPORT] block."""
+    return (
+        "Deep research for lukoil.\n"
+        "\n"
+        "Onderzoeksvragen:\n"
+        "1. Welke fuel retailers passen dynamic pricing toe?\n"
+        "\n"
+        "[DECISION]\n"
+        "Investeert LUKOIL in Duitsland of in margegroei in de Benelux?\n"
+        "[END DECISION]\n"
+        "\n"
+        "[REPORT]\n"
+        f"{body}\n"
+        "[END REPORT]\n"
+        "\n"
+        "[CONTEXT PACK]\n"
+        "- Sector: fuel retail\n"
+    )
+
+
+def test_report_block_yields_language_and_spec():
+    parsed = parse_brief(
+        _brief_with_report_block(
+            "LANGUAGE: Dutch\nLENGTH: comprehensive\nPAGES: 10-20"
+        )
+    )
+
+    assert parsed.language == "Dutch"
+    assert parsed.report_spec == {"length": "comprehensive", "pages": "10-20"}
+    # The block must not damage what already worked.
+    assert parsed.questions == ["Welke fuel retailers passen dynamic pricing toe?"]
+    assert parsed.decision.startswith("Investeert LUKOIL")
+    assert parsed.source == "structured"
+
+
+def test_report_block_lines_never_leak_into_context():
+    """Context is read by the workshop. A delimiter pair the producer owns must not
+    become material the workshop reads as if the client had written it — that class
+    of leak is exactly what fed 32 parents into the d6bb3aae workshop."""
+    parsed = parse_brief(
+        _brief_with_report_block("LANGUAGE: French\nPAGES: 5-10")
+    )
+
+    assert "[REPORT]" not in parsed.context
+    assert "[END REPORT]" not in parsed.context
+    assert "LANGUAGE:" not in parsed.context
+    assert "PAGES:" not in parsed.context
+    # The real context survives intact.
+    assert "Sector: fuel retail" in parsed.context
+
+
+def test_pages_only_block_is_the_standard_case():
+    """`standard` carries a page target and NO length keyword, by operator ruling."""
+    parsed = parse_brief(_brief_with_report_block("LANGUAGE: Dutch\nPAGES: 5-10"))
+    assert parsed.report_spec == {"pages": "5-10"}
+    assert "length" not in parsed.report_spec
+
+
+def test_instructions_keep_their_own_colons():
+    """Split on the FIRST colon only — client text legitimately contains more."""
+    parsed = parse_brief(
+        _brief_with_report_block("INSTRUCTIONS: Target: max. 15 slides voor ExCo")
+    )
+    assert parsed.report_spec == {"instructions": "Target: max. 15 slides voor ExCo"}
+
+
+def test_a_malformed_block_costs_the_block_and_never_the_parse():
+    """The load-bearing degradation property: questions and decision survive."""
+    parsed = parse_brief(
+        _brief_with_report_block("this is not a key value line at all\nWAT: onbekend")
+    )
+
+    assert parsed.report_spec == {}
+    assert parsed.language == ""
+    assert parsed.questions == ["Welke fuel retailers passen dynamic pricing toe?"]
+    assert parsed.decision.startswith("Investeert LUKOIL")
+    # And the junk did not become context either.
+    assert "not a key value line" not in parsed.context
+
+
+def test_an_unclosed_report_block_ends_at_the_next_section_marker():
+    brief = (
+        "Opening.\n"
+        "\n"
+        "[REPORT]\n"
+        "LANGUAGE: English\n"
+        "[CONTEXT PACK]\n"
+        "- Sector: fuel retail\n"
+    )
+    parsed = parse_brief(brief)
+
+    assert parsed.language == "English"
+    assert "Sector: fuel retail" in parsed.context
+
+
+def test_no_report_block_is_the_old_intake_path_and_stays_empty():
+    """THE BACK-COMPAT ARM. An intake predating the field must yield empty, not a
+    guess — pipeline.py's zero-touch branch passes report_spec=None for this shape."""
+    brief = (
+        "Deep research for lukoil.\n"
+        "\n"
+        "Onderzoeksvragen:\n"
+        "1. Welke fuel retailers passen dynamic pricing toe?\n"
+    )
+    parsed = parse_brief(brief)
+
+    assert parsed.language == ""
+    assert parsed.report_spec == {}
+    assert parsed.questions == ["Welke fuel retailers passen dynamic pricing toe?"]
+
+
+def test_absent_language_is_reported_out_loud(caplog):
+    """A fallback that fires 100% of the time is the behaviour, not a fallback.
+    Silence is the entire reason this survived unnoticed on run 368ff3a0."""
+    with caplog.at_level(logging.WARNING, logger=brief_input.log.name):
+        parse_brief("Opening line only.\n")
+
+    assert any(
+        "no report LANGUAGE" in record.getMessage() for record in caplog.records
+    ), "the empty-language path must name itself in the log"
+
+
+def test_a_stated_language_logs_no_warning(caplog):
+    """Non-vacuity for the test above: the warning must be conditional, not constant."""
+    with caplog.at_level(logging.WARNING, logger=brief_input.log.name):
+        parse_brief(_brief_with_report_block("LANGUAGE: Dutch"))
+
+    assert not any(
+        "no report LANGUAGE" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_report_values_are_bounded():
+    """`instructions` reaches a synthesis prompt verbatim — same class of input as a
+    client question, so it carries the same kind of bound."""
+    parsed = parse_brief(
+        _brief_with_report_block("INSTRUCTIONS: " + ("x" * 900))
+    )
+    assert len(parsed.report_spec["instructions"]) == brief_input._REPORT_VALUE_MAX_CHARS
+
+
+def test_the_seam_strings_match_the_producer():
+    """SEAM GUARD. backend/app/research/brief.py spells the same two delimiters; if
+    either side drifts the block silently becomes context and the language is lost
+    again, with no error anywhere. Asserted against the producer's own source."""
+    import pathlib
+    import re
+
+    producer = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "backend"
+        / "app"
+        / "research"
+        / "brief.py"
+    )
+    if not producer.exists():  # engine-only checkout
+        pytest.skip("backend/ not present in this checkout")
+
+    text = producer.read_text(encoding="utf-8")
+    for name, value in (
+        ("_REPORT_HEADER", brief_input._REPORT_HEADER),
+        ("_REPORT_FOOTER", brief_input._REPORT_FOOTER),
+    ):
+        assert re.search(rf'^{name} = "{re.escape(value)}"$', text, re.M), (
+            f"the producer's {name} no longer equals the parser's {value!r} — "
+            "this is a seam change and both sides move in one commit"
+        )

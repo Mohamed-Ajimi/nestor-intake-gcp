@@ -136,6 +136,35 @@ _QUESTIONS_HEADER = "[RESEARCH QUESTIONS]"
 _QUESTIONS_FOOTER = "[END RESEARCH QUESTIONS]"
 _CONTEXT_PACK_HEADER = "[CONTEXT PACK]"
 
+#: The CLIENT-CHOSEN REPORT SHAPE block (quick task 260806-lvt). Producer is
+#: ``backend/app/research/brief.py``, which spells the same two strings — changing
+#: either is a SEAM CHANGE and both sides move in one commit, exactly as the
+#: ``[DECISION]`` pair above.
+#:
+#: WHAT IT CARRIES AND WHY IT IS PARSED RATHER THAN READ AS PROSE. ``LANGUAGE`` is
+#: the run's ONE output language. It is consumed twice downstream — by
+#: ``synthesis/steps.py::_language_directive`` and by
+#: ``research_division._d7_language_sentence`` — and BOTH interpolate it into a
+#: prompt, so neither can recover it from a sentence. Measured on run ``368ff3a0``:
+#: it was empty on every one of that run's dispatch assignments, so both consumers
+#: silently took their weakened fallback branch and nothing anywhere said so.
+_REPORT_HEADER = "[REPORT]"
+_REPORT_FOOTER = "[END REPORT]"
+
+#: Keys recognised inside the report block, lowercased at the point of comparison.
+#: ``LANGUAGE`` lands on its own ``ParsedBrief`` field; the rest compose the
+#: ``report_spec`` dict that ``synthesis/steps.py::_spec_directives`` already knows
+#: how to render. Parsed BY NAME, so an unknown key costs that line and nothing else
+#: — a producer that gains a key does not break a deployed reader.
+_REPORT_SPEC_KEYS = ("length", "pages", "instructions")
+
+#: Characters kept per report-block value. The block is engine-facing and every
+#: value is either an enum this file does not trust or short client text; the one
+#: that can be long is ``instructions``, which reaches a synthesis prompt verbatim
+#: under "ADDITIONAL CLIENT INSTRUCTIONS". Bounding it is the same prompt-injection
+#: control ``_QUESTION_MAX_CHARS`` is, applied to the same class of input.
+_REPORT_VALUE_MAX_CHARS = 400
+
 #: The legacy header, case-insensitive, trailing colon optional. It must match the
 #: WHOLE line: a sentence that merely mentions the word is prose, not a header.
 _LEGACY_QUESTIONS_HEADER_RE = re.compile(r"^onderzoeksvragen\s*:?$", re.IGNORECASE)
@@ -184,6 +213,16 @@ class ParsedBrief:
     * ``context`` — every other line, verbatim and in original order: the opening
       line, the report hint and the entire ``[CONTEXT PACK]`` section. Material to
       read, never a question to dispatch.
+    * ``language`` — the run's ONE output language as an English NAME ("Dutch"), from
+      the ``[REPORT]`` block. ``""`` when the client was never asked — an intake
+      predating the ``report_language`` field. The caller must let that stay empty and
+      SAY SO, never substitute a detected language: guessing from the brief's dominant
+      language is confidently wrong in exactly the case that matters, a Dutch-speaking
+      client who needs an English report for an international board.
+    * ``report_spec`` — the client's chosen report shape as
+      ``{length?, pages?, instructions?}``, ready for
+      ``synthesis/steps.py::_spec_directives``. ``{}`` when no block resolved, which is
+      the OLD-INTAKE path and must keep producing today's default report byte for byte.
     * ``source`` — ``"structured"`` when a question block was found,
       ``"unstructured"`` when the brief is free prose (a legitimate shape — the
       caller then takes the deterministic whole-brief detector path deliberately
@@ -194,6 +233,8 @@ class ParsedBrief:
     decision: str = ""
     context: str = ""
     source: str = "unstructured"
+    language: str = ""
+    report_spec: dict = field(default_factory=dict)
 
 
 def _is_section_marker(stripped: str) -> bool:
@@ -204,6 +245,8 @@ def _is_section_marker(stripped: str) -> bool:
         _QUESTIONS_HEADER,
         _QUESTIONS_FOOTER,
         _CONTEXT_PACK_HEADER,
+        _REPORT_HEADER,
+        _REPORT_FOOTER,
     ):
         return True
     return bool(_LEGACY_QUESTIONS_HEADER_RE.match(stripped))
@@ -312,6 +355,8 @@ def parse_brief(brief: str | None, *, run_id: Optional[uuid.UUID] = None) -> Par
         decision_parts: list[str] = []
         context_lines: list[str] = []
         saw_question_block = False
+        report_language = ""
+        report_spec: dict = {}
 
         state = "none"
         index = 0
@@ -363,9 +408,44 @@ def parse_brief(brief: str | None, *, run_id: Optional[uuid.UUID] = None) -> Par
                 state = "none"
                 continue
 
+            if state == "report":
+                if stripped == _REPORT_FOOTER:
+                    state = "none"
+                    index += 1
+                    continue
+                if _is_section_marker(stripped):
+                    # Unclosed block running into the next section: hand the line
+                    # back WITHOUT advancing, exactly as the decision arm does.
+                    state = "none"
+                    continue
+                if not stripped:
+                    index += 1
+                    continue
+                # KEY: value, split on the FIRST colon only — an instruction may
+                # legitimately contain more (`Target: max. 15 slides`).
+                key, sep, value = stripped.partition(":")
+                if sep:
+                    name = key.strip().lower()
+                    text = " ".join(value.split())[:_REPORT_VALUE_MAX_CHARS]
+                    if text:
+                        if name == "language":
+                            report_language = text
+                        elif name in _REPORT_SPEC_KEYS:
+                            report_spec[name] = text
+                # A line that is not KEY: value, or carries an unknown key, is
+                # DROPPED rather than kept as context: it sat inside a delimiter pair
+                # the producer owns, so treating it as material to read would let a
+                # malformed block leak into the workshop's prompt.
+                index += 1
+                continue
+
             # state == "none"
             if stripped == _DECISION_HEADER:
                 state = "decision"
+                index += 1
+                continue
+            if stripped == _REPORT_HEADER:
+                state = "report"
                 index += 1
                 continue
             if stripped == _QUESTIONS_HEADER or _LEGACY_QUESTIONS_HEADER_RE.match(stripped):
@@ -422,11 +502,26 @@ def parse_brief(brief: str | None, *, run_id: Optional[uuid.UUID] = None) -> Par
                 "detector path deliberately rather than by accident"
             )
 
+        # FAIL LOUD ON THE EMPTY CASE (phase rule 7). An absent language is the
+        # ONLY reason the run's one-language guarantee silently degrades to
+        # "the language of the assignment above" in BOTH the dispatch sentence and
+        # every synthesis prompt. On run 368ff3a0 that happened on every call and
+        # nothing said so — which is why this line exists rather than a comment.
+        if not report_language:
+            log.warning(
+                "brief_input: the brief states no report LANGUAGE, so the run's "
+                "one-language-per-run guarantee falls back to inference — every "
+                "synthesis prompt and every provider assignment will say 'the "
+                "language of the assignment above' instead of naming a language"
+            )
+
         result = ParsedBrief(
             questions=questions,
             decision=decision,
             context=context,
             source=source,
+            language=report_language,
+            report_spec=report_spec,
         )
     except Exception as exc:  # noqa: BLE001 — this parser never raises
         log.error(
