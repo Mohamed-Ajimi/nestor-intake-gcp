@@ -15,8 +15,20 @@ from nestor_pulse_sdk.pipeline.synthesis.steps import (
 
 
 class _FakeResponse:
-    def __init__(self, text: str) -> None:
-        self.text = text
+    """Anthropic messages-response shape (quick task 260806-dn8).
+
+    The report writer runs on `claude-opus-5` via `audited.anthropic_messages`,
+    so the fake returns `.content` blocks + `.stop_reason`, not `.text`.
+    """
+
+    def __init__(self, text: str, stop_reason: str = "end_turn") -> None:
+        self.content = [{"type": "text", "text": text}]
+        self.stop_reason = stop_reason
+
+
+def _prompt_of(kwargs: dict) -> str:
+    """The user prompt out of an `anthropic_messages` kwarg set."""
+    return kwargs["messages"][0]["content"]
 
 
 class FakeAudited:
@@ -25,7 +37,8 @@ class FakeAudited:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+    async def anthropic_messages(self, *, run_id, tenant_id, model, **kwargs):
+        contents = _prompt_of(kwargs)
         self.calls.append({"model": model, "contents": contents, "kwargs": kwargs})
         if "Write the remaining framing sections" in contents:
             return _FakeResponse(
@@ -58,7 +71,18 @@ PROVIDER_REPORTS = [
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # PRE-EXISTING BUG, fixed 2026-08-06 (quick task 260806-dn8, Rule 1).
+    # `asyncio.get_event_loop()` raises `RuntimeError: There is no current event
+    # loop` on Python >= 3.10 once any earlier test in the session has closed
+    # the loop. This file passes in isolation and fails in a combined run, which
+    # is why it survived: it is registered in NEITHER cloudbuild config, so it
+    # has never been executed in CI at all. Owning our own loop makes the file
+    # order-independent.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class TestSynthesizeReport:
@@ -98,12 +122,12 @@ class TestSynthesizeReport:
 
     def test_section_failure_is_visible_not_fatal(self):
         class FlakyAudited(FakeAudited):
-            async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+            async def anthropic_messages(self, *, run_id, tenant_id, model, **kwargs):
+                contents = _prompt_of(kwargs)
                 if "Loyalty apps" in contents and "remaining framing sections" not in contents:
                     raise RuntimeError("provider 500")
-                return await super().gemini_generate(
-                    run_id=run_id, tenant_id=tenant_id, model=model,
-                    contents=contents, **kwargs,
+                return await super().anthropic_messages(
+                    run_id=run_id, tenant_id=tenant_id, model=model, **kwargs,
                 )
 
         audited = FlakyAudited()
@@ -117,8 +141,8 @@ class TestSynthesizeReport:
 
     def test_no_focus_areas_falls_back_to_single_call(self):
         class SingleCallAudited(FakeAudited):
-            async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
-                self.calls.append({"contents": contents})
+            async def anthropic_messages(self, *, run_id, tenant_id, model, **kwargs):
+                self.calls.append({"contents": _prompt_of(kwargs)})
                 return _FakeResponse("Full single-call report text.")
 
         audited = SingleCallAudited()

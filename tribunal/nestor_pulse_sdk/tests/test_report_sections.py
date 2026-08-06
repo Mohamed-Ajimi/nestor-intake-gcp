@@ -408,8 +408,12 @@ ZZ_RECON = "ZZRECON-DELTA"
 
 
 class _FakeResponse:
-    def __init__(self, text: str) -> None:
-        self.text = text
+    """Anthropic messages-response shape (quick task 260806-dn8) — the report
+    writer moved to `claude-opus-5` via `audited.anthropic_messages`."""
+
+    def __init__(self, text: str, stop_reason: str = "end_turn") -> None:
+        self.content = [{"type": "text", "text": text}]
+        self.stop_reason = stop_reason
 
 
 class RecordingAudited:
@@ -422,7 +426,8 @@ class RecordingAudited:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+    async def anthropic_messages(self, *, run_id, tenant_id, model, **kwargs):
+        contents = kwargs["messages"][0]["content"]
         self.prompts.append(contents)
         if "Write the remaining framing sections" in contents:
             return _FakeResponse(

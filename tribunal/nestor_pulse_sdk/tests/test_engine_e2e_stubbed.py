@@ -601,13 +601,12 @@ class _ScriptedProvidersAudited:
             # DETERMINISTIC one, and returning [] here is what forces the run to
             # depend on it rather than on the model's compliance.
             return _FakeTextResponse("[]")
-        if _M_SECTION in prompt:
-            self._book("synthesis_section")
-            return _FakeTextResponse(self._answer_section())
-        if _M_WRAP in prompt:
-            self._book("synthesis_wrap")
-            return _FakeTextResponse(self._answer_wrap())
-
+        # NOTE (quick task 260806-dn8): `_M_SECTION` / `_M_WRAP` USED TO BE ROUTED
+        # HERE. The report writer moved to `claude-opus-5`, so those two branches
+        # now live on the Anthropic surface below. They are deliberately NOT left
+        # behind as a tolerant duplicate: a synthesis prompt that still arrives on
+        # the Gemini surface falls through to `gemini_unrouted` + `_unexpected`,
+        # which is what makes a half-done port LOUD instead of silently green.
         self._book("gemini_unrouted")
         self._unexpected("gemini", prompt)
         return _FakeTextResponse("")
@@ -788,6 +787,20 @@ class _ScriptedProvidersAudited:
             self._book("workshop_evolve")
             return _FakeMessage(
                 [_FakeTextBlock(self._answer_evolve(prompt))], stop_reason="end_turn"
+            )
+        # THE REPORT WRITER (quick task 260806-dn8). These two branches moved here
+        # verbatim from the Gemini surface when synthesis went to `claude-opus-5`.
+        # The counter names are unchanged on purpose — they are asserted by name
+        # further down this file.
+        if _M_SECTION in prompt:
+            self._book("synthesis_section")
+            return _FakeMessage(
+                [_FakeTextBlock(self._answer_section())], stop_reason="end_turn"
+            )
+        if _M_WRAP in prompt:
+            self._book("synthesis_wrap")
+            return _FakeMessage(
+                [_FakeTextBlock(self._answer_wrap())], stop_reason="end_turn"
             )
 
         self._book("anthropic_unrouted")

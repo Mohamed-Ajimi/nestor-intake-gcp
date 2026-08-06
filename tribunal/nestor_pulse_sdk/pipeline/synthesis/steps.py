@@ -16,18 +16,33 @@ parity with the ADK pipeline (we'll compare both on 5 briefs).
 
 What ships in Plan 09 Task 2:
   - `extract_focus_areas` -- pure Python, ported verbatim from the legacy.
-  - `final_synthesis_audited` -- one real audited Gemini call producing the
-    synthesis text from the 3 provider reports. The grep gate
+  - `final_synthesis_audited` -- one real audited call producing the synthesis
+    text from the 3 provider reports. The grep gate
     (audited.gemini_generate|anthropic_messages|openai_response in
     nestor_pulse_sdk/pipeline/synthesis/steps.py) is satisfied.
   - Step stubs for the remaining 9 steps raise `NotImplementedError` with a
     pointer to Plan 12. The orchestrator (`run_synthesis`) only calls
     `final_synthesis_audited` for the Plan 09 minimum path.
 
-Anti-pattern to preserve from the legacy:
+WHICH PROVIDER WRITES WHAT (quick task 260806-dn8, 2026-08-06)
+--------------------------------------------------------------
+This module talks to TWO providers and the split is deliberate:
+  - THE REPORT WRITER runs on Anthropic `claude-opus-5` via
+    `audited.anthropic_messages` -- `final_synthesis_audited`, `_one_section`
+    and the wrap call inside `synthesize_report`. See `_synthesis_kwargs`.
+  - EVERYTHING ELSE stays on Gemini via `audited.gemini_generate`: the
+    ClaimDistiller (`_DISTILLER_MODEL`), the ConflictDetector
+    (`_CONFLICT_MODEL`) and the scrubber (`_SCRUB_MODEL`).
+
+Anti-pattern to preserve from the legacy, and it now applies ONLY to the three
+Gemini paths named above (the report writer no longer uses a genai config at
+all):
   `gemini-2.5-pro` does NOT support `thinking_budget=0` ("only works in
   thinking mode"). High `max_output_tokens` instead. This is honoured by
   AuditedLLMClient.gemini_generate when callers pass a generation config.
+  The Anthropic report path has the mirror-image rule -- see
+  `_synthesis_kwargs`: on Opus 5 thinking is ON BY DEFAULT and
+  `temperature` / `top_p` / `top_k` / `budget_tokens` are an HTTP 400.
 """
 from __future__ import annotations
 
@@ -58,7 +73,12 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-FINAL_SYNTHESIS_MODEL = "gemini-2.5-pro"
+#: The REPORT WRITER's model (quick task 260806-dn8, 2026-08-06). Anthropic, not
+#: Gemini: this constant is read only by `final_synthesis_audited`, `_one_section`
+#: and the wrap call, all of which go through `audited.anthropic_messages`. The
+#: distiller / conflict / scrub models below are separate constants and stay on
+#: Gemini.
+FINAL_SYNTHESIS_MODEL = "claude-opus-5"
 
 # System instruction for report generation — the report-writing contract.
 #
@@ -122,22 +142,73 @@ _SYNTHESIS_SYSTEM = (
 )
 
 
-def _make_synthesis_config(max_tokens: int):
-    """GenerateContentConfig carrying the system instruction + a real token budget.
+def _synthesis_kwargs(prompt: str, max_tokens: int) -> dict:
+    """The COMPLETE kwarg set for one `messages.create` report-writing call.
 
-    gemini-2.5-pro does NOT support thinking_budget=0 — so we just set a high
-    max_output_tokens (a full structured brief needs the headroom; the old call
-    passed no config and silently truncated at the model default).
+    REPLACES `_make_synthesis_config` rather than adapting it, and the shape
+    change is the reason. The old function built a `google.genai`
+    `GenerateContentConfig` and returned `None` from a bare `except`; both call
+    sites turned that `None` into "send no config at all". Gemini tolerates a
+    missing config. **Anthropic does not** — `max_tokens` and `messages` are
+    REQUIRED by `messages.create`, so an optional-config shape cannot survive
+    the port, and keeping the old name with new semantics would be a trap for
+    the next reader.
+
+    THE RETURNED KEYS ARE THE WHOLE SET, ON PURPOSE.
+    `AuditedLLMClient.anthropic_messages` forwards `**kwargs` VERBATIM to
+    `messages.create`, so an unknown key is an HTTP 400, not a warning.
+
+    `temperature=0.2` IS DROPPED — do not "restore" it as a lost setting. On
+    Opus 5 extended thinking is ON BY DEFAULT, and with thinking on
+    `temperature`, `top_p` and `top_k` are rejected with an HTTP 400. For the
+    same reason this does NOT pass `thinking` or `budget_tokens`: thinking needs
+    no opt-in and `budget_tokens` is a 400 here.
+    """
+    return {
+        "max_tokens": max_tokens,
+        "system": _SYNTHESIS_SYSTEM,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+
+def _synthesis_text(response: Any) -> tuple[str, bool]:
+    """`(text, refused)` from an Anthropic messages response. NEVER RAISES.
+
+    `refused` is read FIRST, before any content, because Opus 5's safety
+    classifier returns **HTTP 200** with `stop_reason == "refusal"` and either
+    empty (pre-output) or PARTIAL (mid-stream) content. A content-only check
+    would therefore ship half a section as if it were a whole one.
+
+    The text is the concatenation of EVERY `type == "text"` block, in order —
+    never `content[0]`. With thinking on, `thinking` blocks precede the text
+    blocks, so `content[0]` is normally not text at all; and a long answer can
+    arrive as several text blocks.
+
+    Blocks are read through `pipeline.tribunal.skeptic._block_get`, which already
+    handles the object-or-dict block shapes the SDK returns and is already used
+    by `group_skeptic` and `own_researcher` — one implementation, not a second.
+    It is imported FUNCTION-LOCALLY because this module's module-scope import
+    graph is kept deliberately light (see the `claim_attribution` note at the
+    imports above).
+
+    Never raising matches `_response_text` (this module's existing "an unreadable
+    response is an empty one" precedent): the caller's empty-text branch is the
+    right degradation, not a traceback.
     """
     try:
-        from google.genai import types as genai_types  # noqa: PLC0415
-        return genai_types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-            temperature=0.2,
-            system_instruction=_SYNTHESIS_SYSTEM,
-        )
-    except Exception:
-        return None
+        from nestor_pulse_sdk.pipeline.tribunal.skeptic import _block_get  # noqa: PLC0415
+
+        refused = getattr(response, "stop_reason", None) == "refusal"
+        parts: list[str] = []
+        for block in (getattr(response, "content", None) or []):
+            if _block_get(block, "type") != "text":
+                continue
+            piece = _block_get(block, "text")
+            if isinstance(piece, str):
+                parts.append(piece)
+        return "".join(parts), refused
+    except Exception:  # noqa: BLE001 — an unreadable response is an empty one
+        return "", False
 
 
 def extract_focus_areas(mission_brief: Optional[dict]) -> list[str]:
@@ -189,7 +260,7 @@ async def final_synthesis_audited(
     max_tokens: int = 16384,
     contested_notes: Optional[list[str]] = None,
 ) -> str:
-    """One audited Gemini call producing the final synthesis text.
+    """One audited Anthropic (`claude-opus-5`) call producing the final synthesis text.
 
     Synthesises from the FULL research prose (richness), which the pipeline has
     already SCRUBBED of fact-checked-out claims (trust). The HOW of the report —
@@ -247,24 +318,29 @@ async def final_synthesis_audited(
         "Write the complete report now."
     )
 
-    config = _make_synthesis_config(max_tokens)
-    kwargs: dict = {"config": config} if config is not None else {}
-    response = await audited.gemini_generate(
+    response = await audited.anthropic_messages(
         run_id=run_id,
         tenant_id=tenant_id,
         model=FINAL_SYNTHESIS_MODEL,
-        contents=prompt,
-        **kwargs,
+        **_synthesis_kwargs(prompt, max_tokens),
     )
 
-    # google-genai response shape: .text or .candidates[0].content.parts[0].text
-    text = getattr(response, "text", None)
-    if not text:
-        candidates = getattr(response, "candidates", None) or []
-        if candidates:
-            parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
-            if parts:
-                text = getattr(parts[0], "text", None) or ""
+    text, refused = _synthesis_text(response)
+    if refused:
+        # T-dn8-05: a refusal may carry PARTIAL content. Discard it — this
+        # function's existing degraded value is "" and half a report must not
+        # ship as a whole one.
+        log.error(
+            "final_synthesis_audited: the report was REFUSED by the model "
+            "(stop_reason=refusal) — returning empty text"
+        )
+        text = ""
+    elif getattr(response, "stop_reason", None) == "max_tokens":
+        log.warning(
+            "final_synthesis_audited: the report hit the output cap "
+            "(stop_reason=max_tokens, max_tokens=%d) — it is TRUNCATED",
+            max_tokens,
+        )
     return text or ""
 
 
@@ -280,8 +356,30 @@ async def final_synthesis_audited(
 # the part that got truncated is now untruncatable.
 # ---------------------------------------------------------------------------
 
-_SECTION_MAX_TOKENS = 8192
-_WRAP_MAX_TOKENS = 8192
+#: The anthropic SDK's NON-STREAMING ceiling, and the real bound on the two caps
+#: below — it binds long before the model's 128K output ceiling does.
+#: `messages.create` is called without `stream` and without `timeout`, and the
+#: client is built as a bare `AsyncAnthropic()` (audited_llm_client.py:2043), so
+#: anthropic 0.104.1's `_base_client._calculate_nonstreaming_timeout` applies: it
+#: raises ValueError when `3600 * max_tokens / 128_000 > 600`, i.e. above
+#: int(600 * 128_000 / 3600) tokens, and otherwise sets this call's timeout to
+#: 600 s. The raise is CLIENT-SIDE, before any HTTP request.
+_ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_333
+
+#: Output cap per section / for the wrap call. 8192 was already tight for
+#: Gemini's TEXT alone; on Opus 5 the cap covers THINKING AND TEXT TOGETHER, so
+#: it would truncate every section. 20,000 is a round value inside the SDK bound
+#: above with headroom (~15K thinking + ~5K text ≈ 3,700 words per section).
+#:
+#: GOING HIGHER NEEDS ONE OF TWO THINGS, NEITHER IMPLEMENTED HERE:
+#:   (a) an explicit `timeout=` kwarg — which switches OFF the SDK's own guard
+#:       against a >10-minute blocking call, times N parallel sections; or
+#:   (b) `messages.stream`, which `AuditedLLMClient.anthropic_messages` does not
+#:       implement and whose usage extraction is a rework of the audit path.
+#: Both escape hatches are recorded so the next reader does not rediscover them;
+#: neither is built.
+_SECTION_MAX_TOKENS = 20_000
+_WRAP_MAX_TOKENS = 20_000
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 
 
@@ -1047,26 +1145,38 @@ async def synthesize_report(
             f"--- Fact-checked research ---\n\n{reports_concatenated}\n\n"
             "--- End research ---\n\nWrite the section now."
         )
-        config = _make_synthesis_config(_SECTION_MAX_TOKENS)
-        kwargs: dict = {"config": config} if config is not None else {}
         try:
-            response = await audited.gemini_generate(
+            response = await audited.anthropic_messages(
                 run_id=run_id,
                 tenant_id=tenant_id,
                 model=FINAL_SYNTHESIS_MODEL,
-                contents=prompt,
-                **kwargs,
+                **_synthesis_kwargs(prompt, _SECTION_MAX_TOKENS),
             )
         except Exception as exc:
             log.error("synthesize_report: section %r failed: %s", fa, exc)
             return f"## {fa}\n\n*(Section generation failed: {exc})*"
-        text = getattr(response, "text", None)
-        if not text:
-            candidates = getattr(response, "candidates", None) or []
-            if candidates:
-                parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
-                if parts:
-                    text = getattr(parts[0], "text", None) or ""
+        text, refused = _synthesis_text(response)
+        if refused:
+            # T-dn8-05: a refusal can arrive WITH partial content. Route it into
+            # the SAME degraded placeholder as an empty response — the visible
+            # string is unchanged — but say out loud that it was a refusal,
+            # because "no content" and "the model declined" are different
+            # operator problems.
+            log.error(
+                "synthesize_report: section %r was REFUSED by the model "
+                "(stop_reason=refusal) — the section is empty",
+                fa,
+            )
+            text = ""
+        elif getattr(response, "stop_reason", None) == "max_tokens":
+            # The exact failure the 20,000 cap exists to prevent. It must never
+            # be silent a second time.
+            log.warning(
+                "synthesize_report: section %r hit the output cap "
+                "(stop_reason=max_tokens, max_tokens=%d) — it is TRUNCATED",
+                fa,
+                _SECTION_MAX_TOKENS,
+            )
         text = (text or "").strip()
         if not text:
             log.error("synthesize_report: section %r returned empty text", fa)
@@ -1120,24 +1230,30 @@ async def synthesize_report(
         f"{lang_rule}\n\n"
         f"--- Report body ---\n\n{sections_joined}\n\n--- End body ---"
     )
-    config = _make_synthesis_config(_WRAP_MAX_TOKENS)
-    kwargs = {"config": config} if config is not None else {}
     exec_part, tail_part = "", ""
     try:
-        response = await audited.gemini_generate(
+        response = await audited.anthropic_messages(
             run_id=run_id,
             tenant_id=tenant_id,
             model=FINAL_SYNTHESIS_MODEL,
-            contents=wrap_prompt,
-            **kwargs,
+            **_synthesis_kwargs(wrap_prompt, _WRAP_MAX_TOKENS),
         )
-        wrap_text = getattr(response, "text", None)
-        if not wrap_text:
-            candidates = getattr(response, "candidates", None) or []
-            if candidates:
-                parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
-                if parts:
-                    wrap_text = getattr(parts[0], "text", None) or ""
+        wrap_text, wrap_refused = _synthesis_text(response)
+        if wrap_refused:
+            # T-dn8-05, as in _one_section: discard any partial content. The
+            # existing degradation is an empty exec_part/tail_part and a report
+            # built from the sections alone.
+            log.error(
+                "synthesize_report: the wrap call was REFUSED by the model "
+                "(stop_reason=refusal) — no framing sections"
+            )
+            wrap_text = ""
+        elif getattr(response, "stop_reason", None) == "max_tokens":
+            log.warning(
+                "synthesize_report: the wrap call hit the output cap "
+                "(stop_reason=max_tokens, max_tokens=%d) — it is TRUNCATED",
+                _WRAP_MAX_TOKENS,
+            )
         wrap_text = (wrap_text or "").strip()
         # The exec summary opens the report; the other wrap sections close it.
         # Headings may be translated into the report's language, so split on
