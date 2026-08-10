@@ -1,48 +1,156 @@
 # Phase 21 — deferred items (out of scope, logged not fixed)
 
-Executors append here. Nothing in this file was fixed; each entry is a pre-existing
-condition discovered while executing a plan, outside that plan's scope boundary.
+Executors append here. Out-of-scope discoveries logged during execution. Per the executor scope
+boundary these were NOT fixed: each entry is a pre-existing condition discovered while executing a
+plan, outside that plan's scope boundary.
 
-## `npm run lint` is RED at the phase base commit (`eac6f2b`) — found by 21-01
+> **Merge note (orchestrator, 2026-08-10):** plans 21-01 and 21-02 each created this file
+> independently in their own worktrees, producing an add/add conflict at wave-1 merge. Resolved as a
+> **union** — both agents found genuinely different things about the same red lint gate, and neither
+> account is complete on its own. 21-02 found the CRLF artifact and the two real drifts in the run
+> page; 21-01 found the `scripts/c.ts` root cause that makes the command exit 1 no matter what.
 
-`frontend/scripts/c.ts` — an ad-hoc Supabase scratch script, untouched by phase 21 —
-carries **3 genuine `@typescript-eslint/no-explicit-any` errors** plus prettier
-formatting errors. It is not imported by anything in `src/`. Because `npm run lint`
-runs `eslint .` over the whole frontend, that one file makes the whole command exit 1
-regardless of what any plan does.
+---
+
+## DEF-21-01 — `npm run lint` is already red at the phase base commit (`eac6f2b`)
+
+**Found during:** 21-02 Task 2 and 21-01 Task 3 (both carry a `cd frontend && npm run lint` criterion)
+**Status:** ⛔ **LEAVE DEFERRED — OPERATOR RULING, 2026-08-10. This is not an oversight.**
+
+> **Do not re-open this as a missed item.** The operator was shown this finding and ruled
+> explicitly that it stays deferred and stays **out of Phase 21**. Their reasoning: it predates
+> this work, and fixing it inside a phase whose acceptance criteria measure **single-path diffs**
+> would make every remaining plan's diff unreadable.
+>
+> A later agent that "helpfully" runs `prettier --write` across `frontend/src/` during Phase 21
+> is defying a ruling, not closing a gap. Fix it in its own change, after Phase 21.
+
+**Files:** repo-wide. The content complaints are `frontend/scripts/c.ts` (reason 3), plus two lines in
+`frontend/src/routes/admin.pulse.runs.$runId.tsx` at the `useRunEvents` destructure and the
+`EmptyFeed` return — both PRE-EXISTING lines, unchanged by 21-02.
+
+### Reason 1 — CRLF, and it is a Windows-worktree artifact only
+
+`git config core.autocrlf` is `true` on this machine, so the worktree checkout is CRLF while
+`.prettierrc` leaves `endOfLine` at its `"lf"` default. Every file in the tree therefore fails
+`prettier/prettier` with ``Delete `␍` ``, including files nobody has touched in months
+(`frontend/vitest.config.ts` among them). Measured: **28,046 problems / 28,010 errors** across
+the tree.
+
+This is a checkout artifact, not a repo defect: CI checks out on Linux with LF and would not
+see it. It is NOT fixable from here without rewriting line endings across the whole tree, which
+is exactly the blanket working-tree operation the executor is forbidden to perform.
+
+### Reason 2 — two genuine, EOL-independent formatting drifts, already at HEAD
+
+Filtering the CRLF noise leaves exactly **two** errors in `admin.pulse.runs.$runId.tsx`:
+
+- the `useRunEvents(...)` destructure — prettier wants the multi-line form collapsed;
+- `EmptyFeed`'s `return (...)` — prettier wants the parentheses dropped.
+
+**Both are proven pre-existing.** `git show HEAD:frontend/src/routes/admin.pulse.runs.$runId.tsx`
+was exported to a scratch path and checked with `prettier --config .prettierrc --end-of-line auto`
+— which removes the CRLF variable entirely — and the untouched HEAD version **still fails**. So
+the frontend lint gate does not exit 0 at `eac6f2b` either, on Linux or on Windows.
+
+### Reason 3 — `frontend/scripts/c.ts` reddens the whole command regardless (found by 21-01)
+
+`frontend/scripts/c.ts` — an ad-hoc Supabase scratch script, untouched by phase 21 — carries
+**3 genuine `@typescript-eslint/no-explicit-any` errors** plus prettier formatting errors. It is
+not imported by anything in `src/`. Because `npm run lint` runs `eslint .` over the whole
+frontend, that one file makes the whole command exit 1 **regardless of what any plan does**.
 
 **Consequence for every phase-21 frontend plan:** the acceptance criterion
-`cd frontend && npm run lint` exits 0 is **not satisfiable at this base commit** and
-its failure says nothing about the plan's own code. Verify per-file instead:
+`cd frontend && npm run lint` exits 0 is **not satisfiable at this base commit**, and its failure
+says nothing about the plan's own code. This criterion appears in remaining frontend plans and
+should be read as unsatisfiable-as-written, not as a defect in the plan being executed.
+
+### How to verify frontend work despite the red gate
+
+Per-file, instead of the whole-tree command:
 
 ```
 npm exec --prefix frontend -- eslint --config frontend/eslint.config.js <the files you touched>
 ```
 
 21-01 verified its three files this way: **zero non-prettier rule violations.**
+21-02 verified its three files this way: **zero** contributed errors — only the two pre-existing
+lines above.
 
-### Also: this repo's Windows worktrees make local `eslint` unusable without filtering
-
-`core.autocrlf=true`, so `git ls-files --eol` reports `i/lf w/crlf` — the index is LF,
-the working tree is CRLF. Prettier's `endOfLine: "lf"` therefore reports **one
-`Delete ␍` error per line, on every file in the tree**, including files no one has
-touched. CI checks out on Linux with LF and never sees these.
-
-To check prettier conformance of the form that will actually be committed, feed the
-file through a CR strip:
+To check prettier conformance of the form that will actually be committed, feed the file through a
+CR strip so the CRLF noise cannot drown the signal:
 
 ```
 tr -d '\r' < <file> | npm exec --prefix frontend -- prettier --stdin-filepath <file> --check
 ```
 
-**Doing this found two REAL pre-existing prettier deviations in `RunFeed.tsx`** that the
-CRLF noise had been burying (`stableAfterRow` and the collapse-toggle ternary were both
-wrapped where prettier joins them). 21-01 normalised those two because they sat in a file
-it already owned. There may be more elsewhere in `frontend/src/`; nobody has looked,
-because the local signal is drowned.
+**Doing this found two REAL pre-existing prettier deviations in `RunFeed.tsx`** that the CRLF noise
+had been burying (`stableAfterRow` and the collapse-toggle ternary were both wrapped where prettier
+joins them). 21-01 normalised those two because they sat in a file it already owned. There may be
+more elsewhere in `frontend/src/`; nobody has looked, because the local signal is drowned.
 
-**Not fixed here** — `scripts/c.ts` and any wider prettier sweep are unrelated to the run
-feed and belong to whoever decides whether that scratch script should exist at all.
+### Why it was not fixed here
 
-`frontend/cloudbuild.yaml` has no lint, tsc or vitest step, so none of this currently
-blocks a deploy — which is also why it went unnoticed.
+Reformatting those hunks would put unrelated churn into a diff whose acceptance criteria
+explicitly measure that it touches exactly one path and nothing else. `scripts/c.ts` and any wider
+prettier sweep are unrelated to the run feed and belong to whoever decides whether that scratch
+script should exist at all.
+
+`frontend/cloudbuild.yaml` has no lint, tsc or vitest step, so none of this currently blocks a
+deploy — which is also why it went unnoticed.
+
+**Recommended follow-up (not done here, and NOT during Phase 21 per the ruling above):** pin
+`endOfLine` in `.prettierrc`, rule on whether `scripts/c.ts` should exist at all, then run
+`prettier --write` once across `frontend/src/` as a single dedicated commit.
+
+---
+
+## DEF-21-02 — 21-02's operator UAT, folded into the 21-08 UAT gate
+
+**Origin:** 21-02 Task 3, a `checkpoint:human-verify` with `gate="blocking"`
+**Status:** **DEFERRED to plan 21-08 by operator ruling, 2026-08-10 — sequenced, NOT skipped and
+NOT verified**
+**Owner:** plan 21-08 (the phase's single post-merge operator UAT)
+
+### The ruling
+
+**Operator's reasoning, recorded as theirs:** the code is on an unmerged worktree branch and
+cannot be clicked through yet; plan 21-08 already exists to run a single operator UAT after
+everything is merged and deployed; nothing in Waves 2–4 depends on 21-02. Folding these six
+checks into that one pass means one click-through instead of two.
+
+### What this means for 21-02's acceptance
+
+**Plan 21-02's acceptance is CONDITIONAL on this UAT.** Tasks 1 and 2 are machine-verified — tsc
+clean, vitest 46/46, i18n-audit PASS exit 0, build exit 0 — but the operator-facing behaviour is
+verified by **nothing** yet. A phase verifier must not count SC4 / D-10 / D-11 as
+operator-confirmed until these steps run and pass.
+
+### ⚠ Obligation on plan 21-08
+
+**These six steps MUST be carried into `21-UAT.md`.** If 21-08 ships without them, the deferral
+has quietly become a skip and 21-02's user-facing behaviour will have been checked by no one.
+Note that 21-08's plan file was written **before** this ruling existed and therefore does not
+reference DEF-21-02 on its own — the obligation must be injected when 21-08 executes.
+
+### The six steps, in full
+
+Verifiable on **RECORDED data with NO spend — do NOT trigger a run.**
+
+**Preconditions:** 21-02 merged and `nestor-frontend` deployed; operator signed in as superadmin.
+
+| # | Step | Expected result | Blocker if failed? |
+|---|------|-----------------|--------------------|
+| 1 | Open `/admin/pulse/intakes`, open any intake that has a research run, and click through to the run page via the card's **"Open run"** link. | The dedicated run page at `/admin/pulse/runs/:runId` loads. | Yes |
+| 2 | Look at the vertical order of the page. | The **"View verification report"** toggle appears **BETWEEN the status card and the activity feed** — below the card, above the feed. | Yes |
+| 3 | Click the toggle. | The report opens: **funnel**, **verdict sections** and **cost block** all render. **AND the ACTIVITY FEED IS STILL ON THE PAGE BELOW IT** — the report must not replace, hide or unmount the feed. | Yes — the single most important check in the list |
+| 4 | Click the toggle again. | The report collapses, the label returns to "View verification report", and **the feed is untouched**. | Yes |
+| 5 | If a **failed** or **cancelled** run exists in the list, open it and confirm the toggle is offered there too. | The toggle IS offered on failed and on cancelled runs (D-11 — these are the two states the embedded intake card throws away). | **No — NOT a blocker if no such run exists.** Record "none available" and move on. |
+| 6 | Open a **queued** or **running** run. | **NO toggle appears.** Its **ABSENCE is the CORRECT result**, not a defect — the pipeline has not reached the verify stage, so there is nothing to fetch. | Yes — but note a *present* toggle here is the failure, not an absent one |
+
+### Recording rules carried over from the original Task 3
+
+- The operator's answer must be recorded **VERBATIM**, not paraphrased — a paraphrase of a UAT
+  observation is how a defect becomes a rumour.
+- Any deviation must be **routed**: either a follow-up task or an explicitly deferred item.
+  Never absorbed silently.
