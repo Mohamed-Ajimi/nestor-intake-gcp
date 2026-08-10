@@ -24,6 +24,7 @@ extends from `decomposed` through `in_research` to `delivered`.
 ## Phases
 
 **Phase Numbering:**
+
 - Integer phases (13, 14, 15…): Planned milestone work. v1.1 continues from v1.0's Phase 12.
 - Decimal phases (15.1, 15.2): Urgent insertions (marked with INSERTED)
 
@@ -74,45 +75,57 @@ trail intact.
 ## Phase Details
 
 ### Phase 13: Tribunal Re-home + Infra Baseline
+
 **Goal**: Tribunal runs live in the intake GCP project with correctly isolated schema/migrations, its legally required audit chain verified intact, concurrency-safe locking in place, and one real research run proven end-to-end green — before any feature code depends on it.
 **Depends on**: Phase 12 (v1.0 — live intake platform on GCP)
 **Requirements**: ENGINE-01, ENGINE-02, ENGINE-04, ENGINE-08
 **Success Criteria** (what must be TRUE):
+
   1. `tribunal-api` and `tribunal-worker` run as Cloud Run services in the intake GCP project, with a `tribunal` schema on the shared Cloud SQL instance migrated via its own separate `alembic_version` table (no revision-ID collision with the intake line).
   2. `verify_chain` returns green against the re-homed audit hash-chain — the tamper-evident chain survives the move (EU AI Act Art. 12 gate, before 2026-08-02).
   3. Two simultaneous runs from different spaces complete without interfering — the per-run audit-chain advisory lock (Tribunal's unexecuted plan 01-19) is in place and proven by a ≥2-concurrent-run test.
   4. One real research run completes end-to-end green on the new deployment (closes Tribunal's unverified-E2E gap), and its measured max length is recorded for later stale-run calibration.
+
 **Plans**: 4 plans
+
   - [x] 13-01-PLAN.md — Copy Tribunal engine into tribunal/ (verbatim; frozen hash-chain, sole cross-dep, import-graph gate)
   - [x] 13-02-PLAN.md — Isolated Alembic line (tribunal_alembic_version + schema + 0008 rewrite) + per-run advisory lock (ENGINE-08 keystone)
   - [x] 13-03-PLAN.md — By-construction IaC + Phase-13 runbook + Cloud Build configs + retargeted deploy scripts (audit bucket 7y Unlocked, worker max=5)
   - [x] 13-04-PLAN.md — Operator live session: migrate + deploy + LUKOIL E2E proof + verify_chain + ≥2-concurrent proof + record duration/cost + teardown old project (D-02)
 
 ### Phase 14: Auth Retirement + Integration Seam
+
 **Goal**: Tribunal's standalone auth, orgs, and UI are retired so the intake backend is the sole caller, with every run space-scoped end-to-end.
 **Depends on**: Phase 13
 **Requirements**: SEAM-01, SEAM-02
 **Success Criteria** (what must be TRUE):
+
   1. Tribunal's own logins/orgs/UI are gone (`InternalCallerProvider` installed; `orgs/`, `account/`, `Login.jsx`, static `web/` mount removed) and only the intake backend can call the Tribunal API (IAM invoker = intake runtime SA, internal-only).
   2. Every intake space maps 1:1 onto a Tribunal org/project (identity `space_id` → `tenant_id`, lazy project provisioning), so each run is space-scoped from trigger to storage.
   3. The CI-gated cross-tenant denial suite is extended to cover Tribunal tables and passes (GUC-name mismatch cannot leak across the HTTP boundary).
+
 **Plans**: 4 plans
+
   - [x] 14-01-PLAN.md — Retire Tribunal auth surface + install InternalCallerProvider; salvage ensure_org/ensure_project + /ensure endpoints (SEAM-01/02)
   - [x] 14-02-PLAN.md — Intake seam client: OIDC minting + ensure_org/ensure_project HTTP client (SEAM-02)
   - [x] 14-03-PLAN.md — Two-suite cross-tenant denial gate: seam (pg8000) + tribunal.* RLS (asyncpg) (SEAM-02)
   - [x] 14-04-PLAN.md — Dedicated tribunal-run SA + invoker binding + seam env + runbook + D-07 live proof (SEAM-01/02)
 
 ### Phase 15: Research Engine Redesign — Operator Surfaces
+
 **Goal**: The superadmin gets truthful post-run visibility on the engine as it runs today — a superadmin-only verification report, the live agent-feed foundation, facts-only cost itemization, and numbered clickable citations — built and UAT'd against the recorded run-4cbb5311 data with NO live LLM runs.
 **Depends on**: Phase 16 (SSE bridge + dynamic-stage contract) + Phase 17 (audit bundle path) — both complete. REDEFINED 2026-07-24 (operator): replaces "Engine Enhancements (Plan-Critique + Draft Tournament)"; requirement source = `.planning/RESEARCH-ENGINE-DECISIONS.md` (D1–D15, R1–R7, C1) + `.planning/STAKEHOLDER-NOTES.md` §2026-07-24 (applies to 15/15.1/15.2).
 **Requirements**: ENGINE-09
 **Success Criteria** (what must be TRUE):
+
   1. A superadmin-only post-run verification report renders for a completed run from recorded data (run 4cbb5311): gate funnel numbers, per-claim verdicts, drill-down — no client visibility (16-D-08 stands).
   2. The live agent-feed foundation (D15) renders agent-level activity per the operator-agreed feed mockup — extending (not replacing) the Phase 16 dynamic-stage-list contract; per-row cost visible.
   3. Cost display is facts-only (C1): every countable cost class is counted (cache writes, search fees, deep-research usageMetadata) — pending-then-backfill-exact, never an estimate.
   4. Citations render as numbered, clickable references generated from the existing 3-table citation model (D13); every citation number resolves.
   5. `verify_chain` stays green — new fields only ADD; no frozen audit payload field renamed.
+
 **Plans**: 7 plans
+
   - [x] 15-01-PLAN.md — Foundation: tribunal alembic 0011 (cost columns + verification_verdict RLS table) + models + recorded-run fixture + hash-chain replay
   - [x] 15-02-PLAN.md — Cost-truth C1 fixes: cache-write charge + web_search/web_fetch fees + Gemini DR usageMetadata + pending flag (facts-only)
   - [x] 15-03-PLAN.md — Verification report shaper + /verification endpoint + deterministic [n] citation numbering + enriched /metrics feed schema (RLS-denial tested)
@@ -152,6 +165,7 @@ The batched mutation debt — including `15.4-05`'s P3 and P4, owed since 2026-0
 green.** Detail: `15.8-13-SUMMARY.md` § FINDING-1 and `.planning/STATE.md` § Gates (15.8).
 
 Plans:
+
 - [x] TBD (run /gsd-plan-phase 15.8 to break down) (completed 2026-08-05)
 
 ### Phase 15.7: Research Engine Redesign — Creative Workshop Loop (Wave 4) (INSERTED)
@@ -181,6 +195,7 @@ with two criticals living in the SEAMS between plans.
 **Plans:** 9/9 plans complete
 
 Plans:
+
 - [x] 15.7-01-PLAN.md — wave 1 — grouping declamp + the two downstream bounds that would silently clip the D-W4-5 floor (D-W4-4a)
 - [x] 15.7-02-PLAN.md — wave 1 — the five truncation/count constants, raised together and pinned in one ladder test (D-W4-8)
 - [x] 15.7-03-PLAN.md — wave 1 — `workshop_loop.py`: derived round count, catch-up budget, floor-at-the-cut selection, three-criteria exit, per-round metrics (D-R9/D-W4-3/5/6/7)
@@ -207,6 +222,7 @@ sentences — and the same file says a prompt sentence is not a control.
 **Plans:** 8/7 plans complete
 
 Plans:
+
 - [x] 15.6-01-PLAN.md — wave 1: the `emit_question_groups` index-only tool, the group record, and the pure validator / clamp / one-group-per-client-question fallback
 - [x] 15.6-02-PLAN.md — wave 1: the discovery bracket — no source no slot, global pool with a per-parent cap of 3, the engine-authored question frame and the report provenance annotator
 - [x] 15.6-03-PLAN.md — wave 2: group-driven dispatch — `own` leaves `_D6_STREAMS`, `_D6_TOP_K` and the round-robin deal are deleted, every group goes to all three providers, and the `degraded_parallel` gap is commented not closed
@@ -229,6 +245,7 @@ correct without it.
 **Plans:** 3 plans in 2 waves — COMPLETE, gate-verified (engine 1118/0, gates 187), NOT deployed
 
 Plans:
+
 - [x] 15.5-01-PLAN.md — wave 1: the three nullable `claim` columns, alembic 0017 on 0016, and the pure bounded `extract_as_of`
 - [x] 15.5-02-PLAN.md — wave 2: thread `_sub_question` / `_corroboration_key` from dispatch onto every claim dict, attach `as_of`, pin the invariant-2 no-op
 - [x] 15.5-03-PLAN.md — wave 2: `_insert_claim` writes the three columns (typed, clamped, absent-means-NULL) and the write path is proven with a fake session
@@ -260,12 +277,16 @@ dependency on 15.3 plan 09's operator checkpoints.
 everything downstream is judged through the extraction funnel, so shipping the redesign on top of a
 broken meter would attribute the parser bug to the redesign.
 **Success Criteria** (what must be TRUE):
+
   1. A distiller response using a real tab, the literal `<TAB>`, `|||`, or ` | ` all parse to the same
      claims; priority order is respected (a real tab wins over a literal `<TAB>` on the same line).
+
   2. A unit that returns non-empty lines but zero parsed claims logs at **WARNING** with the offending
      first line — the failure that put a false statement in a client report is no longer invisible.
+
   3. The ZERO-claims warning fires only for facets present in that call's inputs (no more crying wolf
      about a facet that was never in scope).
+
   4. All three gemini fact-list deviations are covered — **but not all by the retry** (corrected
      2026-07-29 during planning; the original wording over-stated it). Ownership is split because the
      deviations fail differently: **no block** → the one additive retry per report; **`STATEMENT`-prefixed
@@ -273,8 +294,10 @@ broken meter would attribute the parser bug to the redesign.
      `SOURCE_URL` column** → the cite index, because those facts *survived* parsing and so never reach
      `needs_distiller_fallback` where a retry could see them. The `STATEMENT` normaliser has a test;
      retry failure still falls through to the distiller exactly as today.
+
   5. `vertexaisearch` redirects are deduped and resolved to publisher URLs at ingest, degrading to
      keeping the unresolved redirect — never dropping a citation.
+
   6. The `gpt-5.6-sol` cost gap is **resolved either way, deliberately** — and the dropped
      `deep_research`/`own_research` `run_event` rows are emitted.
      **Amended 2026-07-29** (original wording: "`gpt-5.6-sol` is in the cost table (`run.cost_pending`
@@ -288,13 +311,16 @@ broken meter would attribute the parser bug to the redesign.
      What would FAIL this criterion is a guessed price, or leaving the question unanswered.
      Rationale: the original wording made a correct decision look like a gap — this project's recorded
      failure mode of a gate going red on sanctioned work.
+
   7. **Replay proof:** V-01's two coffee audit blobs yield **278** claims through the new parser, and
      the two blobs that already worked still yield **43** and **143**.
+
   8. `test_claim_distiller.py` / `test_distiller_coverage.py` are updated deliberately — the prompt
      contract change is reviewed as the substantive edit it is, not an incidental fixup.
 **Plans:** 11 plans in 5 waves
 
 Plans:
+
 - [ ] 15.4-01-PLAN.md (W1) — Commit V-01's four distiller audit blobs as a redaction-checked regression fixture with a 141/137/43/143 manifest (operator sign-off on the credential scan)
 - [ ] 15.4-02-PLAN.md (W1) — Tribunal alembic `0016`: two nullable `source` columns (`resolved_url`, `resolution_status`) + ORM lock-step; engine gate 30 → 31
 - [ ] 15.4-03-PLAN.md (W2) — D-R1(a)+(b): the separator-tolerant `_split_distiller_line`, the `FACET ||| CLAIM_TEXT ||| EVIDENCE` prompt contract, a first-class prompt-contract guard (the coverage that was believed to exist and did not), both historically-named test files updated, and the 278/43/143 replay proof; engine gate 31 -> 32
@@ -315,6 +341,7 @@ Plans:
 **Plans:** 8/9 plans executed
 
 Plans:
+
 - [x] 15.3-01-PLAN.md (W1) — `run_event` table (tribunal alembic `0015`) + `RunEvent` model + the never-raising, PII-scrubbing, batched `runs/run_events.py` emitter; engine gate 27 → 28
 - [x] 15.3-02-PLAN.md (W2) — `GET /api/runs/{run_id}/events` (paginated, seq-ordered, gate-free, 404-on-deny) + additive `RunMetrics.event_seq` cursor; engine gate 28 → 29
 - [x] 15.3-03-PLAN.md (W3) — run lifecycle + labelled stage dividers and per-stage summaries at the `set_stage` choke point, dispatch headers + reasoned agent children in the angle fan-out; engine gate 29 → 30
@@ -326,14 +353,18 @@ Plans:
 - [ ] 15.3-09-PLAN.md (W6) — THE STATES, THE AFFORDANCES AND THE DEPLOY: all eight statuses (D-11, degraded shares the success branch, parked has its own, the feed is a sibling so failed/cancelled keep their evidence); the four carried-over D-10 affordances (audit drill-down, `chain_status` download lock + re-verify, resume-on-parked, Stop confirmation); DEPLOY-RUNBOOK § Step 15.2.k extended to the combined deploy (both alembic lines, corrected gate count) + the what-shipped-together attribution record D-03 requires; two blocking operator checkpoints
 
 ### Phase 15.1: Research Engine Redesign — Verification Gates (INSERTED 2026-07-24)
+
 **Goal**: The verification stage applies the redesigned gate package — materiality gate, error-likelihood gate, canonical grouping, corroboration prioritization, fail-loud behavior, and the "superseded" verdict — proven by replaying the recorded 1,162-claim fixture through the gates in tests.
 **Depends on**: Phase 15 (surfaces render the gate outputs). No live LLM runs needed.
 **Requirements**: ENGINE-10
 **Success Criteria** (what must be TRUE):
+
   1. The gate pipeline replays the recorded 1,162-claim fixture (`docs/tribunal-run-reports/run-20260722-4cbb5311/selection-experiment/`) in tests and reproduces the recorded keep/drop numbers.
   2. Materiality + error-likelihood gates, canonical grouping, and corroboration prioritization run in the verification stage (STAKEHOLDER-NOTES package + D9/D11), with fail-loud on gate errors and a "superseded" verdict available.
   3. `verify_chain` stays green — frozen payload fields unchanged.
+
 **Plans**: 16 plans (9 waves — plans 11-16 are the 2026-07-25 gap-closure set, waves 7-9)
+
   - [x] 15.1-01-PLAN.md — Fixture reader `load_selection_experiment()` + 13-key `RECORDED_FUNNEL_COUNTS` (G-13) + no-Postgres `cloudbuild.test-gates.yaml`
   - [x] 15.1-02-PLAN.md — G-12 corroboration: `found_by` provenance in the distiller + merging `_dedupe_claims` (1,162 stays 1,162)
   - [x] 15.1-03-PLAN.md — G-06/G-07 `superseded` producer side: tool enum, skeptic prompt, normalising parse boundary, adjudicate regression
@@ -352,34 +383,41 @@ Plans:
   - [x] 15.1-16-PLAN.md — GAP CLOSURE (wave 7): operator surface — render the `verdicts.superseded` class in its own section (new nl/en/fr key) + fall the amber caveat back to `superseded_note`; forces a frontend rebuild in 15.1-15
 
 ### Phase 15.2: Research Engine Redesign — Engine Core (INSERTED 2026-07-24)
+
 **Goal**: The pipeline core is restructured — question workshop with pairwise tournament (absorbs ENGINE-05), structured per-provider fact lists + safety-net distiller, SerpAPI-fueled researcher stream, LLM-based cross-provider merge, language tagging, reliability R1–R7, and report changes — validated by a live run compared against the recorded baseline plus operator sign-off, after which the old engine path is removed immediately.
 **Depends on**: Phase 15.1 (gates in place). Live validation run lands after 2026-08-01 (Anthropic monthly cap reset).
 **Requirements**: ENGINE-05, ENGINE-11
 **Success Criteria** (what must be TRUE):
+
   1. The question workshop (orientation + critique + pairwise tournament, D2–D7) selects the run's research questions — visible in the feed — without altering client-validated questions (D4). This IS the evolved plan-critique pass (ENGINE-05 absorbed per S-02).
   2. Providers return structured fact lists with a per-provider safety-net distiller (D8); the SerpAPI-fueled own researcher stream contributes (D10); the cross-provider merge clusters same-fact claims via LLM-based grouping (D9/B-04 — no embedding machinery).
   3. Reliability R1–R7 hold: retry/backoff, breaker, checkpointing, park + superadmin-click-only resume (F-01), checkpoint-resumes free/unlimited with the 3-attempt rule counting full restarts only (F-02), park/failure mail to the triggering superadmin (F-03).
   4. V-01/V-02 acceptance passes: live run on a test intake compared against the recorded 4cbb5311 baseline; hard checklist green (workshop questions visible in feed, per-provider fact lists present, gate funnel recorded, citations resolve, `verify_chain` green, cost fully itemized per C1, feed complete with per-row cost) PLUS operator sign-off next to the recorded baseline.
   5. On acceptance the old engine path (adaptive_intake one-call → distiller-as-shredder → exact-key grouping) is removed immediately (V-03 — no fallback flag), and the first live run validates the deployed F-01 skeptic fix by construction.
+
 **Plans**: 19 plans across 12 waves (planned 2026-07-26). Waves 4-12 are single-plan and mostly serialize file ownership rather than dependency depth — `pipeline/tribunal/pipeline.py` is touched by seven plans and `synthesis/steps.py` by four, and GSD requires zero `files_modified` overlap inside a wave.
 
 **Wave 1** *(no dependencies — 3-way parallel)*
+
   - 15.2-01 — alembic `0013` (D-13 columns + `research_gap` + `ck_run_status`) + ORM sync + non-superuser RLS denial harness
   - 15.2-02 — `reliability.py` (R1/R2/R4/R6 primitives, `terminal_state()`) **+ creates `cloudbuild.test-engine.yaml`**, the phase's keyless fast gate
   - 15.2-03 — `StageFeed` owner + new `ENGINE_STAGES` keys + `audit_id` plumbing (D15/R5/F4/F9)
 
 **Wave 2** *(blocked on Wave 1 — 4-way parallel)*
+
   - 15.2-04 — D8 fact-list format + tolerant parser (`facts.py`)
   - 15.2-05 — D-05 anchor placement + D-06 unresolved accounting + D13 graded sources
   - 15.2-09 — D-09 shared status predicate + D-12 four-state vocabulary
   - 15.2-10 — question workshop A: orientation, candidate generation, near-duplicate clustering
 
 **Wave 3** *(3-way parallel)*
+
   - 15.2-06 — D-08's two deterministic report sections
   - 15.2-11 — question workshop B: critique (**ENGINE-05, absorbed per S-02**), Swiss tournament, evolve, D7 tags
   - 15.2-12 — SerpAPI own-researcher stream (D10) + D-16 cost arithmetic
 
 **Waves 4-8** *(serial)*
+
   - 15.2-07 (W4) — WR-01 fix + the coverage cost-trap intersection + D-11 breaker-gated re-entry
   - 15.2-08 (W5) — WR-10 / D-10 `checked_incidentally` + D-06/D-12 surfacing
   - 15.2-13 (W6) — D6 distribution + `_MAX_ANGLES` rework + 4th stream + D-03 unwiring of `adaptive_intake`
@@ -387,6 +425,7 @@ Plans:
   - 15.2-15 (W8) — cross-provider merge before the gates (D9/D11) + D-13 persistence
 
 **Waves 9-12** *(serial)*
+
   - 15.2-16 (W9) — R3/R4/R7 checkpointing + park, Tribunal engine side + its cross-tenant denial test
   - 15.2-19 (W10) — park/resume intake + frontend side: Resume route, F-03 mail, Resume UI
   - 15.2-17 (W11) — **D-02's single gating proof**: stubbed end-to-end run + D-04's rewired replay + the six-gate sweep
@@ -415,77 +454,99 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 `phases/15.1-*/15.1-UAT.md` § Deferred to Phase 15.2.
 
 ### Phase 16: Research Trigger + Progress Bridge
+
 **Goal**: A superadmin can trigger a research run on a `decomposed` intake and watch live stage-by-stage progress with running cost in the intake admin UI, receiving an email when it finishes — the milestone spine.
 **Depends on**: Phase 14 (proven seam). Phase 15 dependency REMOVED (deferred after Phase 19) — integrates against the engine as it runs today; the progress UI MUST render the stage list dynamically from the run's stage trace (9 stages today, no hardcoded count) so Phase 15's added pass costs nothing later.
 **Requirements**: SEAM-03, SEAM-04, RUN-01, RUN-02, ENGINE-03, ENGINE-07
 **Success Criteria** (what must be TRUE):
+
   1. Superadmin triggers a run on a `decomposed` intake (status → `in_research`, immediate 202), with the brief assembled from the intake's validated context pack.
   2. Live run progress (stage trace rendered dynamically — 9 stages today — + running cost) renders on the intake detail page in the intake design language, fed by a background poll → `research_runs` → SSE bridge.
   3. Tribunal's interactive pause gates (`needs_input` / `needs_report_spec`) NEVER fire for seam runs (16-CONTEXT D-01/D-01b: the validated intake IS the brief; report spec auto-derived from intake answers), and runs execute on the always-on worker so no run is bounded by a Cloud Run request timeout.
   4. The triggering superadmin receives an email when the run completes or fails.
   5. The stale-run reclaim window is set above the real max run length (no double-runs). NOTE: cost-cap flip-on (`NESTOR_TRIBUNAL_UNCAPPED` off) is DEFERRED by operator decision 2026-07-21 (16-CONTEXT D-02) — before client-billed runs, Phase 20 at the latest.
+
 **Plans**: 5 plans
+
   - [x] 16-01-PLAN.md — research_runs table (migration 0011 + RLS) + model/repo + fake_tribunal_client fixture (foundation)
   - [x] 16-02-PLAN.md — seam client (create_run/get_metrics/get_report) + brief assembly (no [INTERACTIVE_REPORT]) + pool-safe poll driver + NL/FR/EN completion/failure mail
   - [x] 16-03-PLAN.md — trigger verb (decomposed→in_research, attempt cap) + SSE stream (research terminal set) + cross-tenant denial tests
   - [x] 16-04-PLAN.md — frontend: research.ts + dynamic-stage ResearchRunProgress panel + confirm-dialog trigger + additive derivePhase (client UI untouched)
   - [x] 16-05-PLAN.md — runbook Phase 16 (REBUILD + 0011 migrate + stale-window=90) + operator live run (closes deferred Phase-14 seam UAT)
+
 **UI hint**: yes
 
 ### Phase 17: Raw Output + Audit Chain Guard
+
 **Goal**: Once a run completes, its full raw output is secured as a superadmin-only download and the audit chain is guarded on the completion path — nothing research-related is client-visible.
 **Depends on**: Phase 16
 **Requirements**: RUN-03
 **Success Criteria** (what must be TRUE):
+
   1. Superadmin can download the full raw research output as a file (GCS signed URL, space-scoped).
   2. A client can never access the raw output — the endpoint is superadmin-only and denies cross-space and client access (added to the CI-gated denial suite).
   3. `verify_chain` runs as a hard gate on the run-completion path (audit objects carried, frozen payload preserved), surfacing a broken chain before delivery.
+
 **Plans**: 4 plans
+
   - [x] 17-01-PLAN.md — research_runs chain/bundle columns (migration 0012) + Tribunal /research-bundle endpoint + seam methods + fixtures (foundation)
   - [x] 17-02-PLAN.md — pure bundle builder + completion-path verify_chain gate + materialize zip to GCS (pool-safe)
   - [x] 17-03-PLAN.md — superadmin-only bundle-url + re-verify routes + denial suite + download/locked/re-verify UI
   - [x] 17-04-PLAN.md — runbook Phase 17 (ordered dual REBUILD + 0012 migrate) + operator live download / verify_chain proof
 
 ### Phase 18: Human Report Upload + Client Delivery
+
 **Goal**: The superadmin uploads the externally crafted final report PDF, moving the intake to `delivered`, and the client sees, downloads, and is emailed about it.
 **Depends on**: Phase 16 (runs complete); independent of Phase 19
 **Requirements**: REPORT-01, REPORT-02, REPORT-03
 **Success Criteria** (what must be TRUE):
+
   1. Superadmin can upload the final report PDF (crafted externally in Claude Design), which sets status → `delivered` (run `completed` does NOT auto-deliver — the upload does).
   2. Client sees and downloads the final report in their own UI, and nothing research-related is client-visible before delivery.
   3. Client receives an email notification when the report is delivered.
+
 **Plans**: 4 plans
+
   - [x] 18-01-PLAN.md — Backend deliver/replace/report verbs (in_research→delivered, PDF-only, forged-key guard, status-gated client read) + report-delivery & cross-tenant denial tests
   - [x] 18-02-PLAN.md — Frontend admin: repair FinalReportBlock (staged upload + explicit Deliver dialog + Replace + PDF-only) + seam verbs + phase-machine wiring + admin reload + NL/FR/EN
   - [x] 18-03-PLAN.md — Frontend client: new delivered-only report route (download-only, chat space reserved) + list "View report" CTA + report-page i18n
   - [x] 18-04-PLAN.md — § Phase 18 runbook (nestor-api + frontend rebuild, no migrate, no new secret) + operator live deploy / stage-deliver-download-mail UAT
+
 **UI hint**: yes
 
 ### Phase 19: Q&A Chat (Voyage + Haiku RAG)
+
 **Goal**: After delivery, both client and superadmin can ask questions over the indexed research findings and get grounded, Belgian-Dutch answers.
 **Depends on**: Phase 16 (completed research output to index) + Phase 15.2 (NEW engine live — Q&A indexes the new engine's output from day one, order set 2026-07-24); independent of Phase 18
 **Requirements**: CHAT-01, CHAT-02, CHAT-03
 **Success Criteria** (what must be TRUE):
+
   1. When a run completes, its findings are chunked and embedded into a dedicated Voyage `voyage-3-large` 1024-dim pgvector table (distinct from the OpenAI 1536-dim column).
   2. Client and superadmin can ask questions post-delivery and get Claude Haiku answers grounded only in the indexed findings (legacy `ask-research` contract: Belgian-Dutch, no markdown, honest when context is insufficient).
   3. Chat is space-scoped (`WHERE space_id` prefilter before the vector op); superadmin additionally sees the source fragments behind each answer while the client does not.
+
 **Plans**: TBD
 **UI hint**: yes
 
 ### Phase 20: Deferred Chores + v1.0 UAT Closure
+
 **Goal**: Carry-over v1.0 items are closed on the now-extended, stable flow — no new features.
 **Depends on**: Phases 16-19 (extended flow live and stable) + Phases 15/15.1/15.2 (engine redesign landed)
 **Requirements**: CLOSE-01, CLOSE-02, CLOSE-03
 **Success Criteria** (what must be TRUE):
+
   1. The 21-item deferred v1.0 UAT ledger is re-run against the extended flow and its results recorded.
   2. Chores are done: Resend key rotated, full backend suite rerun in Cloud Build (green), NDA PDF dropped in + image rebuilt, legacy `VITE_SUPABASE_*` env removed.
   3. The 3 open product decisions are decided and implemented: Templates page visibility, Intake-info link-row trimming, and the "Verzonden mails" history block.
+
 **Plans**: TBD
 
 ### Phase 21: Research Run Feed Completion
+
 **Goal**: The dedicated run page tells the whole story of a run — every stage reports, finished work reads as finished, and the claims-verification evidence is on the page built to hold it.
 **Depends on**: Phase 15.3 (run page + run-event contract), Phase 15.2 (engine core stages)
 **Success Criteria** (what must be TRUE):
+
   1. All 13 tribunal stages emit feed content, not just the 4 wired by 15.3 (`workshop`, `research_division`, `deep_research`, `own_research`). The 8 silent stages — `distill`, `merge`, `gate`, `verify`, `adjudicate`, `coverage`, `conflict`, `synthesize` — each emit a dispatch header and per-item rows, so no phase renders as a label with nothing under it.
   2. A finished agent never renders as a spinner. `agent_run` rows resolve once their work is done, rather than animating forever because the feed is append-only.
   3. The "Show more" toggle appears only when rows are actually hidden — never on a phase whose body is empty or shorter than the collapsed preview.
@@ -499,6 +560,7 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
      the deliverable". Under D-13 as written the correct CONTENT trim is **zero cuts**; the measured volume
      driver is CARDINALITY — one correct line multiplied by 19 angles. A ruling of "no change to that file"
      therefore SATISFIES this criterion. Detail: `21-04-PLAN.md` and the `21-DENSITY-AUDIT.md` it produces.
+
   6. No raw stage key ever reaches the operator's screen, and a test enforces it.
      ⚠ **AMENDED AT PLANNING 2026-08-10** — three measured corrections to this criterion's premises:
      (a) the recurrence-guard test it asks for **already exists and is already registered in CI** —
@@ -521,13 +583,27 @@ six success criteria above and `21-CONTEXT.md` (D-01…D-15); plans trace to tho
 **Plans**: 8 plans in 5 waves (planned 2026-08-10)
 
 Plans:
+**Wave 1**
+
 - [ ] 21-01-PLAN.md (W1) — frontend: the pure settle rule + the hidden-rows predicate, pinned by vitest, and `RunFeed.tsx` wired to both — no spinner on a finished agent, no toggle over an empty phase (SC2/SC3, D-07/D-08/D-09)
 - [ ] 21-02-PLAN.md (W1) — frontend: `VerificationReport` reachable from the run page as a SIBLING of the card and the feed, gated on whether a report CAN exist rather than on which card branch renders, so failed and cancelled runs keep their verdicts (SC4, D-10/D-11)
 - [ ] 21-03-PLAN.md (W1) — engine: `stage_events.py` — the shared row budget, the visible elision row and the house emitter shape — plus `verify`, the stage the operator named twice, with per-cluster lifecycle rows and per-verdict rows (SC1, D-03/D-04/D-05/D-06)
 - [ ] 21-04-PLAN.md (W1) — engine: `21-DENSITY-AUDIT.md` — the per-site verdict as a reviewable artifact, a BLOCKING operator ruling, then exactly what was ruled and nothing more. Carries the measured contradiction of SC5's premise (SC5, D-12/D-13/D-14)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 21-05-PLAN.md (W2) — engine: `distill`, `merge`, `gate` — copying the landed pattern; each closing sentence bound ONCE and shared between `stage_detail` and the feed so the two surfaces cannot drift (SC1)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 21-06-PLAN.md (W3) — engine: `adjudicate`, `coverage` (the emptiest — a bare marker with no detail at all), `conflict`, `synthesize` including the module-level resume path; the capstone test derives its stage list from the SCHEMA, not a hardcoded thirteen (SC1)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 21-07-PLAN.md (W4) — the WR-03 raw-key fix: a BLOCKING ruling on declare-vs-label, the stale "fourteen stages" docstring corrected to the counted number, and the guard strengthened so the non-schema allowlist can never again hide a raw key (SC6, D-15)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 21-08-PLAN.md (W5) — DEPLOY: the surface RE-DERIVED from the actual diff (D-02), both Cloud Build gates read as build TEXT, the digest-proven ordered deploy, and a recorded-run UAT with one honest verdict per success criterion. Triggers NO research run (D-01/D-02)
 
 **Wave structure:** W1 is four-way parallel across disjoint file sets — two frontend plans, the engine spine

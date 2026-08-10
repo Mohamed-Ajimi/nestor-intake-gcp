@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-08-05T11:20:05.455Z"
-last_activity: 2026-08-06 -- quick 260806-dn8: report synthesis moved to claude-opus-5 (caps 8192->20000 under the SDK's 21333 non-streaming bound, Opus 5 price row added, G-10 closed via the CR-08 full-text pattern). Engine gate 43->44 files, 1850 passed / 0 failed. NOT DEPLOYED -- digest baseline voided, five pre-flight gates owed
+last_updated: "2026-08-10T13:52:14.748Z"
+last_activity: 2026-08-10 -- Phase 21 planning complete
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 12
-  total_plans: 124
+  total_plans: 132
   completed_plans: 122
-  percent: 75
+  percent: 71
 ---
 
 # Project State
@@ -309,7 +309,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Executing Phase 15.8
+Status: Ready to execute
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -419,7 +419,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-08-05 -- Phase 15.8 execution started
+Last activity: 2026-08-10 -- Phase 21 planning complete
 
 Progress: [██████████] 100%
 
