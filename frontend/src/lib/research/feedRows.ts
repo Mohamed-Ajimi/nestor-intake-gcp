@@ -52,9 +52,7 @@ export const AGENT_TERMINAL_KINDS: ReadonlySet<string> = new Set(["agent_done", 
  *     on the most recent work rather than on the oldest — which is the correct direction to
  *     fail, since the newest row is the one for which "now" is still plausible.
  */
-export function settledSeqs(
-  events: ReadonlyArray<Pick<RunEvent, "seq" | "kind">>,
-): Set<number> {
+export function settledSeqs(events: ReadonlyArray<Pick<RunEvent, "seq" | "kind">>): Set<number> {
   const settled = new Set<number>();
   const unpaired: number[] = [];
   for (const ev of events) {
