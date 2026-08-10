@@ -604,7 +604,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 21-08-PLAN.md (W5) — DEPLOY: the surface RE-DERIVED from the actual diff (D-02), both Cloud Build gates read as build TEXT, the digest-proven ordered deploy, and a recorded-run UAT with one honest verdict per success criterion. Triggers NO research run (D-01/D-02)
+- [x] 21-08-PLAN.md (W5) — DEPLOY: the surface RE-DERIVED from the actual diff (D-02), both Cloud Build gates read as build TEXT, the digest-proven ordered deploy, and a recorded-run UAT with one honest verdict per success criterion. Triggers NO research run (D-01/D-02)
 
 **Wave structure:** W1 is four-way parallel across disjoint file sets — two frontend plans, the engine spine
 plus `verify`, and the density audit. W2 → W4 serialise on `pipeline.py`, which every engine plan touches
@@ -633,4 +633,4 @@ reports nothing for 8 of 13 stages.
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
-| 21. Research Run Feed Completion | v1.1 | 7/8 | In Progress|  |
+| 21. Research Run Feed Completion | v1.1 | 8/8 | Complete   | 2026-08-10 |
