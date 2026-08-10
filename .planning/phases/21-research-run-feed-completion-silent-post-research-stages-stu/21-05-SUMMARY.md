@@ -377,3 +377,19 @@ schema change. Every threat in the plan's register was mitigated by construction
   `20260806-175613`, this code is proven against the stubbed harness and has
   never executed against a live model. The ~$45 run remains the thing that
   validates it.
+
+## Self-Check: PASSED
+
+- `tribunal/nestor_pulse_sdk/pipeline/tribunal/stage_events.py` — FOUND (modified)
+- `tribunal/nestor_pulse_sdk/pipeline/tribunal/pipeline.py` — FOUND (modified)
+- `tribunal/nestor_pulse_sdk/tests/test_run_event_emit.py` — FOUND (modified)
+- `.planning/phases/21-.../21-05-SUMMARY.md` — FOUND, and verified present in
+  commit `e4a6568` via `git show --name-only` (it needed `git add -f`;
+  `.planning/` is gitignored at line 32 and a plain `git add` would have skipped
+  it silently)
+- commits `f044f11`, `728ca5a`, `abf0f8b`, `e4a6568` — all present in
+  `git log 875b396..HEAD`
+- `git diff --name-only 875b396..HEAD` — exactly four paths, the three source
+  files plus the SUMMARY. `cloudbuild.test-engine.yaml` is NOT among them.
+- `git status --porcelain` — empty; nothing left uncommitted in the worktree
+- STATE.md and ROADMAP.md — NOT modified (the orchestrator owns those writes)
