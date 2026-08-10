@@ -592,7 +592,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 21-05-PLAN.md (W2) — engine: `distill`, `merge`, `gate` — copying the landed pattern; each closing sentence bound ONCE and shared between `stage_detail` and the feed so the two surfaces cannot drift (SC1)
+- [x] 21-05-PLAN.md (W2) — engine: `distill`, `merge`, `gate` — copying the landed pattern; each closing sentence bound ONCE and shared between `stage_detail` and the feed so the two surfaces cannot drift (SC1)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -633,4 +633,4 @@ reports nothing for 8 of 13 stages.
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
-| 21. Research Run Feed Completion | v1.1 | 4/8 | In Progress|  |
+| 21. Research Run Feed Completion | v1.1 | 5/8 | In Progress|  |
