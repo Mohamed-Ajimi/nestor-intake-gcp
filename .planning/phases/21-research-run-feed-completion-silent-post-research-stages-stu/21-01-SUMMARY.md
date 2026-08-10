@@ -155,6 +155,24 @@ Ready. The two frontend defects the operator named are closed and both are regre
 
 **Not verified by anything here:** the memo boundaries. Still inspected, not measured — this plan adds rows to the feed and so makes that gap more consequential, not less.
 
+## Self-Check: PASSED
+
+Verified against `git ls-tree -r HEAD` and `git log`, not against memory:
+
+- `frontend/src/lib/research/feedRows.ts` — tracked at HEAD ✓
+- `frontend/src/lib/research/feedRows.test.ts` — tracked at HEAD ✓
+- `frontend/src/components/research/RunFeed.tsx` — modified, committed in `1b5d928` ✓
+- `.planning/.../21-01-SUMMARY.md` — tracked at HEAD ✓ (required `git add -f`; `.planning/` is gitignored)
+- `.planning/.../deferred-items.md` — tracked at HEAD ✓
+- Commits `c3b010d`, `ebebe35`, `1b5d928`, `8f778b7` all present ✓
+- `git status --porcelain` empty — nothing left uncommitted in the worktree ✓
+- `STATE.md` and `ROADMAP.md` NOT modified — the orchestrator owns those writes ✓
+
+**Worktree base:** this agent hit the documented stale-base trap on startup — `merge-base`
+was `a3a0c96` against an expected base of `eac6f2b`. Corrected with `git reset --hard`
+before any file was read, and both positive-presence sentinels (`21-01-PLAN.md`,
+`21-CONTEXT.md`) confirmed present afterwards. **That makes it 24 in a row.**
+
 ---
 *Phase: 21-research-run-feed-completion-silent-post-research-stages-stu*
 *Completed: 2026-08-10*
