@@ -122,6 +122,13 @@ from nestor_pulse_sdk.runs.stage_feed import StageFeed
 # arguments are evaluated BEFORE the callee is entered, so wrapping the
 # emitter's body protects nothing about the f-string that fed it.
 from nestor_pulse_sdk.runs import run_events
+# 21-03: the feed emitters for the eight stages Phase 15.3 left SILENT — they
+# had a divider and a summary but no BODY, so each rendered as a heading with
+# nothing under it. Imported in MODULE FORM for the same call-site-gate reason
+# stated three lines above, and because the call site then reads as "the verify
+# stage said this", which is what it is. Every helper it exposes goes through the
+# thunk-taking entry point, so none of them can fail a run.
+from nestor_pulse_sdk.pipeline.tribunal import stage_events
 # D-R8 (15.8): the per-assignment / per-round yield emitter. Every sqlalchemy and
 # db import inside it is FUNCTION-LOCAL by its own design, so this costs nothing
 # at module load. Only the `_safe` trio may be called from here — see
@@ -3121,6 +3128,13 @@ class TribunalPipeline:
                     )
                     return None
 
+        # 21-03: ONE row budget for the verify STAGE, spanning BOTH branches
+        # below. Bounding per stage rather than per branch means the ceiling is a
+        # property of what the operator sees under "Skeptic verification", not of
+        # which verification mode happened to run. Flushed once at the stage's
+        # close, so any elision row lands before the next stage's divider.
+        _verify_budget = stage_events.RowBudget(run_id, "verify")
+
         if _GROUP_VERIFY:
             # --- Grouped verification (plan Phase 3) ---------------------------
             # Claims about the same entity|attribute are verified TOGETHER in ONE
@@ -3155,6 +3169,18 @@ class TribunalPipeline:
                     }]},
                 )
 
+            # 21-03: the stage's ONE dispatch header, naming the work and its
+            # counts. It carries the same five numbers `_verify_detail` renders,
+            # so the run page and the intake card cannot disagree about how much
+            # of this run was actually checked.
+            stage_events.emit_verify_dispatch(
+                run_id,
+                groups_selected=total_passes,
+                groups_total=n_groups,
+                multi=multi,
+                claims_selected=gate_funnel["selected_verify"],
+                claims_total=len(claims),
+            )
             await _verify_detail(0)
 
             async def _one_group_pass(group: dict, sources: list) -> dict | None:
@@ -3191,6 +3217,13 @@ class TribunalPipeline:
                         # Bucket-3 site (a): the session crashed or timed out. Its
                         # selected claims got no verdict and never will.
                         _book_unchecked(grp["claims"], "group session crashed or timed out")
+                        # 21-03: and SAY SO, naming the cluster and the cause. An
+                        # absence in the feed reads as "not reached yet"; this
+                        # reads as "never checked", which is what it is.
+                        stage_events.emit_verify_group_failed(
+                            run_id, _verify_budget, group=grp,
+                            reason="the skeptic session crashed or timed out",
+                        )
                         continue
                     vbi = res.get("verdicts_by_index", {})
                     # ENGINE-10: harvested BEFORE the member loop (it used to be
@@ -3230,6 +3263,20 @@ class TribunalPipeline:
                                 # verdict already built.
                                 v["reconciliation"] = dict(recon)
                             verdicts_by_claim[id(c)].append(v)
+                    # 21-03: the cluster's FINISH row and then its individual
+                    # verdicts. BOTH SIT OUTSIDE THE MEMBER LOOP ABOVE, ON
+                    # PURPOSE. That loop carries the WR-10 "DO NOT FILTER THIS
+                    # LOOP" comment, and a call placed inside it invites a later
+                    # reader to add a condition next to it — which is precisely
+                    # the defect that comment exists to prevent. One finish row
+                    # per cluster, one verdict row per refutation or supersession,
+                    # all bounded by the stage's row budget.
+                    stage_events.emit_verify_group_done(
+                        run_id, _verify_budget, group=grp, verdicts=vbi,
+                    )
+                    stage_events.emit_verify_verdicts(
+                        run_id, _verify_budget, group=grp, verdicts=vbi,
+                    )
                     # CR-01: carry this group's superseded caveats out before the
                     # verdict dicts disappear into verdicts_by_claim, where G-07's
                     # note used to die. Merged into contested_notes below.
@@ -3255,11 +3302,23 @@ class TribunalPipeline:
                     # Bucket-3 site (b): the budget governor stopped the spend. The
                     # shortfall lands here honestly instead of reading as verified.
                     _book_unchecked(group["claims"], "budget cap reached")
+                    # 21-03: a cluster skipped on budget must SAY it was skipped.
+                    # Without this row the operator has to infer, from a cluster
+                    # that simply never appears, that it was not checked.
+                    stage_events.emit_verify_group_failed(
+                        run_id, _verify_budget, group=group,
+                        reason="the budget cap was reached before it could be checked",
+                    )
                     continue
                 sources = _extract_sources_for_group(group, provider_results)
                 # ONE thorough session per selected group; stakes sets its depth.
                 pending.append(_one_group_pass(group, sources))
                 owners.append(group)
+                # 21-03: the cluster's START row, paired positionally with the
+                # finish row `_flush_groups` emits for the same group.
+                stage_events.emit_verify_group_run(
+                    run_id, _verify_budget, group=group,
+                )
                 total_skeptics += 1
                 if len(pending) >= _SKEPTIC_CONCURRENCY:
                     await _flush_groups()
@@ -3298,6 +3357,12 @@ class TribunalPipeline:
             n_selected = len(selected_claims)
             _verified_count = 0
 
+            # 21-03: this branch's dispatch header. It and the grouped branch's
+            # are mutually exclusive at runtime, so the stage still gets exactly
+            # ONE header either way.
+            stage_events.emit_verify_batch_dispatch(
+                run_id, selected=n_selected, total=len(claims),
+            )
             await set_stage(
                 run_id, tenant_id, "verify",
                 detail={"items": [{
@@ -3321,6 +3386,11 @@ class TribunalPipeline:
                 pending.clear()
                 owners.clear()
                 _verified_count += batch_size
+                # 21-03: this branch's per-flush progress row.
+                stage_events.emit_verify_batch_done(
+                    run_id, _verify_budget,
+                    verified=_verified_count, selected=n_selected,
+                )
                 await set_stage(
                     run_id, tenant_id, "verify",
                     detail={"items": [{
@@ -3533,10 +3603,21 @@ class TribunalPipeline:
             claims_with_a_verdict=sum(1 for v in verdicts_by_claim.values() if v),
         )
         # G-10: the closing summary states degradation in words, not with an icon.
+        #
+        # 21-03: BOUND ONCE, THEN SHARED. The feed row and the stage detail must
+        # be the SAME sentence — composing it twice is how the run page and the
+        # intake card come to report different degradation for one run, and
+        # `_verify_closing_item` is deliberately the only place that sentence
+        # exists.
+        _verify_closing = _verify_closing_item(verification_funnel)
+        stage_events.emit_verify_closing(run_id, text=_verify_closing["name"])
         await set_stage(
             run_id, tenant_id, "verify",
-            detail={"items": [_verify_closing_item(verification_funnel)]},
+            detail={"items": [_verify_closing]},
         )
+        # 21-03: the stage's row budget is spent — state any elision as a row
+        # HERE, so it lands inside `verify` and before the next stage's divider.
+        _verify_budget.flush("cluster")
         if verification_funnel["should_have_been_checked"]:
             log.warning(
                 "tribunal_pipeline: VERIFICATION DEGRADED — %d of %d selected claims "
