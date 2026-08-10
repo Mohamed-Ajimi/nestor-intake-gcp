@@ -154,3 +154,44 @@ Verifiable on **RECORDED data with NO spend — do NOT trigger a run.**
   observation is how a defect becomes a rumour.
 - Any deviation must be **routed**: either a follow-up task or an explicitly deferred item.
   Never absorbed silently.
+
+---
+
+## DEF-21-03 — the `coverage` summary line is still nearly empty, and per-item rows do NOT fix it
+
+**Found during:** 21-06 Task 3(b), by measurement before and after the change
+**Status:** deferred — out of 21-06's scope, one-line fix identified, NOT applied
+
+### What was measured
+
+21-CONTEXT's `<specifics>` predicted: *"the silent stages' summary lines are probably rendering
+nearly empty because `state["items"]` is 0 for a stage that never reported detail rows — worth
+confirming, because if so, D-04's per-item rows fix the summary line for free."*
+
+**Its first half is right; its conclusion is wrong.** Measured in the stubbed run at 21-06's base
+commit AND after 21-06 landed, `coverage`'s automatic summary meta is `{'worked': '0s',
+'actions': 0}` **both times** — unchanged by the two body rows the stage now emits, and still the
+only stage of the thirteen reporting `actions: 0`.
+
+The mechanism, read out of `pipeline.py`: `_stage_event_summary_meta` builds the summary from
+`state["items"]`; `state["items"]` is written only by `_stage_log_items(detail)`, i.e. from the
+**`detail` argument of `set_stage`**; and `meta["items"]` comes from `detail["summary"]["items_read"]`.
+**Run events never touch that state at all.** The feed body and the summary line are driven by two
+different inputs, so per-item rows cannot fix the summary "for free" or otherwise.
+
+### The fix, and why it was not applied here
+
+`pipeline.py`'s coverage marker is the only `set_stage` call in the pipeline with no `detail`
+argument. Giving it one — e.g. the same sentence `emit_coverage_done` already composes — would
+make `actions` non-zero and the summary meaningful.
+
+It was **not** done in 21-06 because that plan's scope is explicitly "add rows around that call and
+change NO argument to it", and because 21-06's acceptance rests on proving the diff is
+observability-only (`await set_stage(` unchanged at 23, the cost trap byte-identical). Changing a
+`set_stage` payload is a change to the stage-detail contract, which is a different surface with its
+own consumers (`RunMetrics.stages`, the intake card).
+
+**Whoever picks this up:** the assertion pinning the current behaviour is
+`test_the_coverage_stage_summary_is_no_longer_empty` in `test_run_event_emit.py`. It is written to
+fail loudly with an instruction if `actions` stops being 0, so the fix cannot land silently — it
+forces the test and this item to be closed together.
