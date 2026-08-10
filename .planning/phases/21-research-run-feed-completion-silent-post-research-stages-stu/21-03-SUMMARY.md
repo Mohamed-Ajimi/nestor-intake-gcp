@@ -309,3 +309,14 @@ change. Every threat in the plan's register was mitigated by construction:
 - **Nothing here has run.** Like the three changes at tag `20260806-175613`, this code
   is proven against the stubbed harness and has never executed against a live model.
   The ~$45 run remains the thing that validates it.
+
+## Self-Check: PASSED
+
+- `tribunal/nestor_pulse_sdk/pipeline/tribunal/stage_events.py` — FOUND
+- `.planning/phases/21-.../21-03-SUMMARY.md` — FOUND, and verified present in commit
+  `b04cdf4` via `git show --name-only` (it needed `git add -f`; `.planning/` is
+  gitignored at line 32 and a plain `git add` would have skipped it silently)
+- commits `cb28630`, `21ff030`, `449dad5`, `f060bb5`, `b04cdf4` — all present in
+  `git log eac6f2b..HEAD`
+- `git status --porcelain` — empty; nothing left uncommitted in the worktree
+- STATE.md and ROADMAP.md — NOT modified (the orchestrator owns those writes)
