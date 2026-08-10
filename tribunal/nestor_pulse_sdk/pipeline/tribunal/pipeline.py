@@ -1435,6 +1435,9 @@ class TribunalPipeline:
                 return await _write_final_report(
                     bundle=bundle, report_spec=spec,
                     audited=audited, run_id=run_id, tenant_id=tenant_id,
+                    # 21-06: FEED-ONLY. This is the resume entry point, and the
+                    # synthesis row it emits is the only one this path produces.
+                    resumed=True,
                 )
             log.warning(
                 "tribunal_pipeline: report_spec present but no synthesis_cache — running fresh"
@@ -3497,18 +3500,44 @@ class TribunalPipeline:
         # ------------------------------------------------------------------
         # Stage 5: Adjudication
         # ------------------------------------------------------------------
+        # 21-06: the stage's header and its per-item row budget, opened BEFORE the
+        # work so the rows below land inside `adjudicate` rather than after the
+        # next divider.
+        stage_events.emit_adjudicate_dispatch(
+            run_id, claims=len(claims), rule=SURVIVAL_RULE,
+        )
+        _adjudicate_budget = stage_events.RowBudget(run_id, "adjudicate")
         adjudication_result = adjudicate_all(
             claims, verdicts_by_claim, SURVIVAL_RULE
         )
         survivors = adjudication_result["survivors"]
         dropped = adjudication_result["dropped"]
+        # 21-06: NAME what was thrown out, not just how many. Every claim dropped
+        # HERE is a fact-check drop by construction — conflict losers join
+        # `dropped` further down, after `_factcheck_dropped_ids` snapshots this
+        # set — so the rows carry the ledger's `failed_factcheck` reason.
+        for _c in dropped:
+            stage_events.emit_adjudicate_drop(run_id, _adjudicate_budget, claim=_c)
+        # 21-06: BOUND ONCE, THEN SHARED — the same discipline 21-03 applied to
+        # the verify closing line. The feed row and the stage detail must be the
+        # SAME sentence; composing it twice is how two surfaces come to report
+        # different survivor counts for one run.
+        _adjudicate_row = (
+            f"{len(survivors)} survived · {len(dropped)} dropped of {len(claims)} claims"
+        )
+        stage_events.emit_adjudicate_done(
+            run_id, text=_adjudicate_row, survivors=len(survivors),
+        )
         await set_stage(
             run_id, tenant_id, "adjudicate",
             detail={"items": [{
-                "name": f"{len(survivors)} survived · {len(dropped)} dropped of {len(claims)} claims",
+                "name": _adjudicate_row,
                 "status": "done",
             }]},
         )
+        # 21-06: the stage's row budget is spent — state any elision as a row
+        # HERE, so it lands inside `adjudicate` and before the next divider.
+        _adjudicate_budget.flush("dropped claim")
 
         # Build the adjudications mapping for the coverage gate: id(claim) -> True
         # ONLY when at least one skeptic verdict actually came back for that claim.
@@ -3545,6 +3574,15 @@ class TribunalPipeline:
         # stage the gates exist to shrink to ~150. The budget governor is inert
         # (`NESTOR_TRIBUNAL_UNCAPPED=1`) and will not stop it.
         await set_stage(run_id, tenant_id, "coverage")
+        # 21-06: the emptiest stage in the engine gets its header. The row reports
+        # the population the intersection above KEPT — the gate-selected claims —
+        # because that population IS the cost trap's guard, rendered. The counting
+        # walk lives inside the emitter (stage_events recipe step h): a cheaper
+        # `len(claims)` here would name every distilled claim and quietly
+        # misreport the one number this row exists to show.
+        stage_events.emit_coverage_dispatch(
+            run_id, claims=claims, adjudications=adjudications,
+        )
         coverage = check_coverage(claims, adjudications, selected_only=True)
         reentry_count = 0
 
@@ -3554,6 +3592,17 @@ class TribunalPipeline:
         # the breaker gate inside `_coverage_reentry_pass` (D-07-C).
         while not coverage["pass"] and reentry_count < MAX_REENTRY and not budget_exceeded:
             reentry_count += 1
+            # 21-06: a re-entry SPENDS MONEY and existed only as the log line
+            # below, so a run that quietly paid for a second round of skeptics
+            # looked identical on the page to one that did not. D-13 keeps money
+            # signals, and the operator's 2026-08-10 amendment settles the tie in
+            # money's favour where a line is both.
+            stage_events.emit_coverage_reentry(
+                run_id,
+                attempt=reentry_count,
+                max_attempts=MAX_REENTRY,
+                uncovered=len(coverage["uncovered"]),
+            )
             log.warning(
                 "tribunal_pipeline: coverage gate FAIL — re-entry %d/%d for %d uncovered high-stakes claims",
                 reentry_count, MAX_REENTRY, len(coverage["uncovered"]),
@@ -3576,6 +3625,13 @@ class TribunalPipeline:
                 # helper; here the loss is NAMED for the operator, through the run's
                 # ONE accumulator (never a locally-declared list).
                 _note_degradation(reentry["blocked_reason"])
+                # 21-06: the SAME words, on the page. The accumulator carries this
+                # sentence to the degradation notice; the feed row carries it to
+                # the operator watching the run, so the two surfaces cannot become
+                # two accounts of one loss.
+                stage_events.emit_coverage_blocked(
+                    run_id, reason=reentry["blocked_reason"],
+                )
                 log.warning(
                     "tribunal_pipeline: coverage re-entry BLOCKED — %s",
                     reentry["blocked_reason"],
@@ -3596,6 +3652,20 @@ class TribunalPipeline:
             adjudication_result = adjudicate_all(claims, verdicts_by_claim, SURVIVAL_RULE)
             survivors = adjudication_result["survivors"]
             dropped = adjudication_result["dropped"]
+
+        # 21-06: the coverage gate's verdict on itself, emitted HERE — while
+        # `coverage` is still the stage being reported. The frontend groups the
+        # feed by consecutive `stage` values (`RunFeed.tsx`), so a row emitted
+        # after the verify stage's closing `set_stage` below would render under
+        # `verify` instead. A pass and a fail both get a row: a gate that spoke
+        # only on failure would leave "fully covered" and "this stage is broken
+        # again" looking identical.
+        stage_events.emit_coverage_done(
+            run_id,
+            passed=coverage["pass"],
+            uncovered=len(coverage["uncovered"]),
+            reentries=reentry_count,
+        )
 
         # ------------------------------------------------------------------
         # The funnel is final here — and so is what the feed must say about it
@@ -3730,6 +3800,14 @@ class TribunalPipeline:
                 extra={"run_id": str(run_id)},
             )
         contested_notes.extend(_deduped_superseded[:_SUPERSEDED_NOTE_CAP])
+        # 21-06: the stage's header and its per-item budget, opened before the
+        # marker so the findings below land inside `conflict`.
+        stage_events.emit_conflict_dispatch(
+            run_id,
+            survivors=len(survivors),
+            reconciliations=len(group_reconciliations),
+        )
+        _conflict_budget = stage_events.RowBudget(run_id, "conflict")
         await set_stage(
             run_id, tenant_id, "conflict",
             detail={"items": [{
@@ -3739,6 +3817,14 @@ class TribunalPipeline:
             }]},
         )
         conflicts: list[dict] = []
+        # 21-06: BOUND AT THE OUTER LEVEL, with `conflicts`, so the closing feed
+        # row can read them on EVERY path — including the `len(survivors) < 2`
+        # path, where the block below never runs at all. Reading a name bound only
+        # inside that block would raise a NameError at the CALL SITE, which is the
+        # one place outside the emitter's try and therefore the one place D-06
+        # cannot protect (T-21-06-03).
+        loser_idxs: set[int] = set()
+        conflict_losers: list[dict] = []
         if len(survivors) >= 2:
             try:
                 conflicts = await conflict_detector(
@@ -3751,7 +3837,6 @@ class TribunalPipeline:
                 log.warning("tribunal_pipeline: conflict_detector failed: %s", exc)
                 conflicts = []
 
-            loser_idxs: set[int] = set()
             for conflict in conflicts:
                 if conflict.get("contested") or conflict.get("loser") is None:
                     note = conflict.get("tension") or conflict.get("note") or ""
@@ -3759,6 +3844,14 @@ class TribunalPipeline:
                         contested_notes.append(note)
                 else:
                     loser_idxs.add(conflict["loser"])
+
+            # 21-06: report the findings AFTER the classification loop rather than
+            # inside it, so the routing logic above stays free of emission and a
+            # future change to one cannot silently reshape the other.
+            for conflict in conflicts:
+                stage_events.emit_conflict_finding(
+                    run_id, _conflict_budget, conflict=conflict,
+                )
 
             if loser_idxs:
                 kept = [c for i, c in enumerate(survivors) if i not in loser_idxs]
@@ -3770,6 +3863,18 @@ class TribunalPipeline:
                 )
                 dropped = dropped + conflict_losers
                 survivors = kept
+
+        # 21-06: the conflict stage's closing line — what the contradictions cost
+        # the report, in claims. `survivors` here is the count AFTER any losers
+        # were removed, which is exactly the number the synthesis rows below
+        # report writing from, so the two stages reconcile when read in order.
+        stage_events.emit_conflict_done(
+            run_id,
+            losers=len(conflict_losers),
+            contested=len(contested_notes),
+            survivors=len(survivors),
+        )
+        _conflict_budget.flush("contradiction")
 
         # --- D-R8: THE ASSIGNMENT-YIELD COMPLETION SEAM ------------------------
         # WHY EXACTLY HERE — the one thing a later reader cannot re-derive.
@@ -3890,6 +3995,7 @@ class TribunalPipeline:
         # resolution — is physically removed from the research first. This keeps
         # ADK-style richness while making the fact-checking actually stick.
         await raise_if_cancelled(run_id, tenant_id)
+        stage_events.emit_synthesize_dispatch(run_id, survivors=len(survivors))
         await set_stage(
             run_id, tenant_id, "synthesize",
             detail={"items": [{
@@ -3903,6 +4009,14 @@ class TribunalPipeline:
             audited=audited,
             run_id=run_id,
             tenant_id=tenant_id,
+        )
+        # 21-06: SUBTRACTIVE VERIFICATION, MADE VISIBLE. Everything upstream —
+        # the gates, the skeptics, adjudication, conflict resolution — reaches the
+        # delivered report only through this scrub: a refuted claim whose passage
+        # survived into the prose would ship anyway. Nothing has ever shown it
+        # happening.
+        stage_events.emit_synthesize_scrubbed(
+            run_id, removed=len(dropped), reports=len(cleaned_reports),
         )
 
         # Build the SERIALIZABLE verification bundle from the live objects — needed
@@ -4291,12 +4405,22 @@ async def _write_final_report(
     audited: "AuditedLLMClient",
     run_id: uuid.UUID,
     tenant_id: uuid.UUID,
+    resumed: bool = False,
 ) -> dict:
     """Synthesis -> cite-strip -> quality gate -> verification appendix -> result.
 
     Shared by the zero-touch path (bundle freshly built) and the resume path
     (bundle loaded from the synthesis_cache). report_spec is None for the default
     report, or the user's interactive shaping choice.
+
+    `resumed` is FEED-ONLY and DEFAULTED (21-06). It changes no behaviour; it only
+    tells the synthesis feed row which path it is on. It is a parameter rather
+    than something derived here because this function genuinely cannot tell — the
+    same bundle shape arrives from the live pipeline and from the synthesis cache,
+    and guessing from its contents would print a heuristic as a fact. THE DEFAULT
+    IS LOAD-BEARING: it keeps the call shape of every existing caller — the
+    zero-touch site below and the tests that drive this function directly — byte
+    for byte unchanged, so only the resume entry point passes it.
     """
     mission_brief = bundle.get("mission_brief") or {}
     cleaned_reports = [tuple(r) for r in (bundle.get("cleaned_reports") or [])]
@@ -4323,6 +4447,17 @@ async def _write_final_report(
     await set_stage(run_id, tenant_id, "synthesize", detail=_synthesize_detail)
 
     anchor_ledger, numbered, prefix_to_n = await _load_citation_context(run_id, tenant_id)
+    # 21-06: THE RESUME PATH'S ONLY SYNTHESIZE ROW. On a resumed run the
+    # `_run_staged` closure never executes, so the dispatch and scrub rows never
+    # fire and this is the sole thing under "Final synthesis" — the one path where
+    # an operator is most likely to be watching, because something already went
+    # wrong once.
+    stage_events.emit_synthesize_writing(
+        run_id,
+        ledger=len(anchor_ledger),
+        numbered=len(numbered),
+        resumed=resumed,
+    )
     log.info(
         "tribunal_pipeline: citation context loaded — %d ledger fact(s), "
         "%d numbered source(s)",

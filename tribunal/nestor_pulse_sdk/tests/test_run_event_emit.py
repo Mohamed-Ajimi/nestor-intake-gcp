@@ -92,15 +92,21 @@ from nestor_pulse_sdk.pipeline.tribunal import research_division as rd
 from nestor_pulse_sdk.pipeline.tribunal import serpapi as _serpapi
 from nestor_pulse_sdk.pipeline.tribunal import stage_events
 from nestor_pulse_sdk.runs import run_events
-from nestor_pulse_sdk.runs.stages import ENGINE_STAGES
+# 21-06: `stages_for` is what the capstone test derives its stage list FROM, so
+# the schema — not an author's memory — decides which stages must have a body.
+from nestor_pulse_sdk.runs.stages import ENGINE_STAGES, stages_for
 
 # The stubbed end-to-end harness, IMPORTED rather than rebuilt (same reason
 # `test_stage_logging.py` states for its own use of it).
 from nestor_pulse_sdk.pipeline.tribunal import gates as _gates_mod
 from nestor_pulse_sdk.tests.test_engine_e2e_stubbed import (
+    # 21-06: the conflict prompt's marker and the fake's response shape, so the
+    # one-hook subclass below answers on the SAME route production routes on.
+    _FakeTextResponse,
     # 21-05: the one-hook subclass that makes a single stream return no fact
     # list, so the distiller-fallback branch is driven rather than described.
     _LostStreamProvidersAudited,
+    _M_CONFLICT,
     _ScriptedProvidersAudited,
     _engine_run,
     # 21-05: the gate prompt's item-block reader, so the dropping subclass below
@@ -2214,3 +2220,543 @@ async def test_the_closing_feed_row_is_the_same_sentence_as_the_stage_detail(
         "the closing feed row and the stage detail are not the same sentence:\n"
         f"  feed:   {feed_lines[-1]!r}\n  detail: {detail_names!r}"
     )
+
+
+# ===========================================================================
+# PHASE 21 — SC1 IS CLOSED: NO STAGE THE PIPELINE REPORTS IS SILENT (plan 21-06)
+#
+# `adjudicate`, `coverage`, `conflict` and `synthesize` were the last four of the
+# eight. Measured in the stubbed run at 21-06's base commit, using `RunFeed.tsx`'s
+# own `body` filter: 0, 0, 0 and 0 body rows. Measured after: 3, 2, 2 and 3.
+#
+# THE CAPSTONE BELOW IS THE POINT OF THIS SECTION. Every other test here checks a
+# stage somebody remembered to check. The capstone derives its stage list FROM
+# `stages_for("tribunal")`, so it is the schema — not an author's memory — that
+# decides what must have a body, and a stage added later fails it until it emits.
+#
+# ⚠ ONE DECLARED STAGE IS EXCLUDED, AND THE EXCLUSION IS ITSELF ASSERTED.
+# `own_research` is declared in the schema but the pipeline NEVER WRITES THE KEY —
+# an older, separate, deliberately-pinned gap with its own self-retiring test in
+# `test_engine_e2e_stubbed.py`. A stage that is never REPORTED has no block on the
+# page to be empty, so requiring rows for it would be requiring rows nobody can
+# render. The capstone therefore pins the exclusion SET rather than skipping a
+# name: the moment somebody wires `own_research`, the exclusion assertion fails
+# and forces that stage under the body requirement too. That is strictly stronger
+# than a hardcoded skip, and it is why the list is never retyped.
+# ===========================================================================
+
+
+class _ConflictingDetectorAudited(_ScriptedProvidersAudited):
+    """The conflict detector returns one CONTESTED and one RESOLVED contradiction.
+
+    THE CLEAN SCRIPT RETURNS `[]` (`_M_CONFLICT` -> "[]"), so on it the conflict
+    stage finds nothing and every assertion about a finding row would be vacuous —
+    the same trap `_DroppingGateAudited` exists to avoid at the gate stage.
+
+    The claim indices are parsed OUT OF THE PROMPT production actually sent, so
+    the answer is in the same indexed form the real detector would return and the
+    indices are guaranteed in range. `conflict_detector` discards any entry whose
+    indices are out of range, so a hand-typed pair would silently yield a run with
+    no conflicts at all.
+    """
+
+    _PROMPT_INDEX = re.compile(r"^\[(\d+)\]", re.MULTILINE)
+
+    def _answer_conflict(self, prompt: str) -> str:
+        idxs = [int(m) for m in self._PROMPT_INDEX.findall(prompt)]
+        if len(idxs) < 4:
+            # Not enough survivors to state two distinct contradictions; the test
+            # that uses this subclass asserts on the count and will say so.
+            return "[]"
+        a, b, c, d = idxs[0], idxs[1], idxs[2], idxs[3]
+        return json.dumps([
+            {"claims": [a, b], "tension": "16% versus 21% market share",
+             "loser": None, "contested": True, "note": "genuinely unresolved"},
+            {"claims": [c, d], "tension": "two different refinery owners",
+             "loser": d, "contested": False, "note": "one side is better sourced"},
+        ])
+
+    async def gemini_generate(self, *, run_id, tenant_id, model, contents, **kwargs):
+        if _M_CONFLICT in (contents or ""):
+            self._book("conflict_detector")
+            return _FakeTextResponse(self._answer_conflict(contents))
+        return await super().gemini_generate(
+            run_id=run_id, tenant_id=tenant_id, model=model,
+            contents=contents, **kwargs,
+        )
+
+
+#: The four stage keys plan 21-06 gave bodies to. Named once so the tests below
+#: cannot drift apart.
+_21_06_STAGES = ("adjudicate", "coverage", "conflict", "synthesize")
+
+#: The ONE declared stage the pipeline never writes. Not a convenience skip — the
+#: capstone asserts that this is EXACTLY the set of unreported declared stages, so
+#: the exclusion cannot silently grow and cannot silently survive being fixed.
+_NEVER_REPORTED = {"own_research"}
+
+
+def _body_rows(persisted: _Persisted, stage: str) -> list[dict[str, Any]]:
+    """`RunFeed.tsx`'s `body` filter for one stage. The capstone's unit of truth."""
+    return persisted.body(stage)
+
+
+# --- the four stages are no longer labels with nothing under them -----------
+@pytest.mark.parametrize("stage", _21_06_STAGES)
+async def test_the_last_four_stages_are_no_longer_labels_with_nothing_under_them(
+    stage, monkeypatch
+):
+    """SC1 at the four stages plan 21-06 owns — the direct analogue of the test
+    21-05 parameterised over its three.
+
+    Measured at 21-06's base commit, per stage: `adjudicate` 0 body rows,
+    `coverage` 0, `conflict` 0, `synthesize` 0. The capstone below proves the same
+    thing for the whole schema at once; this one names the stage in the failure,
+    so a regression in exactly one of the four says which.
+
+    The `== 1` header assertion is the part the capstone does NOT make: the
+    failure it guards against is a header per ITEM, which a `>= 1` — or a body
+    count alone — would happily accept.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    # THE VACUITY GUARD, FIRST — before any filter runs.
+    assert stage in _stage_sequence(statements), (
+        f"the stubbed run never reported the {stage} stage — every assertion "
+        f"below would be vacuous: {_stage_sequence(statements)}"
+    )
+    assert persisted.on(stage), (
+        f"the {stage} stage produced no run event at all, not even a divider"
+    )
+
+    body = _body_rows(persisted, stage)
+    assert len(body) >= 2, (
+        f"the {stage} stage is still a label with nothing under it: its only "
+        f"rows are {[row['kind'] for row in persisted.on(stage)]}. Before 21-06 "
+        f"this was 0."
+    )
+    assert len(persisted.of(stage, "dispatch")) == 1, (
+        f"expected ONE dispatch header on {stage}, got "
+        f"{[row['text'] for row in persisted.of(stage, 'dispatch')]}"
+    )
+
+
+# --- THE CAPSTONE: SC1, derived from the schema -----------------------------
+async def test_every_declared_tribunal_stage_emits_a_body(monkeypatch):
+    """SC1, ASSERTED FROM THE SCHEMA RATHER THAN FROM A LIST.
+
+    WHAT BREAKS IF THIS FIRES: some phase of the run page renders as a heading
+    with an empty block under it, and 21-01's collapse toggle correctly hides
+    itself because there is nothing to hide. That is complaint 3 of the operator's
+    2026-08-10 UAT — "nothing at all after the deep-research phase".
+
+    THE STAGE LIST IS NEVER RETYPED. It comes from `stages_for("tribunal")`,
+    because the whole point of SC1 is that the set belongs to the schema: a stage
+    added in a later phase must fail this test until somebody gives it rows. A
+    hardcoded list of thirteen names would go stale the day the fourteenth is
+    declared, and would go stale silently.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    declared = [row["key"] for row in stages_for("tribunal")]
+    assert declared, "the tribunal engine declares no stages — schema lookup broke"
+
+    # -- VACUITY GUARDS, BEFORE ANY FILTER RUNS ----------------------------
+    assert persisted.rows, (
+        "the run recorded NO events at all — every assertion below would be "
+        "vacuous, and an empty filter compared with `>= 0` reads as a pass"
+    )
+    reported = set(_stage_sequence(statements))
+    assert len(reported) >= 12, (
+        f"the stubbed run reported only {len(reported)} distinct stages "
+        f"({sorted(reported)}) — it stopped early, so this test proves nothing"
+    )
+
+    # -- THE EXCLUSION IS PINNED, NOT ASSUMED ------------------------------
+    # `own_research` is declared but never written (see this section's header).
+    # Asserting the SET means a newly-silent stage cannot hide in here, and the
+    # day `own_research` is wired this line fails and drags it under the body
+    # requirement below.
+    unreported = set(declared) - reported
+    assert unreported == _NEVER_REPORTED, (
+        f"the set of declared-but-never-reported stages changed: expected "
+        f"{sorted(_NEVER_REPORTED)}, got {sorted(unreported)}. If a stage was "
+        f"newly wired, delete it from _NEVER_REPORTED — it now needs a body. If a "
+        f"stage stopped being reported, that is a regression in the pipeline, not "
+        f"in this test."
+    )
+
+    # -- SC1 ITSELF --------------------------------------------------------
+    must_have_a_body = [key for key in declared if key not in _NEVER_REPORTED]
+    silent = [key for key in must_have_a_body if not _body_rows(persisted, key)]
+    assert not silent, (
+        "SC1 VIOLATED — these declared stages emitted no body row (a row whose "
+        f"kind is neither divider nor summary): {silent}. Each of them renders as "
+        "a phase heading with nothing under it. Rows actually recorded per stage: "
+        + repr({
+            key: [row["kind"] for row in persisted.on(key)]
+            for key in must_have_a_body
+        })
+    )
+
+
+# --- (a) coverage is no longer the emptiest stage ---------------------------
+async def test_coverage_is_no_longer_the_emptiest_stage(monkeypatch):
+    """The stage that reported LESS than the other seven silent ones.
+
+    `pipeline.py`'s coverage marker is the only `set_stage` in the whole pipeline
+    with NO detail argument at all, so this stage advanced its marker and reported
+    neither rows nor a meaningful action count. Measured at 21-06's base commit:
+    0 body rows, and the only stage of the thirteen whose automatic summary line
+    reports `actions: 0`.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "coverage" in _stage_sequence(statements), "vacuity guard"
+    body = _body_rows(persisted, "coverage")
+    assert len(body) >= 2, (
+        "the coverage gate is still nearly empty: its only rows are "
+        f"{[row['kind'] for row in persisted.on('coverage')]}. Before 21-06 this "
+        f"was 0."
+    )
+    # The header names the population the cost trap's intersection KEPT. A row
+    # that named every distilled claim instead would be a confident false
+    # statement about the one guard standing between this stage and ~2,100 paid
+    # sessions, so the wording is asserted rather than assumed.
+    dispatches = persisted.texts("coverage", "dispatch")
+    assert len(dispatches) == 1, f"expected ONE coverage header, got {dispatches}"
+    assert "selected" in dispatches[0], (
+        f"the coverage header does not name the selected population: {dispatches[0]!r}"
+    )
+
+
+# --- (b) the summary-meta hypothesis, settled by MEASUREMENT ----------------
+async def test_the_coverage_stage_summary_is_no_longer_empty(monkeypatch):
+    """21-CONTEXT's `<specifics>` hypothesis — MEASURED, AND REFUTED.
+
+    THE HYPOTHESIS: "the silent stages' summary lines are probably rendering
+    nearly empty because `state["items"]` is 0 for a stage that never reported
+    detail rows — worth confirming, because if so, D-04's per-item rows fix the
+    summary line for free."
+
+    THE MEASUREMENT SAYS ITS FIRST HALF IS RIGHT AND ITS CONCLUSION IS WRONG.
+    `coverage` is indeed the only stage whose summary reports `actions: 0`. But
+    the summary's meta is built by `_stage_event_summary_meta` from
+    `state["items"]`, and `state["items"]` is set ONLY by `_stage_log_items(detail)`
+    — the `detail` argument of `set_stage`. Run EVENTS never touch that state at
+    all. So the per-item rows this plan adds do NOT fix the summary line, for
+    free or otherwise: the two surfaces are driven by different inputs, and the
+    ONE thing that would change this number is giving the coverage `set_stage` a
+    `detail`, which is a change to the stage-detail contract and not this plan's.
+
+    THIS TEST THEREFORE ASSERTS THE ACTUAL BEHAVIOUR, NOT THE HYPOTHESIS. Writing
+    it the other way round would have meant changing production code until a
+    guess came true.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "coverage" in _stage_sequence(statements), "vacuity guard"
+    summaries = persisted.of("coverage", "summary")
+    assert summaries, "the coverage stage emitted no summary line at all"
+
+    meta = summaries[-1].get("meta") or {}
+    # THE REFUTATION, PINNED. `actions` is still 0 and there is still no `items`
+    # key, even though the stage now emits body rows — because the summary reads
+    # the `set_stage` detail, which this plan deliberately did not change.
+    assert meta.get("actions") == 0, (
+        "the coverage summary's `actions` is no longer 0. If a `detail` was added "
+        "to the coverage `set_stage`, that is a real improvement — update this "
+        f"test and record that the hypothesis now holds. meta={meta!r}"
+    )
+    assert "items" not in meta, (
+        f"the coverage summary grew an `items` key: {meta!r}"
+    )
+    # AND THE COUNTERFACTUAL THAT MAKES THE REFUTATION MEAN SOMETHING: the body
+    # rows really are there. Without this, `actions == 0` would be consistent with
+    # "21-06 emitted nothing", which is the opposite of what happened.
+    assert _body_rows(persisted, "coverage"), (
+        "the coverage stage has no body rows — this test would then be measuring "
+        "the defect rather than the refutation"
+    )
+
+
+# --- (c) a re-entry, and a blocked re-entry, each say so --------------------
+async def test_a_coverage_reentry_and_a_blocked_reentry_each_say_so(monkeypatch):
+    """The two coverage rows that only exist on a DEGRADED run.
+
+    ⚠ AN HONEST SPLIT, STATED RATHER THAN HIDDEN. The end-to-end half of this
+    section is the dispatch and verdict rows, proved against the real pipeline in
+    the tests above. THIS test is UNIT-LEVEL for both re-entry rows, because the
+    stubbed harness's coverage gate PASSES: every selected claim comes back with a
+    verdict, so `coverage["pass"]` is True and the `while` loop never executes.
+    Driving a re-entry end to end would need a scripted skeptic that returns no
+    verdict for a high-stakes claim, and driving a BLOCKED one would additionally
+    need the skeptic circuit breaker open — which `test_coverage_reentry.py`
+    already does by calling `_coverage_reentry_pass` directly rather than through
+    a pipeline run.
+
+    What is NOT faked: the emitter. These rows go through the real `emit_safe`,
+    the real thunk, the real vocabulary check, the real PII scrub and the real
+    clamp, and are read at `run_events._writer`. Only the pipeline BRANCH that
+    calls them is stood in for.
+    """
+    persisted = _install_writer(monkeypatch)
+    reason = (
+        "VERIFICATION DEGRADED — the last-chance re-check of 4 claim(s) was not "
+        "attempted because the fact-checking provider's circuit is open; their "
+        "supporting passages ship unexamined."
+    )
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    try:
+        stage_events.emit_coverage_reentry(
+            run_id, attempt=1, max_attempts=1, uncovered=4
+        )
+        stage_events.emit_coverage_blocked(run_id, reason=reason)
+    finally:
+        await run_events.close_run(run_id)
+
+    # A RE-ENTRY IS A ROUTING DECISION THAT SPENDS MONEY -> `plan`.
+    plans = persisted.of("coverage", "plan")
+    assert len(plans) == 1, (
+        f"expected exactly one re-entry row on coverage, got "
+        f"{[row['text'] for row in plans]}"
+    )
+    # D-13 keeps money signals, and the operator's 2026-08-10 amendment settles
+    # the tie in money's favour. Assert the row actually carries that signal —
+    # a re-entry row that did not mention the spend would satisfy a kind check
+    # and still lose the only thing that makes it worth a feed line.
+    assert "paid" in plans[0]["text"], (
+        f"the re-entry row does not say it costs money: {plans[0]['text']!r}"
+    )
+    assert plans[0]["meta"].get("attempt") == 1
+    assert plans[0]["meta"].get("max") == 1
+
+    # A BLOCKED RE-ENTRY IS WORK THAT SHOULD HAVE HAPPENED AND DID NOT -> fail.
+    fails = persisted.of("coverage", "agent_fail")
+    assert len(fails) == 1, (
+        f"expected exactly one blocked row on coverage, got "
+        f"{[row['text'] for row in fails]}"
+    )
+    # VERBATIM, not paraphrased: `pipeline.py` hands this same string to the run's
+    # ONE degradation accumulator, so the feed and the degradation notice must not
+    # become two accounts of one loss.
+    assert fails[0]["text"] == reason, (
+        "the blocked row did not carry the breaker's reason verbatim:\n"
+        f"  emitted: {fails[0]['text']!r}\n  expected: {reason!r}"
+    )
+
+
+# --- (d) a resumed run still reports its final synthesis --------------------
+async def test_a_resumed_run_still_reports_final_synthesis(monkeypatch):
+    """THE ONE SYNTHESIZE ROW A RESUMED RUN GETS.
+
+    `_write_final_report` is module-level and is ALSO the resume path's entry
+    point: `run()` calls it directly from the synthesis cache. On that path the
+    `_run_staged` closure never executes, so `emit_synthesize_dispatch` and
+    `emit_synthesize_scrubbed` never fire. Without the row this test pins, a
+    resumed run renders "Final synthesis" as a heading with nothing under it — on
+    the one path where an operator is most likely to be watching, because
+    something already went wrong once.
+
+    Driven the way the resume path drives it: the real production function, a
+    cached-shaped bundle, and a duck-typed synthesis fake. No DB, no key, no
+    network — `set_stage` and `_load_citation_context` fail and swallow exactly as
+    they do in `test_report_sections.py`, which is what keeps the real path under
+    test.
+    """
+    from nestor_pulse_sdk.pipeline.tribunal.pipeline import _write_final_report
+    from nestor_pulse_sdk.tests.test_report_sections import (
+        RecordingAudited,
+        _patch_gaps,
+        make_bundle,
+    )
+
+    persisted = _install_writer(monkeypatch)
+    _patch_gaps(monkeypatch, {})
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    try:
+        await _write_final_report(
+            bundle=make_bundle(),
+            report_spec=None,
+            audited=RecordingAudited(),
+            run_id=run_id,
+            tenant_id=uuid.uuid4(),
+            resumed=True,
+        )
+    finally:
+        await run_events.close_run(run_id)
+
+    body = _body_rows(persisted, "synthesize")
+    assert body, (
+        "a RESUMED run reported no synthesize body row at all — 'Final synthesis' "
+        "renders as a heading with nothing under it on the resume path"
+    )
+    texts = [row["text"] for row in body]
+    assert any("Resuming from cached research" in text for text in texts), (
+        f"the resumed run's synthesis row does not say it resumed: {texts!r}"
+    )
+
+    # THE COUNTERFACTUAL: the same call WITHOUT `resumed` still emits a row, and a
+    # DIFFERENT one. Without this, a helper that ignored the flag entirely — or
+    # one that only emitted when resumed — would pass the assertions above.
+    fresh = _install_writer(monkeypatch)
+    run_id2 = uuid.uuid4()
+    await run_events.open_run(run_id2, uuid.uuid4())
+    try:
+        await _write_final_report(
+            bundle=make_bundle(),
+            report_spec=None,
+            audited=RecordingAudited(),
+            run_id=run_id2,
+            tenant_id=uuid.uuid4(),
+        )
+    finally:
+        await run_events.close_run(run_id2)
+
+    fresh_texts = [row["text"] for row in _body_rows(fresh, "synthesize")]
+    assert fresh_texts, "the default (non-resumed) call emitted no synthesize row"
+    assert not any("Resuming from cached research" in t for t in fresh_texts), (
+        f"the non-resumed call claimed to be resuming: {fresh_texts!r}"
+    )
+
+
+# --- (e) contested and resolved contradictions read differently -------------
+async def test_conflict_rows_distinguish_contested_from_resolved(monkeypatch):
+    """Two OPPOSITE outcomes for the delivered report, told apart.
+
+    A RESOLVED contradiction means the report LOST a claim — the same consequence
+    as a fact-check drop, stamped `lost_conflict` rather than `failed_factcheck`.
+    A CONTESTED one means the report KEEPS BOTH SIDES and presents them as an open
+    disagreement. An operator reading "conflict found" with no more detail cannot
+    tell which happened, and they are opposite outcomes.
+
+    END TO END: the one-hook subclass makes the detector return one of each, in
+    the indexed form production actually sent, so this measures the real
+    classification path rather than the helper in isolation.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ConflictingDetectorAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "conflict" in _stage_sequence(statements), "vacuity guard"
+    assert audited.routes.get("conflict_detector"), (
+        "the conflict detector was never called — the subclass did not take effect"
+    )
+
+    findings = persisted.texts("conflict", "thinking")
+    # The closing row is also a `thinking` row; the findings are everything before
+    # it. Asserted rather than assumed, so a missing finding cannot hide.
+    assert len(findings) >= 3, (
+        f"expected two finding rows plus a closing row on conflict, got {findings!r}"
+    )
+    contested = [t for t in findings if "UNRESOLVED" in t]
+    resolved = [t for t in findings if "weaker side is dropped" in t]
+    assert len(contested) == 1, f"expected ONE contested row: {findings!r}"
+    assert len(resolved) == 1, f"expected ONE resolved row: {findings!r}"
+    assert contested[0] != resolved[0]
+    assert contested[0] not in resolved[0] and resolved[0] not in contested[0], (
+        "one row is a substring of the other, so they are not distinguishable at "
+        f"a glance:\n  {contested[0]!r}\n  {resolved[0]!r}"
+    )
+
+
+# --- (f) no emit in the last four stages can fail the run -------------------
+async def test_no_emit_in_the_last_four_stages_can_fail_the_run(monkeypatch):
+    """D-06 at the thirteen new sites: a degraded shape costs the ROW, never the run.
+
+    The shapes are the ones a degrading run really produces: a claim dict with no
+    text key at all, a conflict dict missing every field the row reads, and a
+    claims list whose members are not mappings.
+    """
+    # THE NEGATIVE CONTROLS, FIRST. Performed the obvious way — the way a call
+    # site composing its own f-string would perform it — each shape genuinely
+    # raises. Without these, a green run below could mean "the inputs were
+    # harmless after all" rather than "the construction is inside the emitter's
+    # try".
+    not_a_mapping: Any = ["claim one", "claim two"]
+    with pytest.raises(AttributeError):
+        not_a_mapping.get("text")
+    with pytest.raises(TypeError):
+        # what `_coverage_selected` would do at the call site over a bad member
+        len([c["gate"]["strict"] for c in not_a_mapping])
+
+    degraded_claim: dict[str, Any] = {"facet": "networks"}
+    degraded_conflict: dict[str, Any] = {}
+
+    persisted = _install_writer(monkeypatch)
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    adj_budget = stage_events.RowBudget(run_id, "adjudicate", limit=25)
+    con_budget = stage_events.RowBudget(run_id, "conflict", limit=25)
+    try:
+        # (i) NOTHING RAISES. Every one of the thirteen, against degraded input.
+        stage_events.emit_adjudicate_dispatch(run_id, claims=0, rule=None)
+        stage_events.emit_adjudicate_drop(run_id, adj_budget, claim=degraded_claim)
+        stage_events.emit_adjudicate_drop(run_id, adj_budget, claim=not_a_mapping)
+        stage_events.emit_adjudicate_done(run_id, text="2 survived", survivors=2)
+        stage_events.emit_coverage_dispatch(
+            run_id, claims=not_a_mapping, adjudications=None
+        )
+        stage_events.emit_coverage_reentry(
+            run_id, attempt=1, max_attempts=1, uncovered=0
+        )
+        stage_events.emit_coverage_blocked(run_id, reason=None)
+        stage_events.emit_coverage_done(run_id, passed=True, uncovered=0, reentries=0)
+        stage_events.emit_conflict_dispatch(run_id, survivors=0, reconciliations=0)
+        stage_events.emit_conflict_finding(
+            run_id, con_budget, conflict=degraded_conflict
+        )
+        stage_events.emit_conflict_finding(run_id, con_budget, conflict=not_a_mapping)
+        stage_events.emit_conflict_done(run_id, losers=0, contested=0, survivors=0)
+        stage_events.emit_synthesize_dispatch(run_id, survivors=0)
+        stage_events.emit_synthesize_scrubbed(run_id, removed=0, reports=0)
+        stage_events.emit_synthesize_writing(
+            run_id, ledger=0, numbered=0, resumed=False
+        )
+        adj_budget.flush("dropped claim")
+        con_budget.flush("contradiction")
+    finally:
+        await run_events.close_run(run_id)
+
+    # (ii) AND THE GOOD ROWS SURVIVE. 15.4-05's lesson: a swallowed build is a
+    # LOST ROW, so "nothing raised" alone would have passed against a version
+    # that dropped every line. The counts are the load-bearing part.
+    for stage in _21_06_STAGES:
+        assert persisted.of(stage, "dispatch") or stage == "coverage", (
+            f"{stage} lost its header to a degraded neighbour"
+        )
+    # A claim with no text still earns a row, saying so honestly rather than
+    # asserting a claim the run never established (T-15.3-23).
+    adj_rows = persisted.texts("adjudicate", "thinking")
+    assert any("claim text unavailable" in t for t in adj_rows), (
+        f"the degraded drop row invented content or vanished: {adj_rows!r}"
+    )
+    # An empty conflict dict is CONTESTED by production's own rule (`loser` is
+    # None), and says it has no explanation rather than printing a bare colon.
+    con_rows = persisted.texts("conflict", "thinking")
+    assert any("no explanation returned" in t for t in con_rows), (
+        f"the degraded conflict row invented content or vanished: {con_rows!r}"
+    )
+    # A blank reason emitted NOTHING rather than a blank row — the rule
+    # `_sentence_or_none` exists to hold, and the half 21-03 shipped broken.
+    assert persisted.of("coverage", "agent_fail") == [], (
+        "a blank breaker reason produced a blank feed row, which "
+        "`RUN_EVENT_KINDS`' own comment calls worse than an absent one"
+    )
+    # NO FALSE ELISION: nothing was refused, so nothing may be announced as
+    # refused.
+    assert all(
+        _ELISION_MARKER not in row["text"] for row in persisted.rows
+    ), "a stage inside its budget announced an elision it never made"
