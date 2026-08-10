@@ -35,15 +35,34 @@ from nestor_pulse_sdk.runs.stages import ENGINE_STAGES, stages_for
 _SET_STAGE_RE = re.compile(r'set_stage\([^)]*?"([a-z_]+)"', re.DOTALL)
 
 #: Keys `set_stage` may write that are deliberately NOT ordered schema entries.
+#:
+#: 21-07 (OPERATOR RULING, 2026-08-10 — `option-read-path`): membership here now
+#: exempts a key from ONE requirement, not two. It is still exempt from being a
+#: declared CHECKLIST STEP, for the phantom-row reason recorded below. It is NOT
+#: exempt from having a human LABEL — `test_the_non_schema_allowlist_cannot_grow_
+#: into_a_raw_key_leak` iterates this very set and requires each member to resolve
+#: through `_stage_event_label` to something other than itself.
+#:
+#: That is the hole this allowlist used to be. An allowlisted key skipped the
+#: declaration check, nothing checked its label, and `_stage_event_label`'s
+#: raw-key fallback then printed the bare key on the run page. Measured on
+#: 2026-08-10: every completed run ended on a divider reading literally `done`.
+#: Adding a key here without a label in `stages.NON_SCHEMA_STAGE_LABELS` now
+#: turns the build red in the same edit.
 _NON_SCHEMA_MARKERS = {
     # The terminal position, documented as implicit in stages.py: the UI infers it
     # from `current_stage == 'done'` rather than rendering it as a checklist row.
+    # 21-07: labelled "Run complete" on the read path. It is written at the end of
+    # EVERY run, so its raw key was never a latent defect — it shipped on all of them.
     "done",
     # An interactive PAUSE, not a pipeline stage (pipeline.py:1172): the run parks as
     # 'needs_report_spec' until the user supplies a report shape. Declaring it would
     # put a phantom row in the ordered checklist of every NON-interactive run, so it
     # stays out of the schema. PRE-EXISTING and outside plan 15.1-13's scope — listed
     # here explicitly so the exception is reviewable, not silently absorbed.
+    # 21-07: that reasoning was REVIEWED and UPHELD by the operator rather than
+    # reversed; it is labelled "Report shaping" on the read path instead. The
+    # exception is now reviewable in BOTH dimensions — declaration and label.
     "report_spec",
 }
 
@@ -201,6 +220,141 @@ def test_every_set_stage_key_in_the_pipeline_is_declared():
     # Positive control: the keys this test is really about are in the extracted set,
     # so the loop above is proving coverage rather than iterating over nothing.
     assert {"gate", "verify", "synthesize"} <= found
+
+
+# ---------------------------------------------------------------------------
+# 4b. THE STRENGTHENED GATE (21-07) — no stage key can reach the OPERATOR raw
+# ---------------------------------------------------------------------------
+# DECLARATION and LABEL RESOLUTION are two different properties, and section 4
+# only checks the first. `_NON_SCHEMA_MARKERS` exempts a key from declaration,
+# nothing checked that it had a label, and `_stage_event_label`'s raw-key
+# fallback turned that gap into a snake_case string on the run page. Section 4
+# was right and it was not enough.
+# ---------------------------------------------------------------------------
+def _stage_event_label(key: str) -> str:
+    """The pipeline's own read-path resolver, imported the same lazy way the
+    source reader above imports the module (the build context ships only
+    `tribunal/`, and this file must not pay a module-level pipeline import)."""
+    from nestor_pulse_sdk.pipeline.tribunal.pipeline import (
+        _stage_event_label as resolver,
+    )
+
+    return resolver(key)
+
+
+def _every_key_that_can_reach_the_divider() -> set[str]:
+    """The UNION of every source that can put a key on the divider.
+
+    WHY A UNION AND NOT THE SOURCE SCAN ALONE. Section 4 extracts `set_stage`
+    keys from `pipeline.py`, which is the right reach for *its* question but not
+    for this one: `workshop` is written by `StageFeed` (`runs/stage_feed.py`),
+    NOT by a `set_stage` call in `pipeline.py`, and `pipeline.py:1752-1763`
+    records that as deliberate (D-F, 15.2-24). A scan of one file therefore
+    cannot see it — the same blind spot that let `gate` and `report_spec`
+    through. Taking the union with the declared schema and the marker allowlist
+    closes it: a key is covered if ANY source knows about it.
+    """
+    return (
+        set(_SET_STAGE_RE.findall(_pipeline_source()))
+        | set(_keys("tribunal"))
+        | set(_NON_SCHEMA_MARKERS)
+    )
+
+
+def test_every_pipeline_stage_key_resolves_to_a_human_label():
+    """No key any source knows about may render as itself on the operator's screen.
+
+    WHAT BREAKS IF THIS FIRES: the run page's phase divider shows a raw
+    snake_case identifier where a human label belongs — `RunFeed.tsx` renders
+    `event.text` verbatim and looks up no stage vocabulary of its own. That is
+    the WR-03 defect class in its display form, and it is SC6 of Phase 21.
+
+    THIS IS NOT REDUNDANT WITH SECTION 4. That test asks "is the key DECLARED";
+    this one asks "does the key RESOLVE TO A LABEL". `_NON_SCHEMA_MARKERS`
+    exempts a key from the first while saying nothing about the second, so
+    before 21-07 an allowlisted key sailed through section 4 and still printed
+    raw. Measured 2026-08-10: every completed run ended on a divider whose text
+    was literally `done`.
+    """
+    extracted = set(_SET_STAGE_RE.findall(_pipeline_source()))
+
+    # Vacuity guard, same reasoning as section 4: if the extraction breaks, this
+    # must FAIL rather than iterate over an empty set and report success.
+    assert len(extracted) >= 8, (
+        f"only {len(extracted)} stage key(s) extracted from pipeline.py "
+        f"({sorted(extracted)}) — the extraction broke; this test would "
+        "otherwise pass vacuously"
+    )
+
+    covered = _every_key_that_can_reach_the_divider()
+    raw = sorted(key for key in covered if _stage_event_label(key) == key)
+    assert not raw, (
+        f"these stage keys resolve to THEMSELVES, so the run page's phase "
+        f"divider renders the raw snake_case key to the operator: {raw}. Give "
+        f"each one a label — an ordered checklist step goes in "
+        f"ENGINE_STAGES['tribunal'], a written-but-not-a-step marker goes in "
+        f"stages.NON_SCHEMA_STAGE_LABELS. This is the WR-03 defect class: the "
+        f"UI shows a bare key with no label."
+    )
+
+    # Positive controls: the two keys this test is really about are in the set
+    # under assertion, so the loop above proves coverage rather than iterating
+    # over nothing. `report_spec` is the allowlisted key the plan was written
+    # around; `done` is the one that actually shipped on every run.
+    assert "report_spec" in covered
+    assert "done" in covered
+    # And `workshop` is the StageFeed-written key the union exists to reach.
+    assert "workshop" in covered
+
+
+def test_the_non_schema_allowlist_cannot_grow_into_a_raw_key_leak():
+    """Every exemption from declaration must still carry a label.
+
+    This is what makes ADDING to `_NON_SCHEMA_MARKERS` safe. A future engineer
+    exempting a new key from the ordered schema is forced to give it a label in
+    the SAME edit, so the allowlist can never again become the route by which a
+    raw key reaches a reader.
+
+    The set is ITERATED, not copied: a hardcoded duplicate of its contents would
+    go stale the moment somebody appended to it, which is precisely the failure
+    mode this test exists to prevent.
+    """
+    assert _NON_SCHEMA_MARKERS, (
+        "the marker allowlist is empty — this test would pass vacuously"
+    )
+
+    for key in sorted(_NON_SCHEMA_MARKERS):
+        label = _stage_event_label(key)
+        assert label != key, (
+            f"{key!r} is exempt from being declared in ENGINE_STAGES, which is "
+            f"deliberate — but it is still WRITTEN to run.current_stage and the "
+            f"divider renders whatever the resolver returns, so it also needs a "
+            f"label. Add {key!r} to stages.NON_SCHEMA_STAGE_LABELS."
+        )
+        assert label.strip(), f"{key!r} resolved to blank — worse than a raw key"
+
+
+def test_the_raw_key_fallback_still_exists_for_an_unknown_key():
+    """NEGATIVE CONTROL: prove the two tests above assert something breakable.
+
+    If `_stage_event_label` returned a label for everything — say by title-casing
+    its input — both tests above would pass by construction and prove nothing.
+    They are only meaningful because a key neither source knows still comes back
+    AS ITSELF.
+
+    The fallback is also deliberately correct behaviour, not a leftover: a
+    rolling deploy means a newer engine build can write a key this process has
+    never heard of, and a bare key beats a blank divider. `_stage_event_label`'s
+    docstring says so; this pins it.
+    """
+    invented = "a_stage_from_a_newer_build"
+    assert invented not in _keys("tribunal")
+    assert invented not in _NON_SCHEMA_MARKERS
+
+    assert _stage_event_label(invented) == invented, (
+        "the raw-key fallback is gone — an unknown key must still render "
+        "something, and the two label tests above become vacuous without it"
+    )
 
 
 # ---------------------------------------------------------------------------

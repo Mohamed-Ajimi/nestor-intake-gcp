@@ -86,6 +86,36 @@ ENGINE_STAGES: dict[str, list[dict[str, str]]] = {
 ENGINE_STAGES["sdk"] = ENGINE_STAGES["tribunal"]
 
 
+#: Human labels for the stage keys `set_stage` WRITES but the ordered schema
+#: deliberately does NOT declare.
+#:
+#: These keys are written to `run.current_stage` but are NOT ordered checklist
+#: steps, and that exclusion is deliberate in both cases. `done` is the terminal
+#: position, documented as implicit at the top of this module — the UI infers
+#: completion from `current_stage == 'done'` rather than rendering a row for it.
+#: `report_spec` is an interactive PAUSE, not a stage: the run parks as
+#: `needs_report_spec` until the user supplies a report shape, so declaring it
+#: would put a phantom row in the ordered checklist of every NON-interactive run
+#: (the 15.1-13 reasoning, preserved verbatim in intent).
+#:
+#: THEY STILL NEED A LABEL. `RunMetrics.stages` is not the only reader of a stage
+#: key: the run page's phase divider renders whatever `_stage_event_label`
+#: returns, and that resolver falls back to the RAW KEY when it finds no entry.
+#: A raw snake_case key on an operator's screen is the WR-03 defect wearing a
+#: different hat — it is what made the UI show a bare `gate` in 15.1. So the two
+#: concerns are separated: the ordered schema above decides what is a CHECKLIST
+#: STEP, this map decides what is DISPLAYABLE, and every written key must appear
+#: in exactly one of them.
+#:
+#: MEASURED 2026-08-10 (plan 21-07): before this map existed, a complete and
+#: entirely NON-interactive run ended on a divider whose text was literally
+#: `done` — so this was never only a latent interactive-path defect.
+NON_SCHEMA_STAGE_LABELS: dict[str, str] = {
+    "done": "Run complete",
+    "report_spec": "Report shaping",
+}
+
+
 def stages_for(engine: str) -> list[dict[str, str]]:
     """Ordered stage schema for an engine ([] if unknown)."""
     return ENGINE_STAGES.get(engine, [])
