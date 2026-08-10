@@ -7,8 +7,10 @@ import { getIntake } from "@/lib/api/intakes";
 import { locateResearchRun, RESEARCH_TERMINAL, type RunEvent } from "@/lib/api/research";
 import { fmtCost, fmtDuration, useElapsed } from "@/lib/research/runClock";
 import { useRunEvents } from "@/lib/research/useRunEvents";
+import { canHaveVerificationReport } from "@/lib/research/verificationGate";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
+import { VerificationReport } from "@/components/intake/VerificationReport";
 import { RunFeed } from "@/components/research/RunFeed";
 import { RunStatusCard } from "@/components/research/RunStatusCard";
 import { RunActions } from "@/components/research/RunActions";
@@ -30,7 +32,10 @@ import { RunActions } from "@/components/research/RunActions";
 // SECURITY (T-15.3-70 / D-08). Superadmin-only twice over: by PLACEMENT under `admin.pulse`,
 // which inherits the admin guard, and by API — every verb this page calls is superadmin-gated
 // and space-scoped server-side, returning an existence-hiding 404 to anyone else. No
-// client-facing route imports anything from this file.
+// client-facing route imports anything from this file. The verification verb added in 21-02 is
+// no exception — it is superadmin-gated and space-scoped server-side and existence-hides as a
+// 404 exactly like every other verb here, so mounting the report changes this page's
+// authorization surface not at all: it adds no route, no parameter and no new caller.
 //
 // ACCESSIBILITY. The live region is scoped to the STATUS AND PHASE block only. The feed body
 // deliberately carries none: a region announcing every one of a thousand events is worse than
@@ -130,6 +135,12 @@ function ResearchRunPage() {
   // the existence of anything else. No client-facing route may import this panel or reach the
   // verb behind it (D-08).
   const [openAuditId, setOpenAuditId] = useState<string | null>(null);
+
+  // ── The claims-verification report (SC4 / D-10 / D-11). ──────────────────────────────
+  // Declared here with the other hooks, ABOVE the early returns below, so hook order is
+  // unconditional on every render — a `useState` placed after the `locating` return would
+  // change the hook count between the skeleton and the page.
+  const [showVerification, setShowVerification] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollToLatest = () => {
@@ -287,6 +298,53 @@ function ResearchRunPage() {
             elapsed={elapsed}
             actions={<RunActions intakeId={intakeId} run={run} onReload={reloadRun} />}
           />
+
+          {/* ── The claims-verification report (SC4). Three decisions a later editor will
+              otherwise undo, so they are written down here:
+
+              1. IT IS A SIBLING of the card and the feed, following the rule stated directly
+                 above. It is NOT inside `RunStatusCard`, and it must not be moved there: the
+                 moment it lives inside a status branch, some future branch can take it away,
+                 which is exactly how the embedded intake card lost the history.
+              2. THE GATE IS `canHaveVerificationReport`, APPLIED TO THE RUN'S OWN STATUS and
+                 NOT to the card's success branch (D-11). There is exactly ONE call to it in
+                 this file — the guard below — and that is deliberate: a second copy of the
+                 rule is a second thing to forget to update.
+                 A failed or a cancelled run that got past the verify stage has
+                 real verdicts, and those two states are precisely the ones whose evidence the
+                 embedded card discards. Gating on "can a report exist" rather than on "which
+                 card is rendering" is what keeps them.
+              3. IT REUSES `verification.viewAction` / `verification.hideAction` — the two keys
+                 the embedded card's toggle already uses — rather than introducing a key, so
+                 `scripts/i18n-audit.mjs` CHECK B stays green with no locale edit in three files.
+
+              MOUNTED LAZILY, never hidden behind CSS: `VerificationReport` fetches on mount,
+              so rendering it only when open means a run whose report does not exist costs
+              exactly one request, made only when the operator asks for it, and the component's
+              own inline error is the honest answer. `intakeId` is non-null here — the
+              `locateFailed || !intakeId` early return has already run — so it is passed
+              directly rather than through a second guard that would read as though the
+              resolution could still have failed. */}
+          {canHaveVerificationReport(status) && (
+            <div className="mb-3">
+              <button
+                type="button"
+                onClick={() => setShowVerification((v) => !v)}
+                className="inline-flex items-center gap-2 border border-ink/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
+              >
+                {showVerification ? t("verification.hideAction") : t("verification.viewAction")}
+              </button>
+              {showVerification && (
+                <div className="mt-4">
+                  <VerificationReport
+                    intakeId={intakeId}
+                    runId={runId}
+                    onClose={() => setShowVerification(false)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* The backfill hit its page cap. Say so in words and say how many rows are held —
               a partial feed presented as if it were whole is worse than a short one. */}
