@@ -596,7 +596,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 21-06-PLAN.md (W3) — engine: `adjudicate`, `coverage` (the emptiest — a bare marker with no detail at all), `conflict`, `synthesize` including the module-level resume path; the capstone test derives its stage list from the SCHEMA, not a hardcoded thirteen (SC1)
+- [x] 21-06-PLAN.md (W3) — engine: `adjudicate`, `coverage` (the emptiest — a bare marker with no detail at all), `conflict`, `synthesize` including the module-level resume path; the capstone test derives its stage list from the SCHEMA, not a hardcoded thirteen (SC1)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -633,4 +633,4 @@ reports nothing for 8 of 13 stages.
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
-| 21. Research Run Feed Completion | v1.1 | 5/8 | In Progress|  |
+| 21. Research Run Feed Completion | v1.1 | 6/8 | In Progress|  |
