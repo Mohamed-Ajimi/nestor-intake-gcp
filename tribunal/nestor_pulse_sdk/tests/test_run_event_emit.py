@@ -12,8 +12,11 @@ passes it a label instead of a raw key. This file is about the call sites.
 Three behaviours are load-bearing enough to name up front:
 
   1. THE DIVIDER CARRIES THE HUMAN LABEL. `ENGINE_STAGES["tribunal"]` has had a
-     label for all fourteen stages since Phase 15 and no surface has ever shown
-     one — `ResearchRunProgress` renders `Current phase: deep_research`. The
+     label for all 13 of its ordered stages since Phase 15 and no surface has
+     ever shown one — `ResearchRunProgress` renders `Current phase:
+     deep_research`. The two keys that are written but deliberately NOT ordered
+     stages (`done`, `report_spec`) take their labels from
+     `stages.NON_SCHEMA_STAGE_LABELS` instead, added by 21-07. The
      assertions below check for `Deep research` AND check that `deep_research` is
      not what was emitted, because an assertion that only looked for the label
      would pass on a feed that emitted both.
@@ -94,7 +97,12 @@ from nestor_pulse_sdk.pipeline.tribunal import stage_events
 from nestor_pulse_sdk.runs import run_events
 # 21-06: `stages_for` is what the capstone test derives its stage list FROM, so
 # the schema — not an author's memory — decides which stages must have a body.
-from nestor_pulse_sdk.runs.stages import ENGINE_STAGES, stages_for
+from nestor_pulse_sdk.runs.stages import (
+    ENGINE_STAGES,
+    # 21-07: the second label source, for the written-but-undeclared markers.
+    NON_SCHEMA_STAGE_LABELS,
+    stages_for,
+)
 
 # The stubbed end-to-end harness, IMPORTED rather than rebuilt (same reason
 # `test_stage_logging.py` states for its own use of it).
@@ -188,10 +196,19 @@ def _clean_registries():
 
 
 def _label_of(key: str) -> str:
+    """The label a key SHOULD render as — derived, never typed here twice.
+
+    21-07: this mirrors `_stage_event_label`'s two sources in the same order.
+    The ordered schema answers "is this a checklist step"; `NON_SCHEMA_STAGE_LABELS`
+    answers "is this displayable" for the keys that are written but deliberately
+    not declared (`done`, `report_spec`). Before 21-07 this helper knew only the
+    first source, which is exactly why the raw `done` divider looked correct to
+    every assertion built on it.
+    """
     for entry in ENGINE_STAGES["tribunal"]:
         if entry["key"] == key:
             return entry["label"]
-    return key
+    return NON_SCHEMA_STAGE_LABELS.get(key, key)
 
 
 def _runner_ok(calls: dict, name: str, result: Optional[dict] = None):
@@ -258,17 +275,48 @@ def test_a_transition_emits_one_divider_carrying_the_human_label(monkeypatch):
     assert dividers == [_label_of("intake"), _label_of("deep_research")]
 
 
-def test_a_stage_with_no_schema_entry_falls_back_to_its_key(monkeypatch):
-    """`done` is a real terminal key with no ENGINE_STAGES row. A blank divider
-    would be worse than a bare key, so the fallback is asserted rather than
-    assumed."""
+def test_a_written_marker_is_labelled_and_an_unknown_key_still_falls_back(monkeypatch):
+    """Two properties that USED TO BE ONE, and had to be split by 21-07.
+
+    WHAT THIS TEST USED TO SAY. It was called
+    `test_a_stage_with_no_schema_entry_falls_back_to_its_key` and it asserted
+    `["Final synthesis", "done"]` — i.e. it PINNED THE DEFECT. Its reasoning was
+    sound ("a blank divider would be worse than a bare key") but it used `done`
+    as the specimen, and `done` is not a hypothetical unknown key: it is written
+    by `pipeline.py` at the end of EVERY run. So the assertion quietly certified
+    a raw snake_case key reaching the operator's screen on every completed run,
+    which is the WR-03 defect class (SC6, plan 21-07).
+
+    The two properties are now asserted separately, against the right specimens:
+
+      1. A key the engine actually WRITES but the ordered schema deliberately
+         does not declare (`done`, `report_spec`) resolves to a human label out
+         of `NON_SCHEMA_STAGE_LABELS`. Nothing raw reaches the divider.
+      2. The RAW-KEY FALLBACK STILL EXISTS, for a key neither source knows — a
+         rolling deploy makes a newer build's unknown key the normal state of the
+         world, and a bare key beats a blank line. That is asserted with an
+         invented key, which is what the old test meant by "no schema entry".
+    """
     recorder = _install(monkeypatch)
     run_id = uuid.uuid4()
 
     _pipeline_mod._stage_log_transition(run_id, "synthesize")
     _pipeline_mod._stage_log_transition(run_id, "done")
 
-    assert recorder.texts("divider") == ["Final synthesis", "done"]
+    # (1) the terminal marker is LABELLED, and the raw key is nowhere.
+    assert recorder.texts("divider") == ["Final synthesis", "Run complete"]
+    assert "done" not in recorder.texts("divider"), (
+        "the raw terminal key reached the feed — this is the defect 21-07 removed"
+    )
+
+    # (2) the fallback survives, proven on a key neither source declares.
+    other = uuid.uuid4()
+    recorder_2 = _install(monkeypatch)
+    _pipeline_mod._stage_log_transition(other, "a_stage_from_a_newer_build")
+    assert recorder_2.texts("divider") == ["a_stage_from_a_newer_build"], (
+        "an unknown key must still render SOMETHING — a blank divider is worse "
+        "than a bare key, which is why the fallback is deliberately kept"
+    )
 
 
 # ===========================================================================

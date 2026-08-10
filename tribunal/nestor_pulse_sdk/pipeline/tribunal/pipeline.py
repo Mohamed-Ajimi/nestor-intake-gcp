@@ -222,10 +222,15 @@ from nestor_pulse_sdk.runs.stages import (
     set_stage,
     raise_if_cancelled,
     RunCancelled,
-    # 15.3-03: the fourteen `{key, label}` pairs. The feed's divider carries the
-    # LABEL ("Deep research"), never the key ("deep_research") — the labels have
-    # existed since Phase 15 and no surface has ever rendered one.
+    # 15.3-03: the 13 ordered `{key, label}` pairs. The feed's divider carries
+    # the LABEL ("Deep research"), never the key ("deep_research") — the labels
+    # have existed since Phase 15 and no surface has ever rendered one.
     stages_for,
+    # 21-07: labels for the keys `set_stage` writes that are deliberately NOT
+    # ordered schema entries (`done`, `report_spec`). Without this second source
+    # `_stage_event_label` fell back to the raw key, and an ordinary run ended on
+    # a divider reading literally `done`.
+    NON_SCHEMA_STAGE_LABELS,
 )
 from nestor_pulse_sdk.pipeline.tribunal.taxonomy import TAXONOMY
 from nestor_pulse_sdk.citations.extractor import (
@@ -485,18 +490,39 @@ def _stage_log_exit(run_id: Any, state: dict[str, Any]) -> None:
 
 
 def _stage_event_label(stage_key: Any) -> str:
-    """The stage's HUMAN LABEL, falling back to the raw key.
+    """The stage's HUMAN LABEL, from TWO sources, falling back to the raw key.
 
-    `ENGINE_STAGES["tribunal"]` has carried a label for all fourteen stages since
-    Phase 15 and no surface has ever rendered one — `ResearchRunProgress` shows
-    `Current phase: deep_research`. The divider is where that ends. A key with no
-    schema entry (`done`, or a stage added ahead of its declaration) falls back to
-    the key rather than to an empty line.
+    `ENGINE_STAGES["tribunal"]` has carried a label for all 13 of its ordered
+    stages since Phase 15 and no surface had ever rendered one —
+    `ResearchRunProgress` shows `Current phase: deep_research`. The divider is
+    where that ends.
+
+    WHY TWO SOURCES (plan 21-07, SC6). Not every key `set_stage` writes is an
+    ordered checklist step. `done` is the terminal position and `report_spec` is
+    an interactive pause; both are deliberately absent from the schema so they do
+    not put a phantom row in every run's checklist. But both are still WRITTEN,
+    and this function is the one read path between a stage key and the divider
+    text `RunFeed.tsx` renders verbatim — so a key with no label here reached the
+    operator as raw snake_case. That is the WR-03 defect class. `stages.py`'s
+    `NON_SCHEMA_STAGE_LABELS` is the second source, and it exists so that
+    "is a checklist step" and "is displayable" can be answered independently.
+
+    MEASURED before the fix: an ordinary, entirely non-interactive run ended on a
+    divider reading literally `done`.
+
+    THE RAW-KEY FALLBACK IS DELIBERATELY KEPT. A rolling deploy means a newer
+    engine build can write a key this process has never heard of; showing the key
+    is worse than a label and far better than an empty line.
+    `test_stage_schema.py` asserts the fallback still exists, and separately
+    asserts that no key either source knows can reach it.
     """
     key = str(stage_key)
     for entry in stages_for("tribunal"):
         if entry.get("key") == key:
             return str(entry.get("label") or key)
+    marker = NON_SCHEMA_STAGE_LABELS.get(key)
+    if marker:
+        return str(marker)
     return key
 
 
