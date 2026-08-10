@@ -2594,6 +2594,14 @@ class TribunalPipeline:
             angles_failed=max(0, len(provider_results) - int(n_ok_angles)),
             streams=int(n_streams),
         )
+        # 21-05: the distill stage's opening header, and the row budget that
+        # bounds its per-stream rows. ONE budget for the stage, created here and
+        # flushed at its close, so any elision lands inside `distill` rather than
+        # after the next stage's divider.
+        stage_events.emit_distill_dispatch(
+            run_id, streams=n_streams, reports=n_ok_angles,
+        )
+        _distill_budget = stage_events.RowBudget(run_id, "distill")
         await set_stage(
             run_id, tenant_id, "distill",
             detail={"items": [{
@@ -2658,30 +2666,49 @@ class TribunalPipeline:
         _n_from_lists = sum(r.facts_from_list for r in facts_result.records)
         _n_from_fallback = sum(r.claims_from_fallback for r in facts_result.records)
         _fell_back = [r.provider for r in _fallen_back_records]
+
+        # 21-05: ONE ROW PER RESEARCH STREAM, naming what reading it yielded and,
+        # for a stream that stated no fact list, 15.2-04's own reason verbatim.
+        # PLACED AFTER the note reconciliation above so these rows describe the
+        # same data the closing sentence does. The raw record is handed over and
+        # every field is read inside the emitter, per D-06.
+        for _record in facts_result.records:
+            stage_events.emit_distill_record(
+                run_id, _distill_budget, record=_record,
+            )
+
+        # 21-05: BOUND ONCE, then handed to BOTH surfaces. The feed row and the
+        # stage detail must be the same sentence — a second composer here is how
+        # the run page and the intake card start reporting different totals for
+        # the same run.
+        _distill_row = (
+            f"{len(claims)} claims collected · {_n_from_lists} stated by the "
+            f"streams themselves · {_n_from_fallback} extracted from prose by "
+            f"the fallback distiller"
+            + (
+                " · no stream had to fall back"
+                if not _fell_back
+                else (
+                    " · these streams returned no usable fact list and were "
+                    f"distilled instead: {', '.join(_fell_back)}"
+                )
+            )
+            + (
+                f" · {len(research_gaps)} thing(s) a stream said it could not "
+                "establish"
+                if research_gaps else ""
+            )
+        )
+        stage_events.emit_distill_done(
+            run_id, text=_distill_row, claims=len(claims),
+        )
         await set_stage(
             run_id, tenant_id, "distill",
-            detail={"items": [{
-                "name": (
-                    f"{len(claims)} claims collected · {_n_from_lists} stated by the "
-                    f"streams themselves · {_n_from_fallback} extracted from prose by "
-                    f"the fallback distiller"
-                    + (
-                        " · no stream had to fall back"
-                        if not _fell_back
-                        else (
-                            " · these streams returned no usable fact list and were "
-                            f"distilled instead: {', '.join(_fell_back)}"
-                        )
-                    )
-                    + (
-                        f" · {len(research_gaps)} thing(s) a stream said it could not "
-                        "establish"
-                        if research_gaps else ""
-                    )
-                ),
-                "status": "done",
-            }]},
+            detail={"items": [{"name": _distill_row, "status": "done"}]},
         )
+        # 21-05: the stage's row budget is spent — state any elision as a row
+        # HERE, so it lands inside `distill` and before the next stage's divider.
+        _distill_budget.flush("research stream")
 
         if not claims:
             log.warning("tribunal_pipeline: no claims distilled — returning empty synthesis")
@@ -2753,6 +2780,11 @@ class TribunalPipeline:
         #  * The clusterer itself. `group_claims` is called, not modified, not
         #    wrapped and not duplicated (B-04) — there is one clusterer.
         await raise_if_cancelled(run_id, tenant_id)
+        # 21-05: the merge stage's opening header and its row budget.
+        stage_events.emit_merge_dispatch(
+            run_id, claims=len(claims), streams=n_streams,
+        )
+        _merge_budget = stage_events.RowBudget(run_id, "merge")
         await set_stage(
             run_id, tenant_id, "merge",
             detail={"items": [{
@@ -2871,6 +2903,16 @@ class TribunalPipeline:
             multi = sum(1 for g in groups if len(g["claims"]) > 1)
         n_groups = len(groups)
 
+        # 21-05: ONE ROW PER MULTI-MEMBER CLUSTER — the reconciliations D11's
+        # reordering exists to make possible. BELOW THE `groups` REBIND ON
+        # PURPOSE: the comment above records that this name changes meaning from
+        # the workshop's QUESTION groups to CLAIM groups at the `group_claims`
+        # call, and emitting above that point would name the wrong objects.
+        # The loop is unconditional — the helper itself decides that a singleton
+        # earns no row, so the rule has exactly one home.
+        for _g in groups:
+            stage_events.emit_merge_cluster(run_id, _merge_budget, group=_g)
+
         # D9's priority rule is `_group_corroboration` and `_corroboration_order`,
         # which are already in production above. Nothing new counts corroboration.
         n_corroborated = sum(1 for g in groups if _group_corroboration(g) >= 2)
@@ -2902,10 +2944,17 @@ class TribunalPipeline:
                     for f in factlist_fallbacks
                 )
             )
+        # 21-05: the closing line, from the SAME already-bound local the stage
+        # detail and the log line below both use. `_merge_row` carries the
+        # fail-loud NESTOR_TRIBUNAL_GROUP_VERIFY=false sentence and the fallback
+        # attribution; rebuilding it in the emitter would drift from all three.
+        stage_events.emit_merge_done(run_id, text=_merge_row, clusters=n_groups)
         await set_stage(
             run_id, tenant_id, "merge",
             detail={"items": [{"name": _merge_row, "status": "done"}]},
         )
+        # 21-05: any elided cluster row is stated HERE, inside `merge`.
+        _merge_budget.flush("cluster")
         log.info("tribunal_pipeline: merge stage — %s", _merge_row)
 
         # ------------------------------------------------------------------
@@ -2967,6 +3016,11 @@ class TribunalPipeline:
             ],
         })
 
+        # 21-05: the gate stage's opening header and its row budget. Run 4cbb5311
+        # dropped 738 claims here and the page said nothing about any of them,
+        # which is exactly the population `MAX_ROWS_PER_STAGE` bounds.
+        stage_events.emit_gate_dispatch(run_id, claims=len(claims))
+        _gate_budget = stage_events.RowBudget(run_id, "gate")
         await set_stage(
             run_id, tenant_id, "gate",
             detail={"items": [{
@@ -2990,19 +3044,28 @@ class TribunalPipeline:
             not_checkable=int(gate_funnel.get("dropped") or 0),
             gate_errors=int(gate_funnel.get("gate_errors") or 0),
         )
+        # 21-05: ONE ROW PER DROPPED CLAIM, naming the gate's own refusal reason.
+        # `apply_gates` mutated these same dicts by identity, so the decisions are
+        # already on them. The loop is unconditional — the helper decides that a
+        # KEEP earns no row, so the rule has exactly one home.
+        for _c in claims:
+            stage_events.emit_gate_drop(run_id, _gate_budget, claim=_c)
+
+        # 21-05: BOUND ONCE, then handed to BOTH surfaces, as at the distill close.
+        _gate_row = (
+            f"{gate_funnel['selected_verify']} of {gate_funnel['distilled']} claims "
+            f"selected for checking · {gate_funnel['dropped']} not checkable · "
+            f"{gate_funnel['skipped_stable']} stable facts skipped"
+            + (f" · {gate_funnel['gate_errors']} gate errors (sent for checking)"
+               if gate_funnel["gate_errors"] else "")
+        )
+        stage_events.emit_gate_done(run_id, text=_gate_row, funnel=gate_funnel)
         await set_stage(
             run_id, tenant_id, "gate",
-            detail={"items": [{
-                "name": (
-                    f"{gate_funnel['selected_verify']} of {gate_funnel['distilled']} claims "
-                    f"selected for checking · {gate_funnel['dropped']} not checkable · "
-                    f"{gate_funnel['skipped_stable']} stable facts skipped"
-                    + (f" · {gate_funnel['gate_errors']} gate errors (sent for checking)"
-                       if gate_funnel["gate_errors"] else "")
-                ),
-                "status": "done",
-            }]},
+            detail={"items": [{"name": _gate_row, "status": "done"}]},
         )
+        # 21-05: any elided drop row is stated HERE, inside `gate`.
+        _gate_budget.flush("claim")
 
         # R3: the gate decisions now live ON the claim dicts (apply_gates mutates
         # them), so recording the claims records the decisions with them.

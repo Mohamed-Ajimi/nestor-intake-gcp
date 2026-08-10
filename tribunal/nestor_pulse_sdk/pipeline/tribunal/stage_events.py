@@ -1,4 +1,4 @@
-"""Feed emitters for the stages Phase 15.3 left SILENT (Phase 21, plan 21-03).
+"""Feed emitters for the stages Phase 15.3 left SILENT (Phase 21, plans 21-03/05).
 
 `ENGINE_STAGES["tribunal"]` declares thirteen stages and, at the commit this
 module was written against, exactly four of them emitted any run event at all:
@@ -8,6 +8,10 @@ module was written against, exactly four of them emitted any run event at all:
 a phase label and a summary line (both are automatic; see below), so on the run
 page each rendered as a heading with nothing under it, and the collapse toggle
 above it expanded to reveal nothing. This module is where their BODIES live.
+
+WHICH OF THE EIGHT ARE DONE. Plan 21-03 gave `verify` a body; plan 21-05 gave
+`distill`, `merge` and `gate` theirs. `adjudicate`, `coverage`, `conflict` and
+`synthesize` are plan 21-06's, and they extend THIS module by the recipe below.
 
 FOUR RULES THIS MODULE IS BUILT ON. All four are decisions of record; breaking
 any of them is a regression, not a refactor.
@@ -72,6 +76,22 @@ it and do not re-derive the budget.
      inside that stage rather than after the next divider.
   e. Only the meta keys in `run_events._META_FIELDS` may be set. Anything else is
      dropped with a warning. Prove the subset with a recorder, not with a grep.
+  f. A ROW WHOSE TEXT IS PASSED IN MUST REFUSE A BLANK SENTENCE. Use
+     `_sentence_or_none` (added by 21-05, and what `emit_verify_closing` now
+     calls) rather than writing the check a second time. `run_events.emit`
+     ACCEPTS an empty text and queues it, and an empty row renders as a BLANK
+     LINE — which `RUN_EVENT_KINDS`' own comment already calls worse than an
+     absent one, and which is squarely the "rubbish information" half of the
+     operator's 2026-08-10 UAT. 21-03 shipped this defect in its own first cut
+     and its own module docstring had already stated the rule, so stating it is
+     evidently not enough: the check now lives in ONE named function.
+  g. IF A ROW'S `kind` VARIES WITH THE DATA, THE CHOICE IS MADE OUTSIDE THE
+     THUNK — `kind` is an argument to the emitter, not something the thunk
+     returns — so that choice MUST NOT be able to raise. Give it its own
+     never-raising `_<stage>_<row>_kind(...)` helper with an explicit safe
+     default, the way `emit_distill_record` does. Reading a model-shaped
+     attribute inline in the argument list would put rule 3's exact defect back
+     at the call site while looking like a one-liner.
 """
 from __future__ import annotations
 
@@ -129,6 +149,33 @@ def clip_claim(text: Any) -> str:
 def clip_label(text: Any) -> str:
     """One short label (entity / attribute), bounded and never raising."""
     return truncate_task_prompt(text, LABEL_CHARS) or ""
+
+
+def _sentence_or_none(text: Any) -> Optional[str]:
+    """The caller's sentence, or `None` when there is no sentence to show.
+
+    THE BLANK-ROW RULE, IN ONE PLACE (21-05). Several helpers here take a
+    sentence the CALLER already composed — the closing line of `verify`,
+    `distill`, `merge` and `gate` are each bound once and handed to both the feed
+    row and `stage_detail`, so the two surfaces cannot drift. Every one of them
+    therefore faces the same hazard: `run_events.emit` accepts an empty `text`
+    and queues it, and an empty row renders as a BLANK LINE in the feed, which
+    the vocabulary comment in `runs/run_events.py` names as worse than an absent
+    one.
+
+    21-03 wrote that rule into this module's docstring and then shipped
+    `emit_verify_closing` breaking it, which is the argument for a named function
+    rather than a restated convention: a rule that lives in prose is re-derived
+    by every next author, and 21-06 has four more closing lines to add.
+
+    The work is a string test on a value the caller already holds — the same
+    class as `RowBudget.take()` — so it cannot raise, and it is the only work the
+    calling helper performs outside the emitter's own try.
+    """
+    if text is None:
+        return None
+    sentence = str(text).strip()
+    return sentence or None
 
 
 class RowBudget:
@@ -515,18 +562,373 @@ def emit_verify_closing(run_id: Any, *, text: Any) -> None:
     would queue it, and an empty row renders as a BLANK LINE in the feed — which
     the vocabulary comment in `runs/run_events.py` already names as worse than an
     absent one. So a caller whose funnel produced no sentence loses the row rather
-    than printing a gap. The check is a string test on a value the caller already
-    holds, in the same class of work as `RowBudget.take()`: it cannot raise, and
-    it is the only work this function performs outside the emitter's own try.
+    than printing a gap. 21-05 lifted that check into `_sentence_or_none` so the
+    three closing lines it added, and the four 21-06 will add, cannot each
+    re-derive it — the substance and the behaviour here are unchanged.
     """
-    if text is None:
-        return
-    sentence = str(text).strip()
-    if not sentence:
+    sentence = _sentence_or_none(text)
+    if sentence is None:
         return
     run_events.emit_safe(
         run_id,
         stage=_STAGE_VERIFY,
         kind="thinking",
         build=lambda: (sentence, None),
+    )
+
+
+# ===========================================================================
+# `distill` -- Claim distillation.
+#
+# WHAT THE OPERATOR CANNOT SEE WITHOUT THESE ROWS. This stage is where each
+# research stream's own fact list is read, and where a stream that stated no
+# usable list is sent through the fallback distiller instead (D-14). Both are
+# per-STREAM outcomes, and the stage's closing sentence only ever reported their
+# TOTALS -- so a run in which one provider silently contributed nothing looked
+# identical, on the page, to one in which all four contributed evenly.
+#
+# The shape read here is `ProviderFactsRecord`
+# (`pipeline/synthesis/steps.py`): `provider`, `facts_from_list`,
+# `claims_from_fallback`, `reports_fell_back` and `reason`. `reason` carries
+# 15.2-04's own plain-English fallback sentence VERBATIM -- its module writes it
+# to be read by a human -- which is why the row quotes it instead of paraphrasing.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Claim distillation"). Not invented here.
+_STAGE_DISTILL = "distill"
+
+
+def emit_distill_dispatch(run_id: Any, *, streams: Any, reports: Any) -> None:
+    """The distill stage's opening header — how much research is being read.
+
+    ONE HEADER FOR THE STAGE. Same rule, and the same reason, as
+    `emit_verify_dispatch`: the per-stream rows are the children that hang under
+    it.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_DISTILL,
+        kind="dispatch",
+        build=lambda: (
+            f"Reading the fact lists of {streams} research stream(s) across "
+            f"{reports} report(s)",
+            {"items": streams},
+        ),
+    )
+
+
+def _distill_record_kind(record: Any) -> str:
+    """`agent_retry` for a stream that fell back, `agent_done` otherwise.
+
+    NEVER RAISES, and that is the point (recipe step g). `kind` is an argument to
+    the emitter rather than something the thunk returns, so this choice is made
+    OUTSIDE the protected region — reading `record.reports_fell_back` inline in
+    the argument list would put rule 3's exact defect back at the call site.
+    A record too degraded to answer the question is reported as a plain finish
+    row: the row itself still says what the stream yielded, and claiming a
+    fallback that may not have happened would be a worse lie than omitting the
+    distinction.
+
+    WHY `agent_retry` AND NOT `agent_fail`. A fallback is NOT a failure. Per D-14
+    — restated at `pipeline.py`'s own `_fallen_back_records` comment — it degrades
+    ONE STREAM's metadata and not the run, because the provider's research still
+    reached the merge in full. `agent_fail` renders as an ✗ and would tell the
+    operator a stream was lost when nothing was.
+    """
+    try:
+        return "agent_retry" if int(record.reports_fell_back) > 0 else "agent_done"
+    except Exception:  # noqa: BLE001 -- a kind choice may never cost the run
+        return "agent_done"
+
+
+def _distill_record_event(record: Any) -> tuple[str, dict[str, Any]]:
+    """Compose ONE research stream's row. CALLED ONLY FROM INSIDE A build() THUNK.
+
+    Every field is read off the RAW record HERE rather than at the call site, so
+    a record that is not the dataclass this expects costs this ROW and never the
+    run. `reason` is quoted rather than summarised: 15.2-04 writes that sentence
+    for a human to read, and "why did this stream fall back" is precisely the
+    question that otherwise has to be answered out of Cloud Logging.
+    """
+    provider = clip_label(record.provider)
+    stated = int(record.facts_from_list)
+    distilled = int(record.claims_from_fallback)
+    if int(record.reports_fell_back) > 0:
+        reason = clip_claim(record.reason)
+        return (
+            f"{provider or '?'} stated no fact list of its own"
+            + (f" — {reason}" if reason else "")
+            + f" · {distilled} claim(s) distilled from its prose instead",
+            {"items": distilled, "provider": provider},
+        )
+    return (
+        f"{provider or '?'} stated {stated} fact(s) of its own",
+        {"items": stated, "provider": provider},
+    )
+
+
+def emit_distill_record(run_id: Any, budget: RowBudget, *, record: Any) -> None:
+    """One research stream, and what reading it actually yielded.
+
+    BOUNDED LIKE EVERY PER-ITEM SITE even though there are at most four streams.
+    A stage that opts out of the bound because "it can never overflow today" is a
+    stage that grows one later without anyone noticing, and the cost of the guard
+    is one integer comparison.
+    """
+    if not budget.take():
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_DISTILL,
+        kind=_distill_record_kind(record),
+        build=lambda: _distill_record_event(record),
+    )
+
+
+def emit_distill_done(run_id: Any, *, text: Any, claims: Any) -> None:
+    """The distill stage's closing line — THE SAME SENTENCE `stage_detail` gets.
+
+    THE STRING IS PASSED IN, NOT REBUILT, for the reason `emit_verify_closing`
+    gives at length: the caller binds it once and hands both surfaces the same
+    object, so the run page and the intake card cannot report different totals
+    for the same run. A blank sentence emits nothing (`_sentence_or_none`).
+    """
+    sentence = _sentence_or_none(text)
+    if sentence is None:
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_DISTILL,
+        kind="thinking",
+        build=lambda: (sentence, {"items": claims}),
+    )
+
+
+# ===========================================================================
+# `merge` -- Cross-provider merge.
+#
+# THE STAGE D11 EXISTS FOR. Until 15.2 the clusterer ran AFTER the gates, so two
+# providers contradicting each other were two unrelated claims checked in two
+# unrelated skeptic sessions, each of which found its own supporting source and
+# passed -- which is how run 4cbb5311 published Aral's German fuel market share
+# at both 16% and 21%. Clustering first is what puts a contradiction in ONE
+# session that can reconcile it.
+#
+# So the row that matters here is the MULTI-MEMBER CLUSTER. A singleton is the
+# ordinary case and earns nothing; a cluster holding two or more streams'
+# version of the same fact is the whole point of the reordering, and it is the
+# row that lets an operator see a reconciliation about to happen.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Cross-provider merge"). Not invented here.
+_STAGE_MERGE = "merge"
+
+#: Members below which a cluster is the ordinary case and earns no row.
+_MERGE_MIN_MEMBERS = 2
+
+
+def emit_merge_dispatch(run_id: Any, *, claims: Any, streams: Any) -> None:
+    """The merge stage's opening header."""
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_MERGE,
+        kind="dispatch",
+        build=lambda: (
+            f"Merging {claims} fact(s) from {streams} research stream(s) into "
+            f"one clustered list",
+            {"items": claims},
+        ),
+    )
+
+
+def _merge_cluster_members(group: Any) -> int:
+    """How many claims this cluster holds, or 0 for a shape that cannot say.
+
+    NEVER RAISES: this answers the SELECTIVITY question — whether the cluster
+    earns a row at all — which, like the kind choice, is decided outside the
+    thunk. A group too degraded to count is treated as a singleton and skipped;
+    it cannot be described honestly anyway.
+    """
+    try:
+        return len(group.get("claims") or [])
+    except Exception:  # noqa: BLE001 -- a selectivity test may never cost the run
+        return 0
+
+
+def _merge_cluster_event(group: Any) -> tuple[str, dict[str, Any]]:
+    """Compose ONE multi-member cluster's row. CALLED ONLY FROM INSIDE A build()
+    THUNK.
+
+    The entity and attribute are model-shaped strings, read and clipped here.
+    """
+    members = group.get("claims") or []
+    entity = clip_label(group.get("entity"))
+    attribute = clip_label(group.get("attribute"))
+    return (
+        f"{entity or '?'} · {attribute or '?'} — {len(members)} stream(s) stated "
+        f"a version of the same fact; they share one skeptic session",
+        {"items": len(members)},
+    )
+
+
+def emit_merge_cluster(run_id: Any, budget: RowBudget, *, group: Any) -> None:
+    """A cluster holding MORE THAN ONE stream's version of the same fact.
+
+    A SINGLETON EARNS NO ROW, and the rule lives HERE rather than in a condition
+    at the call site. `pipeline.py` loops the groups unconditionally; putting the
+    filter there too would be a second place the rule lives, and the two would
+    eventually disagree about what "multi" means. This is the same reasoning
+    `emit_verify_verdicts` applies to `support`.
+    """
+    if _merge_cluster_members(group) < _MERGE_MIN_MEMBERS:
+        return
+    if not budget.take():
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_MERGE,
+        kind="thinking",
+        build=lambda: _merge_cluster_event(group),
+    )
+
+
+def emit_merge_done(run_id: Any, *, text: Any, clusters: Any) -> None:
+    """The merge stage's closing line — THE SAME SENTENCE `stage_detail` gets.
+
+    `pipeline.py` ALREADY BINDS THIS STRING to a local (`_merge_row`) before it
+    writes the stage detail, so it is passed here rather than rebuilt. That local
+    carries two things a second composer would lose: the fail-loud
+    `NESTOR_TRIBUNAL_GROUP_VERIFY=false` sentence — which is the difference
+    between a contradiction being reconciled and a contradiction shipping — and
+    the per-stream fallback attribution. It is also what the `log.info` line on
+    the next line of `pipeline.py` prints, so the feed, the stage detail and the
+    log are one sentence with one author.
+    """
+    sentence = _sentence_or_none(text)
+    if sentence is None:
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_MERGE,
+        kind="thinking",
+        build=lambda: (sentence, {"items": clusters}),
+    )
+
+
+# ===========================================================================
+# `gate` -- Verification gates.
+#
+# WHERE THE RUN DECIDES WHAT IT WILL NOT CHECK. Two cheap per-claim gates
+# (materiality and error-likelihood) decide which claims are worth fact-checking;
+# a DROP means the claim is never seen by a skeptic. Run 4cbb5311 dropped 738
+# claims here, and the page said nothing about a single one of them.
+#
+# A drop is a ROUTING decision, so these rows are `plan` -- the kind whose own
+# comment in `RUN_EVENT_KINDS` reads "branch -- routing / planning".
+#
+# THE REASON IS NAMED IN THE GATE'S OWN VOCABULARY, not translated into prose.
+# `apply_gates` writes `claim["gate"] = {"decision", "reason", "strict",
+# "gate_error"}` (`gates.py`), where `reason` is one of KEEP, NOT_FALSIFIABLE,
+# NOT_LOAD_BEARING or BOTH. The operator's question is WHICH GATE refused the
+# claim, and those four literals are the answer -- a paraphrase would make the
+# feed row and the funnel's own printed reason breakdown look like two different
+# accountings of the same drop.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Verification gates"). Not invented here.
+_STAGE_GATE = "gate"
+
+#: `gates.py::_DROP`. Read off that module's own literal, not invented.
+_GATE_DROP = "DROP"
+
+
+def emit_gate_dispatch(run_id: Any, *, claims: Any) -> None:
+    """The gate stage's opening header."""
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_GATE,
+        kind="dispatch",
+        build=lambda: (
+            f"Gating {claims} claim(s) — deciding which are worth fact-checking",
+            {"items": claims},
+        ),
+    )
+
+
+def _gate_is_drop(claim: Any) -> bool:
+    """Did the gates DROP this claim? NEVER RAISES.
+
+    The SELECTIVITY question, decided outside the thunk for the same reason the
+    merge stage's member count is. A KEEP is the expected case and is already
+    counted by the funnel, so only a DROP earns a row — and a claim whose gate
+    block is missing or malformed is not an accountable drop and must not be
+    reported as one.
+    """
+    try:
+        return str(claim["gate"]["decision"]).upper() == _GATE_DROP
+    except Exception:  # noqa: BLE001 -- a selectivity test may never cost the run
+        return False
+
+
+def _gate_drop_event(claim: Any) -> tuple[str, dict[str, Any]]:
+    """Compose ONE dropped claim's row. CALLED ONLY FROM INSIDE A build() THUNK.
+
+    Both the reason and the claim text are read off the raw claim HERE. The claim
+    text is provider- and model-influenced, which is the class of input rule 3
+    exists for.
+    """
+    reason = str(claim["gate"]["reason"])
+    text = clip_claim(claim.get("text"))
+    return (
+        f"Not checked — {reason}: {text or '(claim text unavailable)'}",
+        {"sub": reason},
+    )
+
+
+def emit_gate_drop(run_id: Any, budget: RowBudget, *, claim: Any) -> None:
+    """One claim the gates refused to check, and WHICH GATE refused it."""
+    if not _gate_is_drop(claim):
+        return
+    if not budget.take():
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_GATE,
+        kind="plan",
+        build=lambda: _gate_drop_event(claim),
+    )
+
+
+def _gate_done_event(sentence: str, funnel: Any) -> tuple[str, dict[str, Any]]:
+    """Compose the gate stage's closing row. CALLED ONLY FROM INSIDE A build()
+    THUNK.
+
+    THE SENTENCE SURVIVES A MALFORMED FUNNEL. 15.4-05's lesson is that a build
+    which raises is a LOST ROW, and this row is the stage's whole conclusion —
+    losing it because a count could not be read would trade the operator's
+    sentence for a meta field nothing renders on its own.
+    """
+    try:
+        return sentence, {"items": int(funnel["selected_verify"])}
+    except Exception:  # noqa: BLE001 -- the meta is worth less than the sentence
+        return sentence, None
+
+
+def emit_gate_done(run_id: Any, *, text: Any, funnel: Any) -> None:
+    """The gate stage's closing line — THE SAME SENTENCE `stage_detail` gets.
+
+    Passed in, not rebuilt, for the reason `emit_verify_closing` gives. A blank
+    sentence emits nothing (`_sentence_or_none`).
+    """
+    sentence = _sentence_or_none(text)
+    if sentence is None:
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_GATE,
+        kind="thinking",
+        build=lambda: _gate_done_event(sentence, funnel),
     )
