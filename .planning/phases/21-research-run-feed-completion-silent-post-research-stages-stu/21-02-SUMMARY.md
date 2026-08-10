@@ -42,6 +42,18 @@ patterns-established:
 
 requirements-completed: [SC4, D-10, D-11]
 
+# Acceptance is CONDITIONAL — the operator checkpoint (Task 3) was DEFERRED, not passed.
+# Tasks 1-2 are machine-verified (tsc, vitest, i18n-audit, build). The operator-facing
+# behaviour is verified by nothing yet. Do not read this plan as fully verified.
+acceptance: conditional
+open-checkpoint:
+  task: 3
+  type: checkpoint:human-verify
+  status: deferred
+  deferred-to: 21-08
+  reason: "Operator ruling — code is on an unmerged worktree branch and cannot be clicked through yet; 21-08 already exists to run one operator UAT after merge and deploy; nothing in Waves 2-4 depends on 21-02."
+  steps-preserved-in: ["21-02-SUMMARY.md#deferred-uat--folded-into-21-08", "deferred-items.md#DEF-21-02"]
+
 # Metrics
 duration: 42min
 completed: 2026-08-10
@@ -56,7 +68,7 @@ completed: 2026-08-10
 - **Duration:** ~42 min
 - **Started:** 2026-08-10T15:59Z
 - **Completed:** 2026-08-10T16:41Z
-- **Tasks:** 2 of 3 complete (Task 3 is a blocking operator checkpoint — NOT yet done)
+- **Tasks:** 2 of 3 complete; Task 3 **deferred by operator ruling** to the 21-08 UAT gate
 - **Files modified:** 3 (2 created, 1 modified)
 
 ## Accomplishments
@@ -75,7 +87,9 @@ completed: 2026-08-10
 
 1. **Task 1: The availability rule, as a pure module with tests** — `71bced7` (feat)
 2. **Task 2: Mount the report on the run page as a sibling** — `0c26ff9` (feat)
-3. **Task 3: Operator checkpoint** — ⏸ **NOT EXECUTED — awaiting the operator**
+3. **Task 3: Operator checkpoint** — ⏸ **DEFERRED by operator ruling to the 21-08 UAT gate.**
+   Not verified, not skipped — sequenced. Six steps preserved verbatim under
+   "Deferred UAT — folded into 21-08" below and in `deferred-items.md` (DEF-21-02).
 
 ## Files Created/Modified
 
@@ -250,30 +264,66 @@ satisfied by construction: nothing was installed and both manifests are provably
 None. The gate is a real enumerated rule with real assertions, and the report is the existing
 component wired to live ids — no placeholder data, no empty-array-to-UI path.
 
-## ⏸ CHECKPOINT — Task 3 is NOT complete
+## ⏸ Task 3 — DEFERRED by operator ruling, NOT verified and NOT skipped
 
-Task 3 is `checkpoint:human-verify` with `gate="blocking"`. Execution stopped here as the plan
-requires. **No operator response has been recorded, because none has been given.** The plan
-requires that response be recorded VERBATIM in this file — a paraphrase of a UAT observation is
-how a defect becomes a rumour — so this section stays open until the operator speaks.
+**Status:** `deferred — operator ruling, verification folded into 21-08 UAT`
 
-**Operator verbatim response:** _(awaiting — do not fill this in from inference)_
+Task 3 is `checkpoint:human-verify` with `gate="blocking"`. Execution stopped at it and the
+operator ruled. **The report has NOT been clicked through by a human. Task 3 is sequenced, not
+closed.** Do not read this plan as fully verified — see "Conditional acceptance" below.
 
-The walkthrough put to the operator is reproduced in the checkpoint return. It is verifiable on
-RECORDED data with no spend; no run is to be triggered.
+**Operator's reasoning, recorded as theirs:** the code is on an unmerged worktree branch and
+cannot be clicked through yet; plan 21-08 already exists to run a single operator UAT after
+everything is merged and deployed; nothing in Waves 2–4 depends on 21-02. Folding these six
+checks into that one pass means one click-through instead of two.
+
+### ⚠ Conditional acceptance
+
+**Plan 21-02's acceptance is CONDITIONAL on the deferred UAT below.** Tasks 1 and 2 are
+machine-verified (tsc, vitest, i18n-audit, build — all green, evidence table above). The
+operator-facing behaviour — that the toggle sits in the right place, that the report opens, and
+above all that **the feed survives beneath it** — is verified by NOTHING yet. A phase verifier
+must not count SC4/D-10/D-11 as operator-confirmed until the 21-08 pass runs.
+
+## Deferred UAT — folded into 21-08
+
+**These six steps MUST survive into `21-UAT.md` when plan 21-08 builds it.** They are written to
+be picked up mechanically. Verifiable on **RECORDED data with no spend — do NOT trigger a run.**
+
+**Preconditions:** 21-02 merged and `nestor-frontend` deployed; operator signed in as superadmin.
+
+| # | Step | Expected result | Blocker if failed? |
+|---|------|-----------------|--------------------|
+| 1 | Open `/admin/pulse/intakes`, open any intake that has a research run, and click through to the run page via the card's **"Open run"** link. | The dedicated run page at `/admin/pulse/runs/:runId` loads. | Yes |
+| 2 | Look at the vertical order of the page. | The **"View verification report"** toggle appears **BETWEEN the status card and the activity feed** — below the card, above the feed. | Yes |
+| 3 | Click the toggle. | The report opens: **funnel**, **verdict sections** and **cost block** all render. **AND the ACTIVITY FEED IS STILL ON THE PAGE BELOW IT** — the report must not replace, hide or unmount the feed. | Yes — this is the single most important check in the list |
+| 4 | Click the toggle again. | The report collapses, the label returns to "View verification report", and **the feed is untouched**. | Yes |
+| 5 | If a **failed** or **cancelled** run exists in the list, open it and confirm the toggle is offered there too. | The toggle IS offered on failed and on cancelled runs (D-11 — these are the two states the embedded intake card throws away). | **No — NOT a blocker if no such run exists.** Record "none available" and move on. |
+| 6 | Open a **queued** or **running** run. | **NO toggle appears.** Its **ABSENCE is the CORRECT result**, not a defect — the pipeline has not reached the verify stage, so there is nothing to fetch. | Yes — but note that a *present* toggle here is the failure, not an absent one |
+
+**Recording rule carried over from the original Task 3:** the operator's answer must be recorded
+**VERBATIM**, not paraphrased — a paraphrase of a UAT observation is how a defect becomes a
+rumour. Any deviation must be **routed** (a follow-up task or an explicitly deferred item), never
+absorbed silently.
+
+**Operator verbatim response:** _(still awaiting — deferred to 21-08, do not fill from inference)_
 
 ## Next Phase Readiness
 
-- SC4, D-10 and D-11 are implemented and machine-verified; they are **not yet operator-verified**.
+- SC4, D-10 and D-11 are implemented and machine-verified; they are **not yet operator-verified**,
+  and by operator ruling they will not be until the 21-08 UAT pass.
 - Deploy surface for this plan is `nestor-frontend` only. Per D-02, **re-derive the surface from
   the actual diff at deploy time** rather than trusting that line — that rule is what caught
   `nestor-api` on 2026-08-06.
 - No migration, no new event kind, no schema change.
 - Sibling plan 21-01 adds the sixth test file this plan's verification step expects.
-- **Blocker:** the operator checkpoint. Nothing about this plan should be marked done until it
-  clears.
+- **Nothing in Waves 2–4 depends on 21-02**, which is why deferring its UAT does not block them.
+- **Open obligation on plan 21-08:** the six deferred UAT steps above must be carried into
+  `21-UAT.md`. If 21-08 ships without them, this plan's operator-facing behaviour has been
+  verified by nothing at all and the deferral has quietly become a skip.
 
 ---
 *Phase: 21-research-run-feed-completion-silent-post-research-stages-stu*
-*Plan 02 — tasks 1-2 complete, task 3 awaiting operator*
+*Plan 02 — tasks 1-2 complete and machine-verified; task 3 DEFERRED by operator ruling to the 21-08 UAT gate*
+*Acceptance is CONDITIONAL on that deferred UAT*
 *Completed: 2026-08-10*
