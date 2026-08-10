@@ -45,13 +45,13 @@ D-13 class: `long-silence` / `money` / `guard` (the engine's own defensive machi
 
 | line | provider | what the line says | D-13 class | CI-pinned substrings | verdict |
 |---|---|---|---|---|---|
-| 1408 | google | a recorded job id was refused by the guard, so the angle is dispatched fresh and **paid for again** | money **AND** guard | `"refused"`, `"paid for again"` (`test_own_researcher.py:1392-1396`) | **NEEDS-RULING** |
+| 1408 | google | a recorded job id was refused by the guard, so the angle is dispatched fresh and **paid for again** | money **AND** guard | `"refused"`, `"paid for again"` (`test_own_researcher.py:1392-1396`) | **KEEP-AS-IS** — ruled 2026-08-10, money wins |
 | 1436 | google | rejoined the in-flight job — nothing charged twice; states the poll interval | money | `"Rejoined"`, `"job interaction_in_flight_42"`, `"charged twice"` (`:1368-1371`) | KEEP-AS-IS |
 | 1495 | google | "Waiting on Google … A long silence here is the normal shape of this call." | long-silence | `text.startswith("Waiting on Google")` (`:1313`) | KEEP-AS-IS |
 | 1569 | google | the provider reported the job `failed`/`error`/`cancelled`, with its reason | failure | none | KEEP-AS-IS |
 | 1594 | google | the heartbeat — minutes elapsed, poll N of M, "THIS IS A WAIT, NOT A STALL" | long-silence | `startswith("Still waiting")`, `"5 min elapsed"`, `"poll 10 of 70"`, `"NOT A STALL"`, and the cardinality bound `2 <= len(thinking) <= 8` (`:1310-1322`) | KEEP-AS-IS |
 | 1622 | google | gave up after the poll budget ran out — "not a crash" | failure | none | KEEP-AS-IS |
-| 1710 | openai | the same response-id refusal, so the angle is **paid for again** | money **AND** guard | **none** ⚠ | **NEEDS-RULING** |
+| 1710 | openai | the same response-id refusal, so the angle is **paid for again** | money **AND** guard | **none** ⚠ | **KEEP-AS-IS** — ruled 2026-08-10, money wins |
 | 1824 | openai | rejoined the in-flight response — nothing charged twice | money | **none** ⚠ | KEEP-AS-IS |
 | 1866 | openai | "Waiting on OpenAI … A long silence here is the normal shape of this call." | long-silence | **none** ⚠ | KEEP-AS-IS |
 | 1911 | openai | the response reported `failed`/`cancelled`, with its reason | failure | none | KEEP-AS-IS |
@@ -59,10 +59,13 @@ D-13 class: `long-silence` / `money` / `guard` (the engine's own defensive machi
 | 1942 | openai | the heartbeat, same wording contract as Google's | long-silence | **none** ⚠ | KEEP-AS-IS |
 | 1969 | openai | gave up after the poll budget ran out — "not a crash" | failure | none | KEEP-AS-IS |
 
-**1408 and 1710 are recorded as NEEDS-RULING, deliberately.** D-13 says CUT guard-refusal
-commentary and KEEP anything about money. Each of these two sentences is *both in the same
-clause* — "refused by the job-id guard … so it is paid for again". D-13's rule as written does not
-resolve which half governs, and resolving it by fiat is exactly what D-12 forbids.
+**1408 and 1710 were raised as NEEDS-RULING, deliberately — and have since been ruled.** D-13 says
+CUT guard-refusal commentary and KEEP anything about money. Each of these two sentences is *both in
+the same clause* — "refused by the job-id guard … so it is paid for again". D-13's rule as written
+did not resolve which half governs, and resolving it by fiat is exactly what D-12 forbids.
+**The operator ruled on 2026-08-10 that both are KEEP: where the money clause and the
+guard-refusal clause collide, money is dominant.** See "Operator ruling" below — that is an
+amendment to D-13, not an inference drawn here.
 
 Zero of the eight `thinking` lines are parser-defect explanations. Zero are about the engine's
 defensive machinery **alone**. The five `agent_fail` sites are exception-path by nature, but
@@ -216,4 +219,42 @@ problem.
 ---
 
 ## Operator ruling
+
+**Ruled: 2026-08-10.** Recorded verbatim from the operator's decision. This is a ruling, not an
+inference drawn from the audit.
+
+### (1) Option: `option-c` — no change to `audited_llm_client.py`
+
+> The audit document IS the deliverable. The operator accepted your reasoning: the content is not
+> noise by D-13's own rule, the real volume is roughly half what the plan assumed, and
+> `deep_research` only read as overwhelming because it was the sole stage speaking while eight said
+> nothing. Whether this file was ever the problem gets re-read after 21-01/21-03/21-05/21-06 land.
+
+**Consequence:** no edit to `tribunal/nestor_pulse_sdk/audit/audited_llm_client.py` and no edit to
+`tribunal/nestor_pulse_sdk/tests/test_own_researcher.py`. Nothing under `tribunal/` is modified by
+plan 21-04. **This is a completed plan, not an abandoned one** — SC5 is satisfied by a diagnosis
+the operator ruled on, which is what D-12 asked for.
+
+**Re-read trigger:** the open question is not closed forever, it is *sequenced*. After 21-01
+(collapse toggle actually collapses), 21-03, 21-05 and 21-06 (the eight silent stages get bodies)
+land and one run executes, the feed is re-read. If `deep_research` still reads as too verbose then,
+option-a and option-b remain available and this document holds their costing.
+
+### (2) Classification of lines 1408 and 1710: both KEEP — money wins
+
+> Where D-13's money clause and its guard-refusal-commentary clause collide, the money clause is
+> dominant. This is an operator amendment to D-13 resolving the contradiction in favour of KEEP.
+
+**This amends D-13 [ASSISTANT — CORRECTABLE] and is now [OPERATOR].** D-13's keep/cut rule
+previously left a sentence that is simultaneously guard commentary and a money statement
+unresolved. It is resolved: **money is dominant; such a line is KEPT.** The rule now reads, in
+effect — CUT guard-refusal commentary, parser-defect explanations, and lines about the engine's own
+defensive machinery, *unless the same line also states a cost*, in which case it is KEPT.
+
+Applies to both sites, on both providers, and to any future line of the same shape.
+
+---
+
+*Ruling recorded 2026-08-10. Task 3 executed under it as a documented no-op — see
+`21-04-SUMMARY.md`.*
 
