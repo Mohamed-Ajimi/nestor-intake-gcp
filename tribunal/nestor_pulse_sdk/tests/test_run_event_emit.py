@@ -78,6 +78,7 @@ Cloud Build gate:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
@@ -89,6 +90,7 @@ from nestor_pulse_sdk.pipeline.tribunal import own_researcher as own
 from nestor_pulse_sdk.pipeline.tribunal import pipeline as _pipeline_mod
 from nestor_pulse_sdk.pipeline.tribunal import research_division as rd
 from nestor_pulse_sdk.pipeline.tribunal import serpapi as _serpapi
+from nestor_pulse_sdk.pipeline.tribunal import stage_events
 from nestor_pulse_sdk.runs import run_events
 from nestor_pulse_sdk.runs.stages import ENGINE_STAGES
 
@@ -98,6 +100,9 @@ from nestor_pulse_sdk.tests.test_engine_e2e_stubbed import (
     _ScriptedProvidersAudited,
     _engine_run,
     _no_db_sessionmaker,
+    # 21-03: the `set_stage` detail reader, so the closing feed row can be
+    # compared against the sentence the OTHER surface was handed.
+    _stage_detail_entries,
     _stage_sequence,
 )
 
@@ -1174,3 +1179,461 @@ def test_worked_never_returns_a_negative_duration():
     """`time.monotonic` cannot step backwards, but the value reaching this
     formatter passes through a dict a defect could corrupt."""
     assert _pipeline_mod._stage_event_worked(-12) == "0s"
+
+
+# ===========================================================================
+# PHASE 21 — THE STAGES 15.3 LEFT SILENT NOW EMIT A BODY (plan 21-03)
+#
+# WHAT "A BODY" MEANS HERE, AND WHY THAT DEFINITION AND NO OTHER. 15.3 wired the
+# run-event contract into four of the pipeline's thirteen stages. The other nine
+# emitted nothing, and `_stage_event_boundary` gave each of them a `divider` and
+# a `summary` anyway — so every one of them rendered as a phase HEADING WITH
+# NOTHING UNDER IT, and the collapse toggle above it expanded to reveal nothing.
+#
+# `RunFeed.tsx` builds each phase block from
+#   `events.filter(e => e.kind !== "divider" && e.kind !== "summary")`
+# and calls that `body`. The assertions below filter on exactly that predicate,
+# so they measure WHAT THE OPERATOR SEES rather than what the engine intended. An
+# assertion that merely counted events on the stage would have passed against the
+# defect from the day 15.3 shipped: `verify` has always had two events.
+#
+# 21-03 is the `verify` half — the stage the operator named twice and the one
+# where the run's money and its meaning both live. Plans 21-05 and 21-06 extend
+# `stage_events.py` for the remaining seven stages and should extend THIS section
+# in the same shape rather than starting a new file: `cloudbuild.test-engine.yaml`
+# already names this path in its WANTED list, and EXPECTED_FILES stays 44.
+#
+# EVERY TEST BELOW IS PURE — no Postgres, no provider key, no network. The two
+# `run_events` operations that touch Postgres are module-level TEST SEAMS; they
+# are replaced, never reached past. `emit` and `emit_safe` are the REAL ones in
+# every test here, because a recorder installed over either would make these
+# assertions statements about the double rather than about argument construction.
+# ===========================================================================
+
+
+class _Persisted:
+    """A stand-in for `run_events._writer` — the rows that would reach the table.
+
+    Installed at the DEEPEST seam that is still not Postgres, so what these tests
+    read is what the `run_event` table would have been sent: past the real
+    `emit_safe`, the real `build()` thunk, the real vocabulary check, the real
+    PII scrub and the real clamp. `emit` and `emit_safe` stay untouched.
+    """
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+
+    async def __call__(self, tenant_id: Any, batch: list) -> None:
+        self.rows.extend(batch)
+
+    def on(self, stage: str) -> list[dict[str, Any]]:
+        return [row for row in self.rows if row["stage"] == stage]
+
+    def of(self, stage: str, kind: str) -> list[dict[str, Any]]:
+        return [row for row in self.on(stage) if row["kind"] == kind]
+
+    def body(self, stage: str) -> list[dict[str, Any]]:
+        """`RunFeed.tsx`'s own `body` filter, verbatim."""
+        return [
+            row
+            for row in self.on(stage)
+            if row["kind"] != "divider" and row["kind"] != "summary"
+        ]
+
+    def texts(self, stage: str, kind: str) -> list[str]:
+        return [row["text"] for row in self.of(stage, kind)]
+
+
+def _install_writer(monkeypatch) -> _Persisted:
+    persisted = _Persisted()
+
+    async def _max_seq(run_id, tenant_id):
+        return 0
+
+    monkeypatch.setattr(run_events, "_read_max_seq", _max_seq)
+    monkeypatch.setattr(run_events, "_writer", persisted)
+    return persisted
+
+
+def _names_a_cause(text: str) -> bool:
+    """The predicate test (d) applies to a failure line — AND to its control.
+
+    Written once, as a named function, precisely so the negative control can be
+    run through the SAME predicate. A control that applied a slightly different
+    rule would prove nothing about the assertion it is controlling.
+    """
+    lowered = text.strip().lower()
+    if len(lowered) <= 30:
+        return False
+    return any(
+        cause in lowered
+        for cause in ("timed out", "timeout", "crash", "budget cap")
+    )
+
+
+# --- (a) the stage is no longer a label with nothing under it ---------------
+async def test_verify_stage_is_no_longer_a_label_with_nothing_under_it(monkeypatch):
+    """SC1, at the one stage D-04 singles out.
+
+    WHAT BREAKS IF THIS FIRES: the run page shows "Skeptic verification" as a
+    heading with an empty block under it, while the engine spends most of the
+    run's budget beneath that heading — which is complaint 3 of the operator's
+    2026-08-10 UAT, verbatim.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    # THE VACUITY GUARD, FIRST. A harness that stopped before verify would make
+    # every filter below empty, and an empty filter compared with `>= 0` reads as
+    # a pass. This asserts the run actually REPORTED the stage before anything
+    # measures what it emitted there.
+    assert "verify" in _stage_sequence(statements), (
+        "the stubbed run never reported the verify stage — every assertion below "
+        f"would be vacuous: {_stage_sequence(statements)}"
+    )
+    assert persisted.on("verify"), (
+        "the verify stage produced no run event at all, not even a divider"
+    )
+
+    body = persisted.body("verify")
+    assert len(body) >= 2, (
+        "the verify stage is still a label with nothing under it: its only rows "
+        f"are {[row['kind'] for row in persisted.on('verify')]}. Before 21-03 this "
+        f"was 0."
+    )
+
+
+# --- (b) ONE dispatch header for the stage, not one per cluster -------------
+async def test_verify_emits_exactly_one_dispatch_header(monkeypatch):
+    """The header is what the indented per-cluster children hang under. One per
+    cluster would emit a dozen headers with one child each — not this design with
+    a bug in it, but a different design (this file's header, behaviour 2).
+
+    Asserted with `== 1`, never `>= 1`: the failure this guards against is a
+    header per item, which `>= 1` would happily accept.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "verify" in _stage_sequence(statements), "vacuity guard"
+    dispatches = persisted.of("verify", "dispatch")
+    assert len(dispatches) == 1, (
+        f"expected ONE dispatch header for the verify stage, got "
+        f"{len(dispatches)}: {[row['text'] for row in dispatches]}"
+    )
+    # And it names the work rather than merely announcing it.
+    assert "cluster" in dispatches[0]["text"]
+    assert "claims selected" in dispatches[0]["text"]
+
+
+# --- (c) every cluster that starts also finishes ----------------------------
+async def test_a_verify_cluster_row_pairs_with_a_finish_row(monkeypatch):
+    """The ENGINE-side half of the positional pairing the frontend relies on.
+
+    `feedRows.ts::settledSeqs` settles an `agent_run` by counting the finish rows
+    that follow it on the same stage — there is no correlation key (D-07). So an
+    engine that emitted a start with no finish would leave a row spinning forever,
+    which is complaint 1 of the same UAT. If that ever regresses, this test names
+    it at the site rather than leaving it to be found on screen.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "verify" in _stage_sequence(statements), "vacuity guard"
+    starts = persisted.of("verify", "agent_run")
+    assert starts, "no cluster start row was emitted — the pairing is vacuous"
+    finishes = persisted.of("verify", "agent_done") + persisted.of(
+        "verify", "agent_fail"
+    )
+    assert len(finishes) >= len(starts), (
+        f"{len(starts)} cluster(s) started and only {len(finishes)} finished — "
+        f"the unfinished ones spin forever on the run page"
+    )
+
+
+# --- (d) a cluster that was not checked says WHY ----------------------------
+async def test_a_failed_verify_cluster_says_why(monkeypatch):
+    """Every group session crashes. The stage must say so, per cluster, in words.
+
+    The crash path is `pipeline.py`'s `res is None` branch, reached here by making
+    the group skeptic raise — `_one_group_pass` catches it and returns None,
+    exactly as a real timeout does.
+    """
+    # THE NEGATIVE CONTROL, FIRST AND THROUGH THE SAME PREDICATE. Without it a
+    # green run below could mean the predicate accepts anything.
+    assert not _names_a_cause("failed"), (
+        "the predicate this test applies accepts the bare word 'failed', so it "
+        "proves nothing about content"
+    )
+    assert not _names_a_cause("Not checked: lukoil"), (
+        "the predicate accepts a line that names a cluster but no cause"
+    )
+
+    persisted = _install_writer(monkeypatch)
+
+    async def _boom(**kwargs):
+        raise TimeoutError("synthetic group-skeptic timeout for the 21-03 fail row")
+
+    monkeypatch.setattr(_pipeline_mod, "run_group_skeptic", _boom)
+
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "verify" in _stage_sequence(statements), "vacuity guard"
+    fails = persisted.of("verify", "agent_fail")
+    assert fails, (
+        "every group session crashed and the feed said nothing about any of "
+        f"them: {[row['kind'] for row in persisted.on('verify')]}"
+    )
+    for row in fails:
+        assert _names_a_cause(row["text"]), (
+            f"a failure row does not name a cause: {row['text']!r}"
+        )
+        # AND it names WHICH cluster. A cause with no subject leaves the operator
+        # unable to tell which part of the report ships unexamined.
+        assert "Not checked:" in row["text"]
+        assert row["text"].strip().lower() != "failed"
+
+
+# --- (e) the row budget states its elision as a visible row -----------------
+async def test_the_verify_row_budget_states_its_elision_as_a_row(monkeypatch):
+    """D-05. A bounded feed that truncates SILENTLY is the failure the run_event
+    table exists to end: the operator cannot tell "this stage checked 3 clusters"
+    from "this stage checked 10 and showed you 3".
+
+    Driven through the real emitter with an explicit small `limit`, rather than
+    through `monkeypatch.setenv`: `MAX_ROWS_PER_STAGE` is resolved at IMPORT, so
+    setting the environment variable after import would silently do nothing —
+    the exact false-green this project keeps catching.
+    """
+    persisted = _install_writer(monkeypatch)
+    group = {
+        "entity": "lukoil",
+        "attribute": "benelux_retail",
+        "stakes": "high",
+        "claims": [{"text": "a claim"}],
+    }
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    budget = stage_events.RowBudget(run_id, "verify", limit=3)
+    try:
+        for _ in range(10):
+            stage_events.emit_verify_group_run(run_id, budget, group=group)
+        assert budget.used == 3 and budget.elided == 7, (budget.used, budget.elided)
+        budget.flush("cluster")
+        # IDEMPOTENT: a second flush must not add a second elision row.
+        budget.flush("cluster")
+    finally:
+        await run_events.close_run(run_id)
+
+    assert len(persisted.of("verify", "agent_run")) == 3, (
+        "the budget did not bound the per-item rows: "
+        f"{len(persisted.of('verify', 'agent_run'))}"
+    )
+    elisions = persisted.of("verify", "thinking")
+    assert len(elisions) == 1, (
+        f"expected exactly one elision row, got {len(elisions)}: "
+        f"{[row['text'] for row in elisions]}"
+    )
+    text = elisions[0]["text"]
+    # THE REAL COUNT, not a fixed string. A row reading "some rows not shown"
+    # would satisfy a presence check and tell the operator nothing.
+    assert "7 more cluster(s)" in text, (
+        f"the elision row does not carry the real number of refused rows: {text!r}"
+    )
+    assert "first 3" in text, f"the elision row does not state the bound: {text!r}"
+    assert elisions[0]["meta"]["items"] == 7
+
+
+async def test_a_verify_stage_inside_its_budget_emits_no_elision_row(monkeypatch):
+    """The counterfactual for (e). Without it, a `flush` that emitted its row
+    unconditionally would pass the test above and add a false "0 more" line to
+    every healthy run."""
+    persisted = _install_writer(monkeypatch)
+    group = {"entity": "e", "attribute": "a", "stakes": "med", "claims": []}
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    budget = stage_events.RowBudget(run_id, "verify", limit=5)
+    try:
+        for _ in range(2):
+            stage_events.emit_verify_group_run(run_id, budget, group=group)
+        budget.flush("cluster")
+    finally:
+        await run_events.close_run(run_id)
+
+    assert len(persisted.of("verify", "agent_run")) == 2
+    assert persisted.of("verify", "thinking") == [], (
+        "a stage that never overflowed still announced an elision"
+    )
+
+
+# --- (f) no verify emit can fail the run ------------------------------------
+async def test_no_verify_emit_can_fail_the_run(monkeypatch):
+    """D-06 at these sites: a degraded group costs the ROW at worst, never the run.
+
+    The two shapes are the ones a restored or degrading run really produces: a
+    group dict with no `claims` key, and a `verdicts_by_index` that is not a
+    mapping at all.
+    """
+    # THE NEGATIVE CONTROL, FIRST. Performed the obvious way — the way a call site
+    # composing its own f-string would perform it — both shapes genuinely raise.
+    # Without this, a green run below could mean "the inputs were harmless after
+    # all" rather than "the construction is inside the emitter's try".
+    degraded_group: dict[str, Any] = {
+        "entity": "lukoil",
+        "attribute": "benelux_retail",
+        "stakes": "high",
+    }
+    not_a_mapping: Any = ["support", "refute"]
+    with pytest.raises(KeyError):
+        len(degraded_group["claims"])
+    with pytest.raises(AttributeError):
+        not_a_mapping.values()
+
+    persisted = _install_writer(monkeypatch)
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    budget = stage_events.RowBudget(run_id, "verify", limit=25)
+    try:
+        # (i) NOTHING RAISES. Every helper, against both degraded shapes.
+        stage_events.emit_verify_dispatch(
+            run_id, groups_selected=1, groups_total=1, multi=0,
+            claims_selected=1, claims_total=1,
+        )
+        stage_events.emit_verify_group_run(run_id, budget, group=degraded_group)
+        stage_events.emit_verify_group_done(
+            run_id, budget, group=degraded_group, verdicts=not_a_mapping
+        )
+        stage_events.emit_verify_verdicts(
+            run_id, budget, group=degraded_group, verdicts=not_a_mapping
+        )
+        stage_events.emit_verify_group_failed(
+            run_id, budget, group=degraded_group, reason="the session timed out"
+        )
+        stage_events.emit_verify_closing(run_id, text=None)
+        budget.flush("cluster")
+    finally:
+        await run_events.close_run(run_id)
+
+    # AND THE ROWS SURVIVE. 15.4-05's lesson: a swallowed build is a LOST ROW, so
+    # "nothing raised" alone would have passed against a version that dropped
+    # every line. The counts are the load-bearing part.
+    assert len(persisted.of("verify", "dispatch")) == 1
+    assert len(persisted.of("verify", "agent_run")) == 1
+    assert len(persisted.of("verify", "agent_done")) == 1
+    assert len(persisted.of("verify", "agent_fail")) == 1
+    # The cluster's finish line admits it has no verdicts rather than inventing a
+    # tally the run never established (T-15.3-23).
+    assert "no verdict returned" in persisted.texts("verify", "agent_done")[0]
+    # A non-mapping produces no verdict rows, and no elision either — nothing was
+    # refused, so nothing may be announced as refused. AND a closing sentence that
+    # came out blank emitted NOTHING rather than a blank row: `emit` accepts an
+    # empty text and would queue it, and an empty row renders as a blank LINE,
+    # which `RUN_EVENT_KINDS`' own comment calls worse than an absent one.
+    assert persisted.of("verify", "thinking") == [], (
+        "a degraded verify stage emitted a thinking row it had no content for: "
+        f"{persisted.texts('verify', 'thinking')!r}"
+    )
+
+
+async def test_the_verify_closing_line_is_emitted_when_there_is_a_sentence(
+    monkeypatch,
+):
+    """The counterfactual for the blank-row rule asserted in (f).
+
+    Without it, an `emit_verify_closing` that had simply stopped emitting would
+    satisfy the assertion above and silently remove G-10's degradation sentence —
+    the one line standing between an operator scanning a green feed and a run
+    whose verification was gutted.
+    """
+    persisted = _install_writer(monkeypatch)
+    sentence = (
+        "VERIFICATION DEGRADED — 4 of 17 selected claims were never checked"
+    )
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    try:
+        stage_events.emit_verify_closing(run_id, text=sentence)
+    finally:
+        await run_events.close_run(run_id)
+
+    assert persisted.texts("verify", "thinking") == [sentence]
+
+
+async def test_the_verify_closing_row_carries_the_same_sentence_as_the_stage_detail(
+    monkeypatch,
+):
+    """G-10, across BOTH surfaces. `_verify_closing_item` is deliberately the one
+    place that sentence is composed; 21-03 binds it once and hands the feed row
+    and the stage detail the same object. If a second composer is ever introduced,
+    the run page and the intake card start reporting different degradation for the
+    same run — and only one of them would be right.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "verify" in _stage_sequence(statements), "vacuity guard"
+    # The `set_stage` writes are captured as raw JSON, so the names are parsed
+    # back out rather than substring-matched — a JSON escape of an em dash would
+    # otherwise make an identical sentence look different.
+    detail_names: list[str] = []
+    for entry in _stage_detail_entries(statements, "verify"):
+        for item in (json.loads(entry).get("verify") or {}).get("items") or []:
+            name = item.get("name")
+            if name:
+                detail_names.append(str(name))
+    assert detail_names, "the verify stage wrote no stage_detail — vacuous compare"
+
+    feed_lines = persisted.texts("verify", "thinking")
+    assert feed_lines, "the verify stage emitted no closing line"
+    assert feed_lines[-1] in detail_names, (
+        "the closing feed row and the stage detail are not the same sentence:\n"
+        f"  feed:   {feed_lines[-1]!r}\n  detail: {detail_names!r}"
+    )
+
+
+async def test_a_raising_verify_composer_costs_the_row_and_not_the_run(monkeypatch):
+    """The STRUCTURAL half of (f), and the one that survives a future edit.
+
+    A composer promising never to raise is a promise by one helper.
+    `build=lambda:` is the structural guarantee that whatever it builds is built
+    inside the emitter's try. Forcing the composer to raise is the only way to
+    keep asserting that: if anyone ever "tidies" the emitter by hoisting `build()`
+    above its `try`, this run dies instead of losing a row.
+
+    This is also where "(ii) the run completes" is proved — end to end, through
+    the real pipeline, with the real emitter.
+    """
+    persisted = _install_writer(monkeypatch)
+
+    def _boom(_group, _verdicts):
+        raise RuntimeError("synthetic verify composer failure for the D-06 proof")
+
+    monkeypatch.setattr(stage_events, "_verify_group_done_event", _boom)
+
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    # THE RUN COMPLETES.
+    assert "done" in _stage_sequence(statements), (
+        f"a raising feed composer cost the RUN, not just its row: "
+        f"{_stage_sequence(statements)}"
+    )
+    assert result is not None
+    # The row it could not build is DROPPED — correct here; fabricated is not.
+    assert persisted.of("verify", "agent_done") == [], (
+        "a line whose text could not be built reached the feed anyway"
+    )
+    # ...and the stage still has a body, so one broken row did not silence the
+    # stage. This is what stops the test passing on an implementation that gave up
+    # on the whole stage the moment one composer failed.
+    assert persisted.of("verify", "agent_run"), (
+        "one raising composer silenced every other row on the stage"
+    )
