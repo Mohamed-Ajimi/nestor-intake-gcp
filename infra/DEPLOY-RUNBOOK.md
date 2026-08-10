@@ -4702,3 +4702,333 @@ five-wave deploy:
 - [ ] Step 15.8.i — READ-BACKS recorded **VERBATIM**: both Tribunal revisions at 100% traffic, digest-pinned (`@sha256:`, never `:latest`); `nestor-api` + `nestor-frontend` **CONFIRM-ONLY** revision names (not rebuilt — the empty diff IS the evidence); secret bindings **BY NAME only**; `NESTOR_WORKER_STALE_MINUTES` **read live** (expect 60, not 525600) with `NESTOR_RUN_ABORTED_MARKER` ABSENT; ⭐ **the ABSENCE of every `NESTOR_TRIBUNAL_WORKSHOP_*` recorded as a POSITIVE finding** (the Wave-4 validated config IS the code defaults — if one is set, the measuring run measures a config nobody validated); BOTH alembic heads from their own tables (TRIBUNAL **0018**, INTAKE **0013**). ⛔ **And settle the READ SURFACE first (D-W5-18): the yield tables have NO endpoint, no seam verb and no UI**, and the credential-free DB path lacks `logging.logWriter` — so Wave 5's own § 8 criterion is UNREADABLE after the spend unless 15.8-15's blocking pre-flight gate Q-PRE-4 is paid
 - [ ] Step 15.8.j — **THE DEPLOY RECORD** — owned by plan **15.8-14** and by no one else: date/who, the `$SHA`(s) with what each carries, both Tribunal revisions, both CONFIRM-ONLY revisions, TRIBUNAL head 0018 with **all three literal upgrade lines quoted**, INTAKE head 0013 unchanged, both gate results with their build ids, the queue state and how it was proven, `verify_chain`, and the ANTHROPIC secret each service binds by name
 - [ ] Step 15.8.k — **THE ONE MEASURING RUN** — ONE live run on a FRESH intake in the baseline brief domain, **no A/B double-run**, compared in `.planning/phases/15.8-*/15.8-UAT.md`. **Judge from the DELIVERED REPORT** (the `output` row, `format='markdown'`), never the claim table and never the logs; **the verification stage works — do not touch it**; **do NOT tick § 8's struck-through Wave 2 and Wave 3 rows** (Wave 2's mixed-group test cannot be run; Wave 3 issues 9–15 calls, not 15 — both waves shipped correctly, only the checklist is wrong). Grep the ZERO-parsed-claims WARNING (expect ABSENT — its presence names a NEW format deviation and is this phase WORKING), the fact-list retry warnings, the redirect resolver summary, the dispatch stream-count line, and the catch-up `median <= 0` warning (expect ABSENT). ⛔ **The attribution sentence is a NAMED LIST of the five waves, not "nothing changed" — and if it cannot be written honestly, the run is NOT STARTED**
+
+---
+
+## Phase 21 — Research run feed completion (`tribunal-worker` + `nestor-frontend` REBUILD, `tribunal-api` at the shared `$SHA`, **NO migration**, **NO new secret**, **NO run**)
+
+> ⛔ **THIS DEPLOY TRIGGERS NO RESEARCH RUN.** Not one. The ~$45 measuring run is the **NEXT**
+> action after this section completes, and it is deliberately **not part of it**. Every command in
+> this section is free and read-only except the two Cloud Build gates and the image builds.
+
+### 1. What shipped
+
+Phase 21 finishes the run-event contract Phase 15.3 started and left at 4 stages out of 13. The
+**eight previously silent stages** — `distill`, `merge`, `gate`, `verify`, `adjudicate`,
+`coverage`, `conflict`, `synthesize` — now emit a dispatch header plus bounded per-item rows, so no
+phase renders as a label with nothing under it. Alongside that: finished agent rows **settle**
+instead of spinning forever (the feed is append-only, so only the last group can honestly animate);
+the **"Show more" toggle is gated** on rows actually being hidden; `VerificationReport` is
+**reachable from the run page** as a sibling of the card and the feed, so `failed` and `cancelled`
+runs keep their verdicts; and every stage key now resolves to a **human label** via
+`NON_SCHEMA_STAGE_LABELS`, so no raw snake_case key reaches the screen.
+
+**The density ruling (SC5) was `option-c`: NO source change to `audited_llm_client.py`.** All 8
+`thinking` sites there measured as money-or-long-silence, which are D-13's two KEEP classes, and 5
+are pinned by a CI test whose comment reads "the wording is the deliverable". The volume driver is
+**cardinality, not altitude**. That question is **sequenced, not closed** — the operator re-reads
+the feed after this ships and after one run executes.
+
+⭐ **THIS DEPLOY CHANGES OBSERVABILITY ONLY.** No claim, verdict, cost or dispatch behaviour
+changed. The load-bearing evidence, recorded by plans 21-03/05/06/07 and re-measured at deploy
+time: **`await set_stage(` = 23, unchanged from before the phase**; `run_events.open_run` = 1;
+`selected_only=True` present and untouched; `RUN_EVENT_KINDS` untouched (no new kind, so no
+two-language contract change).
+
+#### The DERIVED deploy surface
+
+⛔ **DERIVED AT DEPLOY TIME, NOT COPIED.** `21-CONTEXT.md`'s D-02 records the surface as
+"`tribunal-worker` plus `nestor-frontend`" and then, in the same paragraph, says **re-derive it
+from the actual diff and do not trust that line**. The reason is on the record: on **2026-08-06** a
+standing note said two services, the diff said three, and skipping `nestor-api` would have left the
+whole fix **inert while reading as deployed**. The generalisation, from `CONTINUE-HERE.md`: *"Which
+services a change touches is a MEASUREMENT WITH AN EXPIRY DATE, not a fact."*
+
+The command that produced the table below — run it again and diff the answer before building:
+
+```bash
+git diff --name-only eac6f2b..HEAD
+git diff --name-only eac6f2b..HEAD | awk -F/ '{print $1}' | sort -u
+# expect exactly: .planning  frontend  tribunal      <- NOTE: no `backend`
+```
+
+| Path group | Files | Ships in | Mapping rule applied |
+|---|---|---|---|
+| `frontend/src/components/research/RunFeed.tsx`, `frontend/src/lib/research/feedRows.ts`, `frontend/src/lib/research/verificationGate.ts`, `frontend/src/routes/admin.pulse.runs.$runId.tsx` | **4** | **`nestor-frontend`** — REBUILD | anything under `frontend/src/` ships in the frontend image |
+| `frontend/src/lib/research/{feedRows,verificationGate}.test.ts` | 2 | *(nothing)* | `.test.ts` is not imported by the app; Vite does not bundle it |
+| `tribunal/nestor_pulse_sdk/pipeline/tribunal/pipeline.py`, `.../stage_events.py` | **2** | **`tribunal-worker`** — REBUILD | the worker executes the pipeline; these are its emit sites |
+| `tribunal/nestor_pulse_sdk/runs/stages.py` | **1** | **`tribunal-worker`** — REBUILD; **`tribunal-api`** carries the bytes (see the ruling below) | the API's request path DOES import this module |
+| `tribunal/nestor_pulse_sdk/tests/test_run_event_emit.py`, `.../test_stage_schema.py` | 2 | *(nothing)* | `tests/` ships nothing |
+| `.planning/**` | 11 | *(nothing)* | `.planning/` ships nothing |
+| `backend/**` | **0** | **`nestor-api` — CONFIRM-ONLY** | not in the diff at all |
+
+#### ⚖ The `tribunal-api` ruling, and why it is not obvious
+
+**Both tribunal Dockerfiles do `COPY nestor_pulse_sdk ./nestor_pulse_sdk` — the WHOLE package.**
+So all three changed engine files are baked into the **API image as well as** the worker image, and
+`build-and-push.sh` builds **both** images in ONE invocation at ONE shared `$SHA` regardless.
+
+**And the API request path really does read one of them:** `runs/api.py:41` does
+`from nestor_pulse_sdk.runs.stages import stages_for`, and `stages_for(run.engine)` populates
+`RunMetrics.stages` at `runs/api.py:953`.
+
+**But the change to that file is inert on the API path**, and this was checked rather than assumed:
+
+- 21-07's edit to `runs/stages.py` is **purely additive** — it appends a new module-level
+  `NON_SCHEMA_STAGE_LABELS` dict. **`ENGINE_STAGES` is untouched and `stages_for` is untouched**,
+  so `RunMetrics.stages` returns a byte-identical response.
+- The **only** non-test consumer of `NON_SCHEMA_STAGE_LABELS` is `pipeline.py:523`
+  `_stage_event_label`, which is called **only** from `_stage_event_boundary` (`pipeline.py:597`).
+  That bakes the human label into the divider's **`text` column at emit time** — i.e. **worker-side**.
+  The API never re-labels; it serves rows that already carry their text.
+- `pipeline.py` and `stage_events.py` are **not** on the API's boot or request path: the only
+  import of `TribunalPipeline` is **lazy, inside a function**, at `runs/adapter.py:325`/`331`.
+
+**Verdict: functionally required = `tribunal-worker` + `nestor-frontend`. `tribunal-api` is
+OPTIONAL on behaviour.**
+
+**⛔ THE DERIVED SURFACE AGREES WITH D-02's LINE.** State that plainly, because agreement here was
+**re-earned by measurement, not inherited** — and on 2026-08-06 the same exercise DISAGREED with a
+standing note and caught `nestor-api`. An agreement that was checked is a different object from an
+agreement that was assumed.
+
+**RECOMMENDATION — deploy `tribunal-api` at the shared `$SHA` anyway.** Not because behaviour
+demands it, but because: (a) the API image is **built regardless** by `build-and-push.sh`, so the
+marginal cost is one `deploy-api.sh`; (b) leaving it behind creates a **divergence between two
+images built from one tree**, which is a drift class this project has been bitten by; (c) it
+matches the Phase 15.8 record, where both Tribunal services were deployed together at the shared
+`$SHA`. **If the operator prefers to skip it, that is defensible — record the decision and the
+existing `tribunal-api` revision as CONFIRM-ONLY.**
+
+#### The migration answer — DERIVED, not assumed
+
+```bash
+git diff --name-only eac6f2b..HEAD | grep -Ei 'alembic|versions/|/models?/'
+# MEASURED: exit 1, NO output  -> NO MIGRATION
+```
+
+**NO `tribunal-migrate` run and NO `nestor-migrate` run.** TRIBUNAL head stays **0018**, INTAKE head
+stays **0013**. This phase adds no column, no table and no event kind. Confirm both heads in the
+read-backs anyway (§ 4e) — *confirm rather than assume* is D-02's own instruction.
+
+```bash
+git diff --name-only eac6f2b..HEAD | grep -Ei 'requirements.txt|package.json|package-lock.json|locales/'
+# MEASURED: no output -> NO new dependency, NO new i18n key, NO new secret
+```
+
+---
+
+### 2. PRE-FLIGHT — every step read-only except the two gates
+
+#### (a) ⛔ THE ACCOUNT TRAP — verify BOTH, every time
+
+```bash
+gcloud config get-value account    # expect EXACTLY: tools@dotto.be
+gcloud config get-value project    # expect EXACTLY: project-cb01b861-cb4a-438d-b9a
+gcloud config list --format="value(core.account,core.project)"
+```
+
+**Four accounts exist on this machine** and the active one has silently drifted at least twice
+(to `mohamed.ajimi@agiliz.com` between 08-06 and 08-10; and to `tools@epicimpact.be`, which is what
+was active when this section was written). Switch with `gcloud config set account tools@dotto.be` —
+**deliberately, having read the value first.**
+
+> ⚠ **THE SECOND HALF OF THE TRAP: `--format='value(...)'` RENDERS A PERMISSION ERROR AS AN EMPTY
+> STRING.** Three services and a whole bucket listing once came back blank and read exactly like
+> "the resources are gone". They were fine; the identity was wrong. **When a `value()` read comes
+> back empty, RE-RUN IT WITHOUT `--format` before believing it.**
+
+#### (b) THE FREE QUEUE CANARY — is anything running or claimable?
+
+The always-on worker polls every 2s at `minScale=1`, so any claimable row would **already** have
+been claimed and would be writing audit blobs. Listing the audit bucket for the newest write
+answers this read-only, in ~30s, with no DB credential and no Cloud Build.
+
+```bash
+gcloud storage ls gs://<audit-bucket>/** --project="$GOOGLE_PROJECT" | tail -20
+# expect: newest write still 2026-08-05T19:21:31Z and 9 run prefixes,
+#         i.e. UNCHANGED -> nothing is running and nothing is claimable.
+```
+
+⚠ **A `for f in $(gcloud storage ls ...)` loop silently produced 0-byte files for 3 of 4 once —
+always `ls -la` after any bucket copy loop.** Record the newest-write timestamp here; § 4(f)
+compares it after the deploy to prove no run was triggered.
+
+⛔ **`--min-instances=0` does NOT stop a worker booting.** `runs/worker.py`'s `while True:` **CLAIMS
+FIRST and SLEEPS LAST** — `claim_one()` runs at the top of the very first iteration. The flag
+governs steady state only. **AN EMPTY QUEUE IS THE ONLY PROTECTION.**
+
+#### (c) THE TWO CLOUD BUILD GATES — submitted separately, read as TEXT
+
+```bash
+gcloud builds submit --config=tribunal/cloudbuild.test-engine.yaml tribunal \
+  --project="$GOOGLE_PROJECT" --region="$REGION"
+gcloud builds submit --config=tribunal/cloudbuild.test-gates.yaml  tribunal \
+  --project="$GOOGLE_PROJECT" --region="$REGION"
+```
+
+⛔ **NEVER PIPE `gcloud builds submit` THROUGH `tail`.** That returns the **PIPE's** exit code, and
+a **FAILED build reports exit 0**. Read the result explicitly, by build id:
+
+```bash
+gcloud builds describe "$BUILD_ID" --project="$GOOGLE_PROJECT" --region="$REGION" \
+  --format='value(status)'
+gcloud builds log "$BUILD_ID" --project="$GOOGLE_PROJECT" --region="$REGION"
+```
+
+**SUCCESS and FAILURE are results. QUEUED, WORKING, EXPIRED and CANCELLED are NOT — and an EXPIRED
+build is visually identical to a QUEUED one.**
+
+**Expected engine-gate line, verbatim:** `collecting: 44 of 44 expected files`
+(`EXPECTED_FILES=44`, `cloudbuild.test-engine.yaml:534`). The gates config asserts
+`EXPECTED_FILES=13` (`cloudbuild.test-gates.yaml:161`).
+
+⭐ **READ AND RECORD the pass counts — do not assert them from memory. A count that did NOT RISE
+must be EXPLAINED WITH A MECHANISM, not merely noted.**
+
+**Local pre-measurement at the merged tree `2d16fdd`** (the same test files, run in a local venv —
+this is a *prediction* for the Cloud Build, not a substitute for it):
+
+| Gate | Local result at `2d16fdd` |
+|---|---|
+| engine, 44 files | **1909 passed · 13 skipped · 6 errors · 0 FAILURES** |
+| gates, 13 files | **190 passed · 2 skipped · 0 FAILURES** |
+
+> ⚠ **THE 6 ERRORS ARE PRE-EXISTING AND WINDOWS-ONLY.** `ValueError: the environment variable is
+> longer than 32767 characters`, raised in pytest's `PYTEST_CURRENT_TEST` **teardown**, confined to
+> `test_dispatch_pii.py::test_never_raises` and `test_fact_list_parser.py::test_parser_never_raises`.
+> **Linux CI never hits the limit, so the Cloud Build should show 0 errors.** The pass condition is
+> **0 FAILURES**, not exit 0. Do not "fix" them and do not let them block the deploy decision.
+
+#### (d) FRONTEND GATES
+
+```bash
+cd frontend
+npm ci                       # ⛔ npm ci, NEVER npm install — the lockfile IS committed
+npm run build                # expect exit 0
+node scripts/i18n-audit.mjs  # CHECK B is a HARD gate; expect "PASS — A/B/C clean"
+npx vitest run               # expect 6 files / 61 tests passed
+npx tsc --noEmit -p tsconfig.json   # expect exit 0, no output
+```
+
+⛔ **`npm install` here caused a Radix/React #185 production break on 2026-07-21.** CLAUDE.md's
+"no lockfile committed" line is **stale and wrong**.
+
+> ⛔ **DO NOT RUN `npm run lint` AS A GATE — IT IS UNSATISFIABLE AT THIS BASE (DEF-21-01, operator
+> ruling 2026-08-10: stays deferred and OUT of Phase 21).** `frontend/scripts/c.ts` — an orphan
+> scratch script imported by nothing — carries 3 genuine `no-explicit-any` errors, so `eslint .`
+> exits 1 **no matter what any plan does**. Separately, `core.autocrlf=true` makes every file in a
+> Windows checkout fail `prettier/prettier`. **An agent running `prettier --write` across
+> `frontend/src/` during Phase 21 is defying a ruling, not closing a gap.** Verify PER FILE instead:
+>
+> ```bash
+> npm exec --prefix frontend -- eslint --config frontend/eslint.config.js <the files you touched>
+> ```
+>
+> Measured at `2d16fdd` across all four changed frontend sources: **0 non-prettier rule violations**
+> (1155 `prettier/prettier` messages, all CRLF checkout noise).
+
+---
+
+### 3. THE ORDERED DEPLOY
+
+⛔ **THE WORKER IS THE LAST DEPLOYABLE.** This is § Step 15.2.k's ORDERING CORRECTION, which exists
+because following the as-written order caused an incident. **NO migration step in this phase** —
+§ 1 derived that from the diff. If a future reader finds one, the proof is the literal
+`Running upgrade NNNN -> NNNN` line, **never exit 0**.
+
+1. **BUILD both tribunal images at ONE shared `$SHA`:**
+   ```bash
+   bash tribunal/infrastructure/cloud-run/build-and-push.sh
+   # writes API_IMAGE_URL + WORKER_IMAGE_URL to .last-build.env
+   ```
+2. **BUILD + DEPLOY `nestor-frontend`** (the four `--substitutions` are hand-typed and a typo breaks
+   the **live** frontend — copy them, do not retype):
+   ```bash
+   gcloud builds submit frontend --config=frontend/cloudbuild.yaml \
+     --substitutions=_IMAGE=...,_API_BASE_URL=...,_FB_API_KEY=...,_FB_AUTH_DOMAIN=...,_FB_PROJECT_ID=...
+   ```
+   then deploy that image to the `nestor-frontend` service.
+3. **DEPLOY `tribunal-api`** at `IMAGE_TAG=$SHA` via `deploy-api.sh` *(per § 1's recommendation; skip
+   only on an explicit recorded decision)*.
+   ⛔ **`--set-secrets` in the SCRIPTS is CORRECT and must NOT be "fixed".** The
+   `--update-secrets`-not-`--set-secrets` rule governs **hand-typed `gcloud run services update`**
+   against a live service. The scripts compose the FULL set on purpose; applying the hand-typed rule
+   to them would **DROP bindings**.
+4. **DEPLOY `tribunal-worker` LAST**, at `MIN_INSTANCES=0` + `IMAGE_TAG=$SHA` via `deploy-worker.sh`,
+   then a SEPARATE deliberate `--min-instances=1`. **Re-confirm the queue is empty immediately before
+   this step** — the boot claims first. After unpausing, **watch one poll cycle and confirm it claims
+   NOTHING. The correct observation is an idle worker. If it claims something, STOP and report.**
+5. **`nestor-api` — DO NOT DEPLOY.** CONFIRM-ONLY; record its existing revision. **The empty diff IS
+   the evidence** (`git diff --stat eac6f2b..HEAD -- backend/` is empty).
+
+---
+
+### 4. READ-BACK PROOFS — recorded VERBATIM
+
+Not "looks right". Record the actual strings.
+
+```bash
+# (a) Every new revision at 100% traffic, DIGEST-PINNED.
+#     ⛔ G-1: `containers[0].image` is a MUTABLE TAG and is NOT proof. Read status.imageDigest.
+#     A revision whose image resolves to `:latest` is not pinned and is not proof.
+for SVC in tribunal-worker tribunal-api nestor-frontend; do
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(status.latestReadyRevisionName,status.traffic)'
+  gcloud run revisions describe "$REVISION" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(status.imageDigest)'    # expect an @sha256: value
+done
+
+# (b) CONFIRM-ONLY — the service this deploy does NOT touch. Record the existing name.
+gcloud run services describe nestor-api --region="$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(status.latestReadyRevisionName)'
+
+# (c) Secret bindings BY NAME only, never a value.
+for SVC in tribunal-worker tribunal-api; do
+  gcloud run services describe "$SVC" --region="$REGION" --project="$GOOGLE_PROJECT" \
+    --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' \
+    | grep -E 'ANTHROPIC_API_KEY|SERPAPI_API_KEY'
+done
+
+# (d) The worker's plain env — READ the values back, do not assert them.
+gcloud run services describe tribunal-worker --region "$REGION" --project="$GOOGLE_PROJECT" \
+  --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' \
+  | grep -E 'NESTOR_WORKER|ABORTED|NESTOR_TRIBUNAL'
+```
+
+- **`NESTOR_WORKER_STALE_MINUTES`** — expect **60**, not `525600`. **Read the live value.**
+- ⭐ **The ABSENCE of every `NESTOR_TRIBUNAL_WORKSHOP_*` is a POSITIVE READ-BACK FINDING** and must be
+  written into the record as one. The Wave-4 validated configuration **IS the code defaults**. If any
+  one of them is set, the next measuring run measures a configuration nobody validated.
+  `NESTOR_TRIBUNAL_UNCAPPED=1` is expected and is the only tunable in the committed list.
+
+```sql
+-- (e) BOTH alembic heads, each from its OWN table. One does not imply the other.
+SELECT version_num FROM tribunal.tribunal_alembic_version;   -- expect: 0018 (UNCHANGED)
+SELECT version_num FROM public.alembic_version;              -- expect: 0013 (UNCHANGED)
+```
+
+**(f) NO RUN WAS TRIGGERED.** Re-list the audit bucket. **The newest-write timestamp must EQUAL the
+one recorded in § 2(b).** A newer timestamp means something claimed — STOP and report.
+
+---
+
+### 5. Closing note for the next reader
+
+**The ~$45 measuring run is the NEXT action and is deliberately NOT part of this deploy** (D-01,
+operator). Phase 21 ships first precisely so that ONE run validates **both** this feed **and** the
+three changes deployed at `20260806-175613` that have never executed.
+
+⛔ **THE NEXT MEASURED RUN IS A NEW BASELINE, NOT A COMPARISON against `368ff3a0`.** `260806-lvt`
+changed the report's shape and `260806-o96` changed which claims reach paid verification. Comparing
+the next run to `368ff3a0` compares two different engines and will produce a confident wrong answer.
+
+**Two known, ruled, OUT-OF-SCOPE defects will be visible in the feed and must NOT be reported as
+Phase 21 regressions:**
+
+- **DEF-21-03** — the `coverage` stage summary stays `{'worked': '0s', 'actions': 0}`. It reads
+  `state["items"]`, which is written **only** from `set_stage`'s `detail` argument; run events never
+  touch it. The feed body and the summary line have **two different inputs**. Known separate defect.
+- **DEF-21-04** — the `workshop` stage emits **12 body rows but NO divider**, so its block renders
+  with no phase heading. It is written by `StageFeed`, not by a `set_stage` transition, and that is
+  deliberate (D-F, plan 15.2-24). Known, out of scope.
