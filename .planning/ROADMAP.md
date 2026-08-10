@@ -600,7 +600,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 21-07-PLAN.md (W4) — the WR-03 raw-key fix: a BLOCKING ruling on declare-vs-label, the stale "fourteen stages" docstring corrected to the counted number, and the guard strengthened so the non-schema allowlist can never again hide a raw key (SC6, D-15)
+- [x] 21-07-PLAN.md (W4) — the WR-03 raw-key fix: a BLOCKING ruling on declare-vs-label, the stale "fourteen stages" docstring corrected to the counted number, and the guard strengthened so the non-schema allowlist can never again hide a raw key (SC6, D-15)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -633,4 +633,4 @@ reports nothing for 8 of 13 stages.
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
-| 21. Research Run Feed Completion | v1.1 | 6/8 | In Progress|  |
+| 21. Research Run Feed Completion | v1.1 | 7/8 | In Progress|  |
