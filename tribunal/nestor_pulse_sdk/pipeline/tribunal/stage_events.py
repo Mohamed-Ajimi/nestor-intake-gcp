@@ -510,10 +510,23 @@ def emit_verify_closing(run_id: Any, *, text: Any) -> None:
     `completed`. A second composer here would drift from it, and the run page and
     the intake card would then report different degradation for the same run.
     The caller binds that item once and hands both surfaces the same object.
+
+    A BLANK SENTENCE EMITS NOTHING. `run_events.emit` accepts an empty `text` and
+    would queue it, and an empty row renders as a BLANK LINE in the feed — which
+    the vocabulary comment in `runs/run_events.py` already names as worse than an
+    absent one. So a caller whose funnel produced no sentence loses the row rather
+    than printing a gap. The check is a string test on a value the caller already
+    holds, in the same class of work as `RowBudget.take()`: it cannot raise, and
+    it is the only work this function performs outside the emitter's own try.
     """
+    if text is None:
+        return
+    sentence = str(text).strip()
+    if not sentence:
+        return
     run_events.emit_safe(
         run_id,
         stage=_STAGE_VERIFY,
         kind="thinking",
-        build=lambda: (str(text or ""), None),
+        build=lambda: (sentence, None),
     )
