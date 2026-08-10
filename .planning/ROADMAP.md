@@ -585,10 +585,10 @@ six success criteria above and `21-CONTEXT.md` (D-01…D-15); plans trace to tho
 Plans:
 **Wave 1**
 
-- [ ] 21-01-PLAN.md (W1) — frontend: the pure settle rule + the hidden-rows predicate, pinned by vitest, and `RunFeed.tsx` wired to both — no spinner on a finished agent, no toggle over an empty phase (SC2/SC3, D-07/D-08/D-09)
-- [ ] 21-02-PLAN.md (W1) — frontend: `VerificationReport` reachable from the run page as a SIBLING of the card and the feed, gated on whether a report CAN exist rather than on which card branch renders, so failed and cancelled runs keep their verdicts (SC4, D-10/D-11)
-- [ ] 21-03-PLAN.md (W1) — engine: `stage_events.py` — the shared row budget, the visible elision row and the house emitter shape — plus `verify`, the stage the operator named twice, with per-cluster lifecycle rows and per-verdict rows (SC1, D-03/D-04/D-05/D-06)
-- [ ] 21-04-PLAN.md (W1) — engine: `21-DENSITY-AUDIT.md` — the per-site verdict as a reviewable artifact, a BLOCKING operator ruling, then exactly what was ruled and nothing more. Carries the measured contradiction of SC5's premise (SC5, D-12/D-13/D-14)
+- [x] 21-01-PLAN.md (W1) — frontend: the pure settle rule + the hidden-rows predicate, pinned by vitest, and `RunFeed.tsx` wired to both — no spinner on a finished agent, no toggle over an empty phase (SC2/SC3, D-07/D-08/D-09)
+- [x] 21-02-PLAN.md (W1) — frontend: `VerificationReport` reachable from the run page as a SIBLING of the card and the feed, gated on whether a report CAN exist rather than on which card branch renders, so failed and cancelled runs keep their verdicts (SC4, D-10/D-11)
+- [x] 21-03-PLAN.md (W1) — engine: `stage_events.py` — the shared row budget, the visible elision row and the house emitter shape — plus `verify`, the stage the operator named twice, with per-cluster lifecycle rows and per-verdict rows (SC1, D-03/D-04/D-05/D-06)
+- [x] 21-04-PLAN.md (W1) — engine: `21-DENSITY-AUDIT.md` — the per-site verdict as a reviewable artifact, a BLOCKING operator ruling, then exactly what was ruled and nothing more. Carries the measured contradiction of SC5's premise (SC5, D-12/D-13/D-14)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -633,4 +633,4 @@ reports nothing for 8 of 13 stages.
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
-| 21. Research Run Feed Completion | v1.1 | 0/8 | Planned (8 plans, 5 waves) | - |
+| 21. Research Run Feed Completion | v1.1 | 4/8 | In Progress|  |
