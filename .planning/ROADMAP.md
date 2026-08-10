@@ -482,10 +482,67 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
   3. The 3 open product decisions are decided and implemented: Templates page visibility, Intake-info link-row trimming, and the "Verzonden mails" history block.
 **Plans**: TBD
 
+### Phase 21: Research Run Feed Completion
+**Goal**: The dedicated run page tells the whole story of a run — every stage reports, finished work reads as finished, and the claims-verification evidence is on the page built to hold it.
+**Depends on**: Phase 15.3 (run page + run-event contract), Phase 15.2 (engine core stages)
+**Success Criteria** (what must be TRUE):
+  1. All 13 tribunal stages emit feed content, not just the 4 wired by 15.3 (`workshop`, `research_division`, `deep_research`, `own_research`). The 8 silent stages — `distill`, `merge`, `gate`, `verify`, `adjudicate`, `coverage`, `conflict`, `synthesize` — each emit a dispatch header and per-item rows, so no phase renders as a label with nothing under it.
+  2. A finished agent never renders as a spinner. `agent_run` rows resolve once their work is done, rather than animating forever because the feed is append-only.
+  3. The "Show more" toggle appears only when rows are actually hidden — never on a phase whose body is empty or shorter than the collapsed preview.
+  4. `VerificationReport` (funnel, verdicts, superseded, reconciled, unverified, true cost) is reachable from the dedicated run page, not only from the intake detail card.
+  5. The `deep_research` `thinking` prose is DIAGNOSED before it is trimmed (D-12): a per-site keep/cut
+     verdict exists as a reviewable artifact, the operator rules on it, and whatever is ruled is applied —
+     a line that leaves the feed is demoted to a log, never deleted.
+     ⚠ **AMENDED AT PLANNING 2026-08-10** — measurement contradicts this criterion's original premise.
+     All 8 `thinking` sites in `audited_llm_client.py` are money or long-silence, which are D-13's two KEEP
+     classes, and 5 of them are pinned by `test_own_researcher.py`, whose own comment reads "the wording is
+     the deliverable". Under D-13 as written the correct CONTENT trim is **zero cuts**; the measured volume
+     driver is CARDINALITY — one correct line multiplied by 19 angles. A ruling of "no change to that file"
+     therefore SATISFIES this criterion. Detail: `21-04-PLAN.md` and the `21-DENSITY-AUDIT.md` it produces.
+  6. No raw stage key ever reaches the operator's screen, and a test enforces it.
+     ⚠ **AMENDED AT PLANNING 2026-08-10** — three measured corrections to this criterion's premises:
+     (a) the recurrence-guard test it asks for **already exists and is already registered in CI** —
+     `test_stage_schema.py::test_every_set_stage_key_in_the_pipeline_is_declared`, in
+     `cloudbuild.test-gates.yaml`;
+     (b) `report_spec` was **not undetected** — it is a deliberate entry in that test's
+     `_NON_SCHEMA_MARKERS` allowlist, put there by plan 15.1-13 with a written reason: declaring it
+     "would put a phantom row in the ordered checklist of every NON-interactive run";
+     (c) `pipeline.py:3955` sits inside `if interactive_report:`, a gate Phase 16's D-01/D-01b says never
+     fires for seam runs — so this is a LATENT defect, not the raw key the operator saw during UAT.
+     The OUTCOME clause stands. The MECHANISM is an open decision put to the operator at `21-07-PLAN.md`
+     Task 1: declare it in the schema, or label it on the READ path per this project's own standing
+     generalisation ("when a truncated identifier reaches a reader, resolve it on the READ path instead of
+     widening the identifier" — CONTINUE-HERE.md, paid off twice already). Either way the guard is made
+     strictly stronger: every allowlisted marker must now prove it has a human label, so the allowlist can
+     never again be a hole a raw key reaches the screen through.
+**Requirements**: none assigned — this phase carries no REQUIREMENTS.md id. Its sources of record are the
+six success criteria above and `21-CONTEXT.md` (D-01…D-15); plans trace to those ids, exactly as phases
+15.7 and 15.8 do.
+**Plans**: 8 plans in 5 waves (planned 2026-08-10)
+
+Plans:
+- [ ] 21-01-PLAN.md (W1) — frontend: the pure settle rule + the hidden-rows predicate, pinned by vitest, and `RunFeed.tsx` wired to both — no spinner on a finished agent, no toggle over an empty phase (SC2/SC3, D-07/D-08/D-09)
+- [ ] 21-02-PLAN.md (W1) — frontend: `VerificationReport` reachable from the run page as a SIBLING of the card and the feed, gated on whether a report CAN exist rather than on which card branch renders, so failed and cancelled runs keep their verdicts (SC4, D-10/D-11)
+- [ ] 21-03-PLAN.md (W1) — engine: `stage_events.py` — the shared row budget, the visible elision row and the house emitter shape — plus `verify`, the stage the operator named twice, with per-cluster lifecycle rows and per-verdict rows (SC1, D-03/D-04/D-05/D-06)
+- [ ] 21-04-PLAN.md (W1) — engine: `21-DENSITY-AUDIT.md` — the per-site verdict as a reviewable artifact, a BLOCKING operator ruling, then exactly what was ruled and nothing more. Carries the measured contradiction of SC5's premise (SC5, D-12/D-13/D-14)
+- [ ] 21-05-PLAN.md (W2) — engine: `distill`, `merge`, `gate` — copying the landed pattern; each closing sentence bound ONCE and shared between `stage_detail` and the feed so the two surfaces cannot drift (SC1)
+- [ ] 21-06-PLAN.md (W3) — engine: `adjudicate`, `coverage` (the emptiest — a bare marker with no detail at all), `conflict`, `synthesize` including the module-level resume path; the capstone test derives its stage list from the SCHEMA, not a hardcoded thirteen (SC1)
+- [ ] 21-07-PLAN.md (W4) — the WR-03 raw-key fix: a BLOCKING ruling on declare-vs-label, the stale "fourteen stages" docstring corrected to the counted number, and the guard strengthened so the non-schema allowlist can never again hide a raw key (SC6, D-15)
+- [ ] 21-08-PLAN.md (W5) — DEPLOY: the surface RE-DERIVED from the actual diff (D-02), both Cloud Build gates read as build TEXT, the digest-proven ordered deploy, and a recorded-run UAT with one honest verdict per success criterion. Triggers NO research run (D-01/D-02)
+
+**Wave structure:** W1 is four-way parallel across disjoint file sets — two frontend plans, the engine spine
+plus `verify`, and the density audit. W2 → W4 serialise on `pipeline.py`, which every engine plan touches
+and which GSD forbids two same-wave plans from sharing. W5 is the deploy.
+**Ships BEFORE the first measured run** (D-01): the ~$45 run then validates this feed AND the three
+still-unexercised changes at tag `20260806-175613` together, instead of being spent watching a view that
+reports nothing for 8 of 13 stages.
+
 ## Progress
 
 **Execution Order:**
-13 → 14 → 16 → 17 → 18 → 15 → 15.1 → 15.2 → 19 → 20 (operator decision 2026-07-24, SUPERSEDES the 2026-07-21 deferral: Phase 15 redefined as the Research Engine Redesign, split into 15/15.1/15.2, all before Phase 19 so Q&A chat indexes the NEW engine's output from day one)
+13 → 14 → 16 → 17 → 18 → 15 → 15.1 → 15.2 → 21 → 19 → 20 (operator decision 2026-07-24, SUPERSEDES the 2026-07-21 deferral: Phase 15 redefined as the Research Engine Redesign, split into 15/15.1/15.2, all before Phase 19 so Q&A chat indexes the NEW engine's output from day one)
+
+**Phase 21 is sequenced BEFORE the first measured run** (operator decision 2026-08-10). The three changes deployed at tag `20260806-175613` have never executed, and the ~$45 run that would validate them is the only thing that can also validate the run feed. Running first would spend it watching a view that reports nothing for 8 of 13 stages, so the feed is fixed first and one run validates both.
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -500,3 +557,4 @@ can break the "every claim lands in exactly one bucket" funnel invariant). Both 
 | 18. Human Report Upload + Client Delivery | v1.1 | 4/4 | Complete    | 2026-07-22 |
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
+| 21. Research Run Feed Completion | v1.1 | 0/8 | Planned (8 plans, 5 waves) | - |
