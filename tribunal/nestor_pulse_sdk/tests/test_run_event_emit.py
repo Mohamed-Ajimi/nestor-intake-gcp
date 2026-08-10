@@ -96,9 +96,17 @@ from nestor_pulse_sdk.runs.stages import ENGINE_STAGES
 
 # The stubbed end-to-end harness, IMPORTED rather than rebuilt (same reason
 # `test_stage_logging.py` states for its own use of it).
+from nestor_pulse_sdk.pipeline.tribunal import gates as _gates_mod
 from nestor_pulse_sdk.tests.test_engine_e2e_stubbed import (
+    # 21-05: the one-hook subclass that makes a single stream return no fact
+    # list, so the distiller-fallback branch is driven rather than described.
+    _LostStreamProvidersAudited,
     _ScriptedProvidersAudited,
     _engine_run,
+    # 21-05: the gate prompt's item-block reader, so the dropping subclass below
+    # answers in the SAME indexed form production sent — a hand-built answer
+    # would test the fake against itself.
+    _indexed_items,
     _no_db_sessionmaker,
     # 21-03: the `set_stage` detail reader, so the closing feed row can be
     # compared against the sentence the OTHER surface was handed.
@@ -1636,4 +1644,573 @@ async def test_a_raising_verify_composer_costs_the_row_and_not_the_run(monkeypat
     # on the whole stage the moment one composer failed.
     assert persisted.of("verify", "agent_run"), (
         "one raising composer silenced every other row on the stage"
+    )
+
+
+# ===========================================================================
+# PHASE 21 — `distill`, `merge` AND `gate` GET BODIES (plan 21-05)
+#
+# The same section, extended rather than duplicated, for the reason 21-03's
+# header gives: `cloudbuild.test-engine.yaml` already names this path in its
+# WANTED list and `EXPECTED_FILES` stays 44. `_Persisted`, `_install_writer` and
+# the vacuity-guard discipline above are reused as-is.
+#
+# WHAT EACH OF THE THREE STAGES WAS BEFORE THIS PLAN: a heading with nothing
+# under it. Measured in the stubbed run at the base commit — `distill` 0 body
+# rows, `merge` 0, `gate` 0. Measured after: 5, 3 and 2 on the clean run, and 5
+# on `gate` once the run actually drops something.
+#
+# THE ONE-HOOK DISCIPLINE. Two subclasses drive the branches the clean script
+# never reaches. Each overrides exactly ONE method, in the shape
+# `_LostStreamProvidersAudited` uses, so any difference in the outcome is
+# attributable to the one thing that changed.
+# ===========================================================================
+
+
+class _DroppingGateAudited(_ScriptedProvidersAudited):
+    """Materiality DROPs every second claim, with a reason the gates declare.
+
+    THE CLEAN SCRIPT KEEPS EVERYTHING (`_answer_materiality`: "KEEP everything"),
+    so on it `funnel["dropped"]` is 0 and every assertion about a drop row would
+    be vacuous — an empty filter compared with `>= 0` reads as a pass. This
+    subclass is what makes the gate's drop rows a real measurement.
+
+    `NOT_FALSIFIABLE` is one of `gates._DROP_REASONS`; an unattributable reason
+    is converted back to a KEEP by `apply_gates` itself, so answering with a made
+    up one would silently produce a run with no drops at all.
+    """
+
+    def _answer_materiality(self, prompt: str) -> str:
+        rows: list[str] = []
+        for position, (index, _body) in enumerate(
+            _indexed_items(prompt, "\nClaims:\n")
+        ):
+            if position % 2:
+                rows.append(f"{index} | DROP | NOT_FALSIFIABLE")
+            else:
+                rows.append(f"{index} | KEEP | KEEP")
+        return "\n".join(rows)
+
+
+#: The three stage keys this plan gave bodies to. Named once so the parameterised
+#: body test and the closing-sentence test cannot drift apart.
+_21_05_STAGES = ("distill", "merge", "gate")
+
+#: The count of multi-member clusters, read out of the sentence `pipeline.py`
+#: composes for `_merge_row` — PRODUCTION's own number, not one this file
+#: derives from the rows under test. A test that counted the cluster rows and
+#: then compared them with themselves would prove nothing.
+_MULTI_RE = re.compile(r"\((\d+) holding more than one stream's version")
+
+#: The elision row's fixed half, used as a PRECONDITION rather than as an
+#: assertion: `RowBudget.flush` emits after the closing row, so a run that
+#: overflowed would put the elision line last and the closing-sentence
+#: comparison would be reading the wrong row.
+_ELISION_MARKER = "not shown — the feed shows the first"
+
+
+def _providers_the_run_dispatched(audited) -> set[str]:
+    """The research streams this run actually used, read off the FAKE's ledger.
+
+    Derived from `audited.routes` — the fake's own per-route call counter — so
+    the expected set comes from what was dispatched rather than from a list
+    retyped into this test. A stream that stopped being dispatched would shrink
+    this set and the assertion would follow it instead of failing on a stale
+    hard-coded name.
+    """
+    prefix = "deep_research_"
+    return {
+        route[len(prefix):] for route in audited.routes if route.startswith(prefix)
+    }
+
+
+# --- the three stages are no longer labels with nothing under them ----------
+@pytest.mark.parametrize("stage", _21_05_STAGES)
+async def test_the_stage_is_no_longer_a_label_with_nothing_under_it(
+    stage, monkeypatch
+):
+    """SC1 at the three stages plan 21-05 owns.
+
+    WHAT BREAKS IF THIS FIRES: "Claim distillation", "Cross-provider merge" or
+    "Verification gates" renders as a heading with an empty block under it, and
+    21-01's collapse toggle correctly hides itself because there is nothing to
+    hide. That is complaint 3 of the operator's 2026-08-10 UAT.
+
+    The filter is `RunFeed.tsx`'s own `body` predicate, so this measures what the
+    operator sees rather than what the engine intended — an assertion that
+    counted EVENTS would have passed against the defect from the day 15.3
+    shipped, because all three stages have always had a divider and a summary.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    # THE VACUITY GUARD, FIRST — before any filter runs.
+    assert stage in _stage_sequence(statements), (
+        f"the stubbed run never reported the {stage} stage — every assertion "
+        f"below would be vacuous: {_stage_sequence(statements)}"
+    )
+    assert persisted.on(stage), (
+        f"the {stage} stage produced no run event at all, not even a divider"
+    )
+
+    body = persisted.body(stage)
+    assert len(body) >= 2, (
+        f"the {stage} stage is still a label with nothing under it: its only "
+        f"rows are {[row['kind'] for row in persisted.on(stage)]}. Before 21-05 "
+        f"this was 0."
+    )
+    # EXACTLY ONE dispatch header for the stage, never one per item.
+    assert len(persisted.of(stage, "dispatch")) == 1, (
+        f"expected ONE dispatch header on {stage}, got "
+        f"{[row['text'] for row in persisted.of(stage, 'dispatch')]}"
+    )
+
+
+# --- (a) distill names each stream and what it yielded ----------------------
+async def test_distill_names_each_stream_and_what_it_yielded(monkeypatch):
+    """D-04's per-item bar at the distill stage.
+
+    Until this plan the stage reported only TOTALS, so a run in which one
+    provider silently contributed nothing looked identical, on the page, to one
+    in which every stream contributed evenly.
+
+    The expected provider set is DERIVED from the fake's own dispatch ledger, and
+    each name is asserted to appear in a row's TEXT — not merely in its meta,
+    which the feed does not render.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "distill" in _stage_sequence(statements), "vacuity guard"
+    expected = _providers_the_run_dispatched(audited)
+    assert expected, (
+        "the stubbed run dispatched no research stream — the assertion below "
+        f"would be vacuous: {sorted(audited.routes)}"
+    )
+
+    stream_rows = persisted.of("distill", "agent_done") + persisted.of(
+        "distill", "agent_retry"
+    )
+    assert len(stream_rows) == len(expected), (
+        f"{len(expected)} stream(s) were read and {len(stream_rows)} row(s) "
+        f"describe them: {[row['text'] for row in stream_rows]}"
+    )
+    named = " | ".join(row["text"] for row in stream_rows)
+    for provider in sorted(expected):
+        assert provider in named, (
+            f"the distill stage never names the {provider!r} stream: {named!r}"
+        )
+    # AND SAYS WHAT IT YIELDED, not merely that it was read. A row naming a
+    # stream and no number would satisfy the loop above and tell the operator
+    # nothing about whether that stream contributed anything.
+    for row in persisted.of("distill", "agent_done"):
+        assert re.search(r"\bstated \d+ fact\(s\)", row["text"]), row["text"]
+
+
+# --- (b) a fallen-back stream says WHY, and a healthy one says nothing -------
+async def test_a_fallen_back_stream_says_why(monkeypatch):
+    """D-14's fallback, stated on the page instead of in Cloud Logging.
+
+    THE NEGATIVE CONTROL IS THE POINT. Asserting only that a fallback run emits
+    an `agent_retry` row would also pass on an implementation that emitted one
+    for EVERY stream — which would tell the operator that all four fell back. So
+    the clean run is driven first and asserted to produce ZERO of them.
+    """
+    # --- the counterfactual: a run where no stream fell back ----------------
+    clean_persisted = _install_writer(monkeypatch)
+    clean_audited = _ScriptedProvidersAudited()
+    _clean_result, clean_statements = await _engine_run(
+        clean_audited, monkeypatch=monkeypatch
+    )
+    assert "distill" in _stage_sequence(clean_statements), "vacuity guard"
+    assert clean_persisted.of("distill", "agent_done"), (
+        "the clean run emitted no per-stream row at all, so the absence of a "
+        "retry row below proves nothing"
+    )
+    assert clean_persisted.of("distill", "agent_retry") == [], (
+        "a run in which no stream fell back still reported a fallback: "
+        f"{clean_persisted.texts('distill', 'agent_retry')!r}"
+    )
+
+    # --- the branch itself ---------------------------------------------------
+    persisted = _install_writer(monkeypatch)
+    audited = _LostStreamProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "distill" in _stage_sequence(statements), "vacuity guard"
+    assert audited.factless_providers == [
+        _LostStreamProvidersAudited.FACTLESS_PROVIDER
+    ], f"the scripted factless stream never fired: {audited.factless_providers}"
+
+    retries = persisted.of("distill", "agent_retry")
+    assert len(retries) == 1, (
+        "exactly one stream returned no fact list and the feed reported "
+        f"{len(retries)} fallback row(s): "
+        f"{[row['text'] for row in persisted.on('distill')]}"
+    )
+    text = retries[0]["text"]
+    assert _LostStreamProvidersAudited.FACTLESS_PROVIDER in text, text
+    # IT SAYS WHY. 15.2-04 writes that sentence for a human to read; the row
+    # quotes it rather than paraphrasing, so "why did this stream fall back" is
+    # answered on the page.
+    assert "FACTS_START" in text, (
+        f"the fallback row does not carry 15.2-04's reason: {text!r}"
+    )
+    # AND IT IS NOT REPORTED AS A FAILURE. Per D-14 a fallback degrades ONE
+    # STREAM's metadata, not the run — the provider's research still reached the
+    # merge in full, so an ✗ here would be a false fault report.
+    assert persisted.of("distill", "agent_fail") == [], (
+        "a distiller fallback was rendered as a stream FAILURE: "
+        f"{persisted.texts('distill', 'agent_fail')!r}"
+    )
+
+
+# --- (c) merge names a multi-stream cluster and ignores singletons -----------
+async def test_merge_names_a_multi_stream_cluster_and_ignores_singletons(
+    monkeypatch,
+):
+    """D11's whole purpose, made visible.
+
+    A cluster holding two or more streams' version of the same fact is what makes
+    a contradiction reconcilable — it is why run 4cbb5311 published Aral's German
+    fuel market share at both 16% and 21%, and why the clusterer was moved above
+    the gates. A singleton is the ordinary case and earns no row.
+
+    THE EXPECTED COUNT IS PRODUCTION'S OWN. It is parsed out of the sentence
+    `pipeline.py` composes for `_merge_row`, not counted from the rows under
+    test, so this cannot pass by comparing the emitter with itself.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "merge" in _stage_sequence(statements), "vacuity guard"
+    closing = [
+        row["text"] for row in persisted.of("merge", "thinking")
+        if _MULTI_RE.search(row["text"])
+    ]
+    if not closing:
+        pytest.skip(
+            "this run did not cluster (the per-claim A/B baseline is selected), "
+            "so it can hold no multi-member cluster to report"
+        )
+    expected_multi = int(_MULTI_RE.search(closing[-1]).group(1))
+    if expected_multi == 0:
+        pytest.skip(
+            "the stubbed run formed no multi-member cluster, so asserting zero "
+            "cluster rows would be a pass that proves nothing"
+        )
+
+    cluster_rows = [
+        row for row in persisted.of("merge", "thinking")
+        if "share one skeptic session" in row["text"]
+    ]
+    assert len(cluster_rows) == expected_multi, (
+        f"the run formed {expected_multi} multi-member cluster(s) and the feed "
+        f"described {len(cluster_rows)}: "
+        f"{[row['text'] for row in cluster_rows]}"
+    )
+    # Each one names its subject and how many streams met in it — a row that said
+    # only "a cluster" would satisfy a count and tell the operator nothing.
+    for row in cluster_rows:
+        assert re.search(r"\b\d+ stream\(s\) stated", row["text"]), row["text"]
+        assert int(row["meta"]["items"]) >= 2, row["meta"]
+
+
+# --- (d) the gate drop rows name the gate's own reason -----------------------
+async def test_gate_drop_rows_name_the_gate_reason(monkeypatch):
+    """G-01/G-02's refusals, itemised.
+
+    Run 4cbb5311 dropped 738 claims here and the page said nothing about a single
+    one. The operator's question is WHICH GATE refused a claim, so the row carries
+    the gate's own vocabulary rather than a paraphrase — otherwise the feed row
+    and the funnel's printed reason breakdown read as two different accountings
+    of the same drop.
+
+    THE EXPECTED COUNT IS DERIVED, not asserted as `>= 1`: `min(dropped, bound)`
+    is what catches an off-by-one filter, which "at least one" never would.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _DroppingGateAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert "gate" in _stage_sequence(statements), "vacuity guard"
+    funnel = result.get("verification_summary") or {}
+    dropped = int(funnel.get("dropped") or 0)
+    assert dropped > 0, (
+        "the dropping script produced no drop at all, so every assertion below "
+        f"would be vacuous: {funnel!r}"
+    )
+    expected = min(dropped, stage_events.MAX_ROWS_PER_STAGE)
+
+    rows = persisted.of("gate", "plan")
+    assert len(rows) == expected, (
+        f"the gates dropped {dropped} claim(s) and the feed described "
+        f"{len(rows)} (bound {stage_events.MAX_ROWS_PER_STAGE}): "
+        f"{[row['text'] for row in rows]}"
+    )
+    # The reasons are read OFF `gates.py`, not retyped here.
+    allowed = set(_gates_mod._DROP_REASONS)
+    assert allowed, "gates._DROP_REASONS is empty — the assertion is vacuous"
+    for row in rows:
+        assert any(reason in row["text"] for reason in allowed), (
+            f"a gate drop row names no gate reason: {row['text']!r}"
+        )
+        assert row["meta"]["sub"] in allowed, row["meta"]
+    # A KEEP earns no row: the funnel already counts it, and one row per kept
+    # claim would bury the drops under the ordinary case.
+    assert len(rows) < int(funnel.get("distilled") or 0), (
+        "every claim produced a drop row, so the KEEP filter is not applied"
+    )
+
+
+# --- (e) the gate row budget states its elision as a visible row -------------
+async def test_the_gate_budget_states_its_elision(monkeypatch):
+    """D-05 at the stage with the largest per-item population.
+
+    Driven with an explicit small `limit` rather than through `monkeypatch.setenv`
+    — `MAX_ROWS_PER_STAGE` is resolved at IMPORT, so setting the environment
+    variable after import silently does nothing.
+    """
+    persisted = _install_writer(monkeypatch)
+    claim = {
+        "text": "The Benelux fuel-retail market was worth EUR 38 billion.",
+        "gate": {
+            "decision": "DROP",
+            "reason": "NOT_LOAD_BEARING",
+            "strict": None,
+            "gate_error": False,
+        },
+    }
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    budget = stage_events.RowBudget(run_id, "gate", limit=4)
+    try:
+        for _ in range(11):
+            stage_events.emit_gate_drop(run_id, budget, claim=claim)
+        assert budget.used == 4 and budget.elided == 7, (budget.used, budget.elided)
+        budget.flush("claim")
+        # IDEMPOTENT: a second flush must not add a second elision row.
+        budget.flush("claim")
+    finally:
+        await run_events.close_run(run_id)
+
+    assert len(persisted.of("gate", "plan")) == 4, (
+        f"the budget did not bound the drop rows: "
+        f"{len(persisted.of('gate', 'plan'))}"
+    )
+    elisions = persisted.of("gate", "thinking")
+    assert len(elisions) == 1, (
+        f"expected exactly one elision row, got {len(elisions)}: "
+        f"{[row['text'] for row in elisions]}"
+    )
+    # THE REAL COUNT, not a fixed string.
+    assert "7 more claim(s)" in elisions[0]["text"], elisions[0]["text"]
+    assert "first 4" in elisions[0]["text"], elisions[0]["text"]
+    assert elisions[0]["meta"]["items"] == 7
+
+
+# --- (f) no distill / merge / gate emit can fail the run --------------------
+async def test_no_distill_merge_or_gate_emit_can_fail_the_run(monkeypatch):
+    """D-06 at the nine sites this plan adds.
+
+    THE NEGATIVE CONTROLS COME FIRST, and each is the construction a call site
+    composing its own f-string would perform. Without them a green run below
+    could mean "the degraded shapes were harmless after all" rather than "the
+    construction happens inside the emitter's try".
+    """
+    # A record that is not the dataclass the distill row expects.
+    degraded_record: Any = object()
+    with pytest.raises(AttributeError):
+        degraded_record.provider
+    # A group that is not a mapping at all.
+    not_a_mapping: Any = ["lukoil", "benelux_retail"]
+    with pytest.raises(AttributeError):
+        not_a_mapping.get("claims")
+    # A claim whose gate block is a string rather than a dict.
+    gate_not_a_dict: dict[str, Any] = {"text": "a claim", "gate": "DROP"}
+    with pytest.raises(TypeError):
+        gate_not_a_dict["gate"]["decision"]
+    # A claim the gates DROPPED but whose reason is missing — the shape that
+    # passes the selectivity test and then raises inside the row's own composer,
+    # which is the only shape that can prove the thunk is what protects the run.
+    drop_without_reason: dict[str, Any] = {
+        "text": "a claim", "gate": {"decision": "DROP"},
+    }
+    with pytest.raises(KeyError):
+        drop_without_reason["gate"]["reason"]
+
+    persisted = _install_writer(monkeypatch)
+    good_claim: dict[str, Any] = {
+        "text": "LUKOIL sold its Benelux retail arm.",
+        "gate": {"decision": "DROP", "reason": "BOTH", "strict": None},
+    }
+    good_group: dict[str, Any] = {
+        "entity": "lukoil",
+        "attribute": "benelux_retail",
+        "claims": [{"text": "a"}, {"text": "b"}],
+    }
+
+    run_id = uuid.uuid4()
+    await run_events.open_run(run_id, uuid.uuid4())
+    distill_budget = stage_events.RowBudget(run_id, "distill", limit=25)
+    merge_budget = stage_events.RowBudget(run_id, "merge", limit=25)
+    gate_budget = stage_events.RowBudget(run_id, "gate", limit=25)
+    try:
+        # (i) NOTHING RAISES — every helper, against every degraded shape.
+        stage_events.emit_distill_dispatch(run_id, streams=3, reports=3)
+        stage_events.emit_distill_record(
+            run_id, distill_budget, record=degraded_record
+        )
+        stage_events.emit_distill_done(run_id, text=None, claims=0)
+
+        stage_events.emit_merge_dispatch(run_id, claims=7, streams=3)
+        stage_events.emit_merge_cluster(run_id, merge_budget, group=not_a_mapping)
+        stage_events.emit_merge_cluster(run_id, merge_budget, group=good_group)
+        stage_events.emit_merge_done(run_id, text="   ", clusters=0)
+
+        stage_events.emit_gate_dispatch(run_id, claims=7)
+        stage_events.emit_gate_drop(run_id, gate_budget, claim=gate_not_a_dict)
+        stage_events.emit_gate_drop(run_id, gate_budget, claim=drop_without_reason)
+        stage_events.emit_gate_drop(run_id, gate_budget, claim=good_claim)
+        stage_events.emit_gate_done(run_id, text=None, funnel={})
+
+        distill_budget.flush("research stream")
+        merge_budget.flush("cluster")
+        gate_budget.flush("claim")
+    finally:
+        await run_events.close_run(run_id)
+
+    # (ii) AND THE GOOD ROWS SURVIVE. 15.4-05's lesson: a swallowed build is a
+    # LOST ROW, so "nothing raised" alone would pass against a version that
+    # dropped every line.
+    assert len(persisted.of("distill", "dispatch")) == 1
+    assert len(persisted.of("merge", "dispatch")) == 1
+    assert len(persisted.of("gate", "dispatch")) == 1
+    assert len(persisted.of("merge", "thinking")) == 1, (
+        "the well-formed cluster row was lost alongside the degraded one: "
+        f"{persisted.texts('merge', 'thinking')!r}"
+    )
+    assert len(persisted.of("gate", "plan")) == 1, (
+        "the well-formed drop row was lost alongside the degraded ones: "
+        f"{persisted.texts('gate', 'plan')!r}"
+    )
+    assert "BOTH" in persisted.texts("gate", "plan")[0]
+
+    # (iii) NO ROW WAS FABRICATED, AND NO BLANK ROW WAS EMITTED. A degraded
+    # record, a non-mapping group and a malformed gate each cost their own row
+    # and nothing else; a closing sentence that came out `None` or all-whitespace
+    # emitted NOTHING rather than a blank line, which `RUN_EVENT_KINDS`' own
+    # comment calls worse than an absent one.
+    assert persisted.of("distill", "agent_done") == []
+    assert persisted.of("distill", "agent_retry") == []
+    assert persisted.of("distill", "thinking") == [], (
+        "a blank distill closing sentence still reached the feed: "
+        f"{persisted.texts('distill', 'thinking')!r}"
+    )
+    assert persisted.texts("merge", "thinking") == [
+        text for text in persisted.texts("merge", "thinking") if text.strip()
+    ]
+    assert persisted.of("gate", "thinking") == [], (
+        "a blank gate closing sentence still reached the feed: "
+        f"{persisted.texts('gate', 'thinking')!r}"
+    )
+    # No elision either: nothing was REFUSED, so nothing may be announced as
+    # refused. A row the emitter could not build is not a row the budget elided.
+    assert all(
+        _ELISION_MARKER not in row["text"] for row in persisted.rows
+    ), [row["text"] for row in persisted.rows if _ELISION_MARKER in row["text"]]
+
+
+async def test_a_raising_distill_composer_costs_the_row_and_not_the_run(
+    monkeypatch,
+):
+    """The STRUCTURAL half of (f), and the one that survives a future edit.
+
+    A composer promising never to raise is a promise by one helper. Passing a
+    zero-argument callable is the structural guarantee that whatever it builds is
+    built inside the emitter's try. Forcing the composer to raise is the only way
+    to keep asserting that: if anyone ever "tidies" the emitter by hoisting the
+    build call above its `try`, this run dies instead of losing a row.
+
+    This is also where "the run completes" is proved for these three stages — end
+    to end, through the real pipeline, with the real emitter.
+    """
+    persisted = _install_writer(monkeypatch)
+
+    def _boom(_record):
+        raise RuntimeError("synthetic distill composer failure for the D-06 proof")
+
+    monkeypatch.setattr(stage_events, "_distill_record_event", _boom)
+
+    audited = _ScriptedProvidersAudited()
+    result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    # THE RUN COMPLETES.
+    assert "done" in _stage_sequence(statements), (
+        f"a raising feed composer cost the RUN, not just its row: "
+        f"{_stage_sequence(statements)}"
+    )
+    assert result is not None
+    # The rows it could not build are DROPPED — correct here; fabricated is not.
+    assert persisted.of("distill", "agent_done") == [], (
+        "a line whose text could not be built reached the feed anyway"
+    )
+    # ...and the stage still has a body, so one broken composer did not silence
+    # the whole stage.
+    assert persisted.of("distill", "dispatch"), (
+        "one raising composer silenced every other row on the stage"
+    )
+    assert persisted.of("distill", "thinking"), (
+        "the distill closing sentence was lost with the per-stream rows"
+    )
+
+
+# --- the closing sentence is ONE sentence, on both surfaces -----------------
+@pytest.mark.parametrize("stage", _21_05_STAGES)
+async def test_the_closing_feed_row_is_the_same_sentence_as_the_stage_detail(
+    stage, monkeypatch
+):
+    """The proof that the inline-to-local rebindings preserved their strings.
+
+    Two of the three closing sentences were composed INLINE inside the
+    `set_stage` detail dict and had to be bound to a local so the feed row and
+    the stage detail could share them. A rebinding that dropped a clause would
+    leave both surfaces green in isolation and disagreeing with each other, which
+    is exactly the failure `_verify_closing_item` exists to prevent at its own
+    stage — and only a cross-surface comparison can catch it.
+    """
+    persisted = _install_writer(monkeypatch)
+    audited = _ScriptedProvidersAudited()
+    _result, statements = await _engine_run(audited, monkeypatch=monkeypatch)
+
+    assert stage in _stage_sequence(statements), "vacuity guard"
+
+    # PRECONDITION: `RowBudget.flush` emits AFTER the closing row, so a run that
+    # overflowed would put the elision line last and this comparison would be
+    # reading the wrong row. The stubbed run never overflows; assert it rather
+    # than assume it.
+    assert all(
+        _ELISION_MARKER not in row["text"] for row in persisted.on(stage)
+    ), f"the {stage} stage overflowed its budget — the last row is the elision"
+
+    # The `set_stage` writes are captured as raw JSON, so the names are parsed
+    # back out rather than substring-matched — a JSON escape of an em dash would
+    # otherwise make an identical sentence look different.
+    detail_names: list[str] = []
+    for entry in _stage_detail_entries(statements, stage):
+        for item in (json.loads(entry).get(stage) or {}).get("items") or []:
+            name = item.get("name")
+            if name:
+                detail_names.append(str(name))
+    assert detail_names, f"the {stage} stage wrote no stage_detail — vacuous compare"
+
+    feed_lines = persisted.texts(stage, "thinking")
+    assert feed_lines, f"the {stage} stage emitted no closing line"
+    assert feed_lines[-1] in detail_names, (
+        "the closing feed row and the stage detail are not the same sentence:\n"
+        f"  feed:   {feed_lines[-1]!r}\n  detail: {detail_names!r}"
     )
