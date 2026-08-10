@@ -2,252 +2,386 @@
 phase: 21-research-run-feed-completion-silent-post-research-stages-stu
 plan: 07
 subsystem: tribunal-engine-observability
-tags: [stage-labels, WR-03, SC6, divider, read-path, run-feed]
-status: PAUSED — blocking operator decision at Task 1
+tags: [stage-labels, WR-03, SC6, divider, read-path, run-feed, D-15]
 requires:
   - "tribunal/nestor_pulse_sdk/pipeline/tribunal/pipeline.py::_stage_event_label (15.3-03)"
-  - "tribunal/nestor_pulse_sdk/runs/stages.py::ENGINE_STAGES (the schema, 13 entries)"
-  - "tribunal/nestor_pulse_sdk/tests/test_stage_schema.py (the 15.1-13 WR-03 guard)"
+  - "tribunal/nestor_pulse_sdk/runs/stages.py::ENGINE_STAGES (13 ordered entries)"
+  - "tribunal/nestor_pulse_sdk/tests/test_stage_schema.py (the 15.1-13 WR-03 declaration guard)"
 provides:
-  - "PENDING — awaiting the Task 1 ruling"
+  - "stages.NON_SCHEMA_STAGE_LABELS — the second label source for written-but-undeclared keys"
+  - "_stage_event_label resolving EVERY key any source knows, raw-key fallback preserved"
+  - "the strengthened WR-03 guard: declaration AND label resolution, over a UNION of three sources"
+  - "SC6 CLOSED — no raw stage key can reach the operator's screen"
 affects:
   - "the divider text RunFeed.tsx renders verbatim as the uppercase phase label"
+  - "a future stage added without a label now fails the build instead of shipping as an identifier"
 tech-stack:
   added: []
-  patterns: []
+  patterns:
+    - "resolve a truncated/raw identifier on the READ path, never by widening the identifier (G-10, G-5, now this)"
+    - "an exemption from one requirement must not silently become an exemption from all of them"
+    - "a guard over a UNION of sources, because a single-file source scan has blind spots"
 key-files:
   created: []
-  modified: []
+  modified:
+    - tribunal/nestor_pulse_sdk/runs/stages.py
+    - tribunal/nestor_pulse_sdk/pipeline/tribunal/pipeline.py
+    - tribunal/nestor_pulse_sdk/tests/test_run_event_emit.py
+    - tribunal/nestor_pulse_sdk/tests/test_stage_schema.py
 decisions:
-  - "PENDING — Task 1 is a blocking operator decision, not guessed"
+  - "OPERATOR RULING 2026-08-10: option-read-path — the ordered schema stays at 13, report_spec is NOT declared"
+  - "the ruling covers BOTH done and report_spec — one map, both markers"
+  - "15.1-13's phantom-row reasoning was REVIEWED AND UPHELD, not reversed"
+  - "the guard iterates the UNION of extracted ∪ declared ∪ allowlist — stronger than the plan asked"
+  - "the raw-key fallback is deliberately KEPT and pinned by a negative control"
 metrics:
-  duration: ~35 min (Task 1 measurement only)
-  completed: PAUSED 2026-08-10
+  duration: ~95 min
+  completed: 2026-08-10
 ---
 
-# Phase 21 Plan 07: Stage Labels — PAUSED at the Task 1 Decision
+# Phase 21 Plan 07: SC6 Closed — No Raw Stage Key Reaches the Operator
 
-**No source file has been modified.** Task 1 is a `checkpoint:decision` with
-`gate="blocking"` and the plan forbids starting Task 2 before it is answered.
-This file records the measurement that informs the ruling.
+The plan was written to fix a **latent** defect on an interactive branch that
+never fires for seam runs. Measurement before writing any code found a **second**
+raw-key leak that was not latent at all: **every completed run ever opened ended
+on a divider whose text was literally `done`.** Both are now labelled on the read
+path, the ordered schema is untouched at thirteen, and the guard that missed this
+has been widened from "is the key declared" to "does the key resolve to a label",
+over a union of sources rather than one file.
 
-## STATUS: AWAITING OPERATOR RULING
+## THE OPERATOR'S RULING, RECORDED VERBATIM
 
-The decision, verbatim from the plan: *How `report_spec` (and `done`, and any
-future non-schema marker) stops rendering as a raw snake_case key: by DECLARING
-it in `ENGINE_STAGES["tribunal"]` as D-15 proposes, or by giving the READ PATH a
-label for it while leaving the ordered schema at thirteen.*
+> **(1) `option-read-path`.** Give the read path labels; the ordered schema stays
+> at **thirteen**. Do NOT declare `report_spec` in `ENGINE_STAGES["tribunal"]`.
+>
+> **(2) Confirmed: it must cover BOTH `done` and `report_spec`.** The operator
+> accepted your correction — `done` renders as a raw-key fallback on every
+> ordinary completed run, `done` cannot be declared because `stages.py:36`
+> documents the terminal position as implicit, and shipping two mechanisms would
+> be worse than either alone. One map, both markers.
+>
+> **(3) Widen the guard to the union.** Test (a) must iterate
+> **keys-extracted-from-`pipeline.py` ∪ every declared schema key ∪
+> `_NON_SCHEMA_MARKERS`**.
 
-**Options:** `option-declare` | `option-read-path` (planner's recommendation).
+**Date of ruling: 2026-08-10.** No phantom checklist row was accepted, because
+`option-declare` was not selected.
 
----
+## THE CORRECTION TO THE PLAN'S PREMISE — measured before any code was written
 
-## ⚠ THE PLAN'S FACT 4 IS HALF WRONG, AND THE HALF THAT IS WRONG CHANGES THE DECISION
+The plan's FACT 4 concluded the defect was latent. It is right about
+`report_spec` and wrong about the defect. Every `set_stage` key extracted from
+`pipeline.py`, passed through the real `_stage_event_label` at the base commit:
 
-The plan states the raw-key defect is **LATENT** — that `report_spec` can only be
-written on the interactive branch, which never fires for seam runs, and therefore
-*"the operator has almost certainly never seen a `report_spec` divider on screen"*.
-
-**That is correct about `report_spec` and it is wrong about the defect.** There
-are **TWO** raw-key leaks, not one. The second is `done`, and it fires on **every
-single completed run**.
-
-### How this was measured (executed, not grepped)
-
-The `_SET_STAGE_RE` extraction over `pipeline.py`, with each extracted key passed
-through the real `_stage_event_label`:
-
-| key | `_stage_event_label(key)` | raw key? |
+| key | resolved to | raw? |
 |---|---|---|
-| `adjudicate` | `Adjudication` | |
-| `conflict` | `Conflict detection` | |
-| `coverage` | `Coverage gate` | |
-| `deep_research` | `Deep research` | |
-| `distill` | `Claim distillation` | |
-| **`done`** | **`done`** | **⛔ RAW KEY** |
-| `gate` | `Verification gates` | |
-| `intake` | `Adaptive intake` | |
-| `merge` | `Cross-provider merge` | |
-| **`report_spec`** | **`report_spec`** | **⛔ RAW KEY** |
-| `research_division` | `Research division` | |
-| `synthesize` | `Final synthesis` | |
-| `verify` | `Skeptic verification` | |
+| `adjudicate` `conflict` `coverage` `deep_research` `distill` `gate` `intake` `merge` `research_division` `synthesize` `verify` | their labels | |
+| **`done`** | **`done`** | ⛔ |
+| **`report_spec`** | **`report_spec`** | ⛔ |
 
-13 keys extracted; 13 stages declared.
-
-### The proof that `done` is NOT latent
-
-Driving the full stubbed pipeline through 21-06's own harness (`_engine_run` +
-`_ScriptedProvidersAudited`, rows read at `run_events._writer`) and printing the
-`text` of every `divider` row — i.e. exactly the string `RunFeed.tsx:339-347`
-renders — a complete, ordinary, **non-interactive** run emits **13 dividers**:
+Then the full stubbed pipeline was driven through 21-06's own harness and every
+`divider` row's `text` printed — the exact string `RunFeed.tsx:339-347` renders.
+A complete, **non-interactive** run emitted 13 dividers ending:
 
 ```
-intake             'Adaptive intake'
-research_division  'Research division'
-deep_research      'Deep research'
-distill            'Claim distillation'
-merge              'Cross-provider merge'
-gate               'Verification gates'
-verify             'Skeptic verification'
-adjudicate         'Adjudication'
-coverage           'Coverage gate'
-verify             'Skeptic verification'
-conflict           'Conflict detection'
-synthesize         'Final synthesis'
-done               'done'                *** RAW KEY ON SCREEN ***
+synthesize   'Final synthesis'
+done         'done'          *** RAW KEY ON SCREEN ***
 ```
 
-The `done` divider comes from `pipeline.py:4660`
-(`_stage_log_transition(run_id, "done", ...)`) → `_stage_event_boundary`
-(line 601) → `build=lambda: (_stage_event_label(stage_key), None)` (line 571).
-There is no interactive branch involved. **Every completed run the operator has
-ever opened ends with a divider whose text was produced by the raw-key fallback.**
+The `done` divider comes from `pipeline.py:4660` → `_stage_event_boundary` →
+`build=lambda: (_stage_event_label(stage_key), None)`. No interactive branch is
+involved. It renders as `DONE`, which is why it was never reported — it happens
+to be an English word — but it was produced by a fallback rather than by any
+label anyone chose.
 
-It renders as `DONE` (RunFeed uppercases), which is why it has never been
-reported as "rubbish information" — it happens to be an English word. But it is
-still a raw stage key on the operator's screen, produced by a fallback rather
-than by any label anyone chose, and SC6's outcome clause forbids exactly that.
+**Why this decided the mechanism:** `done` *cannot* be declared (`stages.py:36`
+documents the terminal position as implicit), so `option-declare` would have
+fixed `report_spec` and still needed a read-path label for `done` — shipping the
+phantom row **and** the second source. `option-read-path` handles both with one
+map. The operator ruled on that basis.
 
-### Why this is decision-relevant, not trivia
+### After the fix, same measurement
 
-**`done` cannot be fixed by `option-declare`.** `stages.py:36` states the rule:
-*"The terminal 'done' position is implicit (current_stage == 'done')"* — the UI
-infers completion from `current_stage`, it is not a checklist row. Declaring
-`done` in `ENGINE_STAGES` would add a phantom terminal row to every run's ordered
-checklist and break the exact-list assertion at `test_stage_schema.py:116-130`.
+```
+synthesize   'Final synthesis'
+done         'Run complete'
+RAW-KEY DIVIDERS EMITTED BY A COMPLETE RUN: []
+```
 
-So under `option-declare` the outcome is: `report_spec` gets a schema entry,
-**and `done` still needs a read-path label anyway.** That ships BOTH mechanisms —
-the phantom row *and* the second label source — which is strictly worse than
-either option on its own. Under `option-read-path`, one map handles both markers
-uniformly and the schema stays at thirteen.
+## SC6 verified EXHAUSTIVELY, and the check is FAIL-ABLE
 
-**This does not pre-empt the ruling** — the operator may still prefer the schema
-entry for `report_spec` specifically. It is recorded here because the plan's
-options were written as if `report_spec` were the only marker in play, and it is
-not.
+**Exhaustive:** the assertion runs over the **union of every source that can put
+a key on a divider** — 15 keys — not over one file's grep:
 
----
+```
+adjudicate -> Adjudication          merge             -> Cross-provider merge
+conflict   -> Conflict detection    own_research      -> Own research
+coverage   -> Coverage gate         report_spec       -> Report shaping
+deep_research -> Deep research      research_division -> Research division
+distill    -> Claim distillation    synthesize        -> Final synthesis
+done       -> Run complete          verify            -> Skeptic verification
+gate       -> Verification gates    workshop          -> Question workshop
+intake     -> Adaptive intake
+RAW KEY LEAKS: []
+```
 
-## Everything else in the plan's `<measured_facts>` VERIFIED as written
+**Fail-able — the guard was OBSERVED to fail.** `report_spec`'s label was
+temporarily removed from `NON_SCHEMA_STAGE_LABELS` and the file re-run. Two of
+the three new tests went red, each naming `report_spec` and each stating the
+repair. **Verbatim:**
 
-| Fact | Verdict |
+```
+E   AssertionError: these stage keys resolve to THEMSELVES, so the run page's phase divider
+renders the raw snake_case key to the operator: ['report_spec']. Give each one a label - an
+ordered checklist step goes in ENGINE_STAGES['tribunal'], a written-but-not-a-step marker goes
+in stages.NON_SCHEMA_STAGE_LABELS. This is the WR-03 defect class: the UI shows a bare key with
+no label.
+E   assert not ['report_spec']
+
+E   AssertionError: 'report_spec' is exempt from being declared in ENGINE_STAGES, which is
+deliberate - but it is still WRITTEN to run.current_stage and the divider renders whatever the
+resolver returns, so it also needs a label. Add 'report_spec' to stages.NON_SCHEMA_STAGE_LABELS.
+E   assert 'report_spec' != 'report_spec'
+
+======================== 2 failed, 7 passed in 32.60s =========================
+```
+
+Restored with `git checkout --` on that single path; `git diff` against HEAD for
+`stages.py` is **empty**, and the file is green again at **9 passed**.
+
+## The WR-03 defect class cannot recur
+
+| Test | What it makes impossible |
 |---|---|
-| **FACT 1** — the recurrence guard already exists and is registered | ✅ `test_every_set_stage_key_in_the_pipeline_is_declared` at `test_stage_schema.py:175-203`, with its `len(found) >= 8` vacuity guard and `{"gate","verify","synthesize"} <= found` positive control. Registered in `cloudbuild.test-gates.yaml` (`EXPECTED_FILES=13`). |
-| **FACT 2** — `report_spec` was deliberately excluded by 15.1-13 | ✅ `_NON_SCHEMA_MARKERS` at `test_stage_schema.py:38-48`, with the written phantom-row rationale and *"listed here explicitly so the exception is reviewable, not silently absorbed"*. |
-| **FACT 3** — the phantom-row cost is real | ✅ declaring it would also break the exact 13-name list assertion at lines 116-130. |
-| **FACT 4** — `report_spec` is interactive-only | ✅ **for `report_spec`** — now at `pipeline.py:4213` (not 3955; 21-06 shifted the lines), inside `if interactive_report:` at 4206, `return`ing at 4218. ⛔ but see above: the *defect* is not latent, because `done` is. |
-| **FACT 5** — the stale "fourteen" claim | ✅ **and there are THREE, not two.** See below. |
-| **FACT 6** — the read-path generalisation | ✅ CONTINUE-HERE.md, paid off at G-10 and G-5. |
+| `test_every_set_stage_key_in_the_pipeline_is_declared` (**untouched, 15.1-13**) | a `set_stage` key that is not declared and not allowlisted |
+| **(a)** `test_every_pipeline_stage_key_resolves_to_a_human_label` | a key any source knows about rendering as itself |
+| **(b)** `test_the_non_schema_allowlist_cannot_grow_into_a_raw_key_leak` | exempting a key from declaration *without* labelling it, in the same edit |
+| **(c)** `test_the_raw_key_fallback_still_exists_for_an_unknown_key` | (a) and (b) becoming vacuous if the resolver ever labelled everything |
 
-### FACT 5 correction: there are THREE stale "fourteen" claims, not two
-
-The plan names `pipeline.py:483` and `test_run_event_emit.py`'s header. Measured:
-
-- `pipeline.py:225` — *"15.3-03: the fourteen `{key, label}` pairs."*  ← **the plan does not mention this one**
-- `pipeline.py:490` — *"has carried a label for all fourteen stages since Phase 15"*
-- `test_run_event_emit.py:15` — *"label for all fourteen stages since Phase 15"*
-
-`grep -ci "fourteen" pipeline.py` returns **2**. The plan's acceptance criterion
-*"`grep -ci "fourteen" pipeline.py` returns 0"* therefore requires fixing **both**
-pipeline.py lines, not just the docstring at 490. (`test_run_event_emit.py:2358`
-and `test_workshop_loop.py:1076` also contain "fourteen"/"fourteenth" but both are
-correct forward-looking prose about a hypothetical 14th stage — they must NOT be
-touched.)
-
----
-
-## `own_research`: handled deliberately — it is ALREADY LABELLED, and needs no exclusion
-
-The orchestrator flagged this as the shape most likely to produce a labelling
-blind spot. Measured, it does not:
-
-- `own_research` **is declared** in `ENGINE_STAGES["tribunal"]` with the label
-  `"Own research"` (`stages.py:53`). So `_stage_event_label("own_research")`
-  returns `Own research` — **it is not a raw-key leak and never can be.**
-- It is **never written** by any `set_stage` call, anywhere: absent from the
-  13-key extraction over `pipeline.py`, and the only non-pipeline writers are
-  `stage_feed.py` (writes `workshop`) and `runs/adapter.py` (the **`adk`** engine,
-  a different schema). Confirmed: it emits **no divider** in the stubbed run.
-
-**Conclusion: `own_research` requires NO action in this plan and NO entry in any
-allowlist.** A key that is never written cannot reach the screen, and if it is
-ever wired it already has a label waiting. This is the opposite of 21-06's
-situation — there the body requirement could not be satisfied for it, here the
-label requirement is already satisfied for it. It falls through no gap.
-
-## A REAL blind spot found instead: `workshop`
-
-Both the existing guard and the plan's proposed test (a) extract keys from
-`pipeline.py` **only**. Two declared stages are written elsewhere or not at all:
-
-```
-declared stages with NO divider in a complete run: ['own_research', 'workshop']
-```
-
-`workshop` is written by `StageFeed` (`stage_feed.py:126`), **not** by a
-`set_stage` call in `pipeline.py` — `pipeline.py:1752-1763` documents this as
-deliberate (D-F, 15.2-24). So a source-scan over `pipeline.py` **cannot see it**,
-and a future StageFeed-written key with no schema entry would slip past the
-guard exactly as `gate` and `report_spec` did.
-
-`workshop` itself is safe today (it is declared and labelled `Question
-workshop`). **The recommendation for Task 3 is that test (a) iterate the UNION of
-(keys extracted from `pipeline.py`) ∪ (every declared schema key) ∪
-(`_NON_SCHEMA_MARKERS`)**, which closes the StageFeed hole rather than merely
-reproducing the existing test's reach. That is strictly stronger than the plan
-asks for and costs nothing.
-
-> **Separately noted, NOT fixed here:** `workshop` emits body rows but **no
-> divider**, so its block on the run page has no phase heading. That is a
-> *divider-presence* defect, not a *label* defect, and is therefore outside SC6
-> and outside this plan. Logged as a finding for the phase, not actioned.
-
----
-
-## Baselines pinned at the base commit `a05ec48`
-
-Every one read out of the file, none from memory:
-
-| Measurement | Value |
-|---|---|
-| `grep -c "await set_stage(" pipeline.py` | **23** |
-| `grep -c "run_events.open_run" pipeline.py` | **1** |
-| `grep -ci "fourteen" pipeline.py` | **2** |
-| `EXPECTED_FILES` in `cloudbuild.test-engine.yaml` | **44** |
-| `EXPECTED_FILES` in `cloudbuild.test-gates.yaml` | **13** |
-| `test_stage_schema.py` passing | **6 passed** |
-| declared tribunal stages | **13** |
-| `set_stage` keys extracted from `pipeline.py` | **13** |
-| dividers in a complete stubbed run | **13** (one raw: `done`) |
-
-## Stale-base trap — caught, **27th consecutive occurrence**
-
-The worktree forked from **`a3a0c96`** — the same commit every previous time.
-`git merge-base` caught it; `git rev-list --count` would have read green. All
-four positive-presence sentinels then passed against the corrected tree
-(`stage_events.py`, 21-05's `_sentence_or_none`, `21-06-SUMMARY.md`,
-`21-07-PLAN.md`) before any measurement was trusted.
+A new stage without a label now **fails a test**; it cannot surface as an
+identifier.
 
 ## Deviations from Plan
 
-None yet — no source change has been made. The two corrections above
-(`done` is a second, non-latent leak; three "fourteen" claims not two) are
-corrections to the plan's *premises*, surfaced for the ruling rather than acted
-on unilaterally.
+### 1. [Reconciled against purpose — STRONGER form] The guard iterates a UNION, not the plan's source scan
+
+- **The plan asked for:** test (a) to extract keys with `_SET_STAGE_RE` over
+  `pipeline.py` and assert each resolves.
+- **Why that is not enough:** `workshop` is written by `StageFeed`
+  (`runs/stage_feed.py:126`), **not** by any `set_stage` call in `pipeline.py`,
+  and `pipeline.py:1752-1763` records that as deliberate (D-F, 15.2-24). A scan
+  of one file **cannot see it** — the identical one-file blind spot that let
+  `gate` and then `report_spec` through in the first place. Reproducing the
+  existing test's reach would have reproduced its hole.
+- **Implemented instead:** the union of *(extracted from `pipeline.py`)* ∪
+  *(every declared schema key)* ∪ *(`_NON_SCHEMA_MARKERS`)* — **15 keys vs 13**.
+  Approved by the operator as ruling (3).
+- The `>= 8` vacuity guard is still computed on the **extracted** set, so a
+  broken regex still fails loudly rather than being masked by the schema keys.
+
+### 2. [Rule 1 — bug] TWO pre-existing tests had PINNED the defect and failed
+
+Task 2's own verify command went red at first: `2 failed, 93 passed`. Neither was
+caused by a mistake in the change — both tests asserted the old, wrong behaviour.
+
+- **`test_a_stage_with_no_schema_entry_falls_back_to_its_key`** asserted
+  `recorder.texts("divider") == ["Final synthesis", "done"]`. Its *reasoning* was
+  sound — "a blank divider would be worse than a bare key" — but its **specimen
+  was wrong**: it used `done`, which is not a hypothetical unknown key but one
+  written at the end of every run. So the test certified a raw key reaching the
+  operator on every completed run.
+  **Renamed to `test_a_written_marker_is_labelled_and_an_unknown_key_still_falls_back`
+  and split into the two properties it conflated:** a *written* marker must be
+  labelled, and an *unknown* key must still fall back — the latter now proven
+  with an invented key, which is what the old test meant all along.
+- **`_label_of()`**, the helper the harness uses to derive expected labels,
+  mirrored only `ENGINE_STAGES`. That is *why* a raw `done` divider looked
+  correct to every assertion built on it. It now mirrors both sources, in the
+  same order as the resolver.
+
+This is the fifth consecutive plan in this phase to hit something written during
+planning that did not survive contact with the code — and the first where the
+thing that did not survive was an existing **test** rather than an acceptance
+criterion.
+
+### 3. [Extended past the plan, per ruling] THREE stale "fourteen" claims, not two
+
+The plan named `pipeline.py:483` and the `test_run_event_emit.py` header, but the
+criterion `grep -ci "fourteen" pipeline.py == 0` cannot be met by fixing one
+pipeline site. Measured: **2** in `pipeline.py`.
+
+| Site | Action |
+|---|---|
+| `pipeline.py:225` (import comment, *"the fourteen `{key, label}` pairs"*) | **FIXED** → "the 13 ordered" — **not named by the plan** |
+| `pipeline.py:490` (`_stage_event_label` docstring) | **FIXED** → "all 13 of its ordered stages" |
+| `test_run_event_emit.py:15` (header) | **FIXED** → "all 13 of its ordered stages" + names the second source |
+
+**Deliberately LEFT UNTOUCHED — both are correct forward-looking prose, not
+stale claims:**
+
+- `test_run_event_emit.py:2361` — *"a hardcoded list of thirteen names would go
+  stale the day the **fourteenth** is declared"*. This is the capstone's rationale
+  for deriving from the schema. It says thirteen is today's count and describes a
+  hypothetical fourteenth. Correct as written.
+- `test_workshop_loop.py:1076` — *"**Fourteen** keys, and the ten original ones
+  are all still present."* This counts keys in a workshop result dict and has
+  nothing to do with stage schemas at all.
+
+`grep -ci "fourteen" pipeline.py` is now **0**.
+
+## `own_research`: handled deliberately — NO action needed, and here is the evidence
+
+Flagged as the shape most likely to produce a labelling blind spot. Measured, it
+is the opposite:
+
+- **It is already labelled.** `own_research` **is** declared in
+  `ENGINE_STAGES["tribunal"]` with label `"Own research"` (`stages.py:53`), so
+  `_stage_event_label("own_research")` returns `Own research`. **It cannot leak
+  raw, and never could.** It needs no `NON_SCHEMA_STAGE_LABELS` entry.
+- **It is never written.** Absent from the 13-key extraction over `pipeline.py`;
+  the only non-pipeline stage writers are `stage_feed.py` (writes `workshop`) and
+  `runs/adapter.py` (the **`adk`** engine — a different schema the tribunal
+  resolver never consults). It emits **no divider** in a full stubbed run.
+- **It is nonetheless COVERED by the new guard**, because the union includes
+  every declared schema key. So if it is ever wired, its label is already
+  asserted — and 21-06's pinned `_NEVER_REPORTED` set simultaneously drags it
+  under the body requirement.
+
+**Conclusion: labelled, covered, and requiring no exclusion.** A later reader
+should not re-open this. It fell through no gap: 21-06's problem was that a
+*body* could not exist for it; here the *label* already does.
+
+## New finding, routed not absorbed: DEF-21-04
+
+`workshop` emits 12 body rows but **no divider**, so its block on the run page
+has no phase heading. Cause: `StageFeed` writes the key, and dividers ride
+`_stage_log_transition`, which `pipeline.py:1752-1763` deliberately bypasses for
+the workshop span (D-F, 15.2-24).
+
+**Out of scope and not fixed** — it is a divider-*presence* defect, not a
+divider-*label* defect, and `workshop` is fully labelled. Logged as **DEF-21-04**
+in `deferred-items.md` per the operator's instruction.
+
+## Verification results
+
+| Check | Result |
+|---|---|
+| Task 2 verify (3 files) | **95 passed, 0 failures** |
+| Task 3 verify (`test_stage_schema.py`) | **9 passed** (base: **6**) — **+3**, the criterion's minimum |
+| **Full 44-file engine gate** | **1909 passed, 13 skipped, 6 errors, 0 FAILURES** in 140s |
+| **13-file test-gates config** | **190 passed, 2 deselected, exit 0** |
+| `grep -c "await set_stage("` | **23** — unchanged |
+| `grep -c "run_events.open_run"` | **1** — unchanged |
+| `grep -ci "fourteen" pipeline.py` | **0** (was 2) |
+| `EXPECTED_FILES` engine / gates | **44 / 13** — both read from the files, both unchanged |
+| `cloudbuild.test-engine.yaml` | **NOT in the diff** vs base |
+| `check_coverage(..., selected_only=True)` | **2 matches**, and `check_coverage` appears in **no diff hunk** |
+| declared tribunal stages | **13** — schema untouched |
+
+**The 6 errors are pre-existing and Windows-only** — 4 in `test_dispatch_pii.py`,
+2 in `test_fact_list_parser.py`, all `ValueError: the environment variable is
+longer than 32767 characters` from pytest's own `PYTEST_CURRENT_TEST` teardown on
+very long parametrised ids. Present at every commit including the base; 21-03,
+21-05 and 21-06 each recorded the identical six. Neither file is in this plan's
+diff. **`grep -c "^FAILED"` is 0**, which is the pass condition.
+
+**Why the engine gate count did not move (1909, same as 21-06):**
+`test_stage_schema.py` is registered in `cloudbuild.test-gates.yaml` (13 files),
+**not** in the 44-file engine gate — verified by extracting both lists from the
+configs. My +3 tests land in the gates config (6→9, inside its 190). The one
+engine-gate file I touched, `test_run_event_emit.py`, had a test **renamed**, not
+added. So 1909 unchanged is the correct expected result, not a sign the new tests
+are unregistered.
+
+## Diff shape
+
+Four files, all in `tribunal/`. Every `pipeline.py` hunk is at lines **225–523** —
+`git diff -U0` hunk headers are `@@ -225,3 @@`, `@@ -228,0 @@`, `@@ -488,7 @@`,
+`@@ -499,0 @@`. **No hunk intersects the `if interactive_report:` branch** (now at
+4206–4218), the `report_spec` write, or the cost trap. All four
+`test_stage_schema.py` hunks are pure insertions (`-N,0` — zero deletions
+anywhere in the file), inserted at old lines 38/55/63/225, so
+`test_every_set_stage_key_in_the_pipeline_is_declared` (old lines 175–203) is
+**byte-identical**, vacuity guard and positive control included.
+
+## Stale-base trap — caught, **27th consecutive occurrence**
+
+Forked from **`a3a0c96`** again — the same commit every previous time, and now
+685+ behind. `git merge-base` caught it; `git rev-list --count` would have read
+green. All four positive-presence sentinels then passed against the corrected
+tree before a single measurement was trusted.
 
 ## Known Stubs
 
-None — no code written.
+None. Both labels are real strings rendered by a real code path, proven by
+driving the pipeline end to end.
 
 ## Threat Flags
 
-None — no source modified.
+None. No network endpoint, no auth path, no file access, no schema change.
 
-## Self-Check
+- **T-21-07-01** (raw key rendered to an operator): closed — the resolver now
+  consults both sources and test (a) asserts over the union that nothing resolves
+  to itself. The fallback is deliberately kept for a newer build's unknown key
+  and pinned by test (c).
+- **T-21-07-02** (a future exemption re-opening the hole): closed — test (b)
+  iterates `_NON_SCHEMA_MARKERS` **itself**, never a copy.
+- **T-21-07-03** (silently reversing 15.1-13): closed — the ruling is recorded
+  verbatim and dated above, and 15.1-13's reasoning was **upheld**, with the
+  allowlist comment updated to say so.
+- **T-21-07-04** (DoS): none — one dict lookup on a path that runs once per
+  stage transition.
+- **T-21-07-SC** (package installs): none. No package installed, no
+  `requirements.txt` edited.
 
-- `.planning/.../21-07-SUMMARY.md` — this file, committed with `git add -f`
-- no source file modified: `git diff --name-only` against `a05ec48` lists only
-  this SUMMARY
+## Commits
+
+| Hash | Message |
+|---|---|
+| `3840d4d` | `docs(21-07)`: record Task 1 measurement — a SECOND raw-key leak, and it is not latent |
+| `fe4d98e` | `fix(21-07)`: label the written-but-undeclared stage markers on the read path |
+| `32552fb` | `test(21-07)`: make the WR-03 guard cover LABELS, not just declaration |
+
+## For `.planning/CONTINUE-HERE.md`
+
+> **WR-03, third encounter — what the guard now covers and what it still does
+> not.** The stage guard used to ask one question: is every `set_stage` key in
+> `pipeline.py` declared in `ENGINE_STAGES`? It now asks two, because
+> `_NON_SCHEMA_MARKERS` exempted a key from declaration and *nothing* checked
+> that an exempt key had a label — so the allowlist itself was the route by which
+> a raw key reached the screen. Measured 2026-08-10: **every completed run ended
+> on a divider reading literally `done`**, which is why "the raw key is latent"
+> was wrong. Both markers (`done`, `report_spec`) are now labelled on the READ
+> path via `stages.NON_SCHEMA_STAGE_LABELS`, the ordered schema stays at
+> thirteen, and the guard iterates the **union** of extracted ∪ declared ∪
+> allowlist — because a scan of `pipeline.py` alone cannot see `workshop`, which
+> `StageFeed` writes. **Still NOT covered:** that a reported stage has a divider
+> *at all* (`workshop` has none — DEF-21-04); any stage key written by a module
+> the union does not enumerate; and the `adk` engine's schema, which
+> `_stage_event_label` never consults since it hardcodes `stages_for("tribunal")`.
+> **The generalisation held for the third time:** resolve a raw identifier on the
+> READ path rather than widening the identifier (G-10, then G-5, now this).
+
+## For the next executor
+
+- **Nothing here has run against a live model.** Like 21-03, 21-05 and 21-06,
+  this is proven against the stubbed harness only. The ~$45 run is still the
+  thing that validates it.
+- **Deploy surface:** `tribunal/` only → `tribunal-worker`. Re-derive from the
+  actual diff at deploy time (D-02); the 2026-08-06 deploy caught a third service
+  after a standing note said two.
+- **DEF-21-04 is new** and belongs with the SC1 family, not with labels.
+
+## Self-Check: PASSED
+
+- `tribunal/nestor_pulse_sdk/runs/stages.py` — FOUND (modified)
+- `tribunal/nestor_pulse_sdk/pipeline/tribunal/pipeline.py` — FOUND (modified)
+- `tribunal/nestor_pulse_sdk/tests/test_run_event_emit.py` — FOUND (modified)
+- `tribunal/nestor_pulse_sdk/tests/test_stage_schema.py` — FOUND (modified)
+- commits `3840d4d`, `fe4d98e`, `32552fb` — all present in
+  `git log a05ec48..HEAD`
+- `cloudbuild.test-engine.yaml` and `cloudbuild.test-gates.yaml` — **NOT** in
+  `git diff --name-only` vs base
+- the temporary gate-bite edit is fully reverted — `git diff` on `stages.py` is
+  empty and the file is green at 9 passed
 - STATE.md and ROADMAP.md — **NOT modified** (the orchestrator owns those writes)

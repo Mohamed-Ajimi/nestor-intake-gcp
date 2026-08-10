@@ -195,3 +195,56 @@ own consumers (`RunMetrics.stages`, the intake card).
 `test_the_coverage_stage_summary_is_no_longer_empty` in `test_run_event_emit.py`. It is written to
 fail loudly with an instruction if `actions` stops being 0, so the fix cannot land silently — it
 forces the test and this item to be closed together.
+
+---
+
+## DEF-21-04 — the `workshop` stage emits body rows but NO divider, so its block has no heading
+
+**Found during:** 21-07 Task 1, by measuring every `divider` row's text in a full stubbed run
+**Status:** deferred — **out of 21-07's scope by operator ruling, 2026-08-10**. Routed here rather
+than absorbed silently.
+
+### What was measured
+
+Driving the stubbed pipeline and reading every `divider` row at `run_events._writer`, a complete
+run emits **13 dividers**, and the declared stages with **no divider at all** are:
+
+```
+['own_research', 'workshop']
+```
+
+`own_research` is expected and correct — the pipeline never writes that key at all (see 21-06's
+pinned `_NEVER_REPORTED` exclusion, and 21-07's own finding that it is nonetheless already
+labelled `Own research`, so it can never leak raw).
+
+**`workshop` is the real gap.** It IS reported — it appears twice in the `set_stage` sequence and
+21-06 measured **12 body rows** on it, the most of any stage — but it gets no divider, so those 12
+rows render on the run page with no phase heading above them.
+
+### Why
+
+`workshop` is written by `StageFeed` (`runs/stage_feed.py:126`), **not** by a `set_stage` call in
+`pipeline.py`. Dividers are emitted only by `_stage_event_boundary`, which rides
+`_stage_log_transition`. `pipeline.py:1752-1763` records that this is deliberate (D-F, plan
+15.2-24): the workshop is an **explicit span** (`_stage_log_line("stage_enter", ...)`) rather than
+a synthetic transition, because *"pushing `workshop` through `_stage_log_transition` would split
+the pipeline's two `intake` writes into two separate entries and re-introduce the entry-per-write
+noise the transition rule exists to prevent."*
+
+So the missing divider is a consequence of a decision that was made for a good reason. Fixing it
+means finding a way to open a divider for an explicit span without re-splitting `intake` — which
+is a change to the stage-log transition contract, not a label change.
+
+### Why it was not fixed in 21-07
+
+**It is a divider-PRESENCE defect, not a divider-LABEL defect**, and 21-07's scope (SC6) is
+labels: no raw stage key may reach the operator's screen. `workshop` is fully labelled
+(`Question workshop`) and could never leak raw. Adding a divider would change *which events the
+pipeline emits*, which is engine-observability behaviour and belongs with the SC1 family of work
+(21-03/05/06), not with the label resolver.
+
+**Note for whoever picks this up:** 21-07's new
+`test_every_pipeline_stage_key_resolves_to_a_human_label` already asserts over the union that
+includes `workshop`, so the label side is protected today. What is unprotected is that the stage
+has no heading — no test asserts a divider exists per reported stage. If this is fixed, that
+assertion is the thing to add alongside it.
