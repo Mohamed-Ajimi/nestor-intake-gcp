@@ -9,9 +9,20 @@ a phase label and a summary line (both are automatic; see below), so on the run
 page each rendered as a heading with nothing under it, and the collapse toggle
 above it expanded to reveal nothing. This module is where their BODIES live.
 
-WHICH OF THE EIGHT ARE DONE. Plan 21-03 gave `verify` a body; plan 21-05 gave
-`distill`, `merge` and `gate` theirs. `adjudicate`, `coverage`, `conflict` and
-`synthesize` are plan 21-06's, and they extend THIS module by the recipe below.
+WHICH OF THE EIGHT ARE DONE — ALL OF THEM, AS OF 21-06. Plan 21-03 gave `verify`
+a body; 21-05 gave `distill`, `merge` and `gate` theirs; 21-06 closed the set
+with `adjudicate`, `coverage`, `conflict` and `synthesize`. SC1 is met: every
+stage the pipeline REPORTS now emits at least one row that is neither a divider
+nor a summary, and `test_run_event_emit.py` proves it from the schema rather than
+from a list, so a stage added later fails that test until it emits.
+
+ONE DECLARED STAGE STILL HAS NO ROWS, AND IT IS NOT A HOLE IN THIS WORK.
+`own_research` is declared in `ENGINE_STAGES["tribunal"]` but the pipeline never
+writes the key at all — a separate, older, deliberately-pinned gap with its own
+self-retiring test in `test_engine_e2e_stubbed.py`. A stage that is never
+REPORTED cannot be given a body from here; wiring the key is that test's job, and
+the capstone test's exclusion assertion is written so that the moment somebody
+does wire it, this module is required to give it rows.
 
 FOUR RULES THIS MODULE IS BUILT ON. All four are decisions of record; breaking
 any of them is a regression, not a refactor.
@@ -92,6 +103,18 @@ it and do not re-derive the budget.
      default, the way `emit_distill_record` does. Reading a model-shaped
      attribute inline in the argument list would put rule 3's exact defect back
      at the call site while looking like a one-liner.
+  h. A ROW THAT NAMES A POPULATION MUST COUNT THE POPULATION IT NAMES, AND THE
+     COUNT GOES WHERE THE WALK IS SAFE (21-06). Most counts in this module are
+     plain integers the caller already holds, and passing those is right. But
+     when the honest number needs a WALK — `emit_coverage_dispatch` reports the
+     claims the GATES SELECTED, not every distilled claim — that walk is
+     model-shaped and belongs inside the thunk with the rest of rule 3, not in
+     the argument list. The tempting shortcut is to pass a number that is merely
+     nearby and cheap to compute (`len(claims)`); do not. The coverage row exists
+     precisely to show WHICH population the cost trap's intersection kept, so a
+     row naming the wrong population is worse than no row — it is a confident
+     false statement about the one guard standing between this stage and roughly
+     2,100 paid sessions.
 """
 from __future__ import annotations
 
@@ -931,4 +954,481 @@ def emit_gate_done(run_id: Any, *, text: Any, funnel: Any) -> None:
         stage=_STAGE_GATE,
         kind="thinking",
         build=lambda: _gate_done_event(sentence, funnel),
+    )
+
+
+# ===========================================================================
+# `adjudicate` -- Adjudication.
+#
+# WHERE THE VERDICTS BECOME A DECISION. The skeptic stage produces verdicts;
+# THIS stage turns them into two lists -- `survivors` and `dropped` -- under
+# `SURVIVAL_RULE`. A dropped claim is removed from the report and, one stage
+# later, every passage that depends on it is physically scrubbed out of the
+# research. That is the most consequential thing the engine does to its own
+# output, and until 21-06 the page said only how many.
+#
+# "HOW MANY" IS NOT THE OPERATOR'S QUESTION. `pipeline.py`'s existing closing
+# line already reads "N survived - M dropped of K claims"; what it cannot say is
+# WHICH. The per-claim rows below are the same answer the `rejected_claims`
+# ledger gives the Deep Content Compare -- one stage earlier, and on the page.
+#
+# THE REASON LITERAL IS THE LEDGER'S OWN. `pipeline.py` stamps every rejected
+# claim `failed_factcheck` or `lost_conflict`, and it distinguishes them with the
+# `_factcheck_dropped_ids` snapshot taken BEFORE conflict resolution runs. Every
+# claim dropped at THIS point is a fact-check drop by construction -- conflict
+# losers join `dropped` later -- so these rows carry `failed_factcheck` and the
+# conflict stage's rows carry the other. Naming them in the ledger's vocabulary
+# rather than in fresh prose is what keeps the feed and the ledger one accounting.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Adjudication"). Not invented here.
+_STAGE_ADJUDICATE = "adjudicate"
+
+#: `pipeline.py::rejected_claims`' own literal for a claim the skeptics removed,
+#: as opposed to `lost_conflict`. Read off that ledger, not coined here.
+_REASON_FACTCHECK = "failed_factcheck"
+
+
+def emit_adjudicate_dispatch(run_id: Any, *, claims: Any, rule: Any) -> None:
+    """The adjudicate stage's opening header — the work, and the RULE it applies.
+
+    THE RULE IS NAMED BECAUSE IT IS TUNABLE. `SURVIVAL_RULE` is read from
+    `NESTOR_TRIBUNAL_SURVIVAL_RULE` at import, so two runs of the same intake can
+    adjudicate the same verdicts differently and nothing on the page would say
+    so. An operator comparing two runs needs to see which rule each one used
+    before the survivor counts mean anything.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_ADJUDICATE,
+        kind="dispatch",
+        build=lambda: (
+            f"Adjudicating {claims} fact-checked claim(s) under the "
+            f"{clip_label(rule) or '?'} survival rule",
+            {"items": claims},
+        ),
+    )
+
+
+def _adjudicate_drop_event(claim: Any) -> tuple[str, dict[str, Any]]:
+    """Compose ONE dropped claim's row. CALLED ONLY FROM INSIDE A build() THUNK.
+
+    The claim text is provider- and model-influenced -- rule 3's exact input
+    class -- so it is read and clipped HERE rather than at the call site, which
+    sits in the loop immediately after adjudication.
+    """
+    text = clip_claim(claim.get("text") or claim.get("claim_text"))
+    return (
+        f"Dropped — failed fact-check: {text or '(claim text unavailable)'}",
+        {"sub": _REASON_FACTCHECK},
+    )
+
+
+def emit_adjudicate_drop(run_id: Any, budget: RowBudget, *, claim: Any) -> None:
+    """One claim the fact-checking removed, NAMED.
+
+    Bounded like every per-item site: a run can drop hundreds of claims here, and
+    D-05's arithmetic is written against exactly this stage.
+    """
+    if not budget.take():
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_ADJUDICATE,
+        kind="thinking",
+        build=lambda: _adjudicate_drop_event(claim),
+    )
+
+
+def emit_adjudicate_done(run_id: Any, *, text: Any, survivors: Any) -> None:
+    """The adjudicate stage's closing line — THE SAME SENTENCE `stage_detail` gets.
+
+    THE STRING IS PASSED IN, NOT REBUILT, for the reason `emit_verify_closing`
+    gives at length: `pipeline.py` binds it once and hands both surfaces the same
+    object, so the run page and the intake card cannot report different survivor
+    counts for one run. A blank sentence emits nothing (`_sentence_or_none`).
+    """
+    sentence = _sentence_or_none(text)
+    if sentence is None:
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_ADJUDICATE,
+        kind="thinking",
+        build=lambda: (sentence, {"items": survivors}),
+    )
+
+
+# ===========================================================================
+# `coverage` -- Coverage gate.
+#
+# THE EMPTIEST STAGE IN THE ENGINE, AND THE ONE GUARDING THE LARGEST BILL.
+# Its `set_stage` carries NO detail argument at all, so it advanced its marker
+# and reported nothing -- neither rows nor a meaningful action count. Measured at
+# 21-06's base commit in the stubbed run: 0 body rows, and the only stage of the
+# thirteen whose automatic summary line reports `actions: 0`.
+#
+# WHAT THE STAGE ACTUALLY DOES. It asks one question -- did every high-stakes
+# claim the gates SELECTED come back with a verdict? -- and, if not, it dispatches
+# a bounded last-chance re-check. That re-check SPENDS MONEY, and its refusal by
+# the skeptic circuit breaker is a degradation the run still reports as
+# `completed`. Both were invisible: the re-entry existed only as a `log.warning`
+# and the block only as a line in the degradation accumulator.
+#
+# THE POPULATION IS THE POINT (recipe step h). `check_coverage` is called with
+# `selected_only=True` EXPLICITLY, and `pipeline.py`'s comment above that call
+# records why: without the intersection, the recorded 4cbb5311 population's 738
+# gate-dropped / SKIP_STABLE claims all read as uncovered and this loop fans out
+# roughly 2,100 Anthropic sessions against a stage the gates exist to shrink to
+# ~150 -- with the budget governor inert and unable to stop it. The dispatch row
+# below reports that intersected population, which is why it counts the selected
+# claims rather than every distilled one.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Coverage gate"). Not invented here.
+_STAGE_COVERAGE = "coverage"
+
+#: `gates.py`'s marker for a claim the gates SELECTED for fact-checking. The
+#: coverage gate's population is exactly these claims, and `pipeline.py` counts
+#: bucket 3 with the identical predicate -- so the row and the funnel agree by
+#: construction rather than by coincidence.
+_STRICT_VERIFY = "VERIFY"
+
+
+def _coverage_selected(claims: Any) -> int:
+    """How many claims the gates SELECTED for verification.
+
+    CALLED ONLY FROM INSIDE A build() THUNK (through `_coverage_dispatch_event`).
+    This is a walk over model-shaped claim dicts, and recipe step (h) is the
+    reason it is here rather than at the call site: the honest number needs the
+    walk, and the walk needs the emitter's try.
+    """
+    total = 0
+    for claim in claims or []:
+        if (claim.get("gate") or {}).get("strict") == _STRICT_VERIFY:
+            total += 1
+    return total
+
+
+def _coverage_dispatch_event(claims: Any, adjudications: Any) -> tuple[str, dict]:
+    """Compose the coverage gate's opening row. CALLED ONLY FROM INSIDE A build()
+    THUNK."""
+    selected = _coverage_selected(claims)
+    checked = len(adjudications or {})
+    return (
+        f"Checking that every claim the gates selected came back with a verdict "
+        f"— {selected} selected, {checked} with a verdict so far",
+        {"items": selected},
+    )
+
+
+def emit_coverage_dispatch(run_id: Any, *, claims: Any, adjudications: Any) -> None:
+    """The coverage gate's opening header — the question, and over WHICH claims.
+
+    THE POPULATION IN THIS ROW IS THE COST TRAP'S GUARD, RENDERED. The gate runs
+    with `selected_only=True` deliberately; the alternative is not a slightly
+    different number but roughly 2,100 paid Anthropic sessions, because every
+    gate-dropped claim would read as uncovered and enter the re-entry fan-out.
+    Reporting the SELECTED population is therefore the row's whole content: an
+    operator who sees this number diverge from the gate stage's own
+    `selected_verify` count is looking at the intersection having come undone.
+
+    Both arguments are the raw pipeline objects, walked inside the thunk. Passing
+    a pre-computed `len(claims)` would have been cheaper and would have named the
+    wrong population -- see recipe step (h).
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_COVERAGE,
+        kind="dispatch",
+        build=lambda: _coverage_dispatch_event(claims, adjudications),
+    )
+
+
+def emit_coverage_reentry(
+    run_id: Any, *, attempt: Any, max_attempts: Any, uncovered: Any
+) -> None:
+    """A last-chance re-check is being DISPATCHED — and it is being paid for.
+
+    `plan`, not `thinking`: a re-entry is a ROUTING decision, which is what that
+    kind's own comment in `RUN_EVENT_KINDS` names ("branch -- routing /
+    planning"), and it is the same kind the gate stage's drop rows use for the
+    same reason.
+
+    THIS ROW IS A MONEY SIGNAL AND IS KEPT ON THOSE GROUNDS (D-13, as amended by
+    the operator on 2026-08-10: where a line is both a money signal and
+    commentary, money wins). Until now this dispatch existed ONLY as a
+    `log.warning` — so a run that quietly re-checked a batch of claims, and paid
+    for it, looked on the page exactly like one that did not.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_COVERAGE,
+        kind="plan",
+        build=lambda: (
+            f"Coverage gate FAILED — dispatching re-check {attempt} of "
+            f"{max_attempts} for {uncovered} claim(s) that came back without a "
+            f"verdict; this re-check is paid for",
+            {"items": uncovered, "attempt": attempt, "max": max_attempts},
+        ),
+    )
+
+
+def emit_coverage_blocked(run_id: Any, *, reason: Any) -> None:
+    """The re-check was REFUSED by the skeptic circuit breaker.
+
+    THE REASON IS CARRIED VERBATIM, NOT PARAPHRASED. `_coverage_reentry_pass`
+    composes a sentence written for a human — it names how many claims were not
+    re-checked, that the provider's circuit is open, and that their supporting
+    passages ship unexamined — and `pipeline.py` hands that same string to the
+    run's ONE degradation accumulator. This row puts the identical words on the
+    page, so the feed and the degradation notice cannot drift into two accounts
+    of one loss.
+
+    `agent_fail` is the honest kind: work that should have happened did not.
+    A blank reason emits nothing (`_sentence_or_none`) rather than an empty row.
+    """
+    sentence = _sentence_or_none(reason)
+    if sentence is None:
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_COVERAGE,
+        kind="agent_fail",
+        build=lambda: (sentence, None),
+    )
+
+
+def emit_coverage_done(
+    run_id: Any, *, passed: Any, uncovered: Any, reentries: Any
+) -> None:
+    """The coverage gate's verdict on itself.
+
+    A PASS AND A FAIL READ DIFFERENTLY, and both are stated: a gate that only
+    spoke up when it failed would leave an operator unable to tell "this run was
+    fully covered" from "this stage is broken again".
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_COVERAGE,
+        kind="thinking",
+        build=lambda: (
+            (
+                f"Coverage satisfied — every selected claim came back with a "
+                f"verdict after {reentries} re-check(s)"
+                if passed
+                else f"Coverage NOT satisfied — {uncovered} selected claim(s) "
+                f"still have no verdict after {reentries} re-check(s); their "
+                f"passages ship unexamined"
+            ),
+            {"items": uncovered, "actions": reentries},
+        ),
+    )
+
+
+# ===========================================================================
+# `conflict` -- Conflict detection.
+#
+# THE HORIZONTAL AXIS. The skeptic checks each claim against the WEB (is it
+# true?); this stage checks the survivors against EACH OTHER (do two grounded
+# claims contradict?). Where one side is clearly weaker it is dropped and later
+# scrubbed out of the research; where neither is, the pair becomes a
+# `contested_note` the synthesiser must present as an open disagreement.
+#
+# THOSE TWO OUTCOMES ARE NOT THE SAME EVENT AND MUST NOT READ AS ONE. A RESOLVED
+# conflict means the report lost a claim -- the same consequence as a fact-check
+# drop, arrived at differently, and stamped `lost_conflict` rather than
+# `failed_factcheck` in the rejected-claims ledger. A CONTESTED conflict means
+# the report KEEPS BOTH SIDES and says so. An operator reading "conflict found"
+# with no more detail cannot tell which of those happened, and they are opposite
+# outcomes for the delivered report.
+#
+# The shape read here is `synthesis/steps.py::conflict_detector`'s own normalised
+# dict: `claims` (indices), `tension`, `loser` (int | None), `contested` (bool),
+# `note`.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Conflict detection"). Not invented here.
+_STAGE_CONFLICT = "conflict"
+
+#: `pipeline.py::rejected_claims`' literal for the weaker side of a conflict.
+_REASON_CONFLICT = "lost_conflict"
+
+
+def _conflict_finding_event(conflict: Any) -> tuple[str, dict[str, Any]]:
+    """Compose ONE detected contradiction's row. CALLED ONLY FROM INSIDE A
+    build() THUNK.
+
+    THE CONTESTED TEST IS `pipeline.py`'S OWN, not a second interpretation of the
+    same dict: that file classifies with `conflict.get("contested") or
+    conflict.get("loser") is None`, and a row that used a different test would
+    eventually describe a conflict as resolved while the pipeline treated it as
+    contested. Every field is model-authored, which is exactly the input class
+    rule 3 keeps inside the emitter's try.
+    """
+    contested = bool(conflict.get("contested")) or conflict.get("loser") is None
+    tension = clip_claim(conflict.get("tension") or conflict.get("note"))
+    detail = tension or "(no explanation returned)"
+    if contested:
+        return (
+            f"Contradiction UNRESOLVED — both sides ship, presented as an open "
+            f"disagreement: {detail}",
+            {"sub": "contested"},
+        )
+    return (
+        f"Contradiction resolved — the weaker side is dropped from the report: "
+        f"{detail}",
+        {"sub": _REASON_CONFLICT},
+    )
+
+
+def emit_conflict_dispatch(run_id: Any, *, survivors: Any, reconciliations: Any) -> None:
+    """The conflict stage's opening header."""
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_CONFLICT,
+        kind="dispatch",
+        build=lambda: (
+            f"Checking {survivors} verified claim(s) against each other for "
+            f"contradictions — {reconciliations} group reconciliation(s) carried "
+            f"in from verification",
+            {"items": survivors},
+        ),
+    )
+
+
+def emit_conflict_finding(run_id: Any, budget: RowBudget, *, conflict: Any) -> None:
+    """One contradiction the detector found, AND WHICH WAY IT WENT.
+
+    Takes the RAW conflict dict; every read happens inside the thunk. Bounded
+    like every per-item site.
+    """
+    if not budget.take():
+        return
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_CONFLICT,
+        kind="thinking",
+        build=lambda: _conflict_finding_event(conflict),
+    )
+
+
+def emit_conflict_done(
+    run_id: Any, *, losers: Any, contested: Any, survivors: Any
+) -> None:
+    """The conflict stage's closing line — what it cost the report, in claims.
+
+    `survivors` is the count AFTER any losers were removed, which is the number
+    the synthesis stage is about to write from, so the two stages' rows reconcile
+    by reading them in order.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_CONFLICT,
+        kind="thinking",
+        build=lambda: (
+            f"{losers} claim(s) dropped as the weaker side of a contradiction · "
+            f"{contested} open disagreement(s) carried into the report · "
+            f"{survivors} claim(s) go forward to synthesis",
+            {"items": survivors, "actions": losers},
+        ),
+    )
+
+
+# ===========================================================================
+# `synthesize` -- Final synthesis.
+#
+# TWO CALL SITES IN TWO SCOPES, AND THE SECOND ONE IS WHY A RESUMED RUN IS
+# VISIBLE AT ALL. One site is inside `_run_staged`'s closure; the other is inside
+# the MODULE-LEVEL `_write_final_report`, which is ALSO the resume path's entry
+# point -- `run()` calls it directly from the synthesis cache. On a resumed run
+# the closure never executes, so the row emitted from `_write_final_report` is
+# the ONLY synthesize row there will be. `pipeline.py`'s comment above that
+# function records why it is deliberately not re-plumbed through the closure, and
+# the same judgement applies here: it calls this module directly.
+#
+# SUBTRACTIVE VERIFICATION, MADE VISIBLE. `pipeline.py` explains that synthesis
+# runs on the FULL research prose -- so no information is lost to a claim cap --
+# but that every passage stating or depending on a discredited claim is
+# physically removed from that prose first. That removal is the mechanism which
+# makes the whole Tribunal actually stick to the delivered report, and nothing
+# has ever shown it happening.
+# ===========================================================================
+
+#: The stage key, exactly as `ENGINE_STAGES["tribunal"]` declares it
+#: (`runs/stages.py`, label "Final synthesis"). Not invented here.
+_STAGE_SYNTHESIZE = "synthesize"
+
+
+def emit_synthesize_dispatch(run_id: Any, *, survivors: Any) -> None:
+    """The synthesis stage's opening header."""
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_SYNTHESIZE,
+        kind="dispatch",
+        build=lambda: (
+            f"Writing the report from {survivors} verified claim(s)",
+            {"items": survivors},
+        ),
+    )
+
+
+def emit_synthesize_scrubbed(run_id: Any, *, removed: Any, reports: Any) -> None:
+    """The discredited claims have been CUT OUT of the research prose.
+
+    THE ROW THAT SHOWS SUBTRACTIVE VERIFICATION WORKING. Everything upstream --
+    the gates, the skeptics, adjudication, conflict resolution -- only matters to
+    the delivered report through this step: a claim that was refuted but whose
+    passage survived into the prose would ship anyway. The count is the claims
+    the run discredited; the reports count is the streams they were removed from.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_SYNTHESIZE,
+        kind="thinking",
+        build=lambda: (
+            f"Removed every passage depending on {removed} discredited claim(s) "
+            f"from {reports} research stream(s) before writing",
+            {"items": removed, "actions": reports},
+        ),
+    )
+
+
+def emit_synthesize_writing(
+    run_id: Any, *, ledger: Any, numbered: Any, resumed: Any
+) -> None:
+    """The report is being written, and from WHAT.
+
+    WHY THIS SECOND ROW EXISTS, AND WHY IT IS NOT A DUPLICATE. It is emitted from
+    the module-level `_write_final_report`, which is the RESUME path's entry
+    point. On a resumed run — `run()` loading a cached bundle and writing the
+    report from it — the `_run_staged` closure never executes, so
+    `emit_synthesize_dispatch` and `emit_synthesize_scrubbed` never fire and THIS
+    IS THE ONLY SYNTHESIZE ROW THE FEED WILL EVER GET. An operator watching a
+    resumed run would otherwise see "Final synthesis" as a heading with nothing
+    under it, on the one path where they are most likely to be watching because
+    something already went wrong.
+
+    `resumed` is supplied by the CALLER because the function genuinely cannot
+    tell: the same bundle shape arrives from the live pipeline and from the
+    synthesis cache. Guessing from the bundle's contents would be a heuristic
+    that reads as fact on the page.
+    """
+    run_events.emit_safe(
+        run_id,
+        stage=_STAGE_SYNTHESIZE,
+        kind="thinking",
+        build=lambda: (
+            (
+                "Resuming from cached research — writing the final report from "
+                f"{ledger} verified fact(s) and {numbered} numbered source(s)"
+                if resumed
+                else f"Writing the final report from {ledger} verified fact(s) "
+                f"and {numbered} numbered source(s)"
+            ),
+            {"items": ledger},
+        ),
     )
