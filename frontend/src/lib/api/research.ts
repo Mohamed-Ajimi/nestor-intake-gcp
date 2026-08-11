@@ -180,6 +180,24 @@ export type Citation = {
   temporal_note?: string | null;
   /** The claim that introduced this source (attaches [n] markers to verdict rows). */
   first_claim_id?: string | null;
+  /**
+   * The source's URL. NOT a new wire field — `VerificationCitation.url` (tribunal
+   * `runs/schemas.py`) has always declared it and `number_citations` has always emitted it;
+   * declaring it here only closes a pre-existing TYPE gap on this side of the wire.
+   */
+  url?: string | null;
+  /**
+   * D-22-4. The engine's read-time dedupe emits ONE citation entry per normalized source URL
+   * and drops the rest — and a dropped entry takes its `first_claim_id` with it. This field
+   * carries those absorbed claim ids onto the survivor, so a verdict row whose claim
+   * introduced only an absorbed source still renders its `[n]` marker instead of silently
+   * losing it. Honoured by `lib/research/citationIndex.ts`.
+   *
+   * OPTIONAL because a pre-dedupe backend — a rolling Cloud Run deploy, or any build before
+   * the write-side change lands — simply does not send it. Every reader must tolerate
+   * `undefined`.
+   */
+  also_claim_ids?: string[];
 };
 
 /**
