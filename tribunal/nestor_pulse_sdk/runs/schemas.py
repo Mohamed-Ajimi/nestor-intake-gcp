@@ -462,6 +462,19 @@ class VerificationCitation(BaseModel):
     single_source: bool = False
     first_claim_id: str | None = None
     first_claim_position: int | None = None
+    # D-22-4: the read-time dedupe (`citations.dedupe.collapse_citations_by_url`,
+    # wired in `verification/report.py`) emits ONE entry per normalized source
+    # URL. A dropped entry took its `first_claim_id` with it -- so a verdict row
+    # whose claim introduced ONLY that source would render no [n] marker at all,
+    # a silent regression on a row that has one today. This list carries the
+    # absorbed entries' claim ids onto the survivor, and the frontend indexes on
+    # it as well as on `first_claim_id`.
+    #
+    # DECLARED rather than left to ride through `extra="allow"`, per this file's
+    # "Declare, don't assume" rule (see CR-02 / D-06 in VerificationReport): the
+    # field is part of the documented contract and cannot be dropped out from
+    # under the frontend by a future `model_config` change.
+    also_claim_ids: list[str] = []
 
     model_config = {"extra": "allow"}
 
