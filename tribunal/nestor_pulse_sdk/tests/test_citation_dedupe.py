@@ -24,6 +24,14 @@ What is proved here:
                         `resolved_url` originates in a remote `Location` header
                         (T-22-01), and read-path code that raises takes down a
                         report the operator has already paid for.
+  * NEVER RENUMBERS  -- the load-bearing property of this whole phase. The
+                        deliverable markdown's `[n]` markers were baked at
+                        synthesis and are frozen, so the collapsed list goes
+                        SPARSE (1, 2, 4) and every survivor keeps the number
+                        `number_citations` gave it. Pinned by
+                        `test_numbers_go_sparse_and_are_never_reassigned`.
+  * NEVER MERGES THE UNPARSEABLE -- two URLs that both fail to parse are NOT
+                        thereby the same source.
 
 One named test per property, deliberately -- not one table-driven loop. A future
 edit that breaks `ref` preservation must fail a test whose NAME says what was lost.
@@ -33,6 +41,7 @@ from __future__ import annotations
 
 from nestor_pulse_sdk.citations.dedupe import (
     _TRACKING_PARAMS,
+    collapse_citations_by_url,
     normalize_source_url,
 )
 
@@ -213,3 +222,256 @@ def test_a_malformed_url_degrades_but_never_raises():
     """Whatever these produce, the one forbidden outcome is an exception."""
     for hostile in ("http://", "https://", ":::", "http://[", "%%%%", "///"):
         normalize_source_url(hostile)
+
+
+# ---------------------------------------------------------------------------
+# 5. collapse_citations_by_url -- fixtures
+# ---------------------------------------------------------------------------
+
+
+def _entry(n, source_id, url, claim_id):
+    """The EXACT 10-key entry shape `number_citations` emits (numbering.py:274-287).
+
+    Built by hand so this file needs no DB, and kept COMPLETE so a collapse that
+    silently dropped a key would be visible here.
+    """
+    return {
+        "n": n,
+        "source_id": source_id,
+        "title": f"Title {n}",
+        "url": url,
+        "provider": "gemini",
+        "publication_date": "2026-08-01T00:00:00+00:00",
+        "quality_tier": 3,
+        "single_source": True,
+        "first_claim_id": claim_id,
+        "first_claim_position": n,
+    }
+
+
+def _numbers(entries):
+    return [e["n"] for e in entries]
+
+
+# ---------------------------------------------------------------------------
+# 6. Collapsing
+# ---------------------------------------------------------------------------
+
+
+def test_two_entries_with_one_normalized_url_collapse_to_the_lower_number():
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://www.example.com/a/", "c1"),
+            _entry(2, "s2", "http://example.com/a", "c2"),
+        ]
+    )
+
+    assert _numbers(out) == [1]
+
+
+def test_the_survivor_keeps_its_own_number_when_two_duplicates_follow():
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://example.com/a", "c1"),
+            _entry(2, "s2", "https://example.com/a/", "c2"),
+            _entry(3, "s3", "https://www.example.com/a", "c3"),
+        ]
+    )
+
+    assert _numbers(out) == [1]
+
+
+def test_numbers_go_sparse_and_are_never_reassigned():
+    """THE LOAD-BEARING TEST OF THIS PHASE.
+
+    Entry 3 duplicates entry 2, so 3 disappears and NOTHING shifts down. The
+    output is 1, 2, 4 -- with a hole where 3 was.
+
+    That hole is CORRECT, not a defect to tidy away. `apply_citation_anchors`
+    (`pipeline/tribunal/pipeline.py:4533`) baked the markers into the deliverable
+    markdown at synthesis and froze them there. Closing this gap would make `[4]`
+    on the verification page a DIFFERENT source from `[4]` in the report the
+    operator already downloaded.
+    """
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://one.example/p", "c1"),
+            _entry(2, "s2", "https://two.example/q", "c2"),
+            _entry(3, "s3", "https://two.example/q/", "c3"),
+            _entry(4, "s4", "https://four.example/r", "c4"),
+        ]
+    )
+
+    assert _numbers(out) == [1, 2, 4]
+
+
+def test_two_different_documents_on_one_host_are_not_collapsed():
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://example.com/a", "c1"),
+            _entry(2, "s2", "https://example.com/b", "c2"),
+        ]
+    )
+
+    assert _numbers(out) == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# 7. The absorbed claim ids
+# ---------------------------------------------------------------------------
+
+
+def test_the_survivor_carries_the_absorbed_claim_ids():
+    """Without this alias, a verdict row whose only source was absorbed loses its
+    marker silently."""
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://example.com/a", "c1"),
+            _entry(2, "s2", "https://example.com/a/", "c2"),
+            _entry(3, "s3", "https://www.example.com/a", "c3"),
+        ]
+    )
+
+    assert out[0]["also_claim_ids"] == ["c2", "c3"]
+
+
+def test_the_absorbed_ids_exclude_the_survivors_own_claim_and_never_repeat():
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://example.com/a", "c1"),
+            _entry(2, "s2", "https://example.com/a/", "c1"),
+            _entry(3, "s3", "https://www.example.com/a", "c2"),
+            _entry(4, "s4", "https://example.com/a?utm_source=z", "c2"),
+        ]
+    )
+
+    assert out[0]["first_claim_id"] == "c1"
+    assert out[0]["also_claim_ids"] == ["c2"]
+
+
+def test_a_survivor_that_absorbed_nothing_still_exposes_an_empty_alias_list():
+    """The key is always present, so the read path needs no fallback."""
+    out = collapse_citations_by_url([_entry(1, "s1", "https://example.com/a", "c1")])
+
+    assert out[0]["also_claim_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# 8. Refusing to over-merge
+# ---------------------------------------------------------------------------
+
+
+def test_two_unparseable_urls_are_never_merged_with_each_other():
+    """"Both failed to parse" is not evidence that two rows are one source.
+
+    Merging on it would collapse unrelated citations into one number -- the
+    opposite defect, and a worse one (T-22-03).
+    """
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", None, "c1"),
+            _entry(2, "s2", "   ", "c2"),
+            _entry(3, "s3", "", "c3"),
+        ]
+    )
+
+    assert _numbers(out) == [1, 2, 3]
+
+
+def test_an_unparseable_entry_passes_through_completely_unchanged():
+    original = _entry(1, "s1", None, "c1")
+
+    out = collapse_citations_by_url([original])
+
+    assert out[0] == original
+
+
+# ---------------------------------------------------------------------------
+# 9. The resolution map
+# ---------------------------------------------------------------------------
+
+
+def test_the_resolution_map_collapses_two_redirect_tokens_onto_one_publisher():
+    """The dominant duplicate generator: one page, a different token per citation."""
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://vertexaisearch.cloud.google.com/r/AAA", "c1"),
+            _entry(2, "s2", "https://vertexaisearch.cloud.google.com/r/BBB", "c2"),
+        ],
+        {
+            "s1": ("https://publisher.example/story", "resolved"),
+            "s2": ("https://publisher.example/story", "resolved"),
+        },
+    )
+
+    assert _numbers(out) == [1]
+    assert out[0]["also_claim_ids"] == ["c2"]
+
+
+def test_unresolved_redirect_tokens_stay_separate():
+    """The honest ceiling on this fix: no resolution, no collapse."""
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://vertexaisearch.cloud.google.com/r/AAA", "c1"),
+            _entry(2, "s2", "https://vertexaisearch.cloud.google.com/r/BBB", "c2"),
+        ],
+        {"s1": (None, "unresolved"), "s2": (None, "unresolved")},
+    )
+
+    assert _numbers(out) == [1, 2]
+
+
+def test_a_source_missing_from_the_resolution_map_normalizes_from_its_raw_url():
+    out = collapse_citations_by_url(
+        [
+            _entry(1, "s1", "https://example.com/a", "c1"),
+            _entry(2, "s2", "https://www.example.com/a/", "c2"),
+        ],
+        {"s1": ("https://other.example/x", None)},
+    )
+
+    assert _numbers(out) == [1]
+
+
+# ---------------------------------------------------------------------------
+# 10. Purity and totality
+# ---------------------------------------------------------------------------
+
+
+def test_collapse_is_deterministic_across_two_calls():
+    entries = [
+        _entry(1, "s1", "https://example.com/a", "c1"),
+        _entry(2, "s2", "https://example.com/a/", "c2"),
+        _entry(3, "s3", "https://example.com/b", "c3"),
+    ]
+
+    assert collapse_citations_by_url(entries) == collapse_citations_by_url(entries)
+
+
+def test_the_callers_list_and_entries_are_not_mutated():
+    """The function COPIES; the caller's list must not change under it."""
+    entries = [
+        _entry(1, "s1", "https://example.com/a", "c1"),
+        _entry(2, "s2", "https://example.com/a/", "c2"),
+    ]
+
+    collapse_citations_by_url(entries)
+
+    assert len(entries) == 2
+    assert "also_claim_ids" not in entries[0]
+
+
+def test_empty_none_and_a_missing_resolution_argument_do_not_raise():
+    assert collapse_citations_by_url([]) == []
+    assert collapse_citations_by_url(None) == []
+    assert collapse_citations_by_url([_entry(1, "s1", "https://example.com/a", "c1")])
+
+
+def test_no_number_is_invented_for_an_entry_that_arrives_without_one():
+    """The function assigns no numbers at all, so a missing one stays missing."""
+    entry = _entry(1, "s1", "https://example.com/a", "c1")
+    del entry["n"]
+
+    out = collapse_citations_by_url([entry])
+
+    assert "n" not in out[0]
