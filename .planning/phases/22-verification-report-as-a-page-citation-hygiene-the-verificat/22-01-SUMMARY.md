@@ -193,6 +193,17 @@ collapse_citations_by_url(numbered, resolution=None) -> list[dict[str, Any]]
 
 **Carried forward:** DEF-22-01 (do not delete `ResearchRunProgress.tsx`; correct importer is `admin.pulse.runs.$runId.tsx:11`) and DEF-22-02 (the local gate ceiling).
 
+## Self-Check: PASSED
+
+Every claim above re-verified against disk and git after writing:
+
+- **Files (5/5 FOUND):** `citations/dedupe.py`, `tests/test_citation_dedupe.py`, `cloudbuild.test-engine.yaml`, `deferred-items.md`, `22-01-SUMMARY.md`
+- **Commits (7/7 FOUND):** `9e80fa1`, `a23df1b`, `a9c49e2`, `bc7e13c`, `81dcdbe`, `c844c89`, `2ad0dd8`
+- **Line counts as stated:** `dedupe.py` 307, `test_citation_dedupe.py` 477 (measured, not estimated)
+- **Working tree:** clean — nothing left uncommitted
+
+Not claimed and not verifiable from here: that the Cloud Build engine gate is green. No build was submitted; see DEF-22-02.
+
 ---
 *Phase: 22-verification-report-as-a-page-citation-hygiene-the-verificat*
 *Completed: 2026-08-11*
