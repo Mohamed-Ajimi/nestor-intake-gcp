@@ -82,3 +82,58 @@ Python engine.
 file does not exist.** The route file is `admin.pulse.runs.$runId.tsx` (the only `runs` route file
 in `frontend/src/routes/`), and the import is on line 11. Recorded so a later reader does not go
 looking for a file that was never there.
+
+---
+
+## DEF-22-02 — two engine-gate test files cannot run locally on Windows (env-var length ceiling)
+
+**Found during:** 22-01 Task 3, while running the full 45-file engine gate locally to prove the
+`EXPECTED_FILES=45` bump does not break it
+**Status:** deferred — **a LOCAL HARNESS limitation, not a code defect and not a gate defect.** Both
+files are untouched by phase 22 and both were already in the 44-file list before this plan.
+
+### What was measured
+
+Running the 45 files the gate names, with the venv python on this Windows machine:
+
+| Set | Result |
+|-----|--------|
+| the 44 files other than `test_fact_list_parser.py` | **1824 passed, 13 skipped, 4 errors** |
+| the 4 errors | ALL of them in `test_dispatch_pii.py::test_never_raises`, all `ValueError: the environment variable is longer than 32767 characters` |
+| `test_fact_list_parser.py` alone | **cannot even be collected** — same `ValueError`, raised at `<frozen os>:685 __setitem__` |
+
+### Mechanism
+
+Both files parametrize `test_never_raises` / `test_parser_never_raises` with deliberately enormous
+hostile input strings (thousands of `x` characters — correct, and the point of a never-raises test).
+pytest writes the full test ID into the `PYTEST_CURRENT_TEST` environment variable, and **Windows
+caps a single environment variable at 32767 characters.** The giant parametrized ID blows that cap,
+so `os.environ.__setitem__` raises during setup/teardown.
+
+**This is a Windows-only ceiling.** The Cloud Build gate runs these files inside
+`python:3.11-slim` (`cloudbuild.test-engine.yaml`), i.e. on Linux, where no such per-variable limit
+exists. Nothing here suggests the real gate is red.
+
+### Why it was not fixed
+
+Fixing it means giving those parametrizations short explicit `ids=` so the test ID stops carrying the
+payload. That edits two test files neither of which this plan owns, in a plan whose acceptance
+explicitly measures that its diff touches only its four declared paths. It is also purely a
+developer-ergonomics fix — it changes no production behaviour and closes no operator-visible gap.
+
+### ⚠ Note for whoever next runs the engine gate locally on this machine
+
+MEMORY SAYS the full engine gate runs locally in ~50s. **That is true for 43 of the 45 files.** Do
+not read these 4 errors as a regression introduced by whatever you are working on, and do not
+"fix" them by deleting the hostile-input cases — those cases are the entire value of a never-raises
+test. To get a clean local signal, exclude the two files:
+
+```
+... | grep -v "test_fact_list_parser.py" | xargs python -m pytest -q -m "not live"
+```
+
+and read the 4 remaining errors as known.
+
+**Not proven by this plan:** that the Cloud Build engine gate itself is green. No build was
+submitted — that is a deploy action and outside plan 22-01's scope. What IS proven: all 45 named
+paths resolve on disk, so the config's `COLLECTED -ne EXPECTED_FILES` assertion passes.
