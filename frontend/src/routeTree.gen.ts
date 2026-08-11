@@ -41,10 +41,11 @@ import { Route as AdminSalesProjectsIndexRouteImport } from './routes/admin.sale
 import { Route as AdminPulseIntakesIndexRouteImport } from './routes/admin.pulse.intakes.index'
 import { Route as AdminSalesProjectsNewRouteImport } from './routes/admin.sales.projects.new'
 import { Route as AdminSalesProjectsIdRouteImport } from './routes/admin.sales.projects.$id'
-import { Route as AdminPulseRunsRunIdRouteImport } from './routes/admin.pulse.runs.$runId'
 import { Route as AdminPulseIntakesNewRouteImport } from './routes/admin.pulse.intakes.new'
 import { Route as AdminPulseIntakesIdRouteImport } from './routes/admin.pulse.intakes.$id'
 import { Route as AdminPulseClientsIdRouteImport } from './routes/admin.pulse.clients.$id'
+import { Route as AdminPulseRunsRunIdIndexRouteImport } from './routes/admin.pulse.runs.$runId.index'
+import { Route as AdminPulseRunsRunIdVerificationRouteImport } from './routes/admin.pulse.runs.$runId.verification'
 
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
@@ -206,11 +207,6 @@ const AdminSalesProjectsIdRoute = AdminSalesProjectsIdRouteImport.update({
   path: '/projects/$id',
   getParentRoute: () => AdminSalesRoute,
 } as any)
-const AdminPulseRunsRunIdRoute = AdminPulseRunsRunIdRouteImport.update({
-  id: '/runs/$runId',
-  path: '/runs/$runId',
-  getParentRoute: () => AdminPulseRoute,
-} as any)
 const AdminPulseIntakesNewRoute = AdminPulseIntakesNewRouteImport.update({
   id: '/intakes/new',
   path: '/intakes/new',
@@ -226,6 +222,18 @@ const AdminPulseClientsIdRoute = AdminPulseClientsIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => AdminPulseClientsRoute,
 } as any)
+const AdminPulseRunsRunIdIndexRoute =
+  AdminPulseRunsRunIdIndexRouteImport.update({
+    id: '/runs/$runId/',
+    path: '/runs/$runId/',
+    getParentRoute: () => AdminPulseRoute,
+  } as any)
+const AdminPulseRunsRunIdVerificationRoute =
+  AdminPulseRunsRunIdVerificationRouteImport.update({
+    id: '/runs/$runId/verification',
+    path: '/runs/$runId/verification',
+    getParentRoute: () => AdminPulseRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -259,11 +267,12 @@ export interface FileRoutesByFullPath {
   '/admin/pulse/clients/$id': typeof AdminPulseClientsIdRoute
   '/admin/pulse/intakes/$id': typeof AdminPulseIntakesIdRoute
   '/admin/pulse/intakes/new': typeof AdminPulseIntakesNewRoute
-  '/admin/pulse/runs/$runId': typeof AdminPulseRunsRunIdRoute
   '/admin/sales/projects/$id': typeof AdminSalesProjectsIdRoute
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
+  '/admin/pulse/runs/$runId/verification': typeof AdminPulseRunsRunIdVerificationRoute
+  '/admin/pulse/runs/$runId/': typeof AdminPulseRunsRunIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -294,11 +303,12 @@ export interface FileRoutesByTo {
   '/admin/pulse/clients/$id': typeof AdminPulseClientsIdRoute
   '/admin/pulse/intakes/$id': typeof AdminPulseIntakesIdRoute
   '/admin/pulse/intakes/new': typeof AdminPulseIntakesNewRoute
-  '/admin/pulse/runs/$runId': typeof AdminPulseRunsRunIdRoute
   '/admin/sales/projects/$id': typeof AdminSalesProjectsIdRoute
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects': typeof AdminSalesProjectsIndexRoute
+  '/admin/pulse/runs/$runId/verification': typeof AdminPulseRunsRunIdVerificationRoute
+  '/admin/pulse/runs/$runId': typeof AdminPulseRunsRunIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -333,11 +343,12 @@ export interface FileRoutesById {
   '/admin/pulse/clients/$id': typeof AdminPulseClientsIdRoute
   '/admin/pulse/intakes/$id': typeof AdminPulseIntakesIdRoute
   '/admin/pulse/intakes/new': typeof AdminPulseIntakesNewRoute
-  '/admin/pulse/runs/$runId': typeof AdminPulseRunsRunIdRoute
   '/admin/sales/projects/$id': typeof AdminSalesProjectsIdRoute
   '/admin/sales/projects/new': typeof AdminSalesProjectsNewRoute
   '/admin/pulse/intakes/': typeof AdminPulseIntakesIndexRoute
   '/admin/sales/projects/': typeof AdminSalesProjectsIndexRoute
+  '/admin/pulse/runs/$runId/verification': typeof AdminPulseRunsRunIdVerificationRoute
+  '/admin/pulse/runs/$runId/': typeof AdminPulseRunsRunIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -373,11 +384,12 @@ export interface FileRouteTypes {
     | '/admin/pulse/clients/$id'
     | '/admin/pulse/intakes/$id'
     | '/admin/pulse/intakes/new'
-    | '/admin/pulse/runs/$runId'
     | '/admin/sales/projects/$id'
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
+    | '/admin/pulse/runs/$runId/verification'
+    | '/admin/pulse/runs/$runId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -408,11 +420,12 @@ export interface FileRouteTypes {
     | '/admin/pulse/clients/$id'
     | '/admin/pulse/intakes/$id'
     | '/admin/pulse/intakes/new'
-    | '/admin/pulse/runs/$runId'
     | '/admin/sales/projects/$id'
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes'
     | '/admin/sales/projects'
+    | '/admin/pulse/runs/$runId/verification'
+    | '/admin/pulse/runs/$runId'
   id:
     | '__root__'
     | '/'
@@ -446,11 +459,12 @@ export interface FileRouteTypes {
     | '/admin/pulse/clients/$id'
     | '/admin/pulse/intakes/$id'
     | '/admin/pulse/intakes/new'
-    | '/admin/pulse/runs/$runId'
     | '/admin/sales/projects/$id'
     | '/admin/sales/projects/new'
     | '/admin/pulse/intakes/'
     | '/admin/sales/projects/'
+    | '/admin/pulse/runs/$runId/verification'
+    | '/admin/pulse/runs/$runId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -688,13 +702,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSalesProjectsIdRouteImport
       parentRoute: typeof AdminSalesRoute
     }
-    '/admin/pulse/runs/$runId': {
-      id: '/admin/pulse/runs/$runId'
-      path: '/runs/$runId'
-      fullPath: '/admin/pulse/runs/$runId'
-      preLoaderRoute: typeof AdminPulseRunsRunIdRouteImport
-      parentRoute: typeof AdminPulseRoute
-    }
     '/admin/pulse/intakes/new': {
       id: '/admin/pulse/intakes/new'
       path: '/intakes/new'
@@ -715,6 +722,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/pulse/clients/$id'
       preLoaderRoute: typeof AdminPulseClientsIdRouteImport
       parentRoute: typeof AdminPulseClientsRoute
+    }
+    '/admin/pulse/runs/$runId/': {
+      id: '/admin/pulse/runs/$runId/'
+      path: '/runs/$runId'
+      fullPath: '/admin/pulse/runs/$runId/'
+      preLoaderRoute: typeof AdminPulseRunsRunIdIndexRouteImport
+      parentRoute: typeof AdminPulseRoute
+    }
+    '/admin/pulse/runs/$runId/verification': {
+      id: '/admin/pulse/runs/$runId/verification'
+      path: '/runs/$runId/verification'
+      fullPath: '/admin/pulse/runs/$runId/verification'
+      preLoaderRoute: typeof AdminPulseRunsRunIdVerificationRouteImport
+      parentRoute: typeof AdminPulseRoute
     }
   }
 }
@@ -748,8 +769,9 @@ interface AdminPulseRouteChildren {
   AdminPulseIndexRoute: typeof AdminPulseIndexRoute
   AdminPulseIntakesIdRoute: typeof AdminPulseIntakesIdRoute
   AdminPulseIntakesNewRoute: typeof AdminPulseIntakesNewRoute
-  AdminPulseRunsRunIdRoute: typeof AdminPulseRunsRunIdRoute
   AdminPulseIntakesIndexRoute: typeof AdminPulseIntakesIndexRoute
+  AdminPulseRunsRunIdVerificationRoute: typeof AdminPulseRunsRunIdVerificationRoute
+  AdminPulseRunsRunIdIndexRoute: typeof AdminPulseRunsRunIdIndexRoute
 }
 
 const AdminPulseRouteChildren: AdminPulseRouteChildren = {
@@ -758,8 +780,9 @@ const AdminPulseRouteChildren: AdminPulseRouteChildren = {
   AdminPulseIndexRoute: AdminPulseIndexRoute,
   AdminPulseIntakesIdRoute: AdminPulseIntakesIdRoute,
   AdminPulseIntakesNewRoute: AdminPulseIntakesNewRoute,
-  AdminPulseRunsRunIdRoute: AdminPulseRunsRunIdRoute,
   AdminPulseIntakesIndexRoute: AdminPulseIntakesIndexRoute,
+  AdminPulseRunsRunIdVerificationRoute: AdminPulseRunsRunIdVerificationRoute,
+  AdminPulseRunsRunIdIndexRoute: AdminPulseRunsRunIdIndexRoute,
 }
 
 const AdminPulseRouteWithChildren = AdminPulseRoute._addFileChildren(

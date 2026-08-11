@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { ArrowDownToLine, ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getIntake } from "@/lib/api/intakes";
 import { locateResearchRun, RESEARCH_TERMINAL, type RunEvent } from "@/lib/api/research";
@@ -10,7 +10,6 @@ import { useRunEvents } from "@/lib/research/useRunEvents";
 import { canHaveVerificationReport } from "@/lib/research/verificationGate";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
-import { VerificationReport } from "@/components/intake/VerificationReport";
 import { RunFeed } from "@/components/research/RunFeed";
 import { RunStatusCard } from "@/components/research/RunStatusCard";
 import { RunActions } from "@/components/research/RunActions";
@@ -32,16 +31,17 @@ import { RunActions } from "@/components/research/RunActions";
 // SECURITY (T-15.3-70 / D-08). Superadmin-only twice over: by PLACEMENT under `admin.pulse`,
 // which inherits the admin guard, and by API — every verb this page calls is superadmin-gated
 // and space-scoped server-side, returning an existence-hiding 404 to anyone else. No
-// client-facing route imports anything from this file. The verification verb added in 21-02 is
-// no exception — it is superadmin-gated and space-scoped server-side and existence-hides as a
-// 404 exactly like every other verb here, so mounting the report changes this page's
-// authorization surface not at all: it adds no route, no parameter and no new caller.
+// client-facing route imports anything from this file. Since D-22-1 the verification report is
+// no longer read from here at all — it lives on the sibling route
+// `admin.pulse.runs.$runId.verification.tsx`, which inherits this same posture by placement and
+// whose own verb is superadmin-gated, space-scoped and existence-hiding exactly like every verb
+// this page calls. What remains here is a link, which reads nothing.
 //
 // ACCESSIBILITY. The live region is scoped to the STATUS AND PHASE block only. The feed body
 // deliberately carries none: a region announcing every one of a thousand events is worse than
 // no region at all (T-15.3-82).
 
-export const Route = createFileRoute("/admin/pulse/runs/$runId")({
+export const Route = createFileRoute("/admin/pulse/runs/$runId/")({
   component: ResearchRunPage,
 });
 
@@ -135,12 +135,6 @@ function ResearchRunPage() {
   // the existence of anything else. No client-facing route may import this panel or reach the
   // verb behind it (D-08).
   const [openAuditId, setOpenAuditId] = useState<string | null>(null);
-
-  // ── The claims-verification report (SC4 / D-10 / D-11). ──────────────────────────────
-  // Declared here with the other hooks, ABOVE the early returns below, so hook order is
-  // unconditional on every render — a `useState` placed after the `locating` return would
-  // change the hook count between the skeleton and the page.
-  const [showVerification, setShowVerification] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const scrollToLatest = () => {
@@ -299,8 +293,8 @@ function ResearchRunPage() {
             actions={<RunActions intakeId={intakeId} run={run} onReload={reloadRun} />}
           />
 
-          {/* ── The claims-verification report (SC4). Three decisions a later editor will
-              otherwise undo, so they are written down here:
+          {/* ── Navigation to the claims-verification report (SC4). Three decisions a later
+              editor will otherwise undo, so they are written down here:
 
               1. IT IS A SIBLING of the card and the feed, following the rule stated directly
                  above. It is NOT inside `RunStatusCard`, and it must not be moved there: the
@@ -314,35 +308,30 @@ function ResearchRunPage() {
                  real verdicts, and those two states are precisely the ones whose evidence the
                  embedded card discards. Gating on "can a report exist" rather than on "which
                  card is rendering" is what keeps them.
-              3. IT REUSES `verification.viewAction` / `verification.hideAction` — the two keys
-                 the embedded card's toggle already uses — rather than introducing a key, so
-                 `scripts/i18n-audit.mjs` CHECK B stays green with no locale edit in three files.
+                 D-22-1 moved the report to its own route but left this rule exactly where it
+                 was, because the rule still governs whether the NAVIGATION is offered. The
+                 report page deliberately carries no second copy of it.
+              3. WHAT REMAINS HERE IS NAVIGATION, NOT THE REPORT BODY. D-22-1: the operator
+                 judged the document too long for a dropdown, so it now has its own page and
+                 this page links to it. The CTA reuses `verification.viewAction`, the key the
+                 old toggle already used, so `scripts/i18n-audit.mjs` CHECK B stays green with
+                 no locale edit in three files. `verification.hideAction` is now unused but
+                 STAYS in all three locales: CHECK A tests key parity, not usage, so deleting
+                 it from one file would go red.
 
-              MOUNTED LAZILY, never hidden behind CSS: `VerificationReport` fetches on mount,
-              so rendering it only when open means a run whose report does not exist costs
-              exactly one request, made only when the operator asks for it, and the component's
-              own inline error is the honest answer. `intakeId` is non-null here — the
-              `locateFailed || !intakeId` early return has already run — so it is passed
-              directly rather than through a second guard that would read as though the
-              resolution could still have failed. */}
+              A `Link`, not a button with a navigate handler: this is a plain destination, so
+              the router gets to prefetch it and the operator gets a real URL to bookmark,
+              middle-click and share — which is the whole point of giving the report a page. */}
           {canHaveVerificationReport(status) && (
             <div className="mb-3">
-              <button
-                type="button"
-                onClick={() => setShowVerification((v) => !v)}
+              <Link
+                to="/admin/pulse/runs/$runId/verification"
+                params={{ runId }}
                 className="inline-flex items-center gap-2 border border-ink/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
               >
-                {showVerification ? t("verification.hideAction") : t("verification.viewAction")}
-              </button>
-              {showVerification && (
-                <div className="mt-4">
-                  <VerificationReport
-                    intakeId={intakeId}
-                    runId={runId}
-                    onClose={() => setShowVerification(false)}
-                  />
-                </div>
-              )}
+                {t("verification.viewAction")}
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
             </div>
           )}
 
