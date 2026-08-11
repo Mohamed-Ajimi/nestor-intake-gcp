@@ -217,3 +217,91 @@ def normalize_source_url(
         return None
 
     return key or None
+
+
+def collapse_citations_by_url(
+    numbered: list[dict[str, Any]],
+    resolution: Mapping[str, tuple[str | None, str | None]] | None = None,
+) -> list[dict[str, Any]]:
+    """Collapse `number_citations` entries to ONE per normalized URL.
+
+    `numbered` is the list `citations/numbering.py::number_citations` returns (its
+    10-key entry shape, documented at `numbering.py:274-287`). `resolution` maps
+    `source_id` -> `(resolved_url, resolution_status)`; absent or incomplete is
+    fine -- a source with no entry there is normalized from its raw `url`.
+
+    ⛔ THIS FUNCTION ASSIGNS NO NUMBERS. NOT ONE. It never derives a number from a
+    loop position, and it never writes to any entry's number field.
+
+    THE REASON, because a future editor WILL want to close the gaps: the
+    deliverable report markdown's `[n]` markers were baked at synthesis by
+    `apply_citation_anchors` (`pipeline/tribunal/pipeline.py:4533`) and FROZEN
+    there -- that document has already been generated, downloaded and paid for,
+    and nothing can update it. The verification report PAGE, by contrast, renders
+    every marker from `citation.n` at paint time. So renumbering here would make
+    `[7]` on the page a DIFFERENT SOURCE from `[7]` in the report the operator is
+    holding, silently, on both surfaces at once.
+
+    Therefore every survivor keeps exactly the number `number_citations` gave it,
+    and the emitted list goes SPARSE -- 1, 2, 4, 7, ... THAT SPARSENESS IS CORRECT.
+    It is the honest, visible cost of collapsing duplicates on the read side, and
+    tidying it away would trade a cosmetic gap for a wrong citation.
+
+    Ordering: `numbered` arrives in `_CLAIM_SOURCE_SQL`'s pinned first-appearance
+    order, so "the first time a key is seen" IS "the lowest number for that key".
+    The survivor is therefore deterministic without any sort.
+
+    Absorbed entries are not discarded silently: each survivor carries
+    `also_claim_ids`, the `first_claim_id` of every entry it absorbed. Without that
+    alias a verdict row whose only source was absorbed would lose its marker.
+
+    An entry whose URL normalizes to None is passed through UNCHANGED and is never
+    merged with another such entry -- "both failed to parse" is not evidence that
+    two rows are the same source, and merging on it would collapse unrelated
+    citations into one number, which is the worse defect.
+
+    Emits no yield figure. 22-UI-SPEC §1.6 bars an "N duplicates removed" reading
+    from the page, and a field that exists is a field somebody will render.
+
+    PURE: no DB, no I/O, never raises. The caller's list and its dicts are not
+    mutated -- survivors are copies.
+    """
+    if not numbered:
+        return []
+
+    lookup: Mapping[str, tuple[str | None, str | None]] = resolution or {}
+
+    collapsed: list[dict[str, Any]] = []
+    canonical_by_key: dict[str, dict[str, Any]] = {}
+
+    for entry in numbered:
+        source_id = entry.get("source_id")
+        resolved_url, status = lookup.get(str(source_id), (None, None))
+        key = normalize_source_url(entry.get("url"), resolved_url, status)
+
+        if key is None:
+            # Unparseable: keep it exactly as it arrived, on its own.
+            collapsed.append(entry)
+            continue
+
+        canonical = canonical_by_key.get(key)
+        if canonical is None:
+            # First sighting of this source. COPY rather than mutate: the caller's
+            # list must not change under it.
+            canonical = dict(entry)
+            canonical["also_claim_ids"] = []
+            canonical_by_key[key] = canonical
+            collapsed.append(canonical)
+            continue
+
+        # A repeat: not emitted, but its claim id is carried forward.
+        absorbed = entry.get("first_claim_id")
+        aliases = canonical["also_claim_ids"]
+        if (
+            absorbed
+            and absorbed != canonical.get("first_claim_id")
+            and absorbed not in aliases
+        ):
+            aliases.append(absorbed)
+
+    return collapsed
