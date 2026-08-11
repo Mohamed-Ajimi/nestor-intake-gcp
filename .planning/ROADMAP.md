@@ -637,10 +637,19 @@ reports nothing for 8 of 13 stages.
 
 ### Phase 22: Verification Report as a Page + Citation Hygiene - the verification report moves off the run page onto its own dedicated route and is restyled as a dashboard; citations gain hover previews with the full list collapsed by default; duplicate citations collapse to one number per source; the embedded activity feed is removed from the intake detail page since Open run already serves it
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** The verification report is a page of its own — an instrumented document with the trust figures above the fold and every existing section intact — whose citations preview on hover, collapse to one number per distinct source without ever being renumbered, and no longer label a retrieval date as a publication date; and the intake detail page no longer duplicates the run activity feed while keeping its way into the run.
+**Requirements**: D-22-1, D-22-2, D-22-3, D-22-4, D-22-5 — this phase carries NO REQUIREMENTS.md ids; its sources of record are 22-CONTEXT.md, 22-UI-SPEC.md and the operator UAT in 21-UAT.md
 **Depends on:** Phase 21
-**Plans:** 0 plans
+**Plans:** 10 plans in 6 waves
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 22 to break down)
+- [ ] 22-01-PLAN.md — wave 1 — the shared normalize_source_url + collapse_citations_by_url, with tests, inside the engine fast gate (44 -> 45)
+- [ ] 22-02-PLAN.md — wave 1 — frontend Citation type fields + the pure buildCitationIndex that honours the dedupe aliases
+- [ ] 22-03-PLAN.md — wave 1 — every new locale key in three languages, citation.published -> citation.retrieved, and CitationMarker with its hover card
+- [ ] 22-04-PLAN.md — wave 1 — D-22-5: the activity feed off the intake page, the Open run link kept
+- [ ] 22-05-PLAN.md — wave 2 — the dedupe seam in build_verification_report + also_claim_ids on the wire model
+- [ ] 22-06-PLAN.md — wave 2 — the route rename to .index.tsx, the new /verification route, and the run page CTA as a Link
+- [ ] 22-07-PLAN.md — wave 3 — the instrumented document: stat strip, proportional funnel, anchored section blocks
+- [ ] 22-08-PLAN.md — wave 4 — the section nav rail, the collapsed citation list, and the page-level Sheet
+- [ ] 22-09-PLAN.md — wave 5 — 22-UAT.md and the DEF-21-02 B1-B6 reconciliation
+- [ ] 22-10-PLAN.md — wave 6 — derive the deploy surface, deploy, and prove it by imageDigest

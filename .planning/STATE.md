@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
-stopped_at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
-last_updated: "2026-08-10T13:56:43.205Z"
+stopped_at: Phase 22 UI-SPEC approved
+last_updated: "2026-08-11T08:59:43.867Z"
 last_activity: 2026-08-10 -- Phase 21 execution started
 progress:
-  total_phases: 17
-  completed_phases: 12
+  total_phases: 18
+  completed_phases: 13
   total_plans: 132
-  completed_plans: 122
-  percent: 71
+  completed_plans: 130
+  percent: 72
 ---
 
 # Project State
@@ -573,13 +573,13 @@ PARITY ACCEPTED WITH DEFERRALS). The UAT/chore items are now scoped into **Phase
 
 ## Session Continuity
 
-Last session: 2026-07-26T11:00:13.988Z
-Stopped at: Phase 15.2 context gathered (17 decisions D-01..D-17; CONTEXT.md + DISCUSSION-LOG.md)
+Last session: 2026-08-11T08:59:43.848Z
+Stopped at: Phase 22 UI-SPEC approved
   committed 54dcc1e). Standing operator direction 2026-07-24 unchanged: run ONE combined Phase-15*
   UAT once 15/15.1/15.2 are all ready (against a live run post-2026-08-01) — do NOT UAT piecemeal.
   15.1 needs NO live LLM runs: its CI proof is a deterministic replay of the recorded 1,162-claim
   fixture; the real-classifier calibration check is hand-run after the cap resets 2026-08-01.
-Resume file: .planning/phases/15.2-research-engine-redesign-engine-core-inserted-2026-07-24/15.2-CONTEXT.md
+Resume file: .planning/phases/22-verification-report-as-a-page-citation-hygiene-the-verificat/22-UI-SPEC.md
 
 ## Operator Next Steps
 
