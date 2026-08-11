@@ -38,7 +38,9 @@ from typing import Any, Iterable
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nestor_pulse_sdk.citations.dedupe import collapse_citations_by_url
 from nestor_pulse_sdk.citations.numbering import number_citations
+from nestor_pulse_sdk.db.models.source import Source
 from nestor_pulse_sdk.db.models.verification_verdict import VerificationVerdict
 
 
@@ -626,6 +628,55 @@ def shape_verification_report(
 # Async DB-facing wrapper -- the endpoint calls THIS. RLS-scoped reads only.
 # ---------------------------------------------------------------------------
 
+async def _source_resolution(
+    session: AsyncSession,
+    source_ids: list[str],
+) -> dict[str, tuple[str | None, str | None]]:
+    """Read `(resolved_url, resolution_status)` per source id -- RLS-scoped.
+
+    WHY THIS IS A SEPARATE READ instead of two more columns on the numbering
+    entry: `citations/numbering.py::_CLAIM_SOURCE_SQL` does NOT select either
+    column, and it must not start to. `tests/test_citation_numbering.py` pins the
+    entry that SQL produces to an EXACT 10-key shape, so adding a key there goes
+    RED. One extra RLS-scoped read, keyed on ids we are already holding, is the
+    price of leaving a pinned contract alone.
+
+    Scope: the same `session` under the same tenant context as every other read
+    in `build_verification_report`, filtered to source ids `number_citations`
+    already returned for THIS run. It widens no scope.
+
+    Returns `{}` for empty input -- a run with no citations issues no query.
+    """
+    if not source_ids:
+        return {}
+
+    # `number_citations` emits `source_id` as a string; the column is a UUID.
+    # Convert defensively and SKIP an unparseable id rather than raising: one
+    # malformed id must not fail the operator's whole verification report.
+    ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for raw in source_ids:
+        try:
+            parsed = uuid.UUID(str(raw))
+        except Exception:  # noqa: BLE001 -- an unparseable id simply has no row
+            continue
+        if parsed not in seen:
+            seen.add(parsed)
+            ids.append(parsed)
+
+    if not ids:
+        return {}
+
+    rows = (
+        await session.execute(
+            select(Source.id, Source.resolved_url, Source.resolution_status)
+            .where(Source.id.in_(ids))
+        )
+    ).all()
+
+    return {str(sid): (resolved, status) for sid, resolved, status in rows}
+
+
 async def build_verification_report(
     session: AsyncSession,
     run: Any,
@@ -659,6 +710,32 @@ async def build_verification_report(
     # is what makes the operator surface's [n] markers resolvable: every marker
     # rendered comes from THIS list, so no number can dangle.
     citations = await number_citations(session, run.id)
+
+    # D-22-4 (read-time layer): collapse to ONE entry per normalized source URL.
+    # Two `source` rows exist for one page because the INSERT key is the RAW url;
+    # until the write-side identity fix lands, collapsing on the way out is what
+    # makes one URL render as one number.
+    #
+    # THE DEDUPE SITS HERE -- downstream of `number_citations` -- AND NEVER
+    # INSIDE IT. Three contracts pinned in `citations/numbering.py` would break
+    # if an entry were dropped up there: contiguous `1..N` numbering, the EXACT
+    # 10-key entry shape, and byte-identical agreement with the numbering the
+    # ~$45 deliverable report was written against.
+    #
+    # ⛔ NUMBERS ARE PRESERVED, NEVER REASSIGNED. The deliverable's [n] markers
+    # were baked at synthesis by `apply_citation_anchors` and can no longer be
+    # updated, so renumbering here would make one number mean two different
+    # sources across the two documents -- silently, on both surfaces at once.
+    # The emitted list therefore goes SPARSE (1, 2, 4, ...). GAPS ARE THE
+    # INTENDED, HONEST COST OF COLLAPSING DUPLICATES -- not a defect to tidy
+    # away. Closing them here, or in the frontend, is the bug.
+    #
+    # Read-time only: this changes DISPLAY. Cost and corroboration figures still
+    # count the duplicate `source` rows until the write side lands.
+    resolution = await _source_resolution(
+        session, [c["source_id"] for c in citations]
+    )
+    citations = collapse_citations_by_url(citations, resolution)
 
     return shape_verification_report(
         verdict_rows=verdict_rows,
