@@ -225,6 +225,37 @@ function OpenRunLink({ runId }: { runId: string }) {
   );
 }
 
+/**
+ * The intake detail page's link-only research surface (D-22-5).
+ *
+ * WHY THIS EXISTS AT ALL. D-22-5 takes the embedded feed off the intake detail page — operator
+ * verbatim: *"activity shouldnt show on the intake page, we already have a open run button that
+ * opens it in a different page and it is exactly the same so no need to have it there."* But the
+ * same ruling keeps the link and makes it THE way in. `OpenRunLink` above is defined here and was
+ * rendered ONLY from this file's four card branches, so removing the `<ResearchRunProgress>`
+ * element from the intake page WITHOUT this wrapper would leave the app with no navigation into
+ * the run page at all — only a bookmarked URL. (`RunActions`' own `navigate` is not an entry
+ * point: it fires once you are ALREADY on the run page.) This wrapper is the whole reason the
+ * removal is not a capability loss.
+ *
+ * WHY IT USES THE HOOK. `useActiveResearchRun` is the only client-side way to learn an intake's
+ * latest run id: `Intake` (`lib/api/intakes.ts`) carries no research-run field, and
+ * `locateResearchRun` goes the OTHER way (run id → intake id). The hook stays inside this
+ * component rather than being called from the route, which keeps the intake route free of a
+ * research stream it does not own.
+ *
+ * NETWORK COST. This mounts ONE SSE connection — the very same connection the removed component
+ * already opened on that page. Strictly less network than before, never more, and the stream
+ * still closes itself on a terminal run (`onTerminal → stream.close()`).
+ *
+ * Renders nothing until a run id is known, so an intake with no run shows no dead link.
+ */
+export function IntakeOpenRunLink({ intakeId }: { intakeId: string }) {
+  const { run } = useActiveResearchRun(intakeId);
+  if (!run?.id) return null;
+  return <OpenRunLink runId={run.id} />;
+}
+
 function StageIcon({ status }: { status: string }) {
   if (status === "done") return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
   if (status === "running")
