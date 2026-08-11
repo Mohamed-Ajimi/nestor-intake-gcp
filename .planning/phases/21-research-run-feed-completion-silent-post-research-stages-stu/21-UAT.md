@@ -1,6 +1,49 @@
 # Phase 21 — Operator UAT on RECORDED data
 
-**Status:** ⏸ **AWAITING OPERATOR — no verdict below has been filled in.**
+**Status:** ◐ **PARTIALLY WALKED 2026-08-11 — operator gave a roll-up impression plus five change
+requests. Per-check verdicts below remain UNFILLED and MUST NOT be inferred from the roll-up.**
+
+> ## Operator walkthrough, 2026-08-11 — recorded VERBATIM
+>
+> > "ok looks good but verification report should open its own page not a dropdown (too long) also
+> > verification report contains very good information , so style it better , like a dashboard and
+> > the citation should show when you hover over them , and the list of citation should be hidden by
+> > default and user can expand and see. also there are alot of duplicate citations is there a reason
+> > for that , why not remove duplicates and have 1 number for it? also activity shouldnt show on the
+> > intake page , we already have a open run button that opens it in a different page and it is
+> > exactly the same so no need to have it there."
+>
+> **What this settles:** the report IS reachable and DID render (B1–B4 exercised in substance — the
+> operator read its content and judged it "very good information"). **What it does NOT settle:** no
+> per-check verdict was stated. SC2 (no spinner on a terminal run) and SC6 (final divider reads
+> "Run complete", not `done`) were NOT answered and are both blockers. They stay `(awaiting
+> operator)`. **"looks good" is not a PASS on a check nobody named** — recording it as one would be
+> the exact false green this document exists to prevent.
+>
+> **Five change requests ROUTED to Phase 22** (recording rule 2: routed, never absorbed):
+> 1. Verification report opens on its own page, not an inline dropdown — it is too long.
+> 2. Restyle it as a dashboard; the information itself is good.
+> 3. Citations show on hover; the citation LIST is collapsed by default and expandable.
+> 4. Duplicate citations collapse to one number per source.
+> 5. The activity feed is REMOVED from the intake page — "Open run" already opens the same thing.
+>
+> ⚠ **Item 5 REVERSES this document's R2**, which deliberately kept the embedded
+> `ResearchRunProgress` (21-CONTEXT, out of scope). That is the operator's call, made with the
+> reversal in front of them. Recorded here so a later reader does not mistake its removal for a
+> Phase 21 regression.
+>
+> **Answer to the operator's question about duplicate citations** (they asked "is there a reason"):
+> yes, and it is a defect rather than a design. `_assign_numbers` (`citations/numbering.py:225`)
+> already reuses a number when it sees a source again — the dedupe is correct at the numbering
+> layer. The duplication is created one layer up, at source INSERT
+> (`citations/extractor.py:289-322`): the conflict key is `(tenant_id, content_hash)`, a hash of the
+> **snapshot text**, not the URL. So (a) two providers fetching the same page with even slightly
+> different extracted text produce two `source` rows and therefore two numbers, and (b) when there
+> is no snapshot at all the code says *"No snapshot to hash — skip dedupe and insert plainly"*, so
+> every citation of a snapshot-less source inserts a fresh row every time. Same family as V-01's
+> exact-string merge key. The fix is a normalized-URL identity (prefer `resolved_url`, strip `www.`,
+> trailing slash, tracking params) — read-time for display first, since that is reversible and needs
+> no migration.
 **Created:** 2026-08-10 by plan 21-08 (Task 3 artifact, pre-created at the Task 2 checkpoint)
 **Spend:** **ZERO.** Every check here runs against an EXISTING recorded run.
 
