@@ -41,7 +41,7 @@ import { RunActions } from "@/components/research/RunActions";
 // deliberately carries none: a region announcing every one of a thousand events is worse than
 // no region at all (T-15.3-82).
 
-export const Route = createFileRoute("/admin/pulse/runs/$runId")({
+export const Route = createFileRoute("/admin/pulse/runs/$runId/")({
   component: ResearchRunPage,
 });
 
