@@ -4,12 +4,12 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: Phase 22 UI-SPEC approved
-last_updated: "2026-08-11T08:59:43.867Z"
-last_activity: 2026-08-10 -- Phase 21 execution started
+last_updated: "2026-08-11T13:30:11.030Z"
+last_activity: 2026-08-11 -- Phase 22 execution started
 progress:
   total_phases: 18
   completed_phases: 13
-  total_plans: 132
+  total_plans: 142
   completed_plans: 130
   percent: 72
 ---
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 21 — research-run-feed-completion-silent-post-research-stages-stu
+**Current focus:** Phase 22 — verification-report-as-a-page-citation-hygiene-the-verificat
 
 ## Current Position
 
-Phase: 21 (research-run-feed-completion-silent-post-research-stages-stu) — EXECUTING
-Plan: 1 of 8
+Phase: 22 (verification-report-as-a-page-citation-hygiene-the-verificat) — EXECUTING
+Plan: 1 of 10
 Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
 **NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.
 **No run has been triggered and no measurement exists.** What is done is the credential-free
@@ -309,7 +309,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Executing Phase 21
+Status: Executing Phase 22
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -419,7 +419,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-08-10 -- Phase 21 execution started
+Last activity: 2026-08-11 -- Phase 22 execution started
 
 Progress: [██████████] 100%
 
