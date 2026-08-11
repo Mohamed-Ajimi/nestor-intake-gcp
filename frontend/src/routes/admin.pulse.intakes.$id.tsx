@@ -51,8 +51,11 @@ const EMPTY_PARSED: ParsedSkillOutput = {};
 import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
 import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
-import { ResearchRunProgress } from "@/components/intake/ResearchRunProgress";
-import { cancelResearch, resumeResearch, triggerResearch } from "@/lib/api/research";
+// D-22-5: this page imports the link-only surface, NOT the feed component. The research
+// trigger below stays — `onStartAutoResearch` still calls it. The cancel and resume helpers
+// left with the three handlers that the removed feed element was the only caller of.
+import { IntakeOpenRunLink } from "@/components/intake/ResearchRunProgress";
+import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
 import { AISkillsPanel } from "@/components/intake/AISkillsPanel";
@@ -165,11 +168,12 @@ const STATUS_WITH_BANNER = new Set([
 ]);
 const STATUS_WITH_HINT = new Set(["reviewed", "validated_by_client"]);
 
-// Statuses on which a research run has run (or is running), so the operator's
-// post-run forensic surfaces (D15 feed replay, verification report, cost,
-// citations) stay reachable. `in_research` is the live window; `delivered` and
-// `archived` keep the frozen replay visible AFTER the report PDF flips the status,
-// so a superadmin can still review the run. There is no raw `completed` status
+// Statuses on which a research run has run (or is running), so the way INTO the run page
+// stays offered. Since D-22-5 this gates the "Open run" link alone — the forensic surfaces
+// themselves (D15 feed replay, verification report, cost, citations) now live on
+// `/admin/pulse/runs/:runId`, not on this page. `in_research` is the live window;
+// `delivered` and `archived` keep the link offered AFTER the report PDF flips the status,
+// so a superadmin can still reach a finished run. There is no raw `completed` status
 // (the phase machine derives that phase from `delivered` + results_link_sent_at).
 const RESEARCH_SURFACE_STATUSES = new Set(["in_research", "delivered", "archived"]);
 
@@ -779,7 +783,8 @@ function IntakeDetailPage() {
   // NextStepBanner — this handler is only reached AFTER the operator confirms, so it POSTs
   // the 202 directly (D-03). Return-no-throw: `triggerResearch` surfaces failures as
   // `{success,error}`; on success the backend has flipped the intake to `in_research`, so
-  // a `load()` re-fetch swaps the banner for the live ResearchRunProgress panel below.
+  // a `load()` re-fetch flips the intake to a research status, which (since D-22-5) swaps the
+  // banner for the "Open run" link below rather than for an embedded live panel.
   const onStartAutoResearch = async () => {
     setBusyKey("startResearch", true);
     try {
@@ -796,55 +801,10 @@ function IntakeDetailPage() {
     }
   };
 
-  // Re-trigger from the failure card in ResearchRunProgress. The 3-attempt cap (D-04) is
-  // enforced server-side; an over-cap retry is rejected by the backend and surfaced here.
-  const onRetryResearch = async () => {
-    const res = await triggerResearch(id);
-    if (!res.success) {
-      const codeKey = resolveErrorKey(res.code);
-      toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchStartFailed"));
-      return;
-    }
-    toast.success(t("intakeDetail.toast.researchStarted"));
-    await load();
-  };
-
-  // Resume from the PARKED card in ResearchRunProgress (F-01). Deliberately NOT
-  // `triggerResearch`: a retry starts a new attempt and re-charges the engine, while a
-  // resume re-queues the SAME run from its checkpoints. F-02 — a checkpoint resume is
-  // free and does not consume one of the three trigger attempts, so unlike
-  // `onRetryResearch` there is no cap for this handler to surface.
-  const onResumeResearch = async () => {
-    const res = await resumeResearch(id);
-    if (!res.success) {
-      const codeKey = resolveErrorKey(res.code);
-      toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchResumeFailed"));
-      return;
-    }
-    toast.success(t("intakeDetail.toast.researchResumed"));
-    await load();
-  };
-
-  // Stop from the ACTIVE card in ResearchRunProgress (D-D, plan 15.2-25). The confirm
-  // dialog lives in that component (the same AlertDialog affordance the trigger uses), so
-  // this handler is only reached AFTER the operator confirms. Return-no-throw, exactly
-  // like `onResumeResearch`. The `await load()` matters more here than anywhere else: the
-  // whole point is that the run row RESOLVES, and the re-read is what swaps the live panel
-  // for the cancelled card and re-enables the re-trigger path.
-  //
-  // The toast strings live in the `intake` namespace beside the rest of `research.*`
-  // (this route's own `t` is bound to `admin`), hence the explicit `intake:` prefix —
-  // the same cross-namespace form already used for `common:actions.save` below.
-  const onCancelResearch = async () => {
-    const res = await cancelResearch(id);
-    if (!res.success) {
-      const codeKey = resolveErrorKey(res.code);
-      toast.error(codeKey ? t(codeKey) : res.error || t("intake:research.cancelError"));
-      return;
-    }
-    toast.success(t("intake:research.cancelOk"));
-    await load();
-  };
+  // D-22-5: the retry, resume and stop handlers used to live here. Each had exactly ONE
+  // caller — the research feed element removed from this page below — so they died with it.
+  // The equivalent actions are on the run page via `RunActions`
+  // (`routes/admin.pulse.runs.$runId.tsx`), which is where the operator now performs them.
 
   const onDownloadContextPack = () => {
     const el = document.querySelector("[data-context-pack-block]");
@@ -1210,20 +1170,23 @@ function IntakeDetailPage() {
          </div>
        )}
 
-       {/* Phase 16 (RUN-01/D-07): the operator's window into a Tribunal run. Mounts
-           on the ADMIN detail route only (T-16-12/D-08 — no client-facing research surface).
-           Renders the stage list dynamically from the mirrored research_runs row.
-           Phase 15 (quick 260724-vyf): visible on every post-research status, not just the
-           live `in_research` window — for a terminal run the component shows the frozen
-           replay card (feed + verification report + cost + citations), so a superadmin can
-           still review the run after the report PDF flips the intake to `delivered`/`archived`. */}
+       {/* D-22-5: the activity feed is GONE from this page. Operator verbatim — "activity
+           shouldnt show on the intake page, we already have a open run button that opens it
+           in a different page and it is exactly the same so no need to have it there." The
+           run page renders the same feed, status card and verification report, so what stays
+           here is NAVIGATION to the run, not the run body.
+
+           ⚠ This REVERSES Phase 21's R2, which deliberately kept the embedded card. The
+           operator reversed it with the reversal stated in front of them — a later reader
+           should NOT read this as a Phase 21 regression.
+
+           The link-only wrapper below exists because `OpenRunLink` is defined inside the
+           removed component and was rendered only from its four card branches: dropping the
+           element without that wrapper would leave the app with NO way into the run page. */}
        {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
-            <ResearchRunProgress
-              intakeId={intake.id}
-              onRetry={onRetryResearch}
-              onResume={onResumeResearch}
-              onCancel={onCancelResearch}
-            />
+            <div className="px-6 pb-6">
+              <IntakeOpenRunLink intakeId={intake.id} />
+            </div>
        )}
       </div>
 
