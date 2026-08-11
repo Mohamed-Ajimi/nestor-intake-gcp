@@ -158,6 +158,22 @@ scope). The operator reversed it with the reversal stated in front of them. Reco
 reader does not read the removal as a Phase 21 regression. Verify nothing else on the intake page
 depends on that component before deleting it.
 
+**⚠⚠ AMENDED 2026-08-11 (planner) — D-22-5 AS WRITTEN WOULD DELETE THE APP'S ONLY WAY INTO THE RUN
+PAGE. The "removal strands no capability" finding was WRONG on this point.**
+
+`OpenRunLink` is defined at `ResearchRunProgress.tsx:214-225` and rendered from four branches of the
+very component being removed. A repo-wide grep for `/admin/pulse/runs` over `**/*.tsx` returns three
+non-generated hits: that link, `RunActions.tsx:192` (which only fires once you are ALREADY on the
+run page), and the route's own `createFileRoute`. **The RunActions equivalence the UI checker and
+research both relied on is circular** — it is not an entry point.
+
+No operator re-ruling is needed, because D-22-1 already says it: *"The 'Open run' link stays and is
+the single way in."* Removing the feed must therefore PRESERVE the link — the plan does this via a
+new `IntakeOpenRunLink` wrapping the existing hook and link.
+
+Consequence: **`RESEARCH_SURFACE_STATUSES` SURVIVES.** Research listed it as dead code, but it still
+gates that link, so a criterion asserting it is gone would be unsatisfiable.
+
 **⚠ DO NOT DELETE `ResearchRunProgress.tsx` — remove the ELEMENT, keep the FILE.**
 `admin.pulse.runs.$runId.tsx:11` imports `useActiveResearchRun` from that module. Deleting the file
 breaks the very run page this phase is building around. Research enumerated the rest of the dead
