@@ -634,3 +634,13 @@ reports nothing for 8 of 13 stages.
 | 19. Q&A Chat (Voyage + Haiku RAG) | v1.1 | 0/TBD | Not started | - |
 | 20. Deferred Chores + v1.0 UAT Closure | v1.1 | 0/TBD | Not started | - |
 | 21. Research Run Feed Completion | v1.1 | 8/8 | Complete   | 2026-08-10 |
+
+### Phase 22: Verification Report as a Page + Citation Hygiene - the verification report moves off the run page onto its own dedicated route and is restyled as a dashboard; citations gain hover previews with the full list collapsed by default; duplicate citations collapse to one number per source; the embedded activity feed is removed from the intake detail page since Open run already serves it
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 21
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 22 to break down)
