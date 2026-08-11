@@ -72,17 +72,37 @@ that says "Published" would violate the operator's "NO ESTIMATES — facts only"
 **Operator, verbatim:** *"there are alot of duplicate citations is there a reason for that , why not
 remove duplicates and have 1 number for it?"*
 
-**Root cause, established from the code before planning:** `_assign_numbers`
-(`citations/numbering.py:225`) already dedupes correctly — it reuses a number when it sees a source
-again. The duplication is created one layer up at source INSERT
-(`citations/extractor.py:289-322`), where the conflict key is `(tenant_id, content_hash)` — a hash
-of the **snapshot text**, not the URL. Two consequences:
-1. Two providers fetching the same page with even slightly different extracted text produce two
-   `source` rows, hence two numbers.
-2. When there is no snapshot at all, the code comments *"No snapshot to hash — skip dedupe and
-   insert plainly"* — so every citation of a snapshot-less source inserts a fresh row, every time.
+**⚠ AMENDED 2026-08-11 — the root cause recorded here on 2026-08-10 was WRONG for the path that
+actually runs. Corrected by `22-RESEARCH.md`, which established it by executing the code.**
 
-Same family as V-01's exact-string merge key.
+**What was originally written (and is only half true):** `_assign_numbers`
+(`citations/numbering.py:225`) already dedupes correctly — it reuses a number when it sees a source
+again. That part stands. The duplication is created one layer up at source INSERT
+(`citations/extractor.py:289-322`), where the conflict key is `(tenant_id, content_hash)`. The
+original inference was that `content_hash` is a hash of the **snapshot text**, so two providers
+extracting slightly different text from the same page yield two rows.
+
+**What is actually true:** the live Tribunal path calls `_upsert_source(snapshot_text=url)` at
+`extractor.py:1100` — it passes the URL *as* the snapshot argument. **So the conflict key is already
+`sha256(url)`.** The generic "different snapshot text" story does not describe this path at all, and
+neither does the "no snapshot → dedupe skipped" branch.
+
+**The real defect is raw-vs-normalized URL**, and the dominant duplicate generator is almost
+certainly **Gemini's `vertexaisearch` grounding redirects**, where every citation of the same page
+arrives as a different opaque token.
+
+**This materially changes what the fix can achieve.** Stripping `www.`, trailing slashes and
+tracking params collapses **none** of the redirect-token duplicates. Only `resolved_url` can — and
+`resolved_url` exists only where the best-effort HEAD resolution succeeded, so there is a real
+ceiling on yield that is not knowable before a run. **Do NOT write an acceptance criterion asserting
+a specific reduction in citation count.** `resolved_url` is therefore load-bearing, not a
+refinement: it must be preferred as the identity key wherever present.
+
+**Scheme is excluded from the identity key** (orchestrator decision, 2026-08-11, reversible):
+`http://` and `https://` of the same page are one source. This widens D-22-4's original wording and
+is recorded here rather than made silently.
+
+Same family as V-01's exact-string merge key — an identity key that is too literal.
 
 **Operator ruling 2026-08-11: BOTH layers, read-time first.**
 - **This phase:** group by normalized URL when building the citation list, so one URL renders as one
@@ -90,9 +110,37 @@ Same family as V-01's exact-string merge key.
 - **Next:** change the INSERT conflict key to a normalized URL so new runs stop creating duplicates.
   Sequenced deliberately — the write-side change touches ingest and earns its own validation.
 
-Normalization must prefer `resolved_url` where present, then strip `www.`, a trailing slash, and
-tracking params. **Normalization has to be one function used by both layers**, or read and write
-will disagree about identity — which is the defect being fixed, reintroduced one level down.
+**⚠ The write-side fix does NOT fit Phase 22 — research recommends Phase 23, and the reason is a
+money-loss risk, not tidiness.** It needs Alembic migration 0019, and critically the existing
+`idx_source_tenant_content_hash` UNIQUE index **must be dropped in the same migration**. If it is
+not, two sources with the same text but different URLs raise an unhandled `IntegrityError` **inside
+the persist transaction of a ~$45 run**. Build the shared `normalize_source_url` in this phase;
+land the INSERT change in its own.
+
+Normalization must prefer `resolved_url` where present, then drop the scheme and strip `www.`, a
+trailing slash, and tracking params. **Normalization has to be one function used by both layers**,
+or read and write will disagree about identity — which is the defect being fixed, reintroduced one
+level down. Research names the home: a shared `normalize_source_url` in `citations/dedupe.py`, built
+now even though the write side lands later.
+
+**⚠ NEVER RENUMBER — added 2026-08-11 from `22-RESEARCH.md`, and this is the highest-risk rule in
+the phase.** The verification report PAGE carries zero pre-baked `[n]`; every marker renders from
+`citation.n` at paint time. The **deliverable markdown is the opposite** — `apply_citation_anchors`
+(`pipeline.py:4533`) bakes `[n]` at synthesis and freezes it. So dedupe cannot desynchronise the
+page from itself, but it CAN desynchronise the page from the frozen deliverable — and only if it
+renumbers.
+
+Therefore: **dedupe AFTER numbering, keep each survivor's original `n`, never reassign.** The
+rendered list goes sparse (1, 2, 4, 7, …) and that sparseness is the correct cost, not a defect to
+tidy away. An additive `also_claim_ids` alias is required too — without it, a verdict row whose only
+source was absorbed silently loses its marker.
+
+**Where the dedupe may NOT live** (both established by running the tests):
+- **Not the frontend** — a TypeScript function cannot be shared with the Python INSERT, and D-22-4
+  requires one shared normalization.
+- **Not inside `number_citations`** — `test_citation_numbering.py` pins CONTIGUOUS `1..N` and an
+  exact 10-key entry shape, so dropping entries or adding `resolved_url` there goes red.
+- **The seam is `verification/report.py:661`.**
 
 ⚠ Read-time dedupe changes DISPLAY only. Cost and corroboration metrics still count the duplicate
 rows until the write-side lands. Do not claim otherwise in the UI.
@@ -109,6 +157,14 @@ stays and is the single way in.
 scope). The operator reversed it with the reversal stated in front of them. Recorded so a later
 reader does not read the removal as a Phase 21 regression. Verify nothing else on the intake page
 depends on that component before deleting it.
+
+**⚠ DO NOT DELETE `ResearchRunProgress.tsx` — remove the ELEMENT, keep the FILE.**
+`admin.pulse.runs.$runId.tsx:11` imports `useActiveResearchRun` from that module. Deleting the file
+breaks the very run page this phase is building around. Research enumerated the rest of the dead
+code (imports, state, queries, subscriptions, locale keys); a partial deletion that leaves orphaned
+state is the failure mode to avoid. The UI checker separately confirmed the removal strands no
+capability: the intake page's retrigger/resume/stop handlers have an equivalent on the run page via
+`RunActions` (`admin.pulse.runs.$runId.tsx:299`).
 
 ### Claude's Discretion
 
