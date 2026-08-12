@@ -103,7 +103,12 @@ export type VerificationVerdictItem = {
 };
 
 export type VerificationReport = {
-  funnel: Record<string, number> | null;
+  // CR-01: NOT `Record<string, number>`. The engine writes non-numeric siblings into this same
+  // flat dict — `verification_degraded` is a bool and `degradation_reasons` is a list of the
+  // operator-facing sentences (both set in the engine's pipeline alongside the real counts), and a
+  // `park` dict can appear too. Typing it as all-numbers is what let a consumer coerce a populated
+  // reasons list into the number 0. Consumers MUST narrow per entry and drop what is not a number.
+  funnel: Record<string, unknown> | null;
   verdicts: {
     support?: VerificationVerdictItem[];
     refute?: VerificationVerdictItem[];

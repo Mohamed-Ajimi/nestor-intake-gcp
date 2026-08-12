@@ -366,10 +366,20 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
   const costTotal = report?.true_cost?.cost_usd_total ?? null;
 
   // The funnel's VALUES cross the same trust boundary as its engine-authored keys (T-22-20):
-  // the wire type says number, but anything else would reach the bar as `width: NaN%`. Coerced
-  // once, here, so the bar geometry can never be fed a non-number.
-  const funnelEntries: Array<[string, number]> = Object.entries(report?.funnel ?? {}).map(
-    ([stage, count]) => [stage, Number.isFinite(Number(count)) ? Number(count) : 0],
+  // anything non-numeric would otherwise reach the bar as `width: NaN%`. But COERCING a non-number
+  // is worse than dropping it (CR-01): the engine writes non-numeric siblings into this same flat
+  // dict — `verification_degraded` (bool) and `degradation_reasons` (list of the operator-facing
+  // sentences), plus a possible `park` dict. Coercion turned a populated reasons list into the
+  // number 0, which is indistinguishable from an empty one and ASSERTS there were no reasons —
+  // the report stating something false about its own evidence, which is the exact failure this
+  // phase exists to remove. So: narrow per entry and DROP anything that is not a real number.
+  // `typeof === "number"` is deliberately strict — `Number(true)` is 1 and `Number([])` is 0, so
+  // any looser test re-invents the bug. A stage whose value is not a number simply has no bar.
+  const funnelEntries: Array<[string, number]> = Object.entries(report?.funnel ?? {}).flatMap(
+    ([stage, count]) =>
+      typeof count === "number" && Number.isFinite(count)
+        ? [[stage, count] as [string, number]]
+        : [],
   );
   // A funnel of all zeros must not divide by zero, and an empty funnel must not produce
   // -Infinity — which is exactly what a bare `Math.max(...[])` returns.
