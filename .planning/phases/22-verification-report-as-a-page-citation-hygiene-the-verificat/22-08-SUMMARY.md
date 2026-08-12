@@ -210,3 +210,12 @@ does not scroll" guarantee are **not** provable here: this repo has no React Tes
 and standing one up for one component is out of scope. They ride on the vendored Radix primitives and
 belong to operator UAT (plan 22-09). The `IntersectionObserver` active-marking likewise has no gate —
 it is browser-only code that never executes under `vitest` or SSR.
+
+## Self-Check: PASSED
+
+- `frontend/src/components/intake/VerificationReport.tsx` — FOUND (883 lines, ≥ the 450 min)
+- `.planning/phases/22-.../22-08-SUMMARY.md` — FOUND and tracked in `HEAD` (force-added)
+- `.planning/phases/22-.../deferred-items.md` — FOUND and tracked in `HEAD`
+- Commits `da5379b`, `08e89ea`, `7445186`, `89861e2`, `8e172e5` — all present in `git log e35b6b0..HEAD`
+- `git diff --diff-filter=D e35b6b0 HEAD` — **no deletions**
+- `.planning/STATE.md` / `.planning/ROADMAP.md` — **not modified** (0 paths in the diff)
