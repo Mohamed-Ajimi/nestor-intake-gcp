@@ -155,6 +155,43 @@ Verifiable on **RECORDED data with NO spend — do NOT trigger a run.**
 - Any deviation must be **routed**: either a follow-up task or an explicitly deferred item.
   Never absorbed silently.
 
+### ✅ CLOSURE — DEF-21-02 is RECONCILED, 2026-08-11, by Phase 22 plan 22-09
+
+**All six steps now have an explicit status and a named successor.** Three carried forward, three
+superseded by a deliberate, operator-ruled design change:
+
+| Phase 21 step | Status | Successor in `22-UAT.md` PART B |
+|---|---|---|
+| B1 — run page loads via "Open run" | **CARRIED FORWARD** | 22-B1 |
+| B2 — toggle sits BETWEEN the status card and the feed | **SUPERSEDED by D-22-1** | 22-B2 |
+| B3 — report opens AND the feed survives beneath it | **SUPERSEDED by D-22-1** | 22-B3 |
+| B4 — toggle collapses cleanly, feed untouched | **SUPERSEDED by D-22-1** | 22-B4 |
+| B5 — offered on failed / cancelled runs (D-11) | **CARRIED FORWARD** | 22-B5 |
+| B6 — NO affordance on a queued / running run | **CARRIED FORWARD** | 22-B6 |
+
+**Why three of them changed rather than being answered.** Phase 22's D-22-1 moved the verification
+report onto its own route by operator ruling — *"verification report should open its own page not a
+dropdown (too long)"*. B2, B3 and B4 all asked about a **toggle beside the activity feed** and about
+the **feed surviving beneath an open report**. After D-22-1 there is no toggle and the report is not on
+the same page as the feed, so those three questions have no referent. They are **unanswerable as
+written**, and answering them anyway — in either direction — would be fabricating an observation.
+
+**The obligation this item placed on plan 21-08 is DISCHARGED BY POINTER, not by answering the six
+steps in their original form.** That is recorded plainly here so a later reader does not mistake it
+for an abandoned deferral: the six checks were **rewritten to be answerable against the shipped
+navigation**, and each rewrite states what changed and why.
+
+⛔ **A SUPERSESSION IS NOT A PASS, AND THIS CLOSES NO VERDICT.** All six successors ship **unfilled**
+in `22-UAT.md`, carrying the same blocker status (B5 still not a blocker when no failed or cancelled
+run exists). **Plan 21-02's operator-facing behaviour therefore remains verified by nobody until an
+operator fills in 22-B1 … 22-B6.** A phase verifier must not count SC4 / D-10 / D-11 as
+operator-confirmed on the strength of this closure — it moved the questions, it did not answer them.
+
+⚠ **Scope: this closure covers DEF-21-02 only.** Phase 22 changed no engine write path and triggered
+no research run, so every Phase 21 check that needs a post-deploy live run (SC1 above all) stays OPEN
+in `21-UAT.md`, and `21-UAT.md`'s `awaiting operator` count is unchanged by plan 22-09 (40 before, 40
+after).
+
 ---
 
 ## DEF-21-03 — the `coverage` summary line is still nearly empty, and per-item rows do NOT fix it
