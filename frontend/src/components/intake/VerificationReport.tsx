@@ -6,11 +6,7 @@ import remarkGfm from "remark-gfm";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import {
   getVerification,
@@ -389,6 +385,74 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
     (report?.superseded?.length ?? 0) +
     (report?.reconciled?.length ?? 0);
 
+  // ── The nav rail's entries ────────────────────────────────────────────────────────────────
+  // ONE entry per section THAT ACTUALLY RENDERS, derived from the same lengths the sections
+  // themselves gate on — so the rail can never advertise a destination the document does not
+  // have, and can never omit one it does. An empty verdict list renders nothing and therefore
+  // appears in neither place; that is this component's long-standing behaviour and omitting an
+  // empty section is not hiding anything from anyone.
+  // The unverified accounting and the cost block always render, so they are always listed.
+  // The unverified label carries its own count inside the existing key's own parentheses, which
+  // is why that entry passes no separate figure — one number, once.
+  // ⛔ Navigation ONLY. No verdict text, no per-section summary, no filter chips: a card grid
+  // with summary tiles is the direction the operator was shown and turned down.
+  const navEntries: Array<{ id: string; label: string; count?: number }> = [];
+  if (report) {
+    const listed = (id: string, label: string, count: number) => {
+      if (count > 0) navEntries.push({ id, label, count });
+    };
+    listed("refuted", t("verification.refutedTitle"), report.verdicts?.refute?.length ?? 0);
+    listed("support", t("verification.supportTitle"), report.verdicts?.support?.length ?? 0);
+    listed(
+      "insufficient",
+      t("verification.insufficientTitle"),
+      report.verdicts?.insufficient?.length ?? 0,
+    );
+    listed(
+      "superseded-verdicts",
+      t("verification.supersededVerdictsTitle"),
+      report.verdicts?.superseded?.length ?? 0,
+    );
+    listed("superseded", t("verification.supersededTitle"), report.superseded?.length ?? 0);
+    listed("reconciled", t("verification.reconciledTitle"), report.reconciled?.length ?? 0);
+    navEntries.push({
+      id: "unverified",
+      label: t("verification.unverifiedTitle", { count: report.unverified?.count ?? 0 }),
+    });
+    listed("citations", t("verification.citationsTitle"), sourcesCited);
+    navEntries.push({ id: "cost", label: t("verification.costTitle") });
+  }
+
+  // Which section the operator is currently looking at. `null` until the observer first fires,
+  // so nothing is marked active before anything has been measured.
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  // A STRING key, not the array: `navEntries` is a fresh array on every render, so depending on
+  // it directly would tear the observer down and rebuild it on each one.
+  const navIdKey = navEntries.map((e) => e.id).join(",");
+  useEffect(() => {
+    const ids = navIdKey ? navIdKey.split(",") : [];
+    if (ids.length === 0) return;
+    const targets = ids
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => el !== null);
+    if (targets.length === 0) return;
+    // The top band of the viewport decides: a document this long always has several sections
+    // intersecting at once, and the highest one still inside that band is the one being read.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length === 0) return;
+        visible.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        setActiveSection(visible[0].target.id);
+      },
+      { rootMargin: "-8% 0px -70% 0px", threshold: 0 },
+    );
+    for (const el of targets) observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, [navIdKey]);
+
   // The fetch lives in a callback so that BOTH the mount effect and the error state's "Try
   // again" button drive one code path. `reqRef` does what the old effect's `cancelled` flag
   // did, and more precisely: only the NEWEST request may write state. When intakeId/runId
@@ -535,106 +599,149 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
             </section>
           )}
 
-          {/* ── E. THE DOCUMENT ───────────────────────────────────────────────────────
+          {/* ── D + E. THE RAIL BESIDE THE DOCUMENT ───────────────────────────────────
+                 One flex row: the rail, then the document. On a wide screen the rail is a
+                 sticky left column that stays put while the document scrolls past it; below
+                 that it degrades to a scrollable chip row sitting directly under the funnel,
+                 which is exactly where it is in the source order — so the small-screen layout
+                 needs no reordering and the reading order is the same either way. */}
+          <div className="lg:flex lg:items-start lg:gap-8">
+            <nav
+              aria-label={t("verification.navLabel")}
+              className="mb-6 lg:sticky lg:top-4 lg:mb-0 lg:w-56 lg:shrink-0"
+            >
+              <div className="mb-2 font-mono text-[11px] uppercase tracking-wider text-ink/45">
+                {t("verification.navLabel")}
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:gap-0 lg:overflow-x-visible lg:pb-0">
+                {navEntries.map((entry) => {
+                  const active = activeSection === entry.id;
+                  return (
+                    <a
+                      key={entry.id}
+                      href={`#${entry.id}`}
+                      aria-current={active ? "true" : undefined}
+                      className={cn(
+                        "flex shrink-0 items-center justify-between gap-2 border-l-2 px-2 py-1.5 font-mono text-[11px] uppercase tracking-wider hover:text-ink",
+                        // The rule is present on EVERY entry and only ever changes colour, so
+                        // moving between sections shifts nothing on the page.
+                        active ? "text-ink" : "border-transparent text-ink/50",
+                      )}
+                      style={active ? { borderLeftColor: "#FF2D87" } : undefined}
+                    >
+                      <span className="truncate">{entry.label}</span>
+                      {typeof entry.count === "number" && (
+                        <span className="shrink-0 tabular-nums text-ink/50">{entry.count}</span>
+                      )}
+                    </a>
+                  );
+                })}
+              </div>
+            </nav>
+
+            {/* `min-w-0` so a long unbroken evidence string cannot force the flex child wider
+                than the row and squeeze the rail. */}
+            <div className="min-w-0 flex-1">
+              {/* ── E. THE DOCUMENT ─────────────────────────────────────────────────────
                  E1–E9 below are in the EXACT order this component has always rendered
                  them. Not one has moved, and not one is dropped, truncated, merged or
                  collapsed (D-22-2). What changed is that each is now a block with a real
                  heading and an anchor. */}
 
-          {/* A report that loaded but recorded no verdicts at all is a FINDING. Say so, and
+              {/* A report that loaded but recorded no verdicts at all is a FINDING. Say so, and
               still render the funnel above and the accounting and cost below. */}
-          {verdictRowCount === 0 && (
-            <div className="mb-8 bg-paperLight px-6 py-5">
-              <p className="font-sans text-[13px] leading-relaxed text-ink/60">
-                {t("verification.emptyReport")}
-              </p>
-            </div>
-          )}
+              {verdictRowCount === 0 && (
+                <div className="mb-8 bg-paperLight px-6 py-5">
+                  <p className="font-sans text-[13px] leading-relaxed text-ink/60">
+                    {t("verification.emptyReport")}
+                  </p>
+                </div>
+              )}
 
-          {/* E1. Refuted — the one section carrying a semantic rule, because it is the one
+              {/* E1. Refuted — the one section carrying a semantic rule, because it is the one
                   that answers "what broke". Colour is not the sole carrier: the heading
                   says "Refuted". */}
-          <VerdictSection
-            id="refuted"
-            title={t("verification.refutedTitle")}
-            items={report.verdicts?.refute}
-            leftRuleColor="#DC2626"
-            showEffect
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
-          <VerdictSection
-            id="support"
-            title={t("verification.supportTitle")}
-            items={report.verdicts?.support}
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
-          <VerdictSection
-            id="insufficient"
-            title={t("verification.insufficientTitle")}
-            items={report.verdicts?.insufficient}
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
+              <VerdictSection
+                id="refuted"
+                title={t("verification.refutedTitle")}
+                items={report.verdicts?.refute}
+                leftRuleColor="#DC2626"
+                showEffect
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
+              <VerdictSection
+                id="support"
+                title={t("verification.supportTitle")}
+                items={report.verdicts?.support}
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
+              <VerdictSection
+                id="insufficient"
+                title={t("verification.insufficientTitle")}
+                items={report.verdicts?.insufficient}
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
 
-          {/* ── Superseded VERDICTS (G-06 verdict class: "was true, has since changed") ──
+              {/* ── Superseded VERDICTS (G-06 verdict class: "was true, has since changed") ──
                  ⚠ DISTINCT from the superseded/scoped section directly below: this one lists
                  rows the skeptic CLASSED as superseded (report.verdicts.superseded), while
                  that one lists reconciliation-derived scoped findings carrying a canonical
                  value (report.superseded). Same word, different question — the backend
                  documents the deliberate collision in verification/report.py. Do NOT merge
                  them, and do NOT give them one shared heading. */}
-          <VerdictSection
-            id="superseded-verdicts"
-            title={t("verification.supersededVerdictsTitle")}
-            items={report.verdicts?.superseded}
-            showEffect
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
+              <VerdictSection
+                id="superseded-verdicts"
+                title={t("verification.supersededVerdictsTitle")}
+                items={report.verdicts?.superseded}
+                showEffect
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
 
-          {/* ── Superseded / scoped findings (canonical value + caveat inline) ──── */}
-          <VerdictSection
-            id="superseded"
-            title={t("verification.supersededTitle")}
-            items={report.superseded}
-            showEffect
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
+              {/* ── Superseded / scoped findings (canonical value + caveat inline) ──── */}
+              <VerdictSection
+                id="superseded"
+                title={t("verification.supersededTitle")}
+                items={report.superseded}
+                showEffect
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
 
-          {/* ── Reconciled contradictions (chosen canonical value) ─────────────── */}
-          <VerdictSection
-            id="reconciled"
-            title={t("verification.reconciledTitle")}
-            items={report.reconciled}
-            showEffect
-            citationsByClaim={citationsByClaim}
-            onOpenCitation={openCitationPanel}
-          />
+              {/* ── Reconciled contradictions (chosen canonical value) ─────────────── */}
+              <VerdictSection
+                id="reconciled"
+                title={t("verification.reconciledTitle")}
+                items={report.reconciled}
+                showEffect
+                citationsByClaim={citationsByClaim}
+                onOpenCitation={openCitationPanel}
+              />
 
-          {/* ── Honest unverified accounting (count-only — the backend emits no
+              {/* ── Honest unverified accounting (count-only — the backend emits no
                  per-claim items: {count, claims_with_verdict, total_claims}) ──────── */}
-          <ReportSection
-            id="unverified"
-            title={t("verification.unverifiedTitle", { count: report.unverified?.count ?? 0 })}
-          >
-            {(report.unverified?.count ?? 0) > 0 ? (
-              <p className="mt-3 font-sans text-[13px] leading-relaxed text-ink/60">
-                {t("verification.unverifiedSummary", {
-                  withVerdict: report.unverified?.claims_with_verdict ?? 0,
-                  total: report.unverified?.total_claims ?? 0,
-                })}
-              </p>
-            ) : (
-              <p className="mt-3 font-sans text-[13px] leading-relaxed text-ink/60">
-                {t("verification.unverifiedNone")}
-              </p>
-            )}
-          </ReportSection>
+              <ReportSection
+                id="unverified"
+                title={t("verification.unverifiedTitle", { count: report.unverified?.count ?? 0 })}
+              >
+                {(report.unverified?.count ?? 0) > 0 ? (
+                  <p className="mt-3 font-sans text-[13px] leading-relaxed text-ink/60">
+                    {t("verification.unverifiedSummary", {
+                      withVerdict: report.unverified?.claims_with_verdict ?? 0,
+                      total: report.unverified?.total_claims ?? 0,
+                    })}
+                  </p>
+                ) : (
+                  <p className="mt-3 font-sans text-[13px] leading-relaxed text-ink/60">
+                    {t("verification.unverifiedNone")}
+                  </p>
+                )}
+              </ReportSection>
 
-          {/* ── Numbered citations (SC4 / D13 — every [n] clickable + resolving) ──────
+              {/* ── Numbered citations (SC4 / D13 — every [n] clickable + resolving) ──────
                  CLOSED WHEN THE PAGE OPENS (D-22-3, operator verbatim: the list "should be
                  hidden by default and user can expand and see"). What is NOT hidden is how many
                  sources there are: the figure sits in the trigger row, which is also the
@@ -658,74 +765,76 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
                  The heading wraps the trigger rather than sitting inside it: a heading is not
                  permitted content for a button, and this is the ordinary accessible-accordion
                  shape — the section is still named by a real `<h2>`. */}
-          {citations.length > 0 && (
-            <section
-              id="citations"
-              aria-labelledby="citations-heading"
-              className="mb-8 scroll-mt-6 bg-paperLight px-6 py-2"
-            >
-              <Collapsible defaultOpen={false} onOpenChange={setCitationsOpen}>
-                <h2 id="citations-heading">
-                  <CollapsibleTrigger className="flex w-full items-center justify-between gap-4 py-3 hover:bg-paper2">
-                    <span className={SECTION_HEADING_CLASS}>
-                      {citationsOpen ? (
-                        <ChevronDown className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
-                      ) : (
-                        <ChevronRight className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
-                      )}
-                      <span>{t("verification.citationsTitle")}</span>
-                    </span>
-                    <span className="font-mono text-[11px] tabular-nums text-ink/60">
-                      {t("verification.citationsCount", { count: sourcesCited })}
-                    </span>
-                  </CollapsibleTrigger>
-                </h2>
-                <CollapsibleContent>
-                  <ul className="space-y-2 pb-3">
-                    {citations.map((c) => (
-                      <li
-                        key={c.n}
-                        className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-sans text-[13px] leading-relaxed text-ink/80"
-                      >
-                        <CitationMarker citation={c} onOpen={openCitationPanel} />
-                        <span className="font-mono text-[11px] text-ink/70">
-                          <CitationTierGlyph quality_tier={c.quality_tier} />
+              {citations.length > 0 && (
+                <section
+                  id="citations"
+                  aria-labelledby="citations-heading"
+                  className="mb-8 scroll-mt-6 bg-paperLight px-6 py-2"
+                >
+                  <Collapsible defaultOpen={false} onOpenChange={setCitationsOpen}>
+                    <h2 id="citations-heading">
+                      <CollapsibleTrigger className="flex w-full items-center justify-between gap-4 py-3 hover:bg-paper2">
+                        <span className={SECTION_HEADING_CLASS}>
+                          {citationsOpen ? (
+                            <ChevronDown className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
+                          )}
+                          <span>{t("verification.citationsTitle")}</span>
                         </span>
-                        <span className="font-mono text-[11px] text-ink/60">
-                          {t("citation.retrieved", {
-                            date: c.publication_date ?? t("citation.dateUnknown"),
-                          })}
+                        <span className="font-mono text-[11px] tabular-nums text-ink/60">
+                          {t("verification.citationsCount", { count: sourcesCited })}
                         </span>
-                        <span>{c.title ?? t("citation.untitled")}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </CollapsibleContent>
-              </Collapsible>
-            </section>
-          )}
-
-          {/* ── True itemized cost (facts-only; pending → LABEL, never a number) ── */}
-          <ReportSection id="cost" title={t("verification.costTitle")}>
-            <div className="mt-3 border-t border-ink/10 pt-3">
-              {report.true_cost?.cost_pending ? (
-                <div className="font-mono text-[13px] text-ink/70">
-                  {t("verification.costTotalWithPending", {
-                    total: report.true_cost?.cost_usd_total ?? "—",
-                  })}
-                  <span className="ml-2 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
-                    {t("verification.costPending")}
-                  </span>
-                </div>
-              ) : (
-                <div className="font-mono text-[13px] text-ink/70">
-                  {t("verification.costTotal", {
-                    total: report.true_cost?.cost_usd_total ?? "—",
-                  })}
-                </div>
+                      </CollapsibleTrigger>
+                    </h2>
+                    <CollapsibleContent>
+                      <ul className="space-y-2 pb-3">
+                        {citations.map((c) => (
+                          <li
+                            key={c.n}
+                            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-sans text-[13px] leading-relaxed text-ink/80"
+                          >
+                            <CitationMarker citation={c} onOpen={openCitationPanel} />
+                            <span className="font-mono text-[11px] text-ink/70">
+                              <CitationTierGlyph quality_tier={c.quality_tier} />
+                            </span>
+                            <span className="font-mono text-[11px] text-ink/60">
+                              {t("citation.retrieved", {
+                                date: c.publication_date ?? t("citation.dateUnknown"),
+                              })}
+                            </span>
+                            <span>{c.title ?? t("citation.untitled")}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </section>
               )}
+
+              {/* ── True itemized cost (facts-only; pending → LABEL, never a number) ── */}
+              <ReportSection id="cost" title={t("verification.costTitle")}>
+                <div className="mt-3 border-t border-ink/10 pt-3">
+                  {report.true_cost?.cost_pending ? (
+                    <div className="font-mono text-[13px] text-ink/70">
+                      {t("verification.costTotalWithPending", {
+                        total: report.true_cost?.cost_usd_total ?? "—",
+                      })}
+                      <span className="ml-2 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                        {t("verification.costPending")}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="font-mono text-[13px] text-ink/70">
+                      {t("verification.costTotal", {
+                        total: report.true_cost?.cost_usd_total ?? "—",
+                      })}
+                    </div>
+                  )}
+                </div>
+              </ReportSection>
             </div>
-          </ReportSection>
+          </div>
         </div>
       )}
 
