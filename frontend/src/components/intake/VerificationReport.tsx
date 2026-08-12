@@ -250,9 +250,7 @@ function VerdictSection({
             item={item}
             showEffect={showEffect}
             citations={
-              typeof item.claim_id === "string"
-                ? citationsByClaim?.get(item.claim_id)
-                : undefined
+              typeof item.claim_id === "string" ? citationsByClaim?.get(item.claim_id) : undefined
             }
             onOpenCitation={onOpenCitation}
           />
@@ -322,13 +320,7 @@ function StatTile({
  * mount. Its single mount is `routes/admin.pulse.runs.$runId.verification.tsx`, which owns the
  * page's header, identity rule and back link (superadmin-only by placement).
  */
-export function VerificationReport({
-  intakeId,
-  runId,
-}: {
-  intakeId: string;
-  runId: string;
-}) {
+export function VerificationReport({ intakeId, runId }: { intakeId: string; runId: string }) {
   const { t } = useTranslation("intake");
   const [report, setReport] = useState<VerificationReportData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -383,9 +375,11 @@ export function VerificationReport({
 
   // The fetch lives in a callback so that BOTH the mount effect and the error state's "Try
   // again" button drive one code path. `reqRef` does what the old effect's `cancelled` flag
-  // did: only the newest request may write state, and the effect's cleanup bumps the sequence
-  // so a response landing after unmount is dropped instead of setting state on a dead
-  // component. RETURN-NO-THROW: failure surfaces as an inline message AND a toast.
+  // did, and more precisely: only the NEWEST request may write state. When intakeId/runId
+  // change, the effect re-runs, the sequence is bumped, and the previous run's in-flight
+  // response is dropped — so run A's report can never render under run B's id. React 19 no
+  // longer warns about a setState after unmount and it is a no-op, so no cleanup is needed for
+  // that case. RETURN-NO-THROW: failure surfaces as an inline message AND a toast.
   const reqRef = useRef(0);
   const loadReport = useCallback(() => {
     const seq = ++reqRef.current;
@@ -405,9 +399,6 @@ export function VerificationReport({
 
   useEffect(() => {
     loadReport();
-    return () => {
-      reqRef.current++;
-    };
   }, [loadReport]);
 
   return (
