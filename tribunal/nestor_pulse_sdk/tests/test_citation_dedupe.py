@@ -475,3 +475,38 @@ def test_no_number_is_invented_for_an_entry_that_arrives_without_one():
     out = collapse_citations_by_url([entry])
 
     assert "n" not in out[0]
+
+
+# ── WR-01: a host-free candidate must have NO identity key ─────────────────────────────────────
+# The over-merge these cover is the one the module docstring calls "strictly worse" than
+# under-merging: with no scheme present, `urlparse` reads `foo.com:8080/a` as scheme=`foo.com`
+# with path=`8080/a`, leaving netloc empty. Assembling `host + path` from an empty host therefore
+# produces a path-only key that two unrelated hosts can share. Display-only today; D-22-4
+# designates this function for the INSERT conflict key next, where the same collision would merge
+# real persisted rows.
+
+
+def test_two_different_hosts_do_not_collide_when_the_scheme_is_missing():
+    """The regression proper: both inputs previously normalised to '8080/a'."""
+    a = normalize_source_url("foo.com:8080/a")
+    b = normalize_source_url("bar.com:8080/a")
+
+    assert a is None
+    assert b is None
+    # Belt and braces: even if a future change gives these keys, they must never be EQUAL.
+    assert not (a is not None and a == b)
+
+
+def test_a_path_only_candidate_has_no_identity_key():
+    """A relative path names no source, so it yields no key rather than a collidable one."""
+    assert normalize_source_url("/article/1") is None
+    assert normalize_source_url("article/1") is None
+
+
+def test_a_real_host_still_normalises_after_the_host_guard():
+    """Negative control: the guard must not swallow ordinary absolute urls."""
+    assert normalize_source_url("https://foo.com/a") == "foo.com/a"
+    assert normalize_source_url("https://bar.com/a") == "bar.com/a"
+    assert normalize_source_url("https://foo.com/a") != normalize_source_url("https://bar.com/a")
+    # A host with no path keeps its bare-host key.
+    assert normalize_source_url("https://foo.com") == "foo.com"

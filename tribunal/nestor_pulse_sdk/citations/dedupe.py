@@ -209,6 +209,18 @@ def normalize_source_url(
         elif path.endswith("/"):
             path = path[:-1]
 
+        # 8b. WR-01 GUARD: no host, no identity. A candidate with no netloc yields a key made of
+        #     path alone, and such keys COLLIDE ACROSS HOSTS: with no scheme present, `urlparse`
+        #     reads `foo.com:8080/a` as scheme=`foo.com` with path=`8080/a`, so `foo.com:8080/a`
+        #     and `bar.com:8080/a` both produce `8080/a` — two unrelated sources merged onto one
+        #     identity. That is the over-merge this module's own docstring calls strictly worse
+        #     than under-merging, and it is the reason the docstring returns None rather than ""
+        #     for an input that yields no usable key. Today the key is display-only so the blast
+        #     radius is one report; D-22-4 designates THIS function for the INSERT conflict key
+        #     next, where a collision merges real persisted rows. Fail closed here, once.
+        if not host:
+            return None
+
         # 9. Assemble. Scheme-free by step 4.
         key = f"{host}{path}"
         if query:
