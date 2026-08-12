@@ -30,7 +30,6 @@ import {
   type ResearchStageSummary,
 } from "@/lib/api/research";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
-import { VerificationReport } from "@/components/intake/VerificationReport";
 // The confirm gate for the Stop button. This is the SAME affordance the research
 // TRIGGER already uses (NextStepBanner's `researchConfirm*` AlertDialog) — the existing
 // house pattern for a destructive/paid research action. No new dialog component is
@@ -644,8 +643,6 @@ export function ResearchRunProgress({
   // The run id used to scope the audit drill-down: prefer an explicit route prop, else the
   // SSE run's id. When neither exists, the drill-down affordance is hidden by AgentFeed.
   const runId = runIdProp ?? run?.id ?? null;
-  // The D-09 summary card's "View verification report" toggle (superadmin-only surface).
-  const [showVerification, setShowVerification] = useState(false);
 
   const status = run?.status ?? "queued";
   // `needs_input` is the engine's parked clarification state. The intake side has
@@ -666,11 +663,11 @@ export function ResearchRunProgress({
   if (isTerminal) {
     // D-09/D-12: a `completed_degraded` run deliberately renders the FINISHED card,
     // not the failure card. Reaching the failure card would strip the raw-output
-    // download, the verification-report button and the frozen feed from a ~$45 run —
-    // the exact opposite of D-09. Only the border, icon, title and body differ; every
+    // download, the run-page link and the frozen feed from a ~$45 run — the exact
+    // opposite of D-09. Only the border, icon, title and body differ; every
     // affordance below stays unconditional. The degradation REASONS are not listed
-    // here: 15.2-08 shapes them into the verification report, reached from the
-    // "View verification report" button already in this card.
+    // here: 15.2-08 shapes them into the verification report, which since D-22-1 is
+    // its own page, reached from the run page this card links to.
     if (status === "completed" || status === "completed_degraded") {
       const isDegraded = status === "completed_degraded";
       return (
@@ -704,31 +701,14 @@ export function ResearchRunProgress({
           {/* Raw-output download (verified) or locked+re-verify (broken) — RUN-03. */}
           {run && <RawOutputControls intakeId={intakeId} run={run} />}
 
-          {/* D-09 summary-card action: open the superadmin verification report (funnel +
-              verdicts + superseded + reconciled + unverified + true cost). Only reachable
-              when a run id is available. Superadmin-only by placement. */}
-          {runId && (
-            <div className="mt-4">
-              <button
-                type="button"
-                onClick={() => setShowVerification((v) => !v)}
-                className="inline-flex items-center gap-2 border border-ink/30 px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:bg-ink/5"
-              >
-                {showVerification
-                  ? t("verification.hideAction")
-                  : t("verification.viewAction")}
-              </button>
-            </div>
-          )}
-          {runId && showVerification && (
-            <div className="mt-4">
-              <VerificationReport
-                intakeId={intakeId}
-                runId={runId}
-                onClose={() => setShowVerification(false)}
-              />
-            </div>
-          )}
+          {/* THE VERIFICATION REPORT IS NO LONGER EMBEDDED HERE (D-22-1). This card used to
+              carry a "View verification report" toggle that expanded the whole document inline;
+              the operator's complaint was that a document that long does not belong in a
+              dropdown, so it now has its own page and the only way in is a link. That link
+              lives on the run page — reached through the run-page link directly below — which
+              also holds the single call site of the rule deciding whether a report can exist at
+              all. Re-adding a toggle here would reinstate both the length complaint and a
+              second copy of that rule. */}
 
           {/* Branch 1 of 4: the way into the dedicated run page. */}
           {runId && <OpenRunLink runId={runId} />}
@@ -748,9 +728,8 @@ export function ResearchRunProgress({
     // A parked run deliberately renders a RESUME card rather than the failure card.
     // Reaching the failure card would offer a full re-trigger, which discards the
     // run's paid checkpoints — the opposite of what a park is for. It also renders
-    // no RawOutputControls and no verification toggle: a parked run has no report
-    // and no bundle (`report_readable("parked")` is false and the intake-side
-    // download gate would 409).
+    // no RawOutputControls: a parked run has no bundle (`report_readable("parked")`
+    // is false and the intake-side download gate would 409).
     if (status === "parked") {
       return (
         <div
