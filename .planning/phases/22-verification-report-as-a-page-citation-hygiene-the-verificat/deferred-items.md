@@ -137,3 +137,103 @@ and read the 4 remaining errors as known.
 **Not proven by this plan:** that the Cloud Build engine gate itself is green. No build was
 submitted — that is a deploy action and outside plan 22-01's scope. What IS proven: all 45 named
 paths resolve on disk, so the config's `COLLECTED -ne EXPECTED_FILES` assertion passes.
+
+---
+
+## DEF-22-03 — the i18n audit is blind to every interpolated `t()` call (102 sites)
+
+**Found during:** plan 22-03's execution; routed here by plan 22-08 so it is not lost with that
+plan's SUMMARY
+**Status:** deferred — a **gate-coverage** defect. Nothing in phase 22 relies on it being fixed, and
+fixing it means editing `frontend/scripts/i18n-audit.mjs`, which no plan in this phase owns.
+
+### Mechanism
+
+CHECK A/B/C recognise a translation call with two regexes at `i18n-audit.mjs:126-128`:
+
+- `RE_SINGLE` requires the call to **close immediately after the string** — `t("some.key")`.
+- `RE_TWO` requires the second argument to be a **string** — `t("ns", "some.key")`.
+
+Neither matches `t("some.key", { … })`. **Therefore no interpolated call is visible to the audit at
+all**, and there are **102 such sites in `frontend/src`**. A renamed or deleted interpolated key
+ships **GREEN** and renders the raw key name on screen to the operator.
+
+### How it was measured
+
+Plan 22-03 did this directly rather than reasoning about the regexes: it renamed keys in the locale
+files while leaving the component calling the OLD name, then ran the audit. Result: `RESULT: PASS`,
+exit 0. The audit did not notice.
+
+### Impact
+
+The audit is a real safety net for plain `t("key")` calls and **not a safety net at all** for any
+interpolated one. Anyone treating a green audit as proof that every key resolves is reading more
+into it than it measures. Every count-bearing, date-bearing and name-bearing string in this product
+is interpolated, which is most of the ones an operator actually reads.
+
+**Whoever picks this up:** widen the call recognition to accept an options-object second argument,
+then expect a burst of newly-visible findings on the first run — those are pre-existing, not caused
+by the fix.
+
+---
+
+## DEF-22-04 — two orphaned locale keys left by the removal of the intake-page resume action
+
+**Found during:** plan 22-04 (the D-22-5 element removal); routed here by plan 22-08
+**Status:** deferred — dead copy, zero runtime effect, and the audit will never surface it.
+
+Removing `onResumeResearch` left these two keys present in **all three** locale files with **zero
+referrers** anywhere in `frontend/src`:
+
+```
+intakeDetail.toast.researchResumed
+intakeDetail.toast.researchResumeFailed
+```
+
+The audit only ever flags a key a component asks for and the locales do not have — a **missing**
+key. It has no orphan check, so an unused key stays green forever and accumulates.
+
+⛔ **Do NOT also remove `research.cancelError` / `research.cancelOk`.** Those look like siblings and
+are NOT orphaned: `components/research/RunActions.tsx` still uses both. Deleting them because they
+sit next to these two would break a live surface.
+
+Not removed here because plan 22-08 touches one component file and the three locale files are
+outside its declared diff — and because removing a locale key is exactly the kind of "make the grep
+go green" edit this phase has repeatedly had to guard against.
+
+---
+
+## DEF-22-05 — five order-dependent tribunal test failures, pre-existing and not caused by phase 22
+
+**Found during:** phase 22 execution, running the citation / verification / schema test files
+together; routed here by plan 22-08
+**Status:** deferred — **cross-file pollution in the test harness, NOT a product defect and NOT
+introduced by this phase.**
+
+### What fails, and only in company
+
+Running those test files **together** yields 5 failures:
+
+| File | Test |
+|------|------|
+| `test_citation_roundtrip.py` | `test_source_snapshot_text_round_trips` |
+| `test_citation_roundtrip.py` | `test_source_upsert_by_content_hash_dedupes` |
+| `test_citation_roundtrip.py` | `test_d13_columns_round_trip` |
+| `test_citation_roundtrip.py` | `test_provider_stated_quality_beats_the_domain_heuristic` |
+| `test_schema_isolation.py` | `test_upgrade_head_writes_tribunal_version_table` |
+
+**Every one of them passes in isolation.**
+
+### Why it is not this phase's doing
+
+The identical five were confirmed failing at the **pre-phase commit `9afdf2d`**, where the same
+selection gave **135 passed**. After the phase's engine work the same selection gives **169 passed —
++34 new tests, 0 new failures.** The failure set is byte-identical before and after.
+
+This is the same class as the known directory-wide 180: shared module/DB state leaking between test
+files, sensitive to collection order. It is a harness-isolation problem, and closing it means
+per-test teardown work in files phase 22 does not own.
+
+⚠ **For whoever reads a red local run next:** do not attribute these five to whatever you are
+working on, and do not "fix" them by deleting or skipping the tests — each one asserts something
+real and each one passes on its own. Reproduce in isolation first.
