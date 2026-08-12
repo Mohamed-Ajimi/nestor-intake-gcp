@@ -5551,3 +5551,197 @@ tidiness: it needs Alembic **0019** adding a `normalized_url` column plus a part
 migration** — otherwise `ON CONFLICT (tenant_id, normalized_url)` does not cover a violation of the
 surviving index, and two same-text/different-URL sources raise an unhandled `IntegrityError` **inside
 the persist transaction of a ~$45 run.**
+
+---
+
+### 7. Phase 22 redeploy (2026-08-12) — the two post-review fixes
+
+⛔ **NO RESEARCH RUN WAS TRIGGERED, and the audit bucket proves it** — byte-identical before and
+after (§ 7d). This subsection is a re-run of §§ 2–5 above at a later commit, **not** a new procedure:
+the surface, the gates and the proof rules are unchanged. Read §§ 1–6 first; this section records only
+what differed.
+
+#### (a) Why — production was behind `master` by exactly two commits
+
+§ 5's deploy built at **`13ddb61`**. An end-to-end code review then found and fixed two defects
+(`22-REVIEW.md`), so the live revisions were serving code that predates both:
+
+- **`2666653` — CR-01 (frontend, user-visible, and the reason this redeploy exists).**
+  `VerificationReport` coerced every `report.funnel` value through `Number()` with a `0` fallback. But
+  **the engine writes non-numeric siblings into that same flat dict** — `verification_degraded` is a
+  bool (`pipeline.py:1037`) and `degradation_reasons` is a `list[str]` of the operator-facing sentences
+  (`pipeline.py:1083`). `Number([...])` is `0`, so **a POPULATED degradation-reasons list rendered as
+  `0`** — indistinguishable from empty, and therefore *asserting there were none*. The report was
+  stating something false about its own evidence, which is the failure this phase exists to remove.
+  Now narrowed per entry with a strict `typeof count === "number" && Number.isFinite(count)` and
+  DROPPED rather than coerced (`typeof` is deliberately strict: `Number(true)` is `1`, so any looser
+  test re-invents the bug). The root-cause type `funnel: Record<string, number>` → `Record<string,
+  unknown>` in `research.ts` — the wire type had been asserting a shape the engine does not send.
+- **`61ae873` — WR-01 (tribunal).** With no scheme present, `urlparse` reads `foo.com:8080/a` as
+  `scheme=foo.com` / `path=8080/a` with an EMPTY netloc, so `normalize_source_url` assembled the
+  host-free key `8080/a` — which `bar.com:8080/a` produced too. **Two unrelated sources merged onto one
+  identity**, the over-merge this module's own docstring calls strictly worse than under-merging.
+  Now returns `None` when there is no host. Display-only today, but **D-22-4 designates this same
+  function as the INSERT conflict key next**, where the identical collision would merge real persisted
+  rows — so it is fixed before it is weaponised.
+
+**Redeploy delta verified before building** — `git diff 13ddb61..HEAD` outside `.planning/` is
+**exactly four files**, and nothing else:
+
+```bash
+git diff --name-only 13ddb61..HEAD -- . ':(exclude).planning'
+# MEASURED: frontend/src/components/intake/VerificationReport.tsx
+#           frontend/src/lib/api/research.ts
+#           tribunal/nestor_pulse_sdk/citations/dedupe.py
+#           tribunal/nestor_pulse_sdk/tests/test_citation_dedupe.py
+```
+
+HEAD = **`510203e`** on `master`, tree clean.
+
+#### (b) The surface — RE-DERIVED, not inherited from § 1
+
+⛔ **Re-derived because § 1 says to: "which services a change touches is a MEASUREMENT WITH AN EXPIRY
+DATE, not a fact."** The delta here is narrower than the phase delta, so the derivation had to be
+re-run against `13ddb61..HEAD` rather than `9afdf2d..HEAD`.
+
+```bash
+git diff --name-only 13ddb61..HEAD | awk -F/ '{print $1}' | sort -u
+# MEASURED: .planning  frontend  tribunal            <- no `backend`
+git diff --stat 13ddb61..HEAD -- backend/
+# MEASURED: NO OUTPUT -> nestor-api CONFIRM-ONLY. THE EMPTY DIFF IS THE EVIDENCE.
+git diff --name-only 13ddb61..HEAD | grep -Ei 'alembic|versions/|/models?/'
+# MEASURED: exit 1, NO output -> NO MIGRATION
+git diff --name-only 13ddb61..HEAD | grep -Ei 'requirements.txt|package.json|package-lock.json|locales/'
+# MEASURED: exit 1, NO output -> NO new dependency, NO new secret, NO locale change
+#   (so the i18n audit's CHECK D count must still be 107 — and it was)
+grep -rn "citations.dedupe\|collapse_citations_by_url\|normalize_source_url" \
+  --include=*.py tribunal/ | grep -v "/tests/"
+```
+
+- **`citations/dedupe.py`** — its ONLY non-test importer is still `verification/report.py:41`, called
+  at `report.py:738`. The `runs/schemas.py:465` hit is a **comment**, not an import. Chain:
+  `dedupe.py` → `verification/report.py` → `runs/api.py:996` (inside the
+  `GET /{run_id}/verification` handler) → `server:app` → **`tribunal-api`**.
+- **`tribunal-worker` — CONFIRM-ONLY, re-earned.** `worker.py`'s top-level imports are exactly
+  `db.base`, `db.rls`, `pipeline.tribunal.reliability`. Its only two mentions of the changed modules
+  are **comments at `worker.py:252` and `worker.py:480`**. ⚠ This is the § 1 near-miss holding a second
+  time: `pipeline.py:4570`'s local dict named `verification_report` makes a SUBSTRING derivation drag
+  **the money-risk worker** into the surface. **Derive by imports. Never by name matching.**
+
+**Surface = `{tribunal-api, nestor-frontend}` — identical to § 1, and the identity was MEASURED, not
+assumed.**
+
+#### (c) The gates, at `510203e`
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | exit **0**, no output |
+| `npx vitest run` | **77 passed / 7 files** — unchanged; CR-01 shipped no new frontend test |
+| `node scripts/i18n-audit.mjs` | `RESULT: PASS — A/B/C clean (107 CHECK D advisories)` — **107, unchanged**, as the empty `locales/` diff predicted |
+| `npx vite build` | exit **0**, `✓ built in 31.54s` |
+| engine fast gate build id | **`10c59b32-3639-4960-aa45-7e96b001a280`** / **SUCCESS** *(read via `builds describe`, NEVER through a pipe)* |
+| engine gate collection line, verbatim | `collecting: 45 of 45 expected files` |
+| engine gate pytest summary, verbatim | `====================== 1948 passed, 14 skipped in 19.54s =======================` — **0 failures, 0 errors** |
+
+⭐ **`EXPECTED_FILES` STAYS 45 and that is correct, not an oversight.** WR-01 added three tests to the
+**existing** `tests/test_citation_dedupe.py` — the file count did not change, only the test count
+inside one file. **1945 → 1948 is the +3, and it is the positive sentinel**: a mere `SUCCESS` with an
+unchanged total would have meant the new tests never collected. All three are named in the log:
+`test_two_different_hosts_do_not_collide_when_the_scheme_is_missing`,
+`test_a_path_only_candidate_has_no_identity_key`, and the negative control
+`test_a_real_host_still_normalises_after_the_host_guard` — each **PASSED**.
+
+⚠ **`npm ci` was SKIPPED because `node_modules` was already present** — per § 3(a)'s rule, `npm ci` is
+run only when it is absent, and `npm install` is never run.
+⚠ **`frontend/src/routeTree.gen.ts` showed as modified after `vite build` with an EMPTY diff** (a CRLF
+artifact — `git diff --stat` prints only the LF/CRLF warning). It was `git checkout --`'d, **not
+committed**.
+
+#### (d) The commands actually run — `SHARED_TAG=20260812-121358`
+
+Identical in shape to § 4. Both builds SUCCESS, both statuses read by id.
+
+```bash
+# 1. BUILD tribunal-api  -> build d956ca16-fbd3-4b16-af0b-21baada97f72 / SUCCESS
+gcloud builds submit tribunal --config=tribunal/cloudbuild.api.yaml \
+  --substitutions=_IMAGE=europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/tribunal-api:20260812-121358 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+
+# 2. BUILD nestor-frontend -> build 9a8deb24-c679-4ba9-8816-b686d431d413 / SUCCESS
+#    The four non-_IMAGE values were RECOVERED FROM THE PREVIOUS BUILD, never retyped:
+gcloud builds describe 7327905f-2be7-4c65-ac1c-85f6d2f3a3ea \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
+  --format='value[separator=","](substitutions._API_BASE_URL,substitutions._FB_API_KEY,substitutions._FB_AUTH_DOMAIN,substitutions._FB_PROJECT_ID)'
+#    ...then passed through shell variables into the same `builds submit` as § 4 step 2.
+#    Cross-checked against build cdafc26e-09ac-41b7-9087-57a55b465e00: ALL FOUR VALUES AGREE.
+#    ⛔ ASSERT EACH RECOVERED VALUE IS NON-EMPTY BEFORE BUILDING. `--format='value(...)'` renders a
+#       permission error as an EMPTY STRING (§ 2a), and an empty substitution does not fail the
+#       build — it SILENTLY SHIPS A BROKEN LIVE FRONTEND, because Vite inlines these into the
+#       client bundle at build time. A blank read must abort, not proceed.
+
+# 3-4. DEPLOY, by --image ONLY (no --set-secrets / --set-env-vars / --service-account)
+gcloud run deploy tribunal-api --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/tribunal-api:20260812-121358 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+gcloud run deploy nestor-frontend --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/frontend:20260812-121358 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+
+# 5-6. tribunal-worker + nestor-api: NOT DEPLOYED. Recorded only.
+```
+
+> ⚠ **A `_FB_API_KEY` LITERAL ON THE COMMAND LINE WAS REFUSED BY THIS SESSION'S TOOLING** (it reads as
+> a credential, though § 4 correctly notes it is a public Firebase web identifier). Recovering the
+> value from the prior build instead is **what § 4 step 2 already prescribes** and is strictly better
+> than retyping it — the failure mode § 4 warns about is a typo, and a value sourced from the previous
+> build cannot contain one. A future reader hitting the same refusal should do the same, **and keep the
+> non-empty assertion** — it is what makes the indirection safe.
+
+#### (e) READ-BACK PROOFS — recorded verbatim
+
+| Item | Value |
+|---|---|
+| `tribunal-api` new revision | `tribunal-api-00021-t7k` — traffic **100%** |
+| `tribunal-api` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/tribunal-api@sha256:b690caa6490631eca634affffed3c2370a195c5342678de30e87fa480c2485b0` |
+| `nestor-frontend` new revision | `nestor-frontend-00031-pkh` — traffic **100%** |
+| `nestor-frontend` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/frontend@sha256:a48df3e6700fe98f298c55140e02e3f11c2b89fe9f69bd79ceaff54388694037` |
+| `tribunal-worker` (CONFIRM-ONLY) | `tribunal-worker-00007-l8x` — **UNCHANGED** |
+| `nestor-api` (CONFIRM-ONLY) | `nestor-api-00045-hdw` — **UNCHANGED** |
+| secret bindings, by name | `ANTHROPIC_API_KEY` + `SERPAPI_API_KEY` still bound on **both** `tribunal-api` and `tribunal-worker` |
+| D-11 bundle guard | `OK: no Supabase signature in .output.` (frontend build, step 12/18) |
+| newest `tribunal-migrate` execution | `tribunal-migrate-gqmtk` @ `2026-08-05T09:39:54Z` — **did NOT run today** → TRIBUNAL head still **0018** |
+| newest `nestor-migrate` execution | `nestor-migrate-gl496` @ `2026-07-28T08:12:43Z` — **did NOT run today** → INTAKE head still **0013** |
+| audit newest write, BEFORE | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects |
+| audit newest write, AFTER | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects — **EQUAL, and the prefix listing `diff`s to EMPTY. NOTHING RAN.** |
+
+**⭐ BOTH DIGESTS CHANGED — the only thing that proves the two fixes actually landed:**
+
+| Service | Digest BEFORE this redeploy (§ 5's deploy, at `13ddb61`) | Digest AFTER (at `510203e`) |
+|---|---|---|
+| `tribunal-api` | `sha256:0b67b926ef63…05705005` | `sha256:b690caa64906…0c2485b0` |
+| `nestor-frontend` | `sha256:1c47f975afaf…b2562a08` | `sha256:a48df3e6700f…88694037` |
+
+⛔ **AN IDENTICAL DIGEST WOULD HAVE BEEN A FAILURE, NOT A PASS** — it would mean the build did not
+include the fix, whatever the tag or the revision name said. Compare digests, never
+`containers[0].image` (a mutable tag) and never revision names.
+
+⚠ **The identity trap held for a THIRD reading.** `gcloud config list` reported
+**`tools@epicimpact.be`** — the WRONG account, right project — both at the start of this redeploy and
+again after it finished. **The persisted config was never corrected and never needed to be, because
+every acting command pinned `--account` and `--project`.** § 2(a)'s two unpinned commands are what
+detected it; do not pin them.
+
+#### (f) What this redeploy does NOT prove
+
+- **The deployed frontend was not functionally exercised.** It answers `HTTP 307` at `/` (the expected
+  unauthenticated redirect), and the CR-01 guard
+  (`typeof … === "number" && Number.isFinite(…)`) is present in the verification page's chunk
+  `admin.pulse.runs._runId.verification-*.js` of a bundle built from this same tree — **but that grep
+  was run against the LOCAL `vite build` output, not against the image.** For the image itself, the
+  proof is the changed digest plus a source tarball taken from the verified `510203e` tree.
+- **CR-01's user-visible effect still needs eyes.** Confirming that a populated
+  `degradation_reasons` list no longer renders as `0` is a job for **`22-UAT.md`, which runs on
+  RECORDED data and costs nothing.** That remains the next action, exactly as § 6 says.
+- Nothing here changes § 6's closing note: **duplicate `source` rows are still CREATED** (DEF-22-06),
+  and the four ruled out-of-scope items (DEF-21-01, DEF-21-03, DEF-21-04, DEF-22-01) are all still
+  present and are still not Phase 22 regressions.
