@@ -240,6 +240,54 @@ real and each one passes on its own. Reproduce in isolation first.
 
 ---
 
+## DEF-22-06 — the write-side source-identity fix is the NAMED NEXT PHASE, and its risk is money
+
+**Found during:** plan 22-10 (the deploy), recording the half of D-22-4 that this phase deliberately
+did not ship
+**Status:** deferred **by ruling, not by omission** (D-22-4, operator 2026-08-11: *"BOTH layers,
+read-time first"*). This is a sequenced follow-up with a named migration number, not a dropped idea.
+
+### What phase 22 actually shipped, and what it did not
+
+**Shipped (read side):** `normalize_source_url` + `collapse_citations_by_url` in
+`tribunal/nestor_pulse_sdk/citations/dedupe.py`, wired into `build_verification_report` at the
+`verification/report.py:738` seam. Deployed 2026-08-12 in `tribunal-api-00020-rjw`.
+
+**NOT shipped (write side):** the INSERT conflict key at `citations/extractor.py:289-322` is still
+`(tenant_id, content_hash)`, so duplicate `source` rows are still **CREATED** on every run.
+
+⛔ **THEREFORE: THE DEDUPE IS DISPLAY-ONLY. Cost and corroboration still count every duplicate row.**
+Anyone reading a shorter citation list as a saving is reading something that is not there. **Do not
+state or imply a duplicate-collapse figure or a yield number anywhere** — the dominant duplicate
+generator is Gemini's `vertexaisearch` grounding redirects, whose opaque tokens only `resolved_url`
+can collapse, and `resolved_url` exists only where a best-effort HEAD resolution succeeded. The yield
+is not knowable before a run and was deliberately never asserted as an acceptance criterion.
+
+### The migration, and the trap that makes it a money defect
+
+The follow-up needs **Alembic `0019`**: add a `normalized_url` column plus a **partial unique index on
+`(tenant_id, normalized_url)`**.
+
+⛔ **AND IT MUST DROP `idx_source_tenant_content_hash` IN THE SAME MIGRATION.** This is the whole
+reason the change did not ride along in phase 22. If the old partial unique index survives, then
+`ON CONFLICT (tenant_id, normalized_url)` **does not cover a violation of it** — Postgres only handles
+the conflict target you name. Two sources with the same text but different URLs then raise an
+**unhandled `IntegrityError` inside the persist transaction of a ~$45 run.** The loss is the run, not
+a tidiness regression. Both changes in one migration, or neither.
+
+### The second-order behaviour change to validate on a real run
+
+`ON CONFLICT … DO NOTHING` means **the FIRST row wins and keeps its own `title`, `provider`,
+`resolved_url` and `resolution_status`.** Merging more rows into one therefore **changes which provider
+gets credited for a source** — a silent attribution shift, not just a smaller row count. That is
+observable only on a real run and must be on the validation list for whichever phase lands this.
+
+**Whoever picks this up:** the normalization function already exists and is shared by design (D-22-4
+requires ONE function for both layers, or read and write disagree about identity — which is the defect
+being fixed, reintroduced one level down). Import it; do not write a second one.
+
+---
+
 ## CROSS-REFERENCE — Phase 21's DEF-21-02 was reconciled in THIS phase
 
 **Not a new deferred item, and deliberately carries no `DEF-22-NN` id** — it is a closure recorded

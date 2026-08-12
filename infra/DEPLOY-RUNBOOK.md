@@ -5463,29 +5463,66 @@ SELECT version_num FROM tribunal.tribunal_alembic_version;   -- expect: 0018 (UN
 SELECT version_num FROM public.alembic_version;              -- expect: 0013 (UNCHANGED)
 ```
 
+⚠ **THOSE TWO QUERIES NEED A DB CREDENTIAL THIS SESSION DID NOT HAVE.** The substitute proof is
+STRONGER for the question actually being asked ("did a migration run?"), because it is a read of the
+job history rather than of the resulting state:
+
+```bash
+for J in tribunal-migrate nestor-migrate; do
+  gcloud run jobs executions list --job=$J --region=europe-west1 \
+    --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
+    --format="value(metadata.name,metadata.creationTimestamp)" --limit=3
+done
+```
+
+**MEASURED: the most recent `tribunal-migrate` execution is `tribunal-migrate-gqmtk` at
+`2026-08-05T09:39:54Z`, and the most recent `nestor-migrate` is `nestor-migrate-gl496` at
+`2026-07-28T08:12:43Z`. NEITHER RAN ON 2026-08-12.** No migration was executed by this deploy, which
+is what the empty `alembic/` diff in § 1 predicted. The heads therefore remain at the on-disk values,
+TRIBUNAL **0018** and INTAKE **0013**. ⚠ A future reader with a DSN should still run the two SQL reads —
+job history proves nothing *ran*, not what the tables *say*.
+
 **(f) NO RUN WAS TRIGGERED.** Re-list the audit bucket. **The newest-write timestamp must EQUAL
 `2026-08-05T19:21:31Z` from § 2(d).** A newer timestamp means something claimed — STOP and report.
 
-#### MEASURED VALUES — filled in after the deploy
-
-*(Filled by plan 22-10 Task 3. Until this block carries `@sha256:` strings, THIS DEPLOY HAS NOT BEEN
-PROVEN, whatever any SUMMARY says.)*
+#### MEASURED VALUES — 2026-08-12
 
 | Item | Value |
 |---|---|
-| `SHARED_TAG` | *pending* |
-| engine gate build id / status | *pending* |
-| engine gate collection line | *pending* |
-| `tribunal-api` build id / status | *pending* |
-| `nestor-frontend` build id / status | *pending* |
-| `tribunal-api` new revision | *pending* |
-| `tribunal-api` new `status.imageDigest` | *pending* |
-| `nestor-frontend` new revision | *pending* |
-| `nestor-frontend` new `status.imageDigest` | *pending* |
-| `tribunal-worker` (CONFIRM-ONLY) | *pending* |
-| `nestor-api` (CONFIRM-ONLY) | *pending* |
-| audit newest write, BEFORE | `2026-08-05T19:21:31Z` |
-| audit newest write, AFTER | *pending* |
+| `SHARED_TAG` | `20260812-100556` |
+| engine gate build id / status | `18cee1fb-597d-4660-a831-5cc71c66ae7d` / **SUCCESS** *(read via `builds describe`, never a pipe)* |
+| engine gate collection line, verbatim | `collecting: 45 of 45 expected files` |
+| engine gate pytest summary, verbatim | `====================== 1945 passed, 14 skipped in 22.43s =======================` — **0 failures, 0 errors** |
+| `tribunal-api` build id / status | `0e8bb881-f60e-447d-9dee-224c37b609e2` / **SUCCESS** |
+| `nestor-frontend` build id / status | `7327905f-2be7-4c65-ac1c-85f6d2f3a3ea` / **SUCCESS** |
+| `tribunal-api` new revision | `tribunal-api-00020-rjw` — traffic **100%** |
+| `tribunal-api` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/tribunal-api@sha256:0b67b926ef63d2b35b903e7c92ebf7d755ff8f7875f880a9c76b472905705005` |
+| `nestor-frontend` new revision | `nestor-frontend-00030-wvh` — traffic **100%** |
+| `nestor-frontend` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/frontend@sha256:1c47f975afaf8225f1000f1dbddc00af35b9a8a43cbb4a518738c452b2562a08` |
+| `tribunal-worker` (CONFIRM-ONLY) | `tribunal-worker-00007-l8x` — **UNCHANGED** |
+| `nestor-api` (CONFIRM-ONLY) | `nestor-api-00045-hdw` — **UNCHANGED** |
+| secret bindings, by name | `ANTHROPIC_API_KEY` + `SERPAPI_API_KEY` still bound on **both** `tribunal-api` and `tribunal-worker` |
+| TRIBUNAL alembic head | **0018** (unchanged — no migrate execution on 2026-08-12) |
+| INTAKE alembic head | **0013** (unchanged — no migrate execution on 2026-08-12) |
+| audit newest write, BEFORE | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects |
+| audit newest write, AFTER | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects — **EQUAL. NOTHING RAN.** |
+
+**⭐ BOTH DIGESTS CHANGED, which is the only thing that proves the deploy landed:**
+
+| Service | PRE-deploy digest | POST-deploy digest |
+|---|---|---|
+| `tribunal-api` | `sha256:3a8f2dbb0798…0b3ade4b` | `sha256:0b67b926ef63…05705005` |
+| `nestor-frontend` | `sha256:798a73a29af2…f97bf0a6` | `sha256:1c47f975afaf…b2562a08` |
+
+**Deployed set = `{tribunal-api, nestor-frontend}` = § 1's derived surface EXACTLY. Nothing extra,
+nothing missing.**
+
+> ⚠ **THE REVISION-NAME SHAPE CHANGED, and that is expected, not a defect.** Pre-deploy names were
+> `tribunal-api-20260810-193000-200954` / `nestor-frontend-20260810-193000` — Phase 21 used the deploy
+> scripts, which pass `--revision-suffix`. This section's hand-typed `gcloud run deploy` does not, so
+> Cloud Run auto-numbered: `tribunal-api-00020-rjw` / `nestor-frontend-00030-wvh`. **A reader
+> comparing names alone would think the wrong thing shipped. Compare DIGESTS, which is the whole point
+> of § 5.** If you prefer date-shaped names, add `--revision-suffix=${SHARED_TAG}` in § 4 steps 3-4.
 
 ---
 
