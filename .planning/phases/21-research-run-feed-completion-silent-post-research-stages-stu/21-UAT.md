@@ -229,6 +229,33 @@ It was **deliberately NOT replaced** (21-CONTEXT, out of scope).
 > its own.** The obligation was injected at execution. **If this phase ships without Part B filled
 > in, the deferral has quietly become a skip.**
 
+> ## ⚠ 2026-08-11 — RECONCILED BY PHASE 22, NOT ABANDONED
+>
+> **Phase 22's D-22-1 moved the verification report onto its own route by operator ruling** — *"verification
+> report should open its own page not a dropdown (too long)"*. That ruling landed after this section was
+> written, and it changes what three of these six steps can even mean.
+>
+> **B2, B3 and B4 asked about a TOGGLE sitting beside the activity feed, and about the FEED SURVIVING
+> BENEATH an open report. Neither situation exists any more.** There is no toggle, and the report is no
+> longer on the same page as the feed. Those three are **UNANSWERABLE AS WRITTEN** and are therefore
+> marked **SUPERSEDED**, each with a named Phase 22 successor.
+>
+> **B1, B5 and B6 test properties that survive the redesign** — the run page loads from "Open run"; the
+> affordance is offered on failed and cancelled runs; no affordance appears on a queued or running run.
+> They are **CARRIED FORWARD** to Phase 22 successors that ask the same question against the new
+> navigation.
+>
+> **⛔ THIS IS A RECONCILIATION, NOT A SKIP, AND A SUPERSESSION IS NOT A PASS.** The successors live in
+> `.planning/phases/22-verification-report-as-a-page-citation-hygiene-the-verificat/22-UAT.md` PART B as
+> **22-B1 … 22-B6**, they carry the same blocker status, and they all ship **UNFILLED**. A verifier
+> reading this file must **follow the pointer** rather than treat these six as forgotten — and must not
+> read any of them as confirmed until an operator fills in the successor.
+>
+> ⚠ **Scope of this reconciliation: PART B only.** Phase 22 changed no engine write path and triggered
+> no research run. Every check in PART A above whose answer needs a **post-deploy live run** — SC1 above
+> all — is **untouched by this and stays OPEN**. No verdict anywhere in this file is filled in by the
+> Phase 22 work.
+
 **Verifiable on RECORDED data with NO spend — do NOT trigger a run.**
 
 **Preconditions:** 21-02 merged and `nestor-frontend` deployed; operator signed in as superadmin.
@@ -247,16 +274,21 @@ It was **deliberately NOT replaced** (21-CONTEXT, out of scope).
 ### Verdicts
 
 #### B1 — Run page loads via "Open run"
+> **CARRIED FORWARD → 22-B1** (see 22-UAT.md). Not answered here.
 - **Verdict:** _(awaiting operator)_ · **Blocker:** yes
 - **Observed (VERBATIM):** _(awaiting operator)_
 
 #### B2 — Toggle sits BETWEEN the status card and the activity feed
+> **SUPERSEDED by D-22-1 → 22-B2** (see 22-UAT.md). The toggle no longer exists; the link in the same
+> position is checked there.
 - **Verdict:** _(awaiting operator)_ · **Blocker:** yes
 - **Observed (VERBATIM):** _(awaiting operator)_
 
 #### B3 — Report opens (funnel + verdicts + cost) AND THE FEED SURVIVES BELOW IT
 ⭐ **The single most important check in this document.** The feed surviving is the structural
 property 21-02 was built to guarantee — it is what the embedded intake card gets wrong.
+> **SUPERSEDED by D-22-1 → 22-B3** (see 22-UAT.md). The report is a separate page, so "the feed survives
+> beneath it" cannot arise; the equivalent property is checked at 22-B4.
 - **Verdict:** _(awaiting operator)_ · **Blocker:** yes
 - **Funnel rendered?** _(awaiting operator)_
 - **Verdict sections rendered?** _(awaiting operator)_
@@ -265,12 +297,15 @@ property 21-02 was built to guarantee — it is what the embedded intake card ge
 - **Observed (VERBATIM):** _(awaiting operator)_
 
 #### B4 — Toggle collapses cleanly, label returns, feed untouched
+> **SUPERSEDED by D-22-1 → 22-B4** (see 22-UAT.md). "Back to run leaves the run page whole" replaces
+> "the toggle collapses cleanly".
 - **Verdict:** _(awaiting operator)_ · **Blocker:** yes
 - **Observed (VERBATIM):** _(awaiting operator)_
 
 #### B5 — Toggle offered on failed / cancelled runs (D-11)
 > ⚠ **NOT A BLOCKER IF NO FAILED OR CANCELLED RUN EXISTS.** Record **"none available"** and move
 > on. Do not manufacture one, and above all do not trigger a run to create one.
+> **CARRIED FORWARD → 22-B5** (see 22-UAT.md). Still NOT a blocker if no failed/cancelled run exists.
 - **Verdict:** _(awaiting operator — or "none available")_ · **Blocker:** **NO**
 - **Run id, if one existed:** _(awaiting operator)_
 - **Observed (VERBATIM):** _(awaiting operator)_
@@ -279,6 +314,7 @@ property 21-02 was built to guarantee — it is what the embedded intake card ge
 > ⚠ **THE EXPECTED RESULT IS THE TOGGLE'S ABSENCE.** An absent toggle here is **CORRECT** — the
 > pipeline has not reached the verify stage, so there is nothing to fetch. **A toggle that IS
 > present on a queued or running run is the FAILURE.** Do not record "no toggle" as a defect.
+> **CARRIED FORWARD → 22-B6** (see 22-UAT.md). The expected result is still the AFFORDANCE'S ABSENCE.
 - **Verdict:** _(awaiting operator)_ · **Blocker:** yes (a *present* toggle is the failure)
 - **Run id and its status:** _(awaiting operator)_
 - **Was a toggle present? (yes = FAIL, no = PASS):** _(awaiting operator)_

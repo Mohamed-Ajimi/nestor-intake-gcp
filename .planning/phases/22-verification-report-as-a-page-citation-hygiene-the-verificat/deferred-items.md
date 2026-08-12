@@ -237,3 +237,29 @@ per-test teardown work in files phase 22 does not own.
 ⚠ **For whoever reads a red local run next:** do not attribute these five to whatever you are
 working on, and do not "fix" them by deleting or skipping the tests — each one asserts something
 real and each one passes on its own. Reproduce in isolation first.
+
+---
+
+## CROSS-REFERENCE — Phase 21's DEF-21-02 was reconciled in THIS phase
+
+**Not a new deferred item, and deliberately carries no `DEF-22-NN` id** — it is a closure recorded
+where a reader of this phase's deferred-items file will find it.
+
+**Recorded by:** plan 22-09, 2026-08-11
+
+Phase 21 deferred six blocking operator checks (B1–B6) out of plan 21-02 into a single post-merge UAT
+pass. **Phase 22's D-22-1 made three of them unanswerable as written** — B2, B3 and B4 all asked about
+a toggle sitting beside the activity feed and about the feed surviving beneath an open report, and once
+the report became its own route neither situation exists.
+
+**Where the closure lives:**
+- `.planning/phases/22-…/22-UAT.md` **PART B** — the mapping table plus the six successor checks
+  **22-B1 … 22-B6**, each stating what changed and why.
+- `.planning/phases/21-…/21-UAT.md` PART B — a dated reconciliation block plus a per-slot pointer on
+  each of B1–B6.
+- `.planning/phases/21-…/deferred-items.md` § DEF-21-02 — the closure section.
+
+⛔ **This closed the QUESTIONS, not the VERDICTS.** All six successors ship unfilled and keep their
+blocker status. Nothing in Phase 21 became operator-confirmed, and no Phase 21 verdict was filled in
+(`21-UAT.md`'s `awaiting operator` count is 40 before and 40 after plan 22-09). The Phase 21 checks
+that need a post-deploy live research run — SC1 above all — are untouched and stay OPEN.
