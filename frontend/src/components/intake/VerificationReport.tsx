@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import {
   getVerification,
@@ -12,6 +13,7 @@ import {
   type VerificationVerdictItem,
 } from "@/lib/api/research";
 import { CitationPanel, renderCitationMarker } from "@/components/intake/CitationPanel";
+import { buildCitationIndex } from "@/lib/research/citationIndex";
 
 // frontend/src/components/intake/VerificationReport.tsx — the superadmin-only verification
 // report surface (Plan 15-05 / ENGINE-09). It fetches the recorded run's verification report
@@ -333,21 +335,20 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
   // rows carry their own markers inline (claim-linked runs; the recorded run's
   // rows predate claim linkage and surface via the numbered list below instead).
   const citations = report?.citations ?? [];
-  // ONE computed source count. Stat tile 5 reads it here, and plan 22-08's collapsed citation
-  // list must read this same const rather than make a second `.length` call of its own: two
-  // independent counts of one thing are two numbers that can drift (22-UI-SPEC §3.2).
+  // ONE computed source count, read by the stat tile below AND by the collapsed citation
+  // section's always-visible figure. Neither surface makes a second `.length` call of its own:
+  // two independent counts of one thing are two numbers that can drift (22-UI-SPEC §3.2).
   const sourcesCited = citations.length;
-  const citationsByClaim = new Map<string, Citation[]>();
-  for (const c of citations) {
-    const cid = typeof c.first_claim_id === "string" && c.first_claim_id ? c.first_claim_id : null;
-    if (!cid) continue;
-    const list = citationsByClaim.get(cid);
-    if (list) {
-      list.push(c);
-    } else {
-      citationsByClaim.set(cid, [c]);
-    }
-  }
+  // The claim index is the shared module, not a loop rolled here. WHY THE MODULE, AND WHY THE
+  // ALIAS HALF OF IT MATTERS: the engine's read-time collapsing (D-22-4) emits one entry per
+  // normalized source URL and drops the rest, and a dropped entry takes its `first_claim_id`
+  // with it. Keying strictly on `first_claim_id` — which the loop that used to sit here did —
+  // therefore leaves a verdict row whose claim introduced only an absorbed source resolving to
+  // nothing and rendering NO `[n]` at all. That loss is invisible, because a row missing its
+  // marker looks exactly like a claim that never had a citation. `also_claim_ids` carries the
+  // absorbed claim ids onto the survivor and the module honours them, which is what keeps that
+  // row's marker. It does no URL handling and no renumbering — both belong to the engine.
+  const citationsByClaim = buildCitationIndex(citations);
   const openCitationPanel = (c: Citation) => setOpenCitation(c);
 
   const refutedCount = report?.verdicts?.refute?.length ?? 0;
@@ -634,13 +635,6 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
                   </li>
                 ))}
               </ul>
-              {openCitation && (
-                <CitationPanel
-                  intakeId={intakeId}
-                  citation={openCitation}
-                  onClose={() => setOpenCitation(null)}
-                />
-              )}
             </ReportSection>
           )}
 
@@ -667,6 +661,47 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
           </ReportSection>
         </div>
       )}
+
+      {/* ── The citation panel's host, at page level and DELIBERATELY NOT INSIDE A SECTION ────
+             ⚠ DO NOT MOVE THIS BACK INSIDE THE CITATION LIST. It used to render inside that
+             list's own block. The list is now closed when the page opens, so a marker clicked in
+             a verdict row would have set the state, rendered the panel inside a closed container,
+             and shown the operator nothing — a click that appears to do absolutely nothing,
+             hundreds of pixels further down the document. Hosting it here, at the component root,
+             also means it is reached from EVERY section's markers at once rather than only from
+             the one block it happened to live in, and the open/closed state of any block on the
+             page is irrelevant to it.
+             What the primitive supplies and this surface requires: Esc closes it, focus is
+             trapped inside it and then returned to the marker that opened it, and THE DOCUMENT
+             DOES NOT SCROLL — the operator comes back to exactly the sentence they were reading.
+             The dialog needs an accessible name or it warns and is unnamed for a screen reader,
+             so the header below is an existing-key `sr-only` title. `CitationPanel` goes in
+             UNCHANGED: it brings its own visible header, its own `[n]` and its own close button,
+             and its security posture is untouched — the stored snapshot only, never a live-URL
+             re-fetch, superadmin-only by placement. */}
+      <Sheet
+        open={openCitation !== null}
+        onOpenChange={(o) => {
+          if (!o) setOpenCitation(null);
+        }}
+      >
+        <SheetContent
+          side="right"
+          className="w-full overflow-y-auto border-l-4 bg-paper sm:max-w-lg"
+          style={{ borderLeftColor: "#FF2D87" }}
+        >
+          <SheetHeader>
+            <SheetTitle className="sr-only">{t("citation.regionLabel")}</SheetTitle>
+          </SheetHeader>
+          {openCitation && (
+            <CitationPanel
+              intakeId={intakeId}
+              citation={openCitation}
+              onClose={() => setOpenCitation(null)}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
