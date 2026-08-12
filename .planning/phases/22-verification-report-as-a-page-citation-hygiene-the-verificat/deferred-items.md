@@ -311,3 +311,138 @@ the report became its own route neither situation exists.
 blocker status. Nothing in Phase 21 became operator-confirmed, and no Phase 21 verdict was filled in
 (`21-UAT.md`'s `awaiting operator` count is 40 before and 40 after plan 22-09). The Phase 21 checks
 that need a post-deploy live research run — SC1 above all — are untouched and stay OPEN.
+
+---
+
+# Post-execution additions from `22-REVIEW.md` (2026-08-12)
+
+The end-of-phase code review found 1 critical + 8 warnings + 6 info. **CR-01 and WR-01 were FIXED
+in-phase** (`2666653` and `61ae873`) and are therefore NOT deferred. The operator ruled the remaining
+seven warnings recorded rather than fixed. Two of them extend entries already on this ledger, so they
+are recorded as AMENDMENTS rather than new ids — per the never-renumber rule, each `## DEF-22-NN`
+heading below is a genuinely new item taking the next unclaimed id.
+
+## Amendment to DEF-22-01 (from WR-05) — the unreachable component is now MEASURED
+
+DEF-22-01 anticipated that `ResearchRunProgress`'s body would stay compiled while unrendered. The
+review measured the result: **948 lines with ZERO render sites**, and `onRetry` / `onResume` /
+`onCancel` props with no supplier anywhere. No capability was lost — `RunActions` covers bundle,
+re-verify, resume, cancel and re-trigger — but **bundle download now exists in two implementations
+with only one reachable**, which is the state in which the two drift apart silently. Whoever removes
+this must confirm `IntakeOpenRunLink` (the app's only entry into the run page) is preserved, since it
+lives in the same file.
+
+## Amendment to DEF-22-04 (from WR-08) — there are FOUR orphaned keys, not two
+
+DEF-22-04 records `intakeDetail.toast.researchResumed` and `researchResumeFailed`. The review found
+two more with zero referrers: **`verification.close`** and **`verification.loading`**. Both were
+already live at `9afdf2d`, so they are pre-existing rather than caused by this phase. The reason all
+four stay green forever is DEF-22-03: the i18n audit only ever flags MISSING keys, never orphaned
+ones.
+
+## DEF-22-07 — `urlparse` silently drops trailing path parameters (an undocumented over-merge)
+
+**Where:** `tribunal/nestor_pulse_sdk/citations/dedupe.py` — `normalize_source_url` uses `urlparse`,
+not `urlsplit`.
+
+**What:** `urlparse` splits `;params` off the last path segment and `normalize_source_url` never
+reassembles them, so `https://x.com/a;jsessionid=ABC` and `https://x.com/a` collapse to the same key
+`x.com/a`. Measured directly. For session ids this is arguably desirable, but it is **undocumented** —
+it appears in neither the docstring's numbered step list nor its "Do NOT" block, so the next reader
+cannot tell it is intentional.
+
+**Why it matters:** merging on an undocumented rule is the same class of hazard as WR-01, just milder,
+and it inherits WR-01's escalation: DEF-22-06's write-side fix makes this function the INSERT conflict
+key, where every over-merge merges real persisted rows.
+
+**How to apply:** switch to `urlsplit` (which leaves `;params` in the path) if the params should be
+significant, or keep `urlparse` and add one line to the docstring's step list stating that trailing
+path parameters are deliberately dropped. Either is fine; silence is not.
+
+## DEF-22-08 — the `single_source` badge is wrong in the direction that understates risk
+
+**Where:** `frontend/src/components/intake/CitationPanel.tsx:249-253`; producer
+`tribunal/nestor_pulse_sdk/citations/numbering.py:253`.
+
+**What:** `single_source` is computed BEFORE the dedupe, as `len(sources_per_claim.get(cid, ())) == 1`
+over distinct `source_id` **rows**. After `collapse_citations_by_url`, a claim whose three `source`
+rows are three copies of one page renders exactly **one** `[n]`, and that survivor carries
+`single_source: false` — so the amber `citation.singleSource` warning is **absent**. The operator sees
+a single source and is told by omission that the claim does not rest on one.
+
+**Why it matters — and why "display-only" does not cover it.** The display-only framing (DEF-22-06)
+says duplicates still count toward cost and corroboration, which is about accounting. This is
+different: it is the read/write identity split reaching a **user-facing trust signal**, and the error
+points the unsafe way. `VerificationReport.tsx:527` states the strip carries "NO corroboration claim",
+but `CitationPanel` renders one anyway.
+
+**How to apply:** either recompute the flag over the collapsed set — `collapse_citations_by_url`
+already knows which entries it absorbed, so setting `single_source = True` on a survivor whose
+absorbed set was all one claim is cheap and local — or, if recomputation belongs with the write-side
+fix, fold it into DEF-22-06 explicitly AND add one sentence to the panel saying the badge counts
+source *rows*, not distinct URLs. Do not leave it silently inconsistent.
+
+## DEF-22-09 — the engine's loudest honesty fields still reach nothing
+
+**Where:** `frontend/src/components/intake/VerificationReport.tsx` (nothing reads them); producers
+`tribunal/nestor_pulse_sdk/verification/report.py:497-500, 574-575, 601`, declared on the model at
+`runs/schemas.py:499-528`.
+
+**What:** five fields are shaped by the engine, declared explicitly on the pydantic model so
+`extra="ignore"` cannot drop them, delivered to the browser, and rendered **nowhere**:
+`verification_degraded_text` (the G-10 sentence ending "do not read it as green"),
+`degradation_reasons` (D-12), `accounting` (the G-08 three buckets including
+`should_have_been_checked`, which `report.py:104-106` calls "the phase's most important number"),
+`unverified_note` / `unverified_from_accounting`, and `unresolved_anchors_text`.
+
+**Why it matters:** pre-existing — `9afdf2d` did not render them either — but this phase built a
+six-tile strip whose stated purpose is "the trust question lifted above the fold" and omitted the one
+sentence that answers it. As shipped, a `completed_degraded` run with hundreds of unchecked claims
+renders a strip of neutral figures with **nothing marking it degraded**. Note the interaction with the
+CR-01 fix: `degradation_reasons` no longer prints a false `0` (it is now correctly dropped from the
+funnel), so the report no longer *lies* — but it is still silent, and the schema comment's own
+argument applies verbatim: "a caveat that silently vanishes at the API boundary reads to the operator
+as 'there is no caveat'." The same is true of a caveat that vanishes at the DOM.
+
+**How to apply:** one prose block above the strip, gated the way the engine gates itself so a healthy
+run says nothing: render only when `verification_degraded && verification_degraded_text`.
+
+## DEF-22-10 — `buildCitationIndex`'s docstring overstates what it can answer
+
+**Where:** `frontend/src/lib/research/citationIndex.ts`; producer
+`tribunal/nestor_pulse_sdk/citations/numbering.py:200-206`.
+
+**What:** the index keys on `first_claim_id` plus `also_claim_ids`, but per the producer,
+`first_claim_id` misses the majority case — so the docstring promises coverage the function does not
+have. The function's behaviour is correct for what it is given; the documentation is what is wrong.
+
+**How to apply:** correct the docstring to state exactly which claims it can resolve and which it
+cannot, so the next reader does not build on a promise. Do not widen the function to compensate
+without checking against `numbering.py` first.
+
+## DEF-22-11 — the new cost tile bypasses the shared cost formatter
+
+**Where:** `frontend/src/components/intake/VerificationReport.tsx` — the cost tile renders a raw
+numeric string while every other cost surface in the app goes through `fmtCost`.
+
+**What/why:** inconsistent formatting for the same quantity, and a second place for
+currency/precision rules to drift from the first. Low severity, trivially fixable.
+
+**How to apply:** route the tile through `fmtCost`.
+
+## DEF-22-12 — six informational findings from `22-REVIEW.md`
+
+Recorded together because each is a one-line correction; none changes behaviour today. Full detail in
+`22-REVIEW.md` under the quoted ids.
+
+- **IN-01** stale filename references to the pre-rename route in comments (the rename was
+  `admin.pulse.runs.$runId.tsx` to `…$runId.index.tsx`).
+- **IN-02** `renderCitationMarker`'s comment claims three call sites; there is one.
+- **IN-03** `{{count}}` keys have no plural form, so a one-source run reads "1 sources". User-visible,
+  and note it is an INTERPOLATED key, so per DEF-22-03 the i18n audit cannot see it.
+- **IN-04** `dedupe.py`'s claim to be "importable without dragging a session in" is not true as
+  packaged — worth correcting because the claim is load-bearing for anyone reusing the module.
+- **IN-05** an empty padded block renders when the intake has no locatable run.
+- **IN-06** a negative funnel value would render a full-width bar. Note the CR-01 fix does NOT cover
+  this: a negative number is a real finite number and is correctly kept, so the geometry needs its own
+  clamp.
