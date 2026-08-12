@@ -3,8 +3,14 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import {
   getVerification,
@@ -12,7 +18,12 @@ import {
   type VerificationReport as VerificationReportData,
   type VerificationVerdictItem,
 } from "@/lib/api/research";
-import { CitationPanel, renderCitationMarker } from "@/components/intake/CitationPanel";
+import {
+  CitationMarker,
+  CitationPanel,
+  CitationTierGlyph,
+  renderCitationMarker,
+} from "@/components/intake/CitationPanel";
 import { buildCitationIndex } from "@/lib/research/citationIndex";
 
 // frontend/src/components/intake/VerificationReport.tsx — the superadmin-only verification
@@ -329,6 +340,10 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
   const [error, setError] = useState<string | null>(null);
   // SC4: the clicked [n] citation whose CitationPanel is open (null = closed).
   const [openCitation, setOpenCitation] = useState<Citation | null>(null);
+  // Mirrors the citation section's own open state purely so the chevron can point the right way.
+  // The section itself is uncontrolled — the primitive owns whether it is open, and it starts
+  // closed — so this can never be the thing that decides what the operator sees.
+  const [citationsOpen, setCitationsOpen] = useState(false);
 
   // SC4 / D13: markers are rendered from EXACTLY the backend citations list, so
   // every [n] resolves. Group by the claim that introduced the source so verdict
@@ -619,23 +634,75 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
             )}
           </ReportSection>
 
-          {/* ── Numbered citations (SC4 / D13 — every [n] clickable + resolving) ──
-                 A flat list in this plan; plan 22-08 makes it collapsible and moves the
-                 panel below out to a page-level sheet. */}
+          {/* ── Numbered citations (SC4 / D13 — every [n] clickable + resolving) ──────
+                 CLOSED WHEN THE PAGE OPENS (D-22-3, operator verbatim: the list "should be
+                 hidden by default and user can expand and see"). What is NOT hidden is how many
+                 sources there are: the figure sits in the trigger row, which is also the
+                 section's heading, so it is legible — and, because it is inside the button,
+                 ANNOUNCED — without expanding anything.
+                 The noun is "sources" rather than "citations" on purpose: the engine emits one
+                 entry per normalized source URL, so each `[n]` here stands for one distinct
+                 source. It also says nothing about cost or corroboration, which still account
+                 for the absorbed rows.
+                 ⛔ The rendered numbers are SPARSE (1, 2, 4, 7, …) and that is CORRECT: each
+                 survivor keeps the number it was assigned at synthesis, and the delivered
+                 markdown's markers were frozen there and can no longer be changed. Do not
+                 renumber, do not re-index, and do not add a positional counter beside a marker.
+                 ⛔ No inner scroll box and no height cap: capping a list the operator has just
+                 chosen to expand re-creates the very complaint that started this work.
+                 ⛔ A marker click must never open this list. The panel is page-level (below) and
+                 the hover preview is fed from memory, so the closed state costs the operator
+                 nothing, while auto-expanding would drag them away from the verdict they were
+                 reading to reveal a one-line entry carrying strictly less than the panel they
+                 just opened.
+                 The heading wraps the trigger rather than sitting inside it: a heading is not
+                 permitted content for a button, and this is the ordinary accessible-accordion
+                 shape — the section is still named by a real `<h2>`. */}
           {citations.length > 0 && (
-            <ReportSection id="citations" title={t("verification.citationsTitle")}>
-              <ul className="mt-3 space-y-1">
-                {citations.map((c) => (
-                  <li
-                    key={c.n}
-                    className="flex items-baseline gap-1 font-sans text-[13px] leading-relaxed text-ink/80"
-                  >
-                    {renderCitationMarker(c, openCitationPanel)}
-                    <span>{c.title ?? t("citation.untitled")}</span>
-                  </li>
-                ))}
-              </ul>
-            </ReportSection>
+            <section
+              id="citations"
+              aria-labelledby="citations-heading"
+              className="mb-8 scroll-mt-6 bg-paperLight px-6 py-2"
+            >
+              <Collapsible defaultOpen={false} onOpenChange={setCitationsOpen}>
+                <h2 id="citations-heading">
+                  <CollapsibleTrigger className="flex w-full items-center justify-between gap-4 py-3 hover:bg-paper2">
+                    <span className={SECTION_HEADING_CLASS}>
+                      {citationsOpen ? (
+                        <ChevronDown className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 text-ink/50" aria-hidden="true" />
+                      )}
+                      <span>{t("verification.citationsTitle")}</span>
+                    </span>
+                    <span className="font-mono text-[11px] tabular-nums text-ink/60">
+                      {t("verification.citationsCount", { count: sourcesCited })}
+                    </span>
+                  </CollapsibleTrigger>
+                </h2>
+                <CollapsibleContent>
+                  <ul className="space-y-2 pb-3">
+                    {citations.map((c) => (
+                      <li
+                        key={c.n}
+                        className="flex flex-wrap items-baseline gap-x-2 gap-y-1 font-sans text-[13px] leading-relaxed text-ink/80"
+                      >
+                        <CitationMarker citation={c} onOpen={openCitationPanel} />
+                        <span className="font-mono text-[11px] text-ink/70">
+                          <CitationTierGlyph quality_tier={c.quality_tier} />
+                        </span>
+                        <span className="font-mono text-[11px] text-ink/60">
+                          {t("citation.retrieved", {
+                            date: c.publication_date ?? t("citation.dateUnknown"),
+                          })}
+                        </span>
+                        <span>{c.title ?? t("citation.untitled")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CollapsibleContent>
+              </Collapsible>
+            </section>
           )}
 
           {/* ── True itemized cost (facts-only; pending → LABEL, never a number) ── */}
