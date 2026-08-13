@@ -525,12 +525,12 @@ or French, the equivalents are *Opgehaald* and *Récupéré*.)
 
 | Check | Verdict | Blocker |
 |---|---|---|
-| A1 — the report has its own page, and reload works | _(awaiting)_ | yes |
+| A1 — the report has its own page, and reload works | **PASS** | yes |
 | A2a — stat strip + funnel above the fold | _(awaiting)_ | no |
 | A2b — **nothing was dropped** | _(awaiting)_ | **yes** |
 | A2c — nav rail lists and jumps | _(awaiting)_ | no |
 | A2d — U5 active-section marking (no automated coverage) | _(awaiting)_ | no |
-| A2e — does it read better? (judgement) | _(awaiting)_ | no |
+| A2e — does it read better? (judgement) | **NO** — raw variable names (UAT-22-F1) | no |
 | A3a — hover shows exactly title + date + tier | _(awaiting)_ | yes |
 | A3b — the date reads `Retrieved`, never `Published` | _(awaiting)_ | yes |
 | A3c — no network call, no spinner | _(awaiting)_ | no |
@@ -540,7 +540,7 @@ or French, the equivalents are *Opgehaald* and *Récupéré*.)
 | A3g — list closed on arrival, count visible, no inner scrollbar | _(awaiting)_ | yes |
 | A3h — U2 collapse/expand feel (no automated coverage) | _(awaiting)_ | no |
 | A3i — ruling: keep or strike the fourth hover line | _(awaiting)_ | ruling, not a pass/fail |
-| A4a — no two list entries point at the same source | _(awaiting)_ | yes |
+| A4a — no two list entries point at the same source | **SUPERSEDED** by operator (UAT-22-F3) | yes |
 | A4b — sparse numbering understood and acceptable | _(awaiting)_ | no |
 | A4c — ruling: explain the sparse numbering on screen? | _(awaiting)_ | ruling, not a pass/fail |
 | A4d — no verdict row lost its marker | _(awaiting)_ | yes |
@@ -566,3 +566,114 @@ deferred item with the operator's agreement. Neither may be absorbed silently.
 *Phase: 22-verification-report-as-a-page-citation-hygiene-the-verificat*
 *Created by plan 22-09 · closes DEF-21-02's six deferred steps by reconciliation, not by skipping*
 *No verdict in this file may be filled from inference — only from the operator's own observation*
+
+---
+
+# Operator session — 2026-08-13 (PART A, decisions 1-4)
+
+Recorded VERBATIM per this file's recording rule 1. The operator answered at **decision level**, not
+per sub-check, so only the sub-checks their words actually determine are filled in below. The rest
+stay `(awaiting)` — rule 4 applies: *"Looks good" is not a PASS on a check nobody named.* A5, PART B,
+the regression checks and the two rulings were not reached in this session.
+
+Also recorded: the operator separately confirmed **"works"** for the pre-UAT fix deployed at
+`20260813-101148` — refreshing a page no longer bounces through login to home.
+
+## A1 — PASS
+
+**Observed (VERBATIM):** *"A1 good"*
+
+## A2 — PASS with a finding. A2e answered NO.
+
+**Observed (VERBATIM):** *"A2 its good but it doesnt read good as we are using cariable names , might
+want to change those to business freindly names (no underscores) and a tooltip explaining them maybe"*
+
+- A2e (*does it read better?*) → **NO**, with a specific and actionable reason. Routed as **UAT-22-F1**.
+- A2b (**nothing was dropped** — blocker) is NOT filled: the operator did not state that they walked
+  the 10-section list. It stays `(awaiting)`.
+
+## A3 — PASS with a finding, plus a question the operator asked
+
+**Observed (VERBATIM):** *"A3 is good but when clicking the citation it only shows the link , can we
+add snapshot of the text we are referring to? unless it is entended because of the duplicate fix"*
+
+**Answer to the operator's question: NO, it is not the duplicate fix, and it is not a Phase 22
+regression.** The excerpt was never captured at write time. `citations/extractor.py:1100` upserts
+skeptic-path sources with `snapshot_text=url` and the inline comment
+`# minimal snapshot; Phase 2 can enrich`, so the stored snapshot for those sources **is the URL
+string**. `CitationPanel.tsx:278` renders `source.snapshot_text` faithfully — it has nothing better to
+show. The second write path (`extractor.py:804`) stores `snapshot_text=report`, i.e. the WHOLE report
+rather than the cited passage. Neither captures "the text we are referring to". Routed as
+**UAT-22-F2**.
+
+- A3e (**the blocker: `[n]` from a verdict row opens a visible panel while the list is collapsed**)
+  is NOT filled — "A3 is good" does not name it, and the operator's remark is about the panel's
+  CONTENTS, which implies a panel did open. It stays `(awaiting)` for an explicit answer.
+
+## A4 — NOT a pass. The check was based on a misunderstanding; the operator has corrected the design.
+
+**Observed (VERBATIM):** *"14: i think we miss understood each other , for duplicates , i see 4301
+citations sompe of the citations belong to the same report from the same link , those are duplicates
+for me but in reality they are not since the text is taken from different places of a report or
+different reports from same link, is it possible to group them per link and when a user expands can
+see the different ones from that link (only for the citations dropdown)"*
+
+**This supersedes A4a as written.** A4a asked the operator to confirm that *no two entries point at
+the same source* — the operator's actual requirement is the opposite shape: **same-link entries should
+be GROUPED and expandable, not collapsed away.** Routed as **UAT-22-F3**.
+
+⛔ **And it exposes a real flaw in D-22-4 as implemented.** The read-path dedupe *"emits ONE citation
+entry per normalized source URL and DROPS the rest"* (`research.ts`, `also_claim_ids` docstring). Each
+dropped entry carried its own `source_id`, therefore its own snapshot row — so the distinct excerpts
+from one link are not merely ungrouped today, they are **unreachable**. The operator's grouping model
+PRESERVES information the current collapse discards. D-22-4 is the wrong shape for the stated intent:
+collapse-and-drop where group-and-keep was wanted.
+
+⚠ **ONE OBSERVATION IS STILL NEEDED and must not be filled by inference.** The operator reports seeing
+same-link entries, but the read-path dedupe should already collapse byte-identical normalized URLs.
+Two mutually exclusive explanations, with very different consequences:
+- **(i)** the entries' URLs are NOT byte-identical — different redirect tokens, anchors or paths that
+  resolve to the same document. Then the dedupe is working as designed and F3 is purely a new grouping
+  feature (group by *document*, which is a harder identity problem than group by URL).
+- **(ii)** the URLs ARE identical and the dedupe is not collapsing them. Then there is a live defect
+  in the deployed read path, and F3 sits on top of it.
+**The distinguishing check:** open two same-link entries and compare their URLs character for
+character. Until that is answered, do not plan F3 — the two cases need different fixes.
+
+## Gaps
+
+### UAT-22-F1 — the funnel labels are raw engine dict keys
+status: open · severity: cosmetic but operator-facing · blocker: no
+`VerificationReport.tsx:591` renders `{stage}` verbatim, so the operator sees the engine's internal
+snake_case keys: `checked`, `should_have_been_checked`, `verify_sessions`, `checked_incidentally`,
+`unresolved_anchors`, `selected_verify`. Needs a business-friendly label map plus explanatory
+tooltips, in all three locales.
+⭐ `should_have_been_checked` is what the engine's own source calls *"the phase's most important
+number"* (`verification/report.py:104-106`) — it deserves the clearest wording of the set.
+⚠ Any new tooltip strings will be INTERPOLATED or plain `t()` calls; per DEF-22-03 the i18n audit
+cannot see interpolated keys, so verify en/nl/fr by reading the JSON directly.
+Note: the CR-01 fix already stopped the non-numeric keys (`verification_degraded`,
+`degradation_reasons`) rendering as bogus `0` rows, so only real counts remain to relabel.
+
+### UAT-22-F2 — no real per-citation snapshot excerpt is ever captured
+status: open · severity: substantive · blocker: no (pre-existing, not a Phase 22 regression)
+`citations/extractor.py:1100` writes `snapshot_text=url` (`# minimal snapshot; Phase 2 can enrich`);
+`extractor.py:804` writes `snapshot_text=report` (the whole report). So the citation panel can only
+ever show a URL or an entire document, never the passage being cited. The frontend rendering slot
+already exists (`CitationPanel.tsx:278`) and needs no change — this is an ENGINE WRITE-PATH gap.
+⚠ **Validating a fix here requires a fresh research run** (~$45) — recorded data cannot contain
+excerpts that were never written.
+
+### UAT-22-F3 — group citations per link, expandable to the distinct excerpts
+status: open · severity: design correction to D-22-4 · blocker: no
+Operator's requirement: in the citations dropdown only, group entries by link; expanding a group
+reveals the different excerpts from that link. Replaces D-22-4's collapse-and-drop with
+group-and-keep, restoring evidence the current read path discards.
+⛔ **DEPENDS ON UAT-22-F2.** Implemented before excerpts are captured, every child row in a group
+would display the same URL string — visibly identical rows that read as a bug. Sequence F2 → F3.
+⚠ **BLOCKED pending the observation in A4 above** (are the URLs byte-identical or not) — case (i) and
+case (ii) need different fixes.
+⚠ Any grouping must NOT renumber: the `[n]` markers in the downloadable report were written at
+synthesis time and cannot change, so screen and report must keep agreeing about what a number means.
+And per the standing operator ruling, no duplicate-collapse COUNT or yield figure may be stated
+anywhere.
