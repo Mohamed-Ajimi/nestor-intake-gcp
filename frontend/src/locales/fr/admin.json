@@ -43,7 +43,7 @@
       "reviewed": "Révisé par vous. En attente de la validation du client.",
       "validated_by_client": "Le client a validé. Prêt pour la décomposition.",
       "decomposed": "Décomposition effectuée. Prêt pour la recherche.",
-      "in_research": "Nestor effectue la recherche.",
+      "in_research": "Phase de recherche approfondie. Le panneau « Phase de travail » indique si le run est encore en cours.",
       "delivered": "Livré au client.",
       "archived": "Archivé."
     },
