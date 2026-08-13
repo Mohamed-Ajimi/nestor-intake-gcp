@@ -189,3 +189,37 @@ SAME migration**, or `ON CONFLICT` does not cover the surviving index and two sa
 different-URL sources raise an unhandled `IntegrityError` inside a ~$45 run's persist transaction.
 The steering-note column must NOT silently take `0019` and strand that fix, and must not be bundled
 into it without an explicit decision.
+
+### 2026-08-13 — the operator said "decide"; these are the resulting decisions
+
+- **D-RR-3a — MITIGATION ADOPTED (mine, under D-RR-3).** The steering note is passed through with
+  **no truncation and no length cap**, honouring D-RR-3 literally, but it is injected **ONCE in a
+  delimited block** rather than concatenated into each sub-question's prompt, sanitised at the
+  provider-prompt boundary, and its size is surfaced in the UI. This removes the two failure modes
+  without weakening the ruling: per-sub-question injection would multiply a long note across the run
+  (raising the very cost D-RR-2 declines to quote) and could exceed a model's context ceiling
+  mid-run, after earlier paid stages had already completed. Reversible: it is a change to prompt
+  assembly, not to the contract.
+- **UAT-22-F3 UNBLOCKED — and the A4 observation is no longer needed.** Settled from code rather than
+  from the browser: `citations/dedupe.py`'s own docstring states the ceiling — *"Only the resolved
+  target can [collapse those tokens], and only where the best-effort HEAD resolution succeeded"* — and
+  `citations/numbering.py:238-245` emits the **raw** `url` column, not the resolved target. Therefore
+  several entries for what a human calls "the same link" (different paths on one site, different
+  anchors in one document, or unresolved redirect tokens) are **EXPECTED behaviour, not a defect**.
+  Conclusion: **no live dedupe defect**; F3 is a grouping feature over DOCUMENT identity, which is a
+  harder identity problem than URL equality. F3 will group on resolved-URL-where-available falling
+  back to normalized raw URL, with same-normalized-URL as a subset — correct in both of the cases
+  originally enumerated, so the observation cannot gate it.
+- **SEQUENCING — split by whether verification costs money.**
+  - **Phase 23 — zero spend, verifiable on recorded data:** UAT-22-F1 (business-friendly funnel labels
+    + tooltips) and UAT-22-F4 (banner must not say research is running once it is terminal; delete the
+    dead `run-research` sentence). Frontend + 3 locales only.
+  - **Phase 24 — one paid run validates everything:** the re-run affordance, the separate deliberate
+    re-run counter (D-RR-1), typed confirmation with no cost quoted (D-RR-2), the steering note
+    (D-RR-3 + D-RR-3a), version history + its read path, UAT-22-F2 (capture real per-citation
+    excerpts) and UAT-22-F3 (group by link).
+    ⭐ **Rationale for bundling:** F2, F3 and the re-run feature are EACH unprovable without a real
+    run, so bundling means ONE ~$45 run instead of three — and that same run finally discharges the
+    validation run deferred since Phase 21 (the audit bucket's newest write is still
+    `2026-08-05T19:21:31Z`, so no deployed engine code has ever executed).
+    ⛔ Carries the alembic **0019** collision with DEF-22-06 — resolve the ordering explicitly.
