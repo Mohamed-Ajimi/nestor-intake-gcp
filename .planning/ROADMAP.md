@@ -643,6 +643,7 @@ reports nothing for 8 of 13 stages.
 **Plans:** 10/10 plans complete
 
 Plans:
+
 - [x] 22-01-PLAN.md — wave 1 — the shared normalize_source_url + collapse_citations_by_url, with tests, inside the engine fast gate (44 -> 45)
 - [x] 22-02-PLAN.md — wave 1 — frontend Citation type fields + the pure buildCitationIndex that honours the dedupe aliases
 - [x] 22-03-PLAN.md — wave 1 — every new locale key in three languages, citation.published -> citation.retrieved, and CitationMarker with its hover card
@@ -663,8 +664,16 @@ Plans:
 **Plans:** 3 plans (3 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 23-01-PLAN.md — wave 1 — UAT-22-F1: business-friendly labels + tooltips for all 18 engine funnel keys, en/nl/fr, with a degrade-safe fallback for an unknown key
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 23-02-PLAN.md — wave 2 — UAT-22-F4: the enumerated run-status to work-phase presentation rule, the five honest banner bodies, and the end of the run-research sentence
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
@@ -673,6 +682,7 @@ Plans:
 **Requirements**: D-RR-1, D-RR-2, D-RR-3, D-RR-3a (`.planning/STAKEHOLDER-NOTES.md`, 2026-08-13); UAT-22-F2, UAT-22-F3 (`.planning/phases/22-*/22-UAT.md` Gaps)
 **Depends on:** Phase 22 — **NOT Phase 23.** The two are independent and may run in either order or in parallel; 23 is frontend copy, 24 is engine + backend + frontend.
 **Scope note — this is the first phase since 21 to change an engine WRITE path, and the only one that cannot be verified without spending.**
+
 - Already exists, do not rebuild: `research_runs.attempt` is NOT NULL, starts at 1 and is already bumped by `api/research_routes.py:258`. A re-trigger path exists end to end.
 - The gap: `RunActions.tsx:104-108` gates the fresh-attempt affordance to `failed | cancelled | needs_input` — deliberately, since it is a paid button. Success states must be added.
 - **D-RR-1** deliberate re-runs get their OWN counter; the 3-attempt failure-recovery cap (D-04, `research_routes.py:282-290`) must stay untouched so a re-run can never lock an intake out of genuine recovery.
@@ -682,7 +692,9 @@ Plans:
 - **UAT-22-F3** group the citations dropdown by document identity (resolved URL where available, normalized raw URL otherwise), replacing D-22-4's collapse-and-drop with group-and-keep. **Depends on F2** — without real excerpts every child row shows the same URL and reads as a bug. ⛔ Must NOT renumber: report `[n]` markers were written at synthesis time and screen and report must keep agreeing. No duplicate-collapse count or yield figure may be stated (standing ruling).
 - ⛔ **Alembic collision:** DEF-22-06 already claims `0019` for the write-side source-identity fix, which must add `normalized_url` + a partial unique index AND DROP `idx_source_tenant_content_hash` in the SAME migration. Resolve the ordering explicitly; do not let the steering-note column silently take `0019`.
 - ⭐ **One ~$45 run validates the whole phase** — the re-run affordance, the note's effect, F2's excerpts and F3's grouping are each unprovable otherwise. That same run finally discharges the validation deferred since Phase 21: the audit bucket's newest write is still `2026-08-05T19:21:31Z`, so no deployed engine code has ever executed.
+
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd-plan-phase 24 to break down)
