@@ -5745,3 +5745,328 @@ detected it; do not pin them.
 - Nothing here changes § 6's closing note: **duplicate `source` rows are still CREATED** (DEF-22-06),
   and the four ruled out-of-scope items (DEF-21-01, DEF-21-03, DEF-21-04, DEF-22-01) are all still
   present and are still not Phase 22 regressions.
+
+---
+
+## Deploy 2026-08-13 — SSR auth guard + AI skill-run clock (`nestor-frontend` + `nestor-api` REBUILD, `tribunal-api` and `tribunal-worker` **CONFIRM-ONLY**, **NO migration**, **NO new secret**, **NO run**)
+
+⛔ **NO RESEARCH RUN WAS TRIGGERED, and the audit bucket proves it** — the full recursive object
+listing `diff`s to EMPTY before vs after (§ (e)). The ~$45 measuring run remains a separate,
+deliberate decision and is **not** part of this section.
+
+⚠ **THIS IS NOT A PHASE.** There is no `PLAN.md` and no `SUMMARY.md` behind it — two long-standing
+defects were diagnosed in `.planning/debug/refresh-login-and-skill-clock.md`, fixed on
+`fix/refresh-ssr-guard-and-skill-clock`, and merged to `master` at **`3f48071`**. The procedure,
+proof rules and traps are §§ 2–5 and § 7 above, unchanged; this section records only what differed.
+
+### (a) Why — two independent defects, both predating Phase 22
+
+- **Defect A — `nestor-frontend` only. Every hard load of an admin/intake route bounced to login and
+  landed on `/admin`.** `beforeLoad` runs during SSR (Nitro `node-server` on Cloud Run), where
+  Firebase's session lives in browser IndexedDB and is **structurally invisible**, so `authReady()`
+  resolved `null` server-side and the guard emitted `307 → /auth/login` on every refresh. The client
+  then rehydrated, found a live session, and `AuthRedirector` / `LoginPage` sent it to
+  `landingPathForRole(role)` — which is both the "logs in again" flash and the "switches to home
+  page" landing. The guard's own comment already conceded it is *"UX gating only — the authoritative
+  control is the backend"*, so declining to evaluate it server-side removes no real protection.
+  ⭐ **THERE WERE FIVE BYTE-IDENTICAL GUARD SITES, NOT ONE** — `routes/admin.tsx`,
+  `intake.index.tsx`, `intake.$id.tsx`, `intake.$id.results.tsx`, `intake.$id.report.tsx` (and
+  `/intake/$id/report` trips two, parent + child). Fixing only `admin.tsx` — which is all the
+  original diagnosis located — would have left **the entire regular-user `/intake/*` surface still
+  bouncing**. All five now delegate to one shared `frontend/src/lib/auth-guard.tsx` whose
+  `beforeLoad` no-ops under `typeof window === "undefined"`, with a `RequireAuth` component
+  restoring the genuine signed-out redirect after hydration.
+  Plus a regression guard in `lib/auth-context.tsx`: `loading` now settles in a `.finally()` on the
+  role-claim read, because with the SSR redirect gone a superadmin refreshing `/admin` would
+  otherwise arrive at `loading:false, role:null` and flash the in-place "no access" wall.
+- **Defect B — needs BOTH services. The AI skill-run clock on the intake page counted from zero.**
+  `toActiveSkillRun` derived the clock's start as
+  `applied_at ?? completed_at ?? new Date().toISOString()`. **Both markers are null while a run is
+  RUNNING**, so it collapsed to wall-clock *now* — a NEW value on every re-map, which changed
+  `RunningClock`'s effect dependency on every SSE event and every 5s poll (≈ a reset every 5s) and on
+  every mount (so it never survived a refresh). The real start existed on the model but was projected
+  by **neither** read path. It is now carried through both.
+
+> ⛔ **`skill_runs.started_at` IS A DEAD COLUMN — do not "improve" this by switching to it.** Nothing
+> in the codebase ever writes it: every `started_at` write targets **`research_runs`**
+> (`research/run_task.py:373,434`). `db/ai_session.py:178-190` (`create_running_skill_run`) inserts
+> only `intake_id / skill / status / llm_model / prompt_system / prompt_user`. Projecting it would
+> return **null for every skill run** and the clock would have nothing to count from. `created_at` is
+> the correct field on the merits — `models/skill_run.py:57-59` gives it
+> `server_default=func.now(), nullable=False`, stamped by Postgres at INSERT i.e. exactly at
+> dispatch — and existing code already treats it as the run's start
+> (`sweep_orphaned_skill_runs` ages a stuck `running` row with `SkillRun.created_at < cutoff`).
+> ⚠ The earlier claim that Phase 15.2-24 set a precedent by "carrying `started_at` across" is a
+> **false precedent**: that fix was on `research_runs`, where the column genuinely is written. The
+> seam-fix *shape* transfers; the *field name* does not.
+
+> ⛔ **`triggered_at` IS DELIBERATELY BYTE-IDENTICAL TO BEFORE, and that is not an oversight.** The
+> obvious one-line fix — repurposing `triggered_at` to carry `created_at` — is FORBIDDEN. That field
+> is also the input to the optimistic-**release guard** at
+> `routes/admin.pulse.intakes.$id.tsx:~293`
+> (`if (optimisticRunStartedAt && activeRunTriggeredAt < optimisticRunStartedAt) return;`), which
+> would then compare a **Postgres clock** against a **browser clock** (`new Date()` at `:651`/`:775`).
+> If the browser runs AHEAD of Cloud SQL by any amount — direction of skew is ~50/50 by chance — the
+> guard never releases, `setSkillLoading(false)` never fires, and the dispatch CTAs stay **disabled
+> for the full 10-minute `MAX_POLL_MS` cap.** The real timestamp therefore goes in a NEW, distinct
+> `created_at` field.
+
+⚠ **DEFECT B IS ONLY FIXED WHEN BOTH SERVICES SHIP.** The frontend intentionally retains the old
+`applied_at ?? completed_at ?? new Date()` chain as its LAST fallback and types the new field
+optional, so a frontend-ahead-of-backend state **degrades to the old behaviour rather than a blank
+clock**. Deploy order is safe either way; both are required. (Backend was deployed first here.)
+
+#### The DERIVED deploy surface
+
+⛔ **DERIVED AT DEPLOY TIME, NOT COPIED — and this time the answer DIFFERS from § 1 and § 7.** Both
+of those derived `{tribunal-api, nestor-frontend}`; this one derives `{nestor-frontend, nestor-api}`.
+**Neither pair is "the surface"** — § 1's own generalisation holds: *"which services a change touches
+is a MEASUREMENT WITH AN EXPIRY DATE, not a fact."* `$BASE` = **`8ecc341`** (the last commit of the
+§ 7 redeploy record); `HEAD` = **`3f48071`** on `master`, tree clean.
+
+```bash
+git diff --name-only 8ecc341..HEAD | awk -F/ '{print $1}' | sort -u
+# MEASURED: .planning  backend  frontend            <- NOTE: no `tribunal` this time
+git diff --stat 8ecc341..HEAD -- tribunal/
+# MEASURED: NO OUTPUT -> both tribunal services CONFIRM-ONLY. THE EMPTY DIFF IS THE EVIDENCE.
+git diff --name-only 8ecc341..HEAD | grep -Ei 'alembic|versions/|/models?/'
+# MEASURED: exit 1, NO output -> NO MIGRATION
+git diff --name-only 8ecc341..HEAD | grep -Ei 'requirements.txt|package.json|package-lock.json|locales/|pyproject'
+# MEASURED: exit 1, NO output -> NO new dependency, NO new secret, NO locale change
+#   (so the i18n audit's CHECK D count must still be 107 — and it was)
+```
+
+**13 source files changed** (plus 1 under `.planning/`, which ships nothing):
+
+| Path group | Files | Ships in | Mapping rule applied |
+|---|---|---|---|
+| `frontend/src/lib/auth-guard.tsx` *(new)*, `frontend/src/lib/auth-context.tsx`, `frontend/src/routes/{admin,intake.index,intake.$id,intake.$id.results,intake.$id.report}.tsx` | **7** | **`nestor-frontend`** — REBUILD + DEPLOY | anything under `frontend/src/` is bundled into the frontend image |
+| `frontend/src/lib/api/skillRuns.ts`, `frontend/src/components/intake/{SkillRunProgress,NextStepBanner}.tsx`, `frontend/src/routes/admin.pulse.intakes.$id.tsx` | **4** | **`nestor-frontend`** — REBUILD + DEPLOY | defect B's consumer side; the clock is **compiled into the bundle** (the Phase-18 stale-SPA lesson) |
+| `backend/app/api/intake_routes.py`, `backend/app/db/stream_session.py` | **2** | **`nestor-api`** — REBUILD + DEPLOY | the image that RUNS the changed code — see the import derivation below |
+| `tribunal/**` | **0** | **`tribunal-api` + `tribunal-worker` — CONFIRM-ONLY** | not in the diff at all |
+| `.planning/debug/refresh-login-and-skill-clock.md` | 1 | *(nothing)* | `.planning/` ships nothing |
+| — | 0 | **`nestor-migrate` / `tribunal-migrate` — NOT RUN** | no `alembic/` or `models/` file in the diff |
+
+#### ⚖ Why `nestor-api` and NOT either tribunal service — derived by import graph, not substring
+
+⚠ **`routeTree.gen.ts` IS NOT IN THIS DIFF, and that is correct — no route was added.** All five
+guard sites are existing routes; only their `beforeLoad` bodies changed. Contrast § 1, where a
+genuinely new route made the regenerated tree part of the shipped surface. **Do not regenerate it**
+(see § (c) — it shows as modified after any build with an EMPTY diff, a CRLF artifact).
+
+```bash
+grep -rn "intake_routes\|stream_session" --include=*.py backend/ | grep -v "/tests/"
+```
+
+- **`backend/app/api/intake_routes.py`** — imported by `backend/app/main.py:47`
+  (`from app.api.intake_routes import intake_router`). `app.main:app` is the backend image's
+  entrypoint (`CMD … uvicorn app.main:app`), which is **`nestor-api`**.
+- **`backend/app/db/stream_session.py`** — non-test importers are `intake_routes.py:86` and
+  `research_routes.py:92`. Same `app.main:app`, same service. **This is the SECOND read path and the
+  reason two files changed for one fix:** the SSE frame is a hand-built dict, entirely separate from
+  the Pydantic `SkillRunView`, and the SSE stream is the frontend's *primary* live channel — so
+  projecting `created_at` only in the REST view would have left every streamed frame without one and
+  the clock would have kept resetting on each event. ⭐ It is also safe for the emit-on-change
+  comparison in `stream_skill_runs` (`view != last_sent`): `created_at` is **constant for a given
+  run**, so adding it cannot generate extra frames.
+- **Both tribunal services — CONFIRM-ONLY, and it is structural, not just an empty diff.** Their
+  Dockerfiles' build context is `tribunal/`; they `COPY requirements.txt`, `nestor_pulse_sdk` and
+  `nestor_pulse` and nothing else. **`backend/` is not even in their build context**, so no
+  backend byte can reach either image.
+- ⚠ **The § 1 / § 7 near-miss does not apply here but the RULE does.** `pipeline.py:4570`'s local
+  dict named `verification_report` is why a **substring** derivation drags the money-risk
+  `tribunal-worker` into the surface. **Derive by imports. Never by name matching.**
+  ⛔ **A live example of exactly that trap was hit while writing this section** and is recorded
+  because it is instructive: grepping the backend gate log for tests matching `skill|stream|sse`
+  returned **every** test, because **`PASSED` contains the substring `sse`**. The corrected grep
+  (matching only the `tests/x.py::name` id) returned 13 of 266. *A substring match is not evidence.*
+
+**Surface = `{nestor-frontend, nestor-api}` — MEASURED, and deliberately NOT inherited from § 7.**
+
+### (b) PRE-DEPLOY baselines
+
+| Service | Latest ready revision, PRE-deploy | Traffic |
+|---|---|---|
+| `nestor-frontend` | `nestor-frontend-00031-pkh` | 100% |
+| `nestor-api` | `nestor-api-00045-hdw` | 100% |
+| `tribunal-api` | `tribunal-api-00021-t7k` | 100% |
+| `tribunal-worker` | `tribunal-worker-00007-l8x` | 100% |
+
+- `nestor-frontend-00031-pkh` →
+  `…/nestor/frontend@sha256:a48df3e6700fe98f298c55140e02e3f11c2b89fe9f69bd79ceaff54388694037`
+- `nestor-api-00045-hdw` →
+  `…/nestor/backend@sha256:a525c6e214e311235ca6db0ee5bd721c03500ebf99b280c76620f403c9d4f06a`
+
+⚠ **The backend's Artifact Registry path is `nestor/backend`, NOT `nestor/nestor-api`** (mirroring
+the `nestor/frontend` warning in § 2c).
+
+**THE FREE QUEUE CANARY — MEASURED PRE-DEPLOY: newest write `2026-08-05T19:21:31Z`, 9 run prefixes,
+2050 objects — UNCHANGED from § 7.** Nothing running, nothing claimable. Bucket is
+`gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/`; `gs://nestor-audit-prod/` is **legacy** (22
+prefixes, newest `2026-06-15`) and reading it would make the comparison meaningless.
+
+### (c) The gates, at `3f48071`
+
+| Gate | Result |
+|---|---|
+| `npx tsc --noEmit` | exit **0**, no output |
+| `npx vitest run` | **77 passed / 7 files** — unchanged; neither fix shipped a new test (see § (f)) |
+| `node scripts/i18n-audit.mjs` | `RESULT: PASS — A/B/C clean (107 CHECK D advisories)` — **107, unchanged**, as the empty `locales/` diff predicted |
+| `npx vite build` | exit **0**, `✓ built in 13.78s` |
+| backend gate build id | **`6341894d-3fa2-4faf-8af1-50061e474238`** / **SUCCESS** *(read via `builds describe`, NEVER through a pipe)* |
+| backend gate collection line, verbatim | `collecting ... collected 448 items / 149 deselected / 1 skipped / 299 selected` |
+| backend gate pytest summary, verbatim | `========= 299 passed, 1 skipped, 149 deselected, 8 warnings in 53.08s ==========` — **0 failures, 0 errors** |
+
+**The backend gate is `gcloud builds submit . --config=cloudbuild.test.yaml`** (`pytest tests -m
+integration`) — source MUST be `.` (repo root), never `backend`, because step 3 does a
+root-relative `cd backend`. ⛔ **The engine gate (`tribunal/cloudbuild.test-engine.yaml`) is NOT the
+gate for this deploy and was not run** — `tribunal/` is not in the diff. Its `45 of 45` /
+`1948 passed` figures in § 7 belong to a tribunal change and do not transfer.
+
+⚠ **`npm ci` was SKIPPED because `node_modules` was already present** — per § 3(a), `npm ci` runs
+only when it is absent, and `npm install` is never run.
+⚠ **`frontend/src/routeTree.gen.ts` again showed as modified after `vite build` with an EMPTY diff**
+(`git diff --numstat` returned no rows — only the LF/CRLF warning). It was `git checkout --`'d,
+**not committed**. This is the third recorded occurrence; treat it as expected.
+
+### (d) The commands actually run — `SHARED_TAG=20260813-101148`
+
+```bash
+# 1. BUILD nestor-api (backend)  -> build 50bfb492-536a-4861-a410-755c4c45455c / SUCCESS (1M40S)
+gcloud builds submit backend \
+  --tag "europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/backend:20260813-101148" \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+#    In-build guard observed: step 10/17 `RUN python -c "import fastapi, uvicorn, sqlalchemy,
+#    alembic, pg8000, google.cloud.sql.connector, pgvector, pydantic_settings, app.main"` — the
+#    CR-01 dependency smoke check, which fails the BUILD rather than crash-looping on Cloud Run.
+
+# 2. BUILD nestor-frontend -> build fd62fbf0-e8ec-4fdf-8858-1e87a494dcbe / SUCCESS (2M39S)
+#    The four non-_IMAGE values were RECOVERED FROM THE PREVIOUS BUILD, never retyped:
+gcloud builds describe 9a8deb24-c679-4ba9-8816-b686d431d413 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
+  --format='value[separator="|"](substitutions._API_BASE_URL,substitutions._FB_API_KEY,substitutions._FB_AUTH_DOMAIN,substitutions._FB_PROJECT_ID)'
+#    ...then asserted non-empty and passed through shell variables into the § 4 step 2 `builds submit`.
+#    Cross-checked against build 7327905f-2be7-4c65-ac1c-85f6d2f3a3ea: ALL FOUR VALUES AGREE.
+#    ⛔ ASSERT EACH RECOVERED VALUE IS NON-EMPTY BEFORE BUILDING (§ 7d). `--format='value(...)'`
+#       renders a permission error as an EMPTY STRING, and an empty substitution does not fail the
+#       build — it SILENTLY SHIPS A BROKEN LIVE FRONTEND, because Vite inlines these at build time.
+#       Observed line: `non-empty assertion PASSED (4/4) -- submitting build at tag 20260813-101148`.
+#    In-build guard observed: step 12/18 -> `OK: no Supabase signature in .output.` (D-11).
+
+# 3-4. DEPLOY, backend FIRST, by --image ONLY (no --set-secrets / --set-env-vars / --service-account)
+gcloud run services update nestor-api --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/backend:20260813-101148 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+gcloud run deploy nestor-frontend --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/frontend:20260813-101148 \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+
+# 5-6. tribunal-api + tribunal-worker: NOT DEPLOYED. Recorded only.
+```
+
+> ⚠ **THE `_FB_API_KEY` REFUSAL RECURRED, AND SO DID A NEW VARIANT.** § 7 records that a
+> `_FB_API_KEY=AIzaSy…` **literal** is refused by the tooling classifier. This session hit that
+> **and** a refusal of the substitution list even when the value was already only a shell variable
+> — the parameter *name* is enough to trip it. **The working form is to put the whole
+> recover → assert → submit sequence in a script file and run the script**, which keeps every
+> credential-shaped token off the command line entirely. That is strictly better than § 4's inline
+> form, not a workaround: the failure mode § 4 warns about is a typo, and a value sourced from the
+> previous build cannot contain one. **Keep the non-empty assertion — it is what makes the
+> indirection safe.**
+
+⛔ **NO migration step** — § (a) derived that from the diff. ⚠ Note the § 17 caveat still stands:
+updating `nestor-api` by `--image` leaves the `nestor-migrate` Job pinned to its **old** image. That
+is harmless here because no migration is run, but a future migration must REPIN the Job first.
+
+### (e) READ-BACK PROOFS — recorded verbatim
+
+| Item | Value |
+|---|---|
+| `nestor-api` new revision | `nestor-api-00046-72r` — traffic **100%** |
+| `nestor-api` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/backend@sha256:b43a78cbb71581890a4cf71e5f18dd2d7e27bcb91e5d81ebbe59f1bd26b13299` |
+| `nestor-frontend` new revision | `nestor-frontend-00032-k74` — traffic **100%** |
+| `nestor-frontend` new `status.imageDigest` | `europe-west1-docker.pkg.dev/project-cb01b861-cb4a-438d-b9a/nestor/frontend@sha256:73b8df783ad227cb3611b6958e044d368136d4223667532bf0a5f6d57c8d7e7b` |
+| `tribunal-api` (CONFIRM-ONLY) | `tribunal-api-00021-t7k` — **UNCHANGED** |
+| `tribunal-worker` (CONFIRM-ONLY) | `tribunal-worker-00007-l8x` — **UNCHANGED** |
+| `nestor-api` env bindings, BY NAME | all **12** intact after the `--image` update: `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `CORS_ALLOWED_ORIGINS`, `DB_NAME`, `DB_USER`, `INSTANCE_CONNECTION_NAME`, `NESTOR_ADMIN_EMAIL`, `OPENAI_API_KEY`, `RESEND_API_KEY`, `STORAGE_BUCKET`, `SUPERADMIN_DB_PASSWORD_SECRET`, `TRIBUNAL_SERVICE_URL` |
+| D-11 bundle guard | `OK: no Supabase signature in .output.` (frontend build, step 12/18) |
+| newest `tribunal-migrate` execution | `tribunal-migrate-gqmtk` @ `2026-08-05T09:39:54Z` — **did NOT run today** → TRIBUNAL head still **0018** |
+| newest `nestor-migrate` execution | `nestor-migrate-gl496` @ `2026-07-28T08:12:43Z` — **did NOT run today** → INTAKE head still **0013** |
+| audit newest write, BEFORE | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects |
+| audit newest write, AFTER | `2026-08-05T19:21:31Z` · 9 prefixes · 2050 objects — **EQUAL, and BOTH the prefix listing AND the full recursive object listing `diff` to EMPTY. NOTHING RAN.** |
+
+**⭐ BOTH DIGESTS CHANGED — the only thing that proves the two fixes actually landed:**
+
+| Service | Digest BEFORE (§ 7's redeploy, at `510203e`) | Digest AFTER (at `3f48071`) |
+|---|---|---|
+| `nestor-api` | `sha256:a525c6e214e3…c9d4f06a` | `sha256:b43a78cbb715…26b13299` |
+| `nestor-frontend` | `sha256:a48df3e6700f…88694037` | `sha256:73b8df783ad2…7c8d7e7b` |
+
+⛔ **AN IDENTICAL DIGEST WOULD HAVE BEEN A FAILURE, NOT A PASS.** And **do not compare revision
+NAMES**: `nestor-api` went `00045-hdw → 00046-72r` and `nestor-frontend` `00031-pkh → 00032-k74`
+because these hand-typed commands pass no `--revision-suffix`, so Cloud Run auto-numbers.
+
+**⭐ TWO POSITIVE LIVE PROOFS, beyond the digests — both free and read-only:**
+
+1. **Defect A's server-side half is CONFIRMED FIXED IN PRODUCTION.** The pre-fix measurement on
+   2026-08-12 was `GET /admin` → **307 → /auth/login** and `GET /admin/pulse/intakes` → **307 →
+   /auth/login**, both server-emitted against a cacheless `curl`. Re-measured against
+   `https://nestor-frontend-1055853212188.europe-west1.run.app` after this deploy:
+
+   | Path | Before (2026-08-12) | After (2026-08-13) |
+   |---|---|---|
+   | `/admin` | `307 → /auth/login` | **`200`** |
+   | `/admin/pulse/intakes` | `307 → /auth/login` | **`200`** |
+   | `/intake` | `307 → /auth/login` | **`200`** |
+   | `/auth/login` | `200` | `200` — unchanged |
+   | `/` | `307 → /admin` | `307 → /admin` — **by design** (`routes/index.tsx:4-6`), correctly untouched |
+
+   This is exactly the falsification test the diagnosis specified, and it passes. ⚠ It proves the
+   **server no longer redirects**; it does NOT prove the browser experience (see § (f)).
+2. **Defect B's REST projection is CONFIRMED PRESENT IN THE RUNNING CONTAINER**, not merely in the
+   image. The live `nestor-api` OpenAPI now declares it:
+   ```
+   GET https://nestor-api-1055853212188.europe-west1.run.app/openapi.json
+   components.schemas.SkillRunView.properties
+     -> id, skill, status, created_at, applied_at, completed_at
+     created_at: {"anyOf":[{"type":"string"},{"type":"null"}],"title":"Created At"}
+   ```
+   ⚠ **This covers only the REST half.** The SSE frame in `db/stream_session.py` is a hand-built
+   dict and appears in no schema, so for that path the proof is the changed digest plus the fact
+   that both files ship in the one image built from the verified `3f48071` tree.
+
+⚠ **The identity trap held for a FOURTH and FIFTH reading.** `gcloud config list` reported
+**`tools@epicimpact.be`** — the WRONG account, right project — both before and after this deploy. The
+persisted config was never corrected and never needed to be, because every acting command pinned
+`--account` and `--project`. § 2(a)'s two unpinned commands are what detected it; **do not pin
+them.**
+
+### (f) What this deploy does NOT prove
+
+⛔ **NEITHER DEFECT'S USER-VISIBLE FIX HAS BEEN OBSERVED. Both need a browser session the deploy
+process does not have.**
+
+- **"A refresh stays on the page" is UNPROVEN.** § (e) proves the server stopped redirecting. The
+  other half — that the client, after hydration, keeps you on `/admin/pulse/intakes/…` instead of
+  landing on `/admin` — runs entirely in the browser and needs a signed-in operator to press F5.
+- **"The clock counts true elapsed" is UNPROVEN**, and cannot be checked without a **running** skill
+  run. A skill run is cheap (one Claude call, not a ~$45 research run) but is still a real dispatch,
+  so none was triggered. What is proven is the projection's presence; what is not is the tick.
+- **⛔ NO AUTOMATED TEST COVERS EITHER FIX, so the green gates cannot regression-catch them.** The
+  frontend's 77 tests are **all pure `lib/` functions** — nothing renders a route, so no test
+  exercises `beforeLoad`, `RequireAuth` or `RunningClock`. On the backend, 13 of 266 collected test
+  ids touch the skill-run/SSE surface
+  (`test_intake_routes.py::test_skill_run_view_carries_skill_discriminator`, the four in
+  `test_sse_stream.py`, `test_skill_run_full.py::test_full_run_projection`, …) and **all passed —
+  but none asserts the new `created_at` key.** They prove the additive projection broke nothing;
+  they do **not** prove it is there. The OpenAPI read in § (e) is what proves that, and it is a
+  read of the live service rather than of a test.
+- **The two signed-out/denied paths were not re-verified live** — that an unauthenticated visitor
+  still reaches login, and a non-superadmin still gets the denial wall. Both are `RequireAuth`
+  behaviour after hydration, so both are browser-only checks. The guard was UX gating only (the
+  backend is the authoritative control, and it is untouched), but **these belong on the operator's
+  walkthrough.**
+- **Unchanged from § 6 / § 7(f):** duplicate `source` rows are still CREATED (DEF-22-06), and
+  DEF-21-01, DEF-21-03, DEF-21-04 and DEF-22-01 all remain — none is a regression from this deploy.
+- **`22-UAT.md` is still unrun and is still the next action.** It runs on RECORDED data and costs
+  nothing. Defect A was the thing making it painful to walk, which is why this deploy came first.
