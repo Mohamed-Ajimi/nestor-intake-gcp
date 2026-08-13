@@ -237,22 +237,27 @@ function OpenRunLink({ runId }: { runId: string }) {
  * point: it fires once you are ALREADY on the run page.) This wrapper is the whole reason the
  * removal is not a capability loss.
  *
- * WHY IT USES THE HOOK. `useActiveResearchRun` is the only client-side way to learn an intake's
- * latest run id: `Intake` (`lib/api/intakes.ts`) carries no research-run field, and
- * `locateResearchRun` goes the OTHER way (run id → intake id). The hook stays inside this
- * component rather than being called from the route, which keeps the intake route free of a
- * research stream it does not own.
+ * WHY IT NO LONGER OWNS THE STREAM (23-03, UAT-22-F4). This component used to call
+ * `useActiveResearchRun(intakeId)` itself. It does not any more: the work-phase banner on the
+ * SAME page needs the SAME run object, to tell a running run apart from one that finished long
+ * ago, and `useActiveResearchRun` is still the only client-side way to learn an intake's latest
+ * run id (`Intake` in `lib/api/intakes.ts` carries no research-run field, and
+ * `locateResearchRun` goes the OTHER way, run id → intake id). A SECOND call — here or in the
+ * route alongside an untouched version of this component — would open a SECOND SSE connection
+ * to the same endpoint and burn a second server handler to its `MAX_STREAM_SECONDS` cap. So
+ * `routes/admin.pulse.intakes.$id.tsx` now owns the page's ONE research stream and passes the
+ * id down. This component's behaviour is otherwise unchanged; it lost only its private stream.
  *
- * NETWORK COST. This mounts ONE SSE connection — the very same connection the removed component
- * already opened on that page. Strictly less network than before, never more, and the stream
- * still closes itself on a terminal run (`onTerminal → stream.close()`).
+ * NETWORK COST. ZERO. It opens no connection of its own. The page's single connection is
+ * opened by the intake route, under exactly the `RESEARCH_SURFACE_STATUSES` condition that
+ * used to gate THIS component's render — so the connection count and its timing are the same
+ * as before, not merely similar.
  *
  * Renders nothing until a run id is known, so an intake with no run shows no dead link.
  */
-export function IntakeOpenRunLink({ intakeId }: { intakeId: string }) {
-  const { run } = useActiveResearchRun(intakeId);
-  if (!run?.id) return null;
-  return <OpenRunLink runId={run.id} />;
+export function IntakeOpenRunLink({ runId }: { runId: string | null | undefined }) {
+  if (!runId) return null;
+  return <OpenRunLink runId={runId} />;
 }
 
 function StageIcon({ status }: { status: string }) {

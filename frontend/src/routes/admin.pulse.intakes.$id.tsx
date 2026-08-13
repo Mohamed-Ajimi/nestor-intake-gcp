@@ -54,7 +54,9 @@ import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
 // D-22-5: this page imports the link-only surface, NOT the feed component. The research
 // trigger below stays — `onStartAutoResearch` still calls it. The cancel and resume helpers
 // left with the three handlers that the removed feed element was the only caller of.
-import { IntakeOpenRunLink } from "@/components/intake/ResearchRunProgress";
+// 23-03 (UAT-22-F4): the HOOK is imported here too. This page — not the link component —
+// now owns its single research stream, because the work-phase banner needs the same run.
+import { IntakeOpenRunLink, useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
 import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
@@ -303,6 +305,27 @@ function IntakeDetailPage() {
   // pre-`decomposed` (Bucket E / Phase-Ceiling). The post-decomposed research surface
   // never renders here, so derivePhase is fed `false` (no inline DB read remains).
   const [hasArtifacts] = useState(false);
+
+  // ── THE PAGE'S ONE RESEARCH STREAM ─────────────────────────────────────────────
+  // 23-03 (UAT-22-F4). This call was LIFTED out of `IntakeOpenRunLink`, which used to open
+  // it privately. It moved rather than multiplied: the work-phase banner must tell a running
+  // run apart from one that finished long ago (the `in_research` STATUS survives until the
+  // explicit Deliver act), and it needs the very same run object the link already had. A
+  // SECOND `useActiveResearchRun` call anywhere on this page — in the banner, or here
+  // alongside an unchanged link — would be a SECOND SSE connection to the same endpoint,
+  // holding a second server handler open to its `MAX_STREAM_SECONDS` cap.
+  //
+  // The gate is DELIBERATELY the same `RESEARCH_SURFACE_STATUSES` test that gates the link's
+  // render below, so the connection opens for exactly the same intakes, at exactly the same
+  // times, as before this change. Do not widen it and do not drop it: an unconditional call
+  // would open a stream for every draft and submitted intake, a regression in the other
+  // direction. React's rules-of-hooks are ESLint-enforced here, so the CALL stays
+  // unconditional and only its ARGUMENT carries the condition — `undefined` is the hook's own
+  // documented "do not connect" argument.
+  const researchSurfaceActive = !!intake?.status && RESEARCH_SURFACE_STATUSES.has(intake.status);
+  const { run: researchRun } = useActiveResearchRun(
+    researchSurfaceActive ? intake?.id : undefined,
+  );
 
   // The phase machine must only ever see apply-intake-skill runs: enrichment skills
   // (structure-answers, extract-insights, …) also land `succeeded` runs, and feeding one
@@ -1194,7 +1217,7 @@ function IntakeDetailPage() {
            element without that wrapper would leave the app with NO way into the run page. */}
        {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
             <div className="px-6 pb-6">
-              <IntakeOpenRunLink intakeId={intake.id} />
+              <IntakeOpenRunLink runId={researchRun?.id ?? null} />
             </div>
        )}
       </div>
@@ -1210,6 +1233,7 @@ function IntakeDetailPage() {
          resultsLinkSentAt={intake.results_link_sent_at}
          deliveredAt={intake.delivered_at}
          activeRun={bannerActiveRun}
+         researchRunStatus={researchRun?.status ?? null}
          busy={busy}
          onRunSkill={runSkill}
          onSendIntakeMail={onSendIntakeMail}
