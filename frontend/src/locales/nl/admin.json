@@ -43,7 +43,7 @@
       "reviewed": "Door jou gereviewd. Wacht op klant-validatie.",
       "validated_by_client": "Klant heeft gevalideerd. Klaar voor decompositie.",
       "decomposed": "Decompositie gedaan. Klaar voor onderzoek.",
-      "in_research": "Nestor onderzoekt.",
+      "in_research": "Deep-research-fase. Het werkfase-paneel zegt of de run nog bezig is.",
       "delivered": "Geleverd aan klant.",
       "archived": "Gearchiveerd."
     },

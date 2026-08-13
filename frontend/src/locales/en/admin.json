@@ -43,7 +43,7 @@
       "reviewed": "Reviewed by you. Awaiting client validation.",
       "validated_by_client": "Client has validated. Ready for decomposition.",
       "decomposed": "Decomposition done. Ready for research.",
-      "in_research": "Nestor is researching.",
+      "in_research": "Deep research phase. The work-phase panel says whether the run is still working.",
       "delivered": "Delivered to client.",
       "archived": "Archived."
     },
