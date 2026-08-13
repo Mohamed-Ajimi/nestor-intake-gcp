@@ -11,6 +11,29 @@ export type ActiveSkillRun = {
   // "context-pack". Threaded through so consumers (review-consume, context-pack reload)
   // can tell which skill the latest run belongs to now that multiple skills land runs.
   skill: string;
+  /**
+   * The run's REAL start time (backend `skill_runs.created_at`, Postgres `now()` at
+   * dispatch), or null when the backend has not been redeployed with the projection yet.
+   *
+   * THIS, not `triggered_at`, is what an elapsed clock must count from. It is a distinct
+   * field ON PURPOSE — see the note on `triggered_at` below.
+   */
+  created_at: string | null;
+  /**
+   * LEGACY, SYNTHETIC, and deliberately left exactly as it was: `applied_at ?? completed_at
+   * ?? now`. For a run that is still running BOTH markers are null, so this collapses to
+   * wall-clock now — a value that changes on every re-map.
+   *
+   * ⛔ Do NOT "fix" this field by pointing it at `created_at`. It is also the input to the
+   * optimistic-dispatch RELEASE GUARD in `routes/admin.pulse.intakes.$id.tsx` (~:293),
+   * which compares it against `optimisticRunStartedAt` — a value taken from the BROWSER's
+   * clock via `new Date()`. `created_at` comes from the Cloud SQL clock. If a browser
+   * running ahead of the database were compared that way, a freshly dispatched run's
+   * `created_at` would sort BEFORE the optimistic stamp, the guard would never release,
+   * `skillLoading` would stay true, and the forced 5s poll plus the disabled dispatch CTAs
+   * would stick for the full 10-minute poll cap. Keeping this field byte-for-byte as it was
+   * keeps that guard's behaviour unchanged.
+   */
   triggered_at: string;
   completed_at: string | null;
   applied_at: string | null;
@@ -18,10 +41,13 @@ export type ActiveSkillRun = {
 };
 
 /**
- * Reconcile the backend `SkillRunView` (`{ id, status, applied_at, completed_at }`) into
- * the `ActiveSkillRun` contract this component exposes to its callers. The view does not
- * project a trigger timestamp, so we fall back to the applied/completed markers to give
- * the elapsed-timer banner a sensible start point.
+ * Reconcile the backend `SkillRunView` into the `ActiveSkillRun` contract this module
+ * exposes to its callers.
+ *
+ * `created_at` is passed straight through — it is the run's real start and is STABLE for a
+ * given run, which is what stops the elapsed clock from restarting on every SSE event and
+ * lets it survive a refresh. `triggered_at` retains its original synthetic fallback chain
+ * for the optimistic-release guard that consumes it (see the type above).
  */
 function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
   if (!r) return null;
@@ -29,6 +55,7 @@ function toActiveSkillRun(r: SkillRun | null): ActiveSkillRun | null {
     id: r.id,
     status: r.status,
     skill: r.skill,
+    created_at: r.created_at ?? null,
     triggered_at: r.applied_at ?? r.completed_at ?? new Date().toISOString(),
     completed_at: r.completed_at,
     applied_at: r.applied_at,

@@ -65,8 +65,17 @@ def read_latest_run_dict(identity: Identity, intake_id: Any) -> dict | None:
 
     Returns ``None`` when the intake has no runs yet (the stream then emits ``data: null``,
     Open Question 2). Otherwise returns a plain dict (never a live ORM row — it would
-    detach across ticks) whose four keys ARE the D-05 wire shape. The connection returns to
+    detach across ticks) whose keys ARE the D-05 wire shape. The connection returns to
     the pool on block exit — nothing held between ticks (criterion #2).
+
+    ``created_at`` is the run's REAL START timestamp and MUST be carried here as well as in
+    the REST ``SkillRunView`` (``api/intake_routes.py``). This dict is hand-built and is a
+    SEPARATE read path from that Pydantic view: the SSE stream is the frontend's primary
+    live channel, so projecting the start timestamp only in the REST view would leave every
+    streamed frame without one and the intake page's skill-run clock would keep restarting
+    on each event. It is also SAFE for the emit-on-change comparison in
+    ``intake_routes.stream_skill_runs`` (``view != last_sent``): ``created_at`` is constant
+    for a given run, so adding it cannot generate extra frames.
     """
     with tenant_session(identity) as session:
         run = SkillRunRepository(session, identity).latest_for_intake(intake_id)
@@ -75,6 +84,7 @@ def read_latest_run_dict(identity: Identity, intake_id: Any) -> dict | None:
         return {
             "id": str(run.id),
             "status": run.status,  # verbatim (Pitfall 1)
+            "created_at": run.created_at.isoformat() if run.created_at else None,
             "applied_at": run.applied_at.isoformat() if run.applied_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         }

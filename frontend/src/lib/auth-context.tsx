@@ -107,29 +107,45 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     let settled = false;
-    const settle = (s: User | null) => {
-      if (cancelled) return;
-      setSession(s);
-      if (!settled) {
-        settled = true;
-        setLoading(false);
-      }
+    // `loading` means "auth state is COMPLETE", which includes the role claim — NOT
+    // merely "the first onIdTokenChanged tick arrived".
+    //
+    // WHY (regression guard). This used to flip `loading` false on the first tick, while
+    // `role` was still being read asynchronously below. Every consumer masked it by ALSO
+    // waiting on `role` (AuthRedirector in routes/__root.tsx, LoginPage in
+    // routes/auth.login.tsx), and /admin never saw it at all because the old SSR auth
+    // guard redirected every hard load away before AdminLayout could render. Now that the
+    // guard is client-only (lib/auth-guard.tsx), a superadmin refreshing /admin DOES
+    // arrive here — and with `loading:false, role:null` it would render the in-place
+    // "no access" denial wall for a beat before the claim resolved. Settling only once the
+    // claim read has finished removes that flash and matches how `loading` was already
+    // being consumed everywhere.
+    //
+    // `.finally()`, not `.then()`: a claimless or claim-read-failed user MUST still settle
+    // (role stays null → the denial wall renders for them, as it must) rather than being
+    // left on a permanent blank screen.
+    const markSettled = () => {
+      if (cancelled || settled) return;
+      settled = true;
+      setLoading(false);
     };
 
     // onIdTokenChanged is a superset of onAuthStateChanged (D-LI2-01): it fires on
     // sign-in/out AND on token refresh, so the `role` claim minted server-side after
     // sign-in (picked up via the login `getToken(true)` force-refresh) is observed
-    // here. Identical signature/unsubscribe contract — session/loading behavior is
-    // preserved. Returns its unsubscribe fn directly; use it in cleanup.
+    // here. Identical signature/unsubscribe contract. Returns its unsubscribe fn
+    // directly; use it in cleanup.
     const unsubscribe = onIdTokenChanged(auth, (user) => {
-      // Settle session/loading on the first tick exactly as before — do NOT block
-      // on the async claim read.
-      settle(user);
+      if (cancelled) return;
+      // Session is published on the first tick exactly as before.
+      setSession(user);
 
       if (!user) {
-        if (!cancelled) setRole(null);
+        setRole(null);
         // Allow the boot-locale reconciliation to run again for the next sign-in.
         bootedLocaleUidRef.current = null;
+        // Signed out: there is no claim to wait for, so auth state is already complete.
+        markSettled();
         return;
       }
 
@@ -145,7 +161,9 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
           if (cancelled) return;
           console.error("[auth-context] failed to read role claim", err);
           setRole(null);
-        });
+        })
+        // Resolved or failed, the auth state is now as complete as it will get.
+        .finally(markSettled);
     });
 
     return () => {

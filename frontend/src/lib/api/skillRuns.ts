@@ -18,6 +18,15 @@ export type SkillRun = {
   id: string;
   status: string;
   skill: string;
+  /**
+   * The run's REAL start (dispatch) time — Postgres `now()` stamped at INSERT.
+   *
+   * Optional because the frontend and backend deploy independently (`nestor-frontend`
+   * vs `nestor-api`): a frontend shipped ahead of the backend that adds this field must
+   * degrade to the previous behaviour, not to a blank/NaN clock. Consumers therefore
+   * treat it as "use when present" — see `toActiveSkillRun`.
+   */
+  created_at?: string | null;
   applied_at: string | null;
   completed_at: string | null;
 };

@@ -1,13 +1,14 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { formatDistanceToNow } from "date-fns";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { Inbox } from "lucide-react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth, MOCK_AUTH } from "@/lib/firebase";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { requireAuthBeforeLoad, RequireAuth } from "@/lib/auth-guard";
 import { listIntakes, type Intake } from "@/lib/api/intakes";
 import { StatusPill } from "@/components/intake/_status";
 import { TopBar } from "@/components/TopBar";
@@ -29,30 +30,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 // DOES mount the persisting LanguageSwitcher (UAT defect 1): a user needs to change
 // their display language post-login, and this page has no other chrome to host it.
 
-// Firebase resolves `auth.currentUser` only after the first onAuthStateChanged tick;
-// await the initial state so the guard does not race a not-yet-populated currentUser.
-// Mirrors the admin layout guard (routes/admin.tsx).
-function authReady(): Promise<User | null> {
-  if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-}
-
 export const Route = createFileRoute("/intake/")({
   // UX gating only — the authoritative control is the backend get_current_identity
   // dependency. Redirect to login when signed out (no session → cannot loop).
-  beforeLoad: async () => {
-    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
-    const user = await authReady();
-    if (!user) {
-      throw redirect({ to: "/auth/login" });
-    }
-  },
-  component: UserIntakeListPage,
+  //
+  // Shared SSR-safe guard (lib/auth-guard.tsx). The local copy this replaced also ran
+  // during SSR, where the browser-held Firebase session is invisible, so refreshing this
+  // page 307'd to /auth/login and then landed the user on their role's home instead of
+  // here. <RequireAuth> keeps the real signed-out redirect, client-side, and also keeps
+  // this page's data effect from firing tokenless.
+  beforeLoad: requireAuthBeforeLoad,
+  component: () => (
+    <RequireAuth>
+      <UserIntakeListPage />
+    </RequireAuth>
+  ),
 });
 
 // The seam `Intake` projection is status + phase markers; `title`/`updated_at` are

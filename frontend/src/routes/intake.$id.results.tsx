@@ -1,9 +1,10 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth, MOCK_AUTH } from "@/lib/firebase";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { requireAuthBeforeLoad, RequireAuth } from "@/lib/auth-guard";
 import { getIntake } from "@/lib/api/intakes";
 import { listAnswers } from "@/lib/api/answers";
 import { getTemplates } from "@/lib/api/templates";
@@ -21,25 +22,18 @@ import { StatusPill } from "@/components/intake/_status";
 // not yet validated by the client there is nothing to show, so it redirects back to the
 // fill route.
 
-function authReady(): Promise<User | null> {
-  if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-}
-
 export const Route = createFileRoute("/intake/$id/results")({
-  beforeLoad: async () => {
-    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
-    const user = await authReady();
-    if (!user) {
-      throw redirect({ to: "/auth/login" });
-    }
-  },
-  component: UserIntakeResultsPage,
+  // Shared SSR-safe guard (lib/auth-guard.tsx). The local copy this replaced also ran
+  // during SSR, where the browser-held Firebase session is invisible, so refreshing this
+  // page 307'd to /auth/login and then bounced the user to their role's landing page.
+  // NOTE this route is a CHILD of /intake/$id, so a refresh here used to trip TWO copies
+  // of that guard. <RequireAuth> keeps the genuine signed-out redirect, client-side.
+  beforeLoad: requireAuthBeforeLoad,
+  component: () => (
+    <RequireAuth>
+      <UserIntakeResultsPage />
+    </RequireAuth>
+  ),
 });
 
 // Status ordering — results are available from `validated_by_client` onward; anything

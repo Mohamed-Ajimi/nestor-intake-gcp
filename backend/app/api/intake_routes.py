@@ -167,11 +167,22 @@ class SkillRunView(BaseModel):
     landing ``succeeded`` runs (07-09), consumers that used to assume "newest succeeded run
     == apply-intake-skill" can filter on this field instead (07-10). The ORM column carries
     ``server_default="apply-intake-skill"`` so legacy rows read back a non-null value.
+
+    ``created_at`` is the run's REAL START timestamp — the Postgres ``now()`` stamped at
+    INSERT by ``create_running_skill_run`` (``models/skill_run.py`` gives it
+    ``server_default=func.now()``, NOT NULL). It exists because this view previously
+    projected NO start timestamp at all, so the frontend synthesised one with
+    ``new Date()`` for any run still in flight (both ``applied_at`` and ``completed_at``
+    are null while running). That made the intake page's AI skill-run elapsed clock restart
+    from 00:00 on every mount AND on every SSE event. NOTE ``skill_runs.started_at`` is a
+    DEAD column — nothing in this codebase ever writes it (only ``research_runs.started_at``
+    is written), so it is deliberately NOT the field projected here.
     """
 
     id: str
     skill: str
     status: str
+    created_at: str | None = None
     applied_at: str | None = None
     completed_at: str | None = None
 
@@ -365,6 +376,10 @@ def _skill_run_view(run) -> SkillRunView:
         id=str(run.id),
         skill=run.skill,
         status=run.status,
+        # The run's real start (dispatch time) — see SkillRunView. Guarded with a
+        # truthiness check like its siblings even though the column is NOT NULL, so a
+        # legacy/partial row can never raise here.
+        created_at=(run.created_at.isoformat() if run.created_at else None),
         applied_at=(run.applied_at.isoformat() if run.applied_at else None),
         completed_at=(run.completed_at.isoformat() if run.completed_at else None),
     )
