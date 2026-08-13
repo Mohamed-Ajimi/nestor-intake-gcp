@@ -72,6 +72,76 @@ frontend/backend credentials) and **must survive**. Only the one stale sentence 
 
 ---
 
+## DEF-23-03 — `paused` fuses two states that license different, differently-priced actions
+
+**Found during:** phase 23 code review (WR-02), after all three plans had executed.
+**Status:** partially closed — the misleading COPY was fixed in `2edb752`; the presentation SPLIT
+is deferred.
+**Owner:** unassigned.
+
+`workPhase.ts` maps both `parked` and `needs_input` to the single `paused` presentation. The run
+page does not treat them alike: `components/research/RunActions.tsx:105-109` sets
+`showResume = status === "parked"` and
+`showFreshAttempt = failed || cancelled || needs_input`. So a `parked` run can be **resumed**, while
+a `needs_input` run's only affordance is a **fresh attempt** — a full ~$45 re-run that discards
+paid checkpoints.
+
+**What was fixed:** the paused body said *"Open the run to continue it"*, which is false for
+`needs_input` and steers the operator toward an unnamed spend. It now reads *"Open the run to see
+what it needs"* in all three languages — true of both states, promising nothing about cost.
+
+**What is deferred:** splitting `paused` into two presentations (resumable vs awaiting-input) so the
+banner can name the actual next action, with a sixth body per language and a sixth banner branch.
+That is a change to plan 23-02's presentation union and to `NextStepBanner`'s exhaustive mapping,
+which is why it was not folded into a review fix.
+
+For whoever picks it up: the union in `workPhase.ts` is exhaustive by design — adding a sixth member
+is a TYPE ERROR at the banner until the branch is written, which is the intended forcing function.
+Add the binding test alongside it; `funnelLabels.test.ts`'s WR-01 block is the pattern.
+
+---
+
+## DEF-23-04 — the unrendered `ResearchRunProgress` subtree still opens a stream if anyone imports it
+
+**Found during:** phase 23 code review (WR-03).
+**Status:** deferred — a deletion, not a fix, and larger than this phase.
+**Owner:** unassigned.
+
+After D-22-5 removed its render site and plan 23-03 lifted the hook out of `IntakeOpenRunLink`, the
+`ResearchRunProgress` **component** (and roughly 450 lines of subtree exclusive to it, including
+`AuditBodyPanel`) has **no importer anywhere**. It still calls `useActiveResearchRun` at
+`ResearchRunProgress.tsx:638`.
+
+The module must survive — the intake route and the run page both import `useActiveResearchRun` and
+`IntakeOpenRunLink` out of it (DEF-22-01 records this). But the page's one-stream invariant, which
+plan 23-03 was written to establish, currently rests on *nobody importing the dead component*. A
+future author who re-adds it to the intake page re-creates the double-stream defect silently.
+
+For whoever picks it up: either delete the dead subtree, or add a cheap CI grep guard asserting
+`ResearchRunProgress` has no importer outside its own module — the latter is minutes of work and
+converts a convention into a gate.
+
+---
+
+## DEF-23-05 — the funnel ⓘ is mouse-only and its label is announced unreliably
+
+**Found during:** phase 23 code review (WR-04).
+**Status:** deferred — a pre-existing pattern in this file, not introduced by phase 23.
+**Owner:** unassigned.
+
+`InfoTip` (`VerificationReport.tsx:340-346`) is a non-focusable `<span>` with no `role`, carrying
+its text in `title` + `aria-label`. It is therefore keyboard-unreachable, and `aria-label` on a
+generic element with no role is not reliably exposed by screen readers. The funnel row `<div>`
+carries an `aria-label` under the same limitation.
+
+Phase 23 made this matter more than it did before — the tooltip is now the second half of the F1
+fix rather than decoration — but the pattern predates the phase, and correcting it properly means a
+focusable element with an appropriate role (or a real popover primitive), which is a UI-layer
+decision rather than a review fix. `frontend/src/components/ui/` is shadcn and not to be modified
+directly, so this likely wants a small local component.
+
+---
+
 ## CORRECTION to 22-UAT.md § UAT-22-F1 — the funnel has 18 numeric keys, not 6
 
 **Not a deferred item, and deliberately carries no `DEF-` id:** it is a correction to a source
