@@ -171,4 +171,31 @@ describe("humanizeFunnelStage — the degrade-safe fallback", () => {
   it("a curated key humanizes too — the fallback is never worse than the raw token, even for a key that also has locale copy", () => {
     expect(humanizeFunnelStage("should_have_been_checked")).toBe("Should have been checked");
   });
+
+  // ── CR/WR-05 REGRESSION: the underscore replace must run BEFORE the collapse and the trim ──
+  // These four pin the ORDER, not the output alphabet. With the `_`→space replace last (as it
+  // shipped), the spaces it produced were never collapsed or trimmed, and every one of these
+  // failed. The third is the severe one: a blank label is the invariant this module owns.
+
+  it("a key with a LEADING underscore does not come back with a leading space and a lost capital", () => {
+    expect(humanizeFunnelStage("_new_key")).toBe("New key");
+  });
+
+  it("a DOUBLE underscore collapses to one space rather than surviving as two", () => {
+    expect(humanizeFunnelStage("a__b")).toBe("A b");
+  });
+
+  it("a key made ONLY of underscores takes the same fallback as an empty key — never a blank label, which is this module's own invariant", () => {
+    // Asserted the way the empty-key test above asserts it: the fallback string stays module-
+    // private, so the property (non-blank, and the SAME phrase an empty key gets) is what is
+    // pinned. As shipped, "__" returned "  " — which passes a naive `!== ""` check and is still
+    // a blank row on screen, so `.trim()` is the assertion that actually bites.
+    expect(humanizeFunnelStage("__").trim()).not.toBe("");
+    expect(humanizeFunnelStage("__")).toBe(humanizeFunnelStage(""));
+    expect(humanizeFunnelStage("_")).toBe(humanizeFunnelStage(""));
+  });
+
+  it("a TRAILING underscore leaves no trailing space", () => {
+    expect(humanizeFunnelStage("a_b__c_")).toBe("A b c");
+  });
 });

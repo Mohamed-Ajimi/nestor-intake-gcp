@@ -124,9 +124,14 @@ export function humanizeFunnelStage(stage: string): string {
     // Every Unicode "Other" code point (control, format, surrogate, unassigned) becomes a
     // SPACE. Written as a property escape so this source file carries no control byte itself.
     .replace(/\p{C}/gu, " ")
+    // ORDER IS LOAD-BEARING (CR/WR-05). Underscores become spaces BEFORE the collapse and the
+    // trim, never after. With the replace last, the spaces it produces were never collapsed or
+    // trimmed: `"__"` survived as `"  "` — a BLANK label, which is exactly the "never a blank
+    // row" invariant this module exists to hold — and `"_new_key"` came out as `" new key"`,
+    // leading space and no capital, because `charAt(0)` was upper-casing a space.
+    .replace(/_/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
-    .replace(/_/g, " ");
+    .trim();
   if (cleaned === "") return UNNAMED;
   const phrase = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   return phrase.length > MAX_LABEL_CHARS ? `${phrase.slice(0, MAX_LABEL_CHARS)}…` : phrase;
