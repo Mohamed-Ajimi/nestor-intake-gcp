@@ -268,6 +268,10 @@ function IntakeDetailPage() {
           id: "starting",
           status: "running",
           skill: activeRun?.skill ?? "apply-intake-skill",
+          // Optimistic placeholder: there is no server row yet, so the click time is the
+          // only start we have. `created_at` is what RunningClock counts from; it is
+          // handed over to the real row's server `created_at` once the run surfaces.
+          created_at: optimisticRunStartedAt,
           triggered_at: optimisticRunStartedAt,
           completed_at: null,
           applied_at: null,
@@ -587,7 +591,12 @@ function IntakeDetailPage() {
  model: null,
  output: null,
  cost_estimate_usd: null,
- triggered_at: r.applied_at ?? r.completed_at ?? "",
+ // Prefer the run's real start (`created_at`). Before it was projected this read
+ // `applied_at ?? completed_at ?? ""`, so an in-flight run got `""` — which sorts
+ // FIRST in the ascending localeCompare below and therefore renders LAST in the
+ // newest-first Sheet, timestamped "—" (fmt("") → "—"). The applied/completed
+ // markers remain as the fallback for a backend not yet redeployed.
+ triggered_at: r.created_at ?? r.applied_at ?? r.completed_at ?? "",
  completed_at: r.completed_at,
  applied_at: r.applied_at,
  error_message: null,

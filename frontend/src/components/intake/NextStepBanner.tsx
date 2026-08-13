@@ -113,16 +113,31 @@ function Tooltip({ text }: { text: string }) {
   );
 }
 
-function RunningClock({ triggeredAt }: { triggeredAt: string }) {
+/**
+ * Elapsed clock for an in-flight AI skill run.
+ *
+ * `startedAt` MUST be the run's real start (`ActiveSkillRun.created_at`, i.e. backend
+ * `skill_runs.created_at`) — a value that is STABLE for the lifetime of the run. It used
+ * to be fed `ActiveSkillRun.triggered_at`, which for a still-running run is synthesised as
+ * wall-clock `new Date()`; because that produced a NEW value on every re-map, the effect's
+ * dependency changed on every SSE event and every 5s poll and the clock restarted from
+ * 00:00 roughly every 5 seconds — as well as on every mount, so it never survived a
+ * refresh. Nothing about the counting method changed; only the value it counts from.
+ *
+ * This is NOT a second clock definition: the deep-research run page has its own,
+ * `lib/research/runClock.ts::useElapsed`, which is correct and is deliberately untouched.
+ * This one is the intake page's skill-run banner clock.
+ */
+function RunningClock({ startedAt }: { startedAt: string }) {
   const { t } = useTranslation("intake");
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    const start = new Date(triggeredAt).getTime();
+    const start = new Date(startedAt).getTime();
     const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [triggeredAt]);
+  }, [startedAt]);
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
   return (
@@ -182,7 +197,7 @@ export function NextStepBanner(props: Props) {
     case "awaiting_skill_run":
       if (activeRun?.status === "running") {
         body = t("nextStep.analyzingBody");
-        actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
+        actions = <RunningClock startedAt={activeRun.created_at ?? activeRun.triggered_at} />;
       } else {
         body = t("nextStep.runSkillBody");
         actions = (
@@ -197,7 +212,7 @@ export function NextStepBanner(props: Props) {
       if (activeRun?.status === "running") {
         // A manual re-run is in flight — same running treatment as awaiting_skill_run.
         body = t("nextStep.analyzingBody");
-        actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
+        actions = <RunningClock startedAt={activeRun.created_at ?? activeRun.triggered_at} />;
       } else {
         body = t("nextStep.reviewBody");
         actions = (
@@ -249,7 +264,7 @@ export function NextStepBanner(props: Props) {
     case "awaiting_context_pack":
       if (activeRun?.status === "running") {
         body = t("nextStep.contextPackRunningBody");
-        actions = <RunningClock triggeredAt={activeRun.triggered_at} />;
+        actions = <RunningClock startedAt={activeRun.created_at ?? activeRun.triggered_at} />;
       } else {
         body = (
           <>
