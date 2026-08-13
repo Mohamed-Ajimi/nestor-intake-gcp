@@ -339,7 +339,9 @@ function StatTile({
  */
 function InfoTip({ text }: { text: string }) {
   return (
-    <span className="ml-1 cursor-help text-ink/40" title={text} aria-label={text}>
+    // `shrink-0` (CR-02): this sits as a flex item beside a truncating label span, and without it
+    // the glyph is itself shrinkable — the tooltip must never be the thing that gives way.
+    <span className="ml-1 shrink-0 cursor-help text-ink/40" title={text} aria-label={text}>
       ⓘ
     </span>
   );
@@ -648,8 +650,21 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
                       className="flex items-center gap-3"
                       aria-label={t("verification.funnelStage", { stage: label, count })}
                     >
-                      <span className="w-44 shrink-0 truncate font-mono text-[11px] text-ink/70">
-                        {label}
+                      {/* CR-02. The ⓘ sits OUTSIDE the truncating span, not inside it. When both
+                          were one `w-44 truncate` span the glyph was the last inline child, so any
+                          label wider than the 176px column clipped the tooltip away entirely —
+                          and that is most of them: 12 of 18 labels in nl (the boot and fallback
+                          language) and 10 of 18 in fr overflow, including the row whose own
+                          tooltip calls it the most important number on the page. The tooltip is
+                          the whole second half of UAT-22-F1, so it was unreachable exactly where
+                          the labels are longest. Widening `w-44` only moves the cliff; splitting
+                          the truncate onto an inner span removes it. `min-w-0` is what actually
+                          lets the inner span shrink inside a flex parent. `title` gives the
+                          truncated text a native fallback it did not have. */}
+                      <span className="flex w-44 shrink-0 items-center font-mono text-[11px] text-ink/70">
+                        <span className="min-w-0 truncate" title={label}>
+                          {label}
+                        </span>
                         {tip ? <InfoTip text={tip} /> : null}
                       </span>
                       <div className="h-2 flex-1 bg-paper2" aria-hidden="true">
