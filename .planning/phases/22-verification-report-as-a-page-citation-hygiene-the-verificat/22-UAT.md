@@ -677,3 +677,45 @@ case (ii) need different fixes.
 synthesis time and cannot change, so screen and report must keep agreeing about what a number means.
 And per the standing operator ruling, no duplicate-collapse COUNT or yield figure may be stated
 anywhere.
+
+### UAT-22-F4 — the "Work phase" banner says research is RUNNING after it has finished
+status: open · severity: substantive, operator- AND client-facing · blocker: no
+Reported by the operator 2026-08-13, verbatim: *"why does it say: Work phase / Research running.
+Upload artifacts per research question or let run-research run. or Nestor is researching. when
+research is done?"*
+
+**Cause — a missing state, not a broken one.** `derivePhase` returns the `in_research` phase from the
+intake STATUS ALONE; `lib/intake-phase.ts:65-69` says so in terms: *"the `in_research` visibility is
+driven by the intake STATUS alone"*. And the status deliberately REMAINS `in_research` until the
+explicit Deliver act (`components/intake/FinalReportBlock.tsx:57`). So one phase spans two materially
+different situations — **research running** and **research finished, awaiting delivery** — and
+`NextStepBanner.tsx:307-309` prints the running copy for both.
+
+Three distinct defects in one banner:
+1. **No "research complete, awaiting delivery" phase exists.** The operator is told work is in flight
+   when the only outstanding action is theirs.
+2. ⛔ **The copy instructs the operator to wait for something this system NEVER invokes.**
+   `intake.json:293` reads *"Research running. Upload artifacts per research question or let
+   run-research run."* — measured: **no code path in `backend/app` or `frontend/src` invokes
+   `run-research`.** The single repo mention is a comment in
+   `backend/app/db/alembic/versions/0004_triggers.py:7` noting that restoring those triggers would
+   re-open the path toward it, which INTAKE-05 / Pitfall 5 explicitly BARS. This is dead Supabase-era
+   copy telling the operator to await a function the scope ceiling forbids calling.
+3. **The same conflation is CLIENT-FACING.** `locales/en/admin.json:46` maps status `in_research` to
+   *"Nestor is researching."*, rendered through the shared status-label path
+   (`components/intake/_status.tsx:34`, `routes/admin.pulse.intakes.$id.tsx:188`), so a client can be
+   told research is ongoing after it has completed.
+
+⭐ **Unlike UAT-22-F2/F3 this needs NO backend change and NO research run to validate.**
+`useActiveResearchRun(intakeId)` (`components/intake/ResearchRunProgress.tsx:157-162`) already streams
+the full `ResearchRun` — including its status — to the intake detail page over SSE. The banner can
+distinguish running from terminal from the data already on the page. Frontend + 3 locales only.
+
+**How to apply:** split the `in_research` phase's presentation on the live run's terminal state (do NOT
+split the intake STATUS itself — the Deliver act owns that transition, and changing it would ripple
+into `IntakeWorkflowStepper`, `ContextPackBlock`, `ResearchArtifacts` and `FinalReportBlock`, all of
+which gate on `in_research`). Delete the `run-research` sentence outright rather than rewording it.
+⚠ Per DEF-22-03 the i18n audit cannot see interpolated `t()` calls, so verify any new or renamed key
+against en/nl/fr JSON directly — a rename ships GREEN and renders the raw key name on screen.
+⚠ `ResearchRunProgress.tsx` is otherwise unreachable dead code (DEF-22-01) but its exported HOOKS are
+live; import the hook, do not revive the component.
