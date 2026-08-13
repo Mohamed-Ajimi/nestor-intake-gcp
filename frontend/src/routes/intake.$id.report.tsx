@@ -1,11 +1,12 @@
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Download, Loader2 } from "lucide-react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth, MOCK_AUTH } from "@/lib/firebase";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { requireAuthBeforeLoad, RequireAuth } from "@/lib/auth-guard";
 import { getIntake, getReport, type ReportView } from "@/lib/api/intakes";
 import * as storage from "@/lib/api/storage";
 import { StatusPill } from "@/components/intake/_status";
@@ -19,25 +20,18 @@ import { StatusPill } from "@/components/intake/_status";
 // D-07: a static placeholder reserves layout space for the future Phase-19 Q&A chat; no
 // chat UI is built here (label only, no input, no message list, no data fetch).
 
-function authReady(): Promise<User | null> {
-  if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-}
-
 export const Route = createFileRoute("/intake/$id/report")({
-  beforeLoad: async () => {
-    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
-    const user = await authReady();
-    if (!user) {
-      throw redirect({ to: "/auth/login" });
-    }
-  },
-  component: UserIntakeReportPage,
+  // Shared SSR-safe guard (lib/auth-guard.tsx). The local copy this replaced also ran
+  // during SSR, where the browser-held Firebase session is invisible, so refreshing this
+  // page 307'd to /auth/login and then bounced the user to their role's landing page.
+  // NOTE this route is a CHILD of /intake/$id, so a refresh here used to trip TWO copies
+  // of that guard. <RequireAuth> keeps the genuine signed-out redirect, client-side.
+  beforeLoad: requireAuthBeforeLoad,
+  component: () => (
+    <RequireAuth>
+      <UserIntakeReportPage />
+    </RequireAuth>
+  ),
 });
 
 // Local byte formatter (copied from FinalReportBlock :18-23 — display-only helper).

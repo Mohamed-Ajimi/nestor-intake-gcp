@@ -1,9 +1,10 @@
-import { createFileRoute, Outlet, redirect, useMatches, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useMatches, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { auth, MOCK_AUTH } from "@/lib/firebase";
+import { signOut } from "firebase/auth";
+import { auth } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth-context";
+import { requireAuthBeforeLoad, RequireAuth } from "@/lib/auth-guard";
 import { getIntake } from "@/lib/api/intakes";
 import { listAnswers } from "@/lib/api/answers";
 import { getTemplates } from "@/lib/api/templates";
@@ -17,25 +18,18 @@ import { IntakeForm } from "@/components/intake/IntakeForm";
 // header so this route adds no extra chrome. The form is editable only for `draft`;
 // submitted/reviewed are hosted read-only ("Antwoorden bekijken").
 
-function authReady(): Promise<User | null> {
-  if (auth.currentUser) return Promise.resolve(auth.currentUser);
-  return new Promise((resolve) => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      unsubscribe();
-      resolve(user);
-    });
-  });
-}
-
 export const Route = createFileRoute("/intake/$id")({
-  beforeLoad: async () => {
-    if (MOCK_AUTH) return; // mock mode: bypass Firebase auth check
-    const user = await authReady();
-    if (!user) {
-      throw redirect({ to: "/auth/login" });
-    }
-  },
-  component: UserIntakeRouteShell,
+  // Shared SSR-safe guard (lib/auth-guard.tsx). The local copy this replaced also ran
+  // during SSR, where the browser-held Firebase session is invisible, so refreshing this
+  // page 307'd to /auth/login and then bounced the user to their role's landing page.
+  // <RequireAuth> keeps the genuine signed-out redirect, client-side, and keeps the
+  // wrapped page's data effects from firing tokenless.
+  beforeLoad: requireAuthBeforeLoad,
+  component: () => (
+    <RequireAuth>
+      <UserIntakeRouteShell />
+    </RequireAuth>
+  ),
 });
 
 // Phase 18 fix: `/intake/$id/report` and `/intake/$id/results` are file-route CHILDREN of
