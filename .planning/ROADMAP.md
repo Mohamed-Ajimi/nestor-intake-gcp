@@ -653,3 +653,34 @@ Plans:
 - [x] 22-08-PLAN.md — wave 4 — the section nav rail, the collapsed citation list, and the page-level Sheet
 - [x] 22-09-PLAN.md — wave 5 — 22-UAT.md and the DEF-21-02 B1-B6 reconciliation
 - [x] 22-10-PLAN.md — wave 6 — derive the deploy surface, deploy, and prove it by imageDigest
+
+### Phase 23: Report legibility — business-friendly funnel labels and an honest work-phase banner
+
+**Goal:** A superadmin reads every figure on the verification report without knowing the engine's internals, and is never told research is running once it has finished. Two operator findings from the Phase 22 UAT: the gate funnel renders the engine's raw snake_case dict keys (`should_have_been_checked`, `checked_incidentally`, `selected_verify`, …) instead of business-friendly labels with explanatory tooltips; and the "Work phase" banner prints running copy for the whole `in_research` phase — which by design spans both *running* and *finished, awaiting delivery* — including a sentence telling the operator to "let run-research run", a function nothing in this system invokes and the scope ceiling bars.
+**Requirements**: UAT-22-F1, UAT-22-F4 (`.planning/phases/22-*/22-UAT.md` Gaps)
+**Depends on:** Phase 22
+**Scope note:** Frontend + 3 locales ONLY. No backend, no migration, no engine change. `useActiveResearchRun` already streams the run's terminal state to the intake page, so F4 needs no new data. **Zero spend — fully verifiable on recorded data.** Do NOT split the intake STATUS itself: the Deliver act owns that transition and `IntakeWorkflowStepper` / `ContextPackBlock` / `ResearchArtifacts` / `FinalReportBlock` all gate on `in_research`. Per DEF-22-03 the i18n audit cannot see interpolated `t()` calls — verify new keys against en/nl/fr JSON directly.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23 to break down)
+
+### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
+
+**Goal:** A superadmin can deliberately re-run deep research on an intake that already succeeded, steer that re-run with a note asking for something different from previous runs, see every version of an intake's research, and read the actual cited passage grouped under its link instead of a bare URL.
+**Requirements**: D-RR-1, D-RR-2, D-RR-3, D-RR-3a (`.planning/STAKEHOLDER-NOTES.md`, 2026-08-13); UAT-22-F2, UAT-22-F3 (`.planning/phases/22-*/22-UAT.md` Gaps)
+**Depends on:** Phase 22 — **NOT Phase 23.** The two are independent and may run in either order or in parallel; 23 is frontend copy, 24 is engine + backend + frontend.
+**Scope note — this is the first phase since 21 to change an engine WRITE path, and the only one that cannot be verified without spending.**
+- Already exists, do not rebuild: `research_runs.attempt` is NOT NULL, starts at 1 and is already bumped by `api/research_routes.py:258`. A re-trigger path exists end to end.
+- The gap: `RunActions.tsx:104-108` gates the fresh-attempt affordance to `failed | cancelled | needs_input` — deliberately, since it is a paid button. Success states must be added.
+- **D-RR-1** deliberate re-runs get their OWN counter; the 3-attempt failure-recovery cap (D-04, `research_routes.py:282-290`) must stay untouched so a re-run can never lock an intake out of genuine recovery.
+- **D-RR-2** typed confirmation before dispatch, and **quote NO cost figure** — per-run cost varies, so a number would be fabricated.
+- **D-RR-3 + D-RR-3a** the note steers the run with NO length cap and no truncation, but is injected ONCE in a delimited block (never concatenated per sub-question), sanitised at the provider-prompt boundary, with its size surfaced in the UI. ⛔ An unbounded field on a paid provider prompt was a shipped CRITICAL in phase 15.6 — this is the mitigation, not a weakening of the ruling.
+- **UAT-22-F2** `citations/extractor.py:1100` writes `snapshot_text=url` (`# minimal snapshot; Phase 2 can enrich`) and `:804` writes the whole report, so no per-citation excerpt is ever captured. Frontend rendering slot already exists at `CitationPanel.tsx:278`.
+- **UAT-22-F3** group the citations dropdown by document identity (resolved URL where available, normalized raw URL otherwise), replacing D-22-4's collapse-and-drop with group-and-keep. **Depends on F2** — without real excerpts every child row shows the same URL and reads as a bug. ⛔ Must NOT renumber: report `[n]` markers were written at synthesis time and screen and report must keep agreeing. No duplicate-collapse count or yield figure may be stated (standing ruling).
+- ⛔ **Alembic collision:** DEF-22-06 already claims `0019` for the write-side source-identity fix, which must add `normalized_url` + a partial unique index AND DROP `idx_source_tenant_content_hash` in the SAME migration. Resolve the ordering explicitly; do not let the steering-note column silently take `0019`.
+- ⭐ **One ~$45 run validates the whole phase** — the re-run affordance, the note's effect, F2's excerpts and F3's grouping are each unprovable otherwise. That same run finally discharges the validation deferred since Phase 21: the audit bucket's newest write is still `2026-08-05T19:21:31Z`, so no deployed engine code has ever executed.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 24 to break down)
