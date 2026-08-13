@@ -293,7 +293,7 @@
     "inResearchRunningBody": "La recherche est en cours. Vous pouvez téléverser des artifacts par question de recherche pendant ce temps.",
     "inResearchFinishedBody": "La recherche est terminée. Plus rien ne tourne — téléversez le rapport client et livrez-le.",
     "inResearchStoppedBody": "La recherche s'est arrêtée avant la fin. Plus rien ne tourne — ouvrez le run pour voir ce qui s'est passé.",
-    "inResearchPausedBody": "La recherche est en pause et attend votre action. Ouvrez le run pour la poursuivre.",
+    "inResearchPausedBody": "La recherche est en pause et attend votre action. Ouvrez le run pour voir ce qui est requis.",
     "inResearchUnknownBody": "La recherche approfondie est la phase de travail actuelle. Ouvrez le run pour connaître son statut.",
     "reportUploadBody": "Recherche terminée. Téléversez le rapport client complet (DOCX ou PDF).",
     "uploadReport": "Téléverser le rapport",

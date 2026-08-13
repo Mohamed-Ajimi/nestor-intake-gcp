@@ -293,7 +293,7 @@
     "inResearchRunningBody": "Research loopt. Je kunt ondertussen artifacts per onderzoeksvraag uploaden.",
     "inResearchFinishedBody": "Research is klaar. Er loopt niets meer — upload het klantrapport en lever het op.",
     "inResearchStoppedBody": "Research is gestopt voordat hij klaar was. Er loopt niets — open de run om te zien wat er gebeurd is.",
-    "inResearchPausedBody": "Research staat op pauze en wacht op jou. Open de run om verder te gaan.",
+    "inResearchPausedBody": "Research staat op pauze en wacht op jou. Open de run om te zien wat er nodig is.",
     "inResearchUnknownBody": "Deep research is de huidige werkfase. Open de run voor de actuele status.",
     "reportUploadBody": "Research klaar. Upload het volledige klant-rapport (DOCX of PDF).",
     "uploadReport": "Upload rapport",
