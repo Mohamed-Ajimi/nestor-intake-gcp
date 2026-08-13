@@ -661,12 +661,12 @@ Plans:
 **Requirements**: UAT-22-F1, UAT-22-F4 (`.planning/phases/22-*/22-UAT.md` Gaps)
 **Depends on:** Phase 22
 **Scope note:** Frontend + 3 locales ONLY. No backend, no migration, no engine change. `useActiveResearchRun` already streams the run's terminal state to the intake page, so F4 needs no new data. **Zero spend — fully verifiable on recorded data.** Do NOT split the intake STATUS itself: the Deliver act owns that transition and `IntakeWorkflowStepper` / `ContextPackBlock` / `ResearchArtifacts` / `FinalReportBlock` all gate on `in_research`. Per DEF-22-03 the i18n audit cannot see interpolated `t()` calls — verify new keys against en/nl/fr JSON directly.
-**Plans:** 3 plans (3 waves)
+**Plans:** 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 23-01-PLAN.md — wave 1 — UAT-22-F1: business-friendly labels + tooltips for all 18 engine funnel keys, en/nl/fr, with a degrade-safe fallback for an unknown key
+- [x] 23-01-PLAN.md — wave 1 — UAT-22-F1: business-friendly labels + tooltips for all 18 engine funnel keys, en/nl/fr, with a degrade-safe fallback for an unknown key
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
