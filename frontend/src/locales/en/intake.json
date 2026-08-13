@@ -290,7 +290,6 @@
     "researchConfirmCancel": "Cancel",
     "researchConfirmConfirm": "Yes, start research",
     "workPhaseTitle": "Work phase",
-    "inResearchBody": "Deep research is the current work phase. Open the run for its live status.",
     "inResearchRunningBody": "Research is running. You can upload artifacts per research question while it works.",
     "inResearchFinishedBody": "Research has finished. Nothing is running — upload the client report and deliver it.",
     "inResearchStoppedBody": "Research stopped before it finished. Nothing is running — open the run to see what happened.",

@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import type { Phase } from "@/lib/intake-phase";
+import { deriveWorkPhasePresentation } from "@/lib/research/workPhase";
 import type { ActiveSkillRun } from "./SkillRunProgress";
 import {
   AlertDialog,
@@ -23,6 +24,10 @@ type Props = {
   resultsLinkSentAt: string | null;
   deliveredAt: string | null;
   activeRun?: ActiveSkillRun | null;
+  // The DEEP-RESEARCH run's status (`ResearchRun.status`) — NOT `activeRun`, which is the
+  // intake AI SKILL run. Two different runs, two different vocabularies; wiring the wrong
+  // one here makes the work-phase banner lie about the research.
+  researchRunStatus?: string | null;
   busy: Partial<Record<BusyKey, boolean>>;
   onRunSkill: () => void;
   onSendIntakeMail: () => void;
@@ -165,6 +170,7 @@ export function NextStepBanner(props: Props) {
     resultsLinkSentAt,
     deliveredAt,
     activeRun,
+    researchRunStatus,
     busy,
   } = props;
 
@@ -304,10 +310,55 @@ export function NextStepBanner(props: Props) {
       );
       break;
 
-    case "in_research":
+    // UAT-22-F4. Operator verbatim: *"why does it say: Work phase / Research running. ...
+    // when research is done?"* — this branch printed ONE running sentence for every intake
+    // whose status is `in_research`, and that status deliberately survives long after the
+    // engine stops, until the explicit Deliver act (`FinalReportBlock.tsx:57`).
+    //
+    // The intake STATUS is deliberately NOT split: `IntakeWorkflowStepper`,
+    // `ContextPackBlock`, `ResearchArtifacts` and `FinalReportBlock` all gate on
+    // `in_research`, so splitting it would be a phase-machine change with four consumers.
+    // What is split is the PRESENTATION, driven by the LIVE run handed down from the route
+    // (`researchRunStatus`) rather than inferred from the status alone.
+    //
+    // `unknown` is a first-class outcome, not a fallback: a page that has not yet received
+    // an SSE frame, an intake that never had a run, and a stream that failed all land here,
+    // and none of them means the work ended. It claims neither running nor finished. The
+    // prop is OPTIONAL for the same reason — a caller that was never updated degrades to
+    // neutral copy instead of to a false claim.
+    //
+    // No `actions` here on purpose: `phaseShowsFinalReport` includes `in_research`, so
+    // `FinalReportBlock` already renders the upload control on this very page.
+    case "in_research": {
       title = t("nextStep.workPhaseTitle");
-      body = t("nextStep.inResearchBody");
+      const presentation = deriveWorkPhasePresentation(researchRunStatus);
+      switch (presentation) {
+        case "running":
+          body = t("nextStep.inResearchRunningBody");
+          break;
+        case "finished":
+          body = t("nextStep.inResearchFinishedBody");
+          break;
+        case "stopped":
+          body = t("nextStep.inResearchStoppedBody");
+          break;
+        case "paused":
+          body = t("nextStep.inResearchPausedBody");
+          break;
+        case "unknown":
+          body = t("nextStep.inResearchUnknownBody");
+          break;
+        default: {
+          // Exhaustiveness guard: a sixth `WorkPhasePresentation` member makes this a TYPE
+          // ERROR here rather than a silent fall-through into somebody else's sentence.
+          const unhandled: never = presentation;
+          void unhandled;
+          body = t("nextStep.inResearchUnknownBody");
+          break;
+        }
+      }
       break;
+    }
 
     case "awaiting_report_upload":
       body = t("nextStep.reportUploadBody");
