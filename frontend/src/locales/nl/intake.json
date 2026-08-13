@@ -640,7 +640,7 @@
       "checked_incidentally": "Toch gecheckt",
       "checked_incidentally_not_falsifiable": "Toch gecheckt: niet controleerbaar",
       "checked_incidentally_not_load_bearing": "Toch gecheckt: niet doorslaggevend",
-      "checked_incidentally_both": "Toch gecheckt: geen van beide redenen",
+      "checked_incidentally_both": "Toch gecheckt: beide redenen",
       "checked_incidentally_stable": "Toch gecheckt: vaststaand feit",
       "unresolved_anchors": "Verwijderde bronverwijzingen"
     },

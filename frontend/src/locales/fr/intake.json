@@ -640,7 +640,7 @@
       "checked_incidentally": "Vérifiées malgré tout",
       "checked_incidentally_not_falsifiable": "Vérifiées malgré tout : non vérifiables",
       "checked_incidentally_not_load_bearing": "Vérifiées malgré tout : non déterminantes",
-      "checked_incidentally_both": "Vérifiées malgré tout : aucune des deux raisons",
+      "checked_incidentally_both": "Vérifiées malgré tout : les deux raisons",
       "checked_incidentally_stable": "Vérifiées malgré tout : faits établis",
       "unresolved_anchors": "Marqueurs de citation supprimés"
     },

@@ -640,7 +640,7 @@
       "checked_incidentally": "Checked anyway",
       "checked_incidentally_not_falsifiable": "Checked anyway: not checkable",
       "checked_incidentally_not_load_bearing": "Checked anyway: not load-bearing",
-      "checked_incidentally_both": "Checked anyway: neither reason",
+      "checked_incidentally_both": "Checked anyway: both reasons",
       "checked_incidentally_stable": "Checked anyway: settled fact",
       "unresolved_anchors": "Citation markers removed"
     },
