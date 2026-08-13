@@ -661,7 +661,7 @@ Plans:
 **Requirements**: UAT-22-F1, UAT-22-F4 (`.planning/phases/22-*/22-UAT.md` Gaps)
 **Depends on:** Phase 22
 **Scope note:** Frontend + 3 locales ONLY. No backend, no migration, no engine change. `useActiveResearchRun` already streams the run's terminal state to the intake page, so F4 needs no new data. **Zero spend — fully verifiable on recorded data.** Do NOT split the intake STATUS itself: the Deliver act owns that transition and `IntakeWorkflowStepper` / `ContextPackBlock` / `ResearchArtifacts` / `FinalReportBlock` all gate on `in_research`. Per DEF-22-03 the i18n audit cannot see interpolated `t()` calls — verify new keys against en/nl/fr JSON directly.
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 **Wave 1**
@@ -674,7 +674,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
+- [x] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
