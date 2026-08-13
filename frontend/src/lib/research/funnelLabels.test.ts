@@ -4,6 +4,9 @@ import {
   humanizeFunnelStage,
   isKnownFunnelStage,
 } from "@/lib/research/funnelLabels";
+import enIntake from "@/locales/en/intake.json";
+import nlIntake from "@/locales/nl/intake.json";
+import frIntake from "@/locales/fr/intake.json";
 
 // 23-01 Task 1 — the funnel-stage vocabulary, pinned over ALL EIGHTEEN engine keys plus the
 // unknown, empty, hostile-length and control-character paths.
@@ -197,5 +200,62 @@ describe("humanizeFunnelStage — the degrade-safe fallback", () => {
 
   it("a TRAILING underscore leaves no trailing space", () => {
     expect(humanizeFunnelStage("a_b__c_")).toBe("A b c");
+  });
+});
+
+// ── WR-01: the vocabulary must be BOUND to the copy, in both directions ──────────────────────
+// Nothing else in this repo binds them. Every test above pins KNOWN_FUNNEL_STAGES against itself
+// and never opens a locale file; `i18n-audit.mjs` cannot see the TEMPLATE-LITERAL `t()` calls the
+// funnel row uses (DEF-22-03 — the audit says so itself); and the `defaultValue` on those calls
+// then makes the failure SILENT, degrading to a humanized key rather than going red. So a
+// nineteenth engine stage added without copy, or a label path dropped in one language during a
+// merge, would ship green and reach an operator as a raw-ish phrase — the exact defect UAT-22-F1
+// was raised to remove. These four are the only thing standing between that and production.
+
+const CATALOGS = [
+  ["en", enIntake],
+  ["nl", nlIntake],
+  ["fr", frIntake],
+] as const;
+
+describe("the stage vocabulary is bound to the locale copy (WR-01)", () => {
+  for (const [lng, catalog] of CATALOGS) {
+    it(`${lng}: every known stage has a curated LABEL — a stage without one degrades silently via defaultValue`, () => {
+      const labels = catalog.verification.funnelLabel as Record<string, string>;
+      const missing = KNOWN_FUNNEL_STAGES.filter((s) => !labels[s]?.trim());
+      expect(missing).toEqual([]);
+    });
+
+    it(`${lng}: every known stage has a curated TOOLTIP — the tooltip is the second half of UAT-22-F1, not a nicety`, () => {
+      const tips = catalog.verification.funnelTip as Record<string, string>;
+      const missing = KNOWN_FUNNEL_STAGES.filter((s) => !tips[s]?.trim());
+      expect(missing).toEqual([]);
+    });
+  }
+
+  it("no locale carries an ORPHANED funnel label or tooltip — a key with no stage is dead copy, and this repo has already accumulated four of those (DEF-22-04 + its WR-08 amendment)", () => {
+    const known = new Set<string>(KNOWN_FUNNEL_STAGES);
+    for (const [lng, catalog] of CATALOGS) {
+      const labels = Object.keys(catalog.verification.funnelLabel as Record<string, string>);
+      const tips = Object.keys(catalog.verification.funnelTip as Record<string, string>);
+      expect({ lng, orphans: labels.filter((k) => !known.has(k)) }).toEqual({ lng, orphans: [] });
+      expect({ lng, orphans: tips.filter((k) => !known.has(k)) }).toEqual({ lng, orphans: [] });
+    }
+  });
+
+  it("the three languages are at exact key PARITY — a path present in one and absent in another is the silent half of this failure mode", () => {
+    const [, en] = CATALOGS[0];
+    const enLabels = Object.keys(en.verification.funnelLabel).sort();
+    const enTips = Object.keys(en.verification.funnelTip).sort();
+    for (const [lng, catalog] of CATALOGS.slice(1)) {
+      expect({ lng, k: Object.keys(catalog.verification.funnelLabel).sort() }).toEqual({
+        lng,
+        k: enLabels,
+      });
+      expect({ lng, k: Object.keys(catalog.verification.funnelTip).sort() }).toEqual({
+        lng,
+        k: enTips,
+      });
+    }
   });
 });
