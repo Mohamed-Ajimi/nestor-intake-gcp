@@ -21,6 +21,7 @@ import {
   renderCitationMarker,
 } from "@/components/intake/CitationPanel";
 import { buildCitationIndex } from "@/lib/research/citationIndex";
+import { humanizeFunnelStage, isKnownFunnelStage } from "@/lib/research/funnelLabels";
 
 // frontend/src/components/intake/VerificationReport.tsx — the superadmin-only verification
 // report surface (Plan 15-05 / ENGINE-09). It fetches the recorded run's verification report
@@ -323,6 +324,28 @@ function StatTile({
 }
 
 /**
+ * The house tooltip atom (mirrors `NextStepBanner.tsx`): a `title` + `aria-label` glyph. No
+ * portal, no shadcn primitive, no dependency — the browser's own tooltip is enough for an
+ * explanatory sentence, and `aria-label` carries the same sentence to a screen reader so the
+ * explanation is not sighted-only.
+ *
+ * Defined locally rather than imported from `NextStepBanner`, in the same register as this
+ * file's own `StatTile` / `MdText`: that module is a banner of CTA buttons and nothing about
+ * this report should depend on it.
+ *
+ * `text` reaches the DOM as an ATTRIBUTE VALUE, which React escapes. It is never routed through
+ * `dangerouslySetInnerHTML` or `MdText` (T-23-01) — one of its callers passes a humanized engine
+ * key, which is not trusted markup.
+ */
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="ml-1 cursor-help text-ink/40" title={text} aria-label={text}>
+      ⓘ
+    </span>
+  );
+}
+
+/**
  * The superadmin verification report, rendered as an instrumented document: a stat strip, a
  * proportional gate funnel, then every section this report has always had, in the order it has
  * always had them, as anchored and headed blocks. Fetches `getVerification(intakeId, runId)` on
@@ -571,12 +594,25 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
 
           {/* ── C. Gate funnel as proportion ──────────────────────────────────────────
                  A bar per stage, so "3,000 in, 40 out" is legible at a glance where a
-                 comma-separated list of numbers is not. The stage key is rendered RAW: it is
-                 an engine identifier, and inventing a friendly label for a key this build has
-                 never seen is precisely the fabrication this project bars. NO CHART LIBRARY —
-                 one is already installed and it is deliberately not used here, because a
-                 proportional div matches the house language, costs no bundle weight and needs
-                 no responsive container.
+                 comma-separated list of numbers is not.
+                 UAT-22-F1: the stage key used to be rendered RAW. The operator's verbatim
+                 finding was "it doesnt read good as we are using cariable names , might want to
+                 change those to business freindly names (no underscores) and a tooltip
+                 explaining them maybe" — so each row now carries a business phrase plus an
+                 explanatory ⓘ. The CURATED VOCABULARY is enumerated in
+                 `lib/research/funnelLabels.ts` and its copy lives in the three locale files;
+                 nothing about the vocabulary is decided here. A key that vocabulary has never
+                 heard of degrades to a HUMANIZED form rather than a raw token — not a guess at
+                 its meaning, just its own name made legible, with a tooltip that says the
+                 description is missing. That path is a contract, not a hedge:
+                 `pipeline._build_funnel` declares funnel keys ADDITIVE ONLY, so an unheard-of
+                 key is the normal state of the world after any engine release.
+                 ⛔ The row SET and the row ORDER are untouched by all of this — this changes a
+                 row's LABEL TEXT and nothing else (D-22-2: nothing dropped, reordered or
+                 merged). The figures and the bar geometry are likewise untouched.
+                 NO CHART LIBRARY — one is already installed and it is deliberately not used
+                 here, because a proportional div matches the house language, costs no bundle
+                 weight and needs no responsive container.
                  The funnel gets no anchor id: it sits above the document, beside the stat
                  strip, and is not one of the nav rail's entries. */}
           {funnelEntries.length > 0 && (
@@ -585,26 +621,49 @@ export function VerificationReport({ intakeId, runId }: { intakeId: string; runI
                 <span>{t("verification.funnelTitle")}</span>
               </h2>
               <div className="mt-3 space-y-1.5">
-                {funnelEntries.map(([stage, count]) => (
-                  <div
-                    key={stage}
-                    className="flex items-center gap-3"
-                    aria-label={t("verification.funnelStage", { stage, count })}
-                  >
-                    <span className="w-44 shrink-0 truncate font-mono text-[11px] text-ink/70">
-                      {stage}
-                    </span>
-                    <div className="h-2 flex-1 bg-paper2" aria-hidden="true">
-                      <div
-                        className="h-2 bg-ink"
-                        style={{ width: `${(count / funnelMax) * 100}%` }}
-                      />
+                {funnelEntries.map(([stage, count]) => {
+                  const known = isKnownFunnelStage(stage);
+                  // `defaultValue` is load-bearing, not belt-and-braces. Per DEF-22-03 the i18n
+                  // audit's regexes cannot see a TEMPLATE-LITERAL `t()` call, so renaming or
+                  // dropping one of these keys would ship GREEN and put the literal string
+                  // "verification.funnelLabel.checked" on the operator's screen. The default
+                  // makes that failure mode degrade to the humanized key instead — still not the
+                  // curated copy, but still a phrase rather than an i18n path.
+                  const label = known
+                    ? t(`verification.funnelLabel.${stage}`, {
+                        defaultValue: humanizeFunnelStage(stage),
+                      })
+                    : humanizeFunnelStage(stage);
+                  const tip = known
+                    ? t(`verification.funnelTip.${stage}`, { defaultValue: "" })
+                    : t("verification.funnelUnknownTip", { defaultValue: "" });
+                  return (
+                    // `key` stays the RAW engine key: it is React's reconciliation identity, not
+                    // display, and the engine key is the correct stable one. `funnelStage`'s own
+                    // locale key is NOT renamed either — its {{stage}} placeholder simply now
+                    // receives human text, so no key path changes and the DEF-22-03 rename
+                    // hazard is not incurred a second time.
+                    <div
+                      key={stage}
+                      className="flex items-center gap-3"
+                      aria-label={t("verification.funnelStage", { stage: label, count })}
+                    >
+                      <span className="w-44 shrink-0 truncate font-mono text-[11px] text-ink/70">
+                        {label}
+                        {tip ? <InfoTip text={tip} /> : null}
+                      </span>
+                      <div className="h-2 flex-1 bg-paper2" aria-hidden="true">
+                        <div
+                          className="h-2 bg-ink"
+                          style={{ width: `${(count / funnelMax) * 100}%` }}
+                        />
+                      </div>
+                      <span className="w-16 shrink-0 text-right font-mono text-[11px] tabular-nums text-ink/70">
+                        {count}
+                      </span>
                     </div>
-                    <span className="w-16 shrink-0 text-right font-mono text-[11px] tabular-nums text-ink/70">
-                      {count}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           )}
