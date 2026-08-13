@@ -127,3 +127,65 @@ skeptics as-is on the ~424 → "superseded" verdict outcome carried into synthes
 mandatory caveat → fail-loud verification (0-verdict run must not report green) →
 superadmin verification report (requirement above). Deeper cut available later via
 cross-provider corroboration once Phase-19 embeddings land.
+
+---
+
+## 2026-08-13 — FEATURE REQUEST: re-run deep research, with versions and a steering note
+
+Raised by the operator during the Phase 22 UAT. **New scope — not a Phase 22 finding.** Verbatim:
+*"also add the possibility to rerun a deepresearch and keeping track of versions while adding a note
+a super admin can put to ask for something different than previous runs"*
+
+### What already exists (measured, not assumed)
+
+- `research_runs.attempt` — NOT NULL, starts at 1, already bumped by the trigger endpoint
+  (`api/research_routes.py:258`, inserts `status=queued, attempt=n`). Its own comment: *"a retrigger
+  after a failed/stale run bumps this so the audit trail keeps every attempt."* **Version tracking
+  has a real foundation already.**
+- A re-trigger path exists end to end (`RunActions` → `research_routes.trigger`).
+
+### The actual gaps
+
+1. **A COMPLETED run cannot be re-run.** `RunActions.tsx:104-108` gates the fresh-attempt affordance
+   to `failed | cancelled | needs_input` only, and deliberately: *"enumerated rather than defaulted,
+   so a status added later cannot silently inherit it."* Success states were excluded on purpose —
+   it is a ~$45 button.
+2. **A 3-attempt cap exists** (D-04, enforced `research_routes.py:282-290`) and it exists for FAILURE
+   RECOVERY.
+3. **No steering-note field exists** anywhere — new column, therefore a migration.
+4. **No version-history read path.** `locateResearchRun` returns ONE run and no run state, so listing
+   an intake's runs needs a new endpoint plus UI.
+
+### Operator rulings, 2026-08-13
+
+- **D-RR-1 — SEPARATE COUNTERS.** Deliberate re-runs get their own counter; the 3-attempt
+  failure-recovery budget is untouched. Rationale: a deliberate re-run must never lock the intake out
+  of recovering a genuinely broken run.
+- **D-RR-2 — TYPED CONFIRMATION, AND DO NOT STATE A COST.** The dialog requires typing an explicit
+  token before dispatch, but must NOT quote a figure. ⭐ This is consistent with the standing ruling
+  against fabricated numbers: per-run cost varies, so a quoted "$45" would be a made-up fact. Show
+  no number rather than a wrong one.
+- **D-RR-3 — THE NOTE STEERS THE RUN, WITH NO LENGTH CAP.** Recording it only was explicitly
+  rejected; it must change what the run does.
+
+### ⚠ Flagged to the operator against D-RR-3 (raised once, then to be built as ruled)
+
+An unbounded field reaching a paid provider prompt is the exact shape of a **shipped critical** from
+phase 15.6 (an unbounded field placed onto three paid providers' prompts). Two concrete risks:
+- injected per sub-question, a long note **multiplies across the run** and materially raises the very
+  cost D-RR-2 declines to quote;
+- past a model's context ceiling it **fails mid-run**, after the earlier paid stages have completed.
+
+Proposed mitigation that keeps "no cap" literally true: **no truncation**, but inject the note ONCE in
+a delimited block rather than concatenated into every sub-question prompt; sanitise at the
+provider-prompt boundary; surface the note's size in the UI. Awaiting the operator's confirmation or
+override.
+
+### ⛔ Migration collision — whoever writes `0019` must read this
+
+DEF-22-06 already claims alembic **0019** for the write-side source-identity fix, and that migration
+**must add `normalized_url` + a partial unique index AND DROP `idx_source_tenant_content_hash` in the
+SAME migration**, or `ON CONFLICT` does not cover the surviving index and two same-text /
+different-URL sources raise an unhandled `IntegrityError` inside a ~$45 run's persist transaction.
+The steering-note column must NOT silently take `0019` and strand that fix, and must not be bundled
+into it without an explicit decision.
