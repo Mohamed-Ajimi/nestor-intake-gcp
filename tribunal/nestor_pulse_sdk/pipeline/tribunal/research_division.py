@@ -1955,51 +1955,48 @@ def divide(
     return angles
 
 
-# The wording a count that could not be established renders as. Named rather
-# than inlined so a test can assert on the CONSTANT instead of retyping the
-# sentence, and so the two halves of the rule below cannot drift apart.
-_UNKNOWN_FACTS = "an unknown number of facts"
+def _agent_done_text(angle_no: int, provider: str) -> str:
+    """The `agent_done` feed row for one research angle: `Angle NN done · provider`.
 
+    WHY THE COUNT IS GONE (260831-ksq, operator ruling). This line used to end
+    with a fact count produced by `_fact_count_label`. That helper rendered a
+    REAL number only when the provider result carried a countable `facts` list,
+    and three of the four streams (`gemini`, `openai`, `claude`) return a
+    `{status, report}` prose envelope that never has one. So the clause read
+    "an unknown number of facts" on the overwhelming majority of rows -- noise on
+    the operator's screen, occupying the width of a real fact. The operator was
+    told plainly that the `own` stream DOES carry a real number and would lose it,
+    and asked for the removal anyway. `_fact_count_label` and `_UNKNOWN_FACTS` are
+    deleted with it.
 
-def _fact_count_label(result: Any) -> str:
-    """How many facts an angle established, or an honest admission that we do not know.
+    The honest-unknown rule (T-15.3-23 -- never print a `0`, or any number, the
+    run did not measure) is NOT weakened by this. It simply has no remaining site
+    on this line, because no number is claimed at all. The rule stays live
+    everywhere it still applies, including `own_researcher`'s separate
+    `Own query done -- N facts from N pages` line, which is untouched.
 
-    WHY THIS EXISTS (15.4-05). The `agent_done` line used to read
-    `len(result["facts"])` as a SUBSCRIPT. The reason given for the subscript was
-    correct and still stands (T-15.3-23): a `.get("facts", [])` defaulting to 0
-    would print "0 facts" for an angle whose fact count is merely UNKNOWN, which
-    is a feed row asserting something the run never established. The MECHANISM
-    chosen for that reason was not: a degrading provider returning a short dict
-    made the whole line raise, `emit_safe` swallowed it exactly as D-06 designs
-    it to, and the row VANISHED -- so the feed showed an angle that started and
-    never ended. About twenty rows were lost this way on run 7dcf51d5 (D-V01-7).
+    WHY THIS IS A NAMED FUNCTION AND NOT AN INLINE F-STRING. Do not inline it.
+    It is the monkeypatchable lever that
+    `test_j_the_done_line_is_still_built_inside_the_emitters_try` forces to raise,
+    and that is the only way left to prove D-06 AT THIS SITE now that the site no
+    longer raises on its own. Inlining does not "simplify" the emission -- it
+    deletes the proof that the row is built INSIDE `emit_safe`'s `try`. The lever
+    only works because production really calls it; a lever nothing calls proves
+    nothing and goes red against correct code.
 
-    So the honest-unknown rule is kept and the intolerance is dropped: a sized
-    `facts` renders its count, and ANY other shape renders `_UNKNOWN_FACTS`.
-    Never `0` -- zero is a number the run would be claiming to have measured.
-
-    THE FIX BELONGS HERE, NOT IN `emit_safe`. The emitter caught these correctly;
-    the build lambdas were the intolerant part. Do not "fix" this class of defect
-    by loosening `run_events.emit_safe` or by hoisting its `build()` above its
-    `try` -- both undo D-06 while looking like a cleanup.
+    AND THE FIX FOR THIS CLASS OF DEFECT BELONGS HERE, NOT IN `emit_safe`. The
+    emitter has always caught these correctly; the build lambdas were the
+    intolerant part. Do not "fix" a raising feed line by loosening
+    `run_events.emit_safe` or by hoisting its `build()` above its `try` -- both
+    undo D-06 while looking like a cleanup, and hoisting is exactly what lost
+    about twenty `agent_done` rows on run 7dcf51d5 (D-V01-7).
 
     Never raises: it is called from inside a feed-line thunk, and a helper that
-    could raise there would put the row back where it was.
+    could raise there would put the row back where it was. It now reads only an
+    `int` loop index and an internal stream name, so there is nothing left in it
+    that a provider could make raise.
     """
-    try:
-        facts = result.get("facts") if isinstance(result, dict) else None
-        # SIZED is the test, with str/bytes excluded explicitly. `len` is what
-        # makes a shape countable, so anything `len` refuses (None, an int, an
-        # object) falls through to the unknown wording via the except below. A
-        # str is the one shape that would answer `len` with a number MEANING
-        # SOMETHING ELSE — `len("no results")` is 10, and "10 facts" would be a
-        # fabricated count, which is the exact thing this helper exists to
-        # prevent.
-        if facts is None or isinstance(facts, (str, bytes)):
-            return _UNKNOWN_FACTS
-        return f"{len(facts)} facts"
-    except Exception:  # noqa: BLE001 -- an unknown count is a wording, never a raise
-        return _UNKNOWN_FACTS
+    return f"Angle {angle_no:02d} done · {provider}"
 
 
 async def run_angles(
@@ -2133,26 +2130,32 @@ async def run_angles(
         # below on purpose — the line describes what the ANGLE did, and it must
         # not disappear on a caller that wired no checkpoint callback.
         #
-        # 15.4-05: the count is now resolved TOLERANTLY by `_fact_count_label`,
-        # and the honest-unknown rule the old subscript existed to protect is
-        # preserved by it — an angle whose fact count cannot be established says
-        # so in words and NEVER prints "0 facts" (T-15.3-23). The reason the old
-        # comment here gave was right; the mechanism it chose was not. A
-        # subscript made a degrading provider's short dict raise, and although
-        # `emit_safe` swallowed that exactly as D-06 designs it to, the ROW WAS
-        # LOST — about twenty of them on run 7dcf51d5 (D-V01-7), leaving the feed
+        # 260831-ksq: the row carries NO fact count. `_fact_count_label` printed a
+        # real number only for a countable `facts` list, which three of the four
+        # streams never return, so the clause read "an unknown number of facts" on
+        # nearly every row. See `_agent_done_text` for the full ruling. Nothing
+        # this line renders is read off `result` any more.
+        #
+        # D-V01-7 IS WHY THE THUNK IS A THUNK, and that reasoning outlived the
+        # helper it was first written about. The line once read `result["facts"]`
+        # as a subscript; a degrading provider's short dict made it raise, and
+        # although `emit_safe` swallowed that exactly as D-06 designs it to, the
+        # ROW WAS LOST — about twenty of them on run 7dcf51d5, leaving the feed
         # showing angles that started and never ended.
         #
-        # The thunk stays a thunk regardless: `_fact_count_label` never raising
-        # is a property of one helper, whereas `build=lambda:` is the STRUCTURAL
-        # guarantee that anything built here is built inside `emit_safe`'s try.
+        # The thunk stays a thunk regardless. `_agent_done_text` never raising is
+        # a property of one helper, and a helper can be edited; `build=lambda:` is
+        # the STRUCTURAL guarantee that anything built here is built inside
+        # `emit_safe`'s try. Do not hoist this construction above the call — that
+        # is the "cleanup" D-06 exists to catch, and
+        # `test_j_the_done_line_is_still_built_inside_the_emitters_try` goes red
+        # on it by forcing `_agent_done_text` to raise.
         run_events.emit_safe(
             run_id,
             stage="deep_research",
             kind="agent_done",
             build=lambda: (
-                f"Angle {i + 1:02d} done — "
-                f"{_fact_count_label(result)} · {provider}",
+                _agent_done_text(i + 1, provider),
                 {
                     "angle": i + 1,
                     "provider": provider,
