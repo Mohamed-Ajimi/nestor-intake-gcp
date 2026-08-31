@@ -45,8 +45,9 @@ Coverage, in two halves:
    23. a recorder that RAISES changes nothing about the session
    24. NOR does a turn whose shape makes the LINE ITSELF raise — driven through
        the real emitter, with a negative control (T-15.3-34b)
-   25. a long provider poll narrates itself in words: elapsed minutes, attempt
-       number, and the sentence that separates a wait from a stall
+   25. a long provider poll emits NO waiting chatter — no dispatch line, no
+       strided heartbeat — while still completing across all 31 polls
+       (the four emissions were removed on operator request 2026-08-31)
    26. a rejoined job says so; a refused job id never reaches a stored row
 
 WHY 23 AND 24 ARE BOTH HERE. A raising recorder proves CALLING the emitter is
