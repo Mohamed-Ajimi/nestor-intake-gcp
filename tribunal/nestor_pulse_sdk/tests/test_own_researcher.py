@@ -1279,13 +1279,28 @@ async def _no_sleep(_seconds: Any) -> None:
     return None
 
 
-async def test_a_long_poll_says_in_words_that_it_is_a_wait(monkeypatch):
-    """(e) THE WITHDRAWN-D-C FIX, asserted as behaviour.
+async def test_a_long_poll_emits_no_waiting_chatter(monkeypatch):
+    """(e) THE SILENCE IS DELIBERATE, asserted as behaviour.
 
-    Thirty polls at the production cadence. The count of lines is asserted as an
-    UPPER BOUND (a stride, not an exact schedule), and the content is asserted
-    exactly: minutes elapsed, attempt out of max, and the sentence that tells an
-    operator to wait instead of killing a paid run.
+    Thirty-one polls at the production cadence, and NOT ONE line about waiting.
+    The dispatch announcement and the strided "Still waiting … NOT A STALL"
+    heartbeat were REMOVED on operator request 2026-08-31 ("remove these logs
+    from deep research"): the operator watches the live feed and judged them
+    noise. The accepted consequence is up to 35 minutes of feed silence during a
+    deep-research call.
+
+    HISTORY, CONSIDERED AND OVERRULED — NOT FORGOTTEN. Those lines existed
+    because on 2026-07-27 a run mid long-poll was read as a stall from log
+    silence and idle CPU, and it was not; the misreading cost an hour and a
+    withdrawn defect report. The operator has weighed that against the noise and
+    chosen silence. If a future reader is tempted to "restore the heartbeat",
+    that is a decision to re-open with the operator, not a bug to fix.
+
+    Scope of the claim: this asserts the ABSENCE OF THREE SHAPES, not total
+    emptiness. The rejoin line still emits on the resume branch, and provider
+    failures still reach the feed as `agent_fail` — only the waiting chatter
+    went. The `status == "success"` guard is what proves the deletion took the
+    narration and left the poll machinery intact across all 31 polls.
     """
     from nestor_pulse_sdk.tests import test_provider_resume as _pr
 
@@ -1305,27 +1320,24 @@ async def test_a_long_poll_says_in_words_that_it_is_a_wait(monkeypatch):
         "q", poll_interval=30, max_attempts=70,
     )
 
+    # The loop still survives 31 polls: this removed narration, not machinery.
     assert result["status"] == "success"
+
     thinking = recorder.texts("thinking")
-    assert 2 <= len(thinking) <= 8, (
-        f"a 31-poll wait must produce a handful of lines, not seventy: {len(thinking)}"
+    assert not [text for text in thinking if text.startswith("Waiting on")], (
+        "the dispatch announcement was removed on operator request 2026-08-31; "
+        f"the feed emitted it anyway: {thinking!r}"
     )
-    assert any(text.startswith("Waiting on Google") for text in thinking)
-    heartbeats = [text for text in thinking if text.startswith("Still waiting")]
-    assert heartbeats, "a wait with no heartbeat is indistinguishable from a hang"
-    assert any("5 min elapsed" in text for text in heartbeats), (
-        "the elapsed-minute arithmetic is the operator's whole basis for waiting"
+    assert not [text for text in thinking if "Still waiting" in text], (
+        "the strided heartbeat was removed on operator request 2026-08-31; "
+        f"the feed emitted it anyway: {thinking!r}"
     )
-    assert any("poll 10 of 70" in text for text in heartbeats)
-    assert all("NOT A STALL" in text for text in heartbeats), (
-        "the wording is the deliverable — this run was misread as a stall once"
+    assert not [text for text in thinking if "NOT A STALL" in text], (
+        "the stall-disclaimer wording was removed on operator request "
+        f"2026-08-31; the feed emitted it anyway: {thinking!r}"
     )
     assert all(
         row["stage"] == "deep_research" for row in recorder.rows
-    )
-    assert all(
-        row["meta"] and row["meta"].get("provider") == "google"
-        for row in recorder.of("thinking")
     )
 
 
