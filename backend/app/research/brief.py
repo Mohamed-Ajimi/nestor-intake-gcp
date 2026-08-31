@@ -133,6 +133,16 @@ _OUTPUT_SIZE_FIELD_KEYS = ("output_size", "rapportomvang", "report_size")
 #: search-language default while still producing a correct output directive.
 _RUN_LANGUAGE_NAMES: dict[str, str] = {"nl": "Dutch", "fr": "French", "en": "English"}
 
+#: The same map read backwards, so :func:`derive_report_language_code` can hand a
+#: CODE to :func:`_resolve_localized` without a second reader of the answers. Derived
+#: from the map above rather than spelled out again — one of the two would rot.
+_RUN_LANGUAGE_CODES: dict[str, str] = {name: code for code, name in _RUN_LANGUAGE_NAMES.items()}
+
+#: The variant :func:`_resolve_localized` falls back to. ``nl`` is the guaranteed key
+#: on the frontend's own ``LocalizedString`` (``localizeSchema.ts``), so both sides of
+#: the app fall back to the same language rather than to two different ones.
+_LOCALIZED_FALLBACK_LANG = "nl"
+
 #: ``output_size`` answer -> the report spec the engine's
 #: ``synthesis/steps.py::_spec_directives`` consumes.
 #:
@@ -224,14 +234,65 @@ def _answers_map(intake: Any) -> dict[str, Any]:
     return {}
 
 
-def _first_nonempty(answers: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-    """Return the first non-empty answer value whose key matches (case-insensitive)."""
+def _resolve_localized(value: Any, lang: str = "") -> str:
+    """Resolve an AI-authored string to ONE language. PURE, never raises.
+
+    THIS FUNCTION EXISTS TO STOP A DICT REPR REACHING A PAID RESEARCH QUESTION.
+    Since quick task 260831-lm4 the intake skill emits every string it AUTHORS as
+    ``{"nl": ..., "fr": ..., "en": ...}``, and ``AIReviewPanel`` writes that object
+    straight back into the intake answers the moment the operator accepts it. Any
+    ``str()`` of such a value returns the PYTHON REPR —
+    ``"{'nl': 'Wat is…', 'fr': 'Quel est…'}"`` — which would then be dispatched to the
+    engine as the question to research, in a run costing roughly $45. Silently, because
+    every reader in this module is documented "never raises".
+
+    Resolution order, and each step is load-bearing:
+
+    1. a plain ``str`` passes through unchanged — OLD INTAKES ARE NOT MIGRATED, so the
+       scalar shape is the compatibility story and must stay first;
+    2. ``value[lang]`` — the client's chosen report language (operator ruling);
+    3. ``value["nl"]`` — the guaranteed variant, matching the frontend's own fallback
+       in ``localizeSchema.ts`` so the two sides never disagree about which language
+       "no preference" means;
+    4. the first non-empty variant of whatever IS present — a model that dropped a key
+       must still yield TEXT rather than a repr;
+    5. ``""`` — anything else (numbers, objects, ``None``). Empty is recoverable and
+       visible; a repr is neither.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in (lang.strip().lower()[:2], _LOCALIZED_FALLBACK_LANG):
+            if not key:
+                continue
+            variant = value.get(key)
+            if isinstance(variant, str) and variant.strip():
+                return variant.strip()
+        for variant in value.values():
+            if isinstance(variant, str) and variant.strip():
+                return variant.strip()
+    return ""
+
+
+def _first_nonempty(
+    answers: dict[str, Any], keys: tuple[str, ...], lang: str | None = None
+) -> str | None:
+    """Return the first non-empty answer value whose key matches (case-insensitive).
+
+    ``lang`` is OPT-IN and defaults to ``None``, which keeps the historical
+    ``str(value)`` behaviour byte-for-byte for the callers that read the client's own
+    scalar answers (sector, goals). Pass a language ONLY for a field that can hold an
+    AI-AUTHORED value — today that is ``decision_or_goal``, which ``AIReviewPanel``
+    overwrites with the skill's ``suggested`` object on accept. Those values go through
+    :func:`_resolve_localized` instead, so the ``[DECISION]`` block the engine ranks
+    materiality against can never be a stringified dict.
+    """
     lowered = {k.lower(): v for k, v in answers.items()}
     for key in keys:
         value = lowered.get(key)
         if value is None:
             continue
-        text = str(value).strip()
+        text = _resolve_localized(value, lang) if lang is not None else str(value).strip()
         if text:
             return text
     return None
@@ -278,6 +339,20 @@ def derive_report_language(intake: Any) -> str:
     """
     choice, _ = _radio_answer(_answers_map(intake), _LANGUAGE_FIELD_KEYS)
     return _RUN_LANGUAGE_NAMES.get(choice.lower(), "")
+
+
+def derive_report_language_code(intake: Any) -> str:
+    """The client's report language as an ISO-ish CODE (``nl``/``fr``/``en``), or ``""``.
+
+    The engine wants an English NAME (:func:`derive_report_language`);
+    :func:`_resolve_localized` wants the CODE the skill keyed its output by. This maps
+    the one to the other, deliberately derived FROM the function above rather than by
+    reading the answers a second time: two independent readers of the same radio could
+    disagree about which language the client chose, and only one of them feeds the
+    engine. ``""`` means the client was never asked, and the resolver then falls back
+    to ``nl`` — this function never guesses.
+    """
+    return _RUN_LANGUAGE_CODES.get(derive_report_language(intake), "")
 
 
 def derive_report_spec(intake: Any) -> dict[str, str]:
@@ -429,9 +504,22 @@ def derive_decision_statement(
         # 1. The context pack's §3 decision line.
         statement = _decision_from_context_pack(context_pack_text)
 
-        # 2. The intake's own decision answer.
+        # 2. The intake's own decision answer. Resolved through _resolve_localized
+        # (the `lang` argument), NOT str(): `decision_or_goal` stops being the client's
+        # raw words the moment the operator accepts the skill's suggestion —
+        # AIReviewPanel overwrites the answer with the skill's `suggested` value, which
+        # since 260831-lm4 is a {"nl","fr","en"} object. Without this the [DECISION]
+        # block would carry a Python dict repr, and the engine's Swiss tournament would
+        # rank every candidate sub-question's materiality against that repr.
         if not statement:
-            statement = _first_nonempty(_answers_map(intake), _DECISION_FIELD_KEYS) or ""
+            statement = (
+                _first_nonempty(
+                    _answers_map(intake),
+                    _DECISION_FIELD_KEYS,
+                    derive_report_language_code(intake),
+                )
+                or ""
+            )
 
         # 3. The decomposition summary — but never the deterministic title fallback.
         if not statement:
@@ -448,13 +536,24 @@ def derive_decision_statement(
         return ""
 
 
-def _item_text(item: Any) -> str:
-    """Best-effort question text from a list/proposal_list entry (never raises)."""
+def _item_text(item: Any, lang: str = "") -> str:
+    """Best-effort question text from a list/proposal_list entry (never raises).
+
+    ``text`` is resolved through :func:`_resolve_localized`, NOT through ``str()``.
+    This is the single highest-consequence line in the module: the value it returns is
+    enumerated under ``Onderzoeksvragen:`` and dispatched to the engine as a question
+    to research. Before quick task 260831-lm4 a localized ``text`` object would have
+    been stringified into its Python repr and researched AS a repr, for roughly $45,
+    with nothing raising.
+
+    ``lang`` defaults to ``""`` so the old one-argument call still resolves (to ``nl``);
+    callers with an intake in hand pass the client's :func:`derive_report_language_code`.
+    """
     if isinstance(item, str):
         return item.strip()
     if isinstance(item, dict):
-        return str(item.get("text") or "").strip()
-    return str(getattr(item, "text", "") or "").strip()
+        return _resolve_localized(item.get("text"), lang)
+    return _resolve_localized(getattr(item, "text", None), lang)
 
 
 def questions_from_answers(intake: Any) -> list[dict]:
@@ -468,8 +567,16 @@ def questions_from_answers(intake: Any) -> list[dict]:
 
     Returns ``[{question_text, priority}]`` dicts compatible with
     :func:`assemble_brief`. Unrecognized shapes contribute nothing (never raises).
+
+    Both lists can carry AI-AUTHORED text: ``research_questions`` is patched by
+    ``AIReviewPanel`` with the skill's accepted ``suggested`` value, and
+    ``extra_questions_proposed`` is the skill's own proposal list. Since 260831-lm4
+    those values may be ``{"nl", "fr", "en"}`` objects, so every one of them is
+    resolved to the client's CHOSEN REPORT LANGUAGE here (operator ruling) before it
+    can become a question.
     """
     answers = _answers_map(intake)
+    lang = derive_report_language_code(intake)
     out: list[dict] = []
 
     # First non-empty client-question source wins (refined list over raw form list).
@@ -478,7 +585,7 @@ def questions_from_answers(intake: Any) -> list[dict]:
         if isinstance(raw, (list, tuple)):
             found = False
             for item in raw:
-                text = _item_text(item)
+                text = _item_text(item, lang)
                 if text:
                     out.append({"question_text": text, "priority": 1})
                     found = True
@@ -490,7 +597,7 @@ def questions_from_answers(intake: Any) -> list[dict]:
         for item in raw:
             if isinstance(item, dict) and not item.get("approved"):
                 continue
-            text = _item_text(item)
+            text = _item_text(item, lang)
             if text:
                 out.append({"question_text": text, "priority": 2})
 

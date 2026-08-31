@@ -7,7 +7,6 @@ import type {
   LocalizedIntakeField,
   LocalizedIntakeSchema,
   LocalizedIntakeSection,
-  LocalizedString,
 } from "@/lib/intake-types";
 
 // frontend/src/lib/i18n/localizeSchema.ts — the LOAD-TIME flatten pass (Pitfall 4).
@@ -21,13 +20,45 @@ import type {
 //
 // No React, no i18next dependency — a pure transform (mirrors research-question.ts).
 
-/** Resolve a LocalizedString to a scalar for `lang`, with nl as the guaranteed fallback. */
-function pick(value: LocalizedString | undefined, lang: string): string | undefined {
-  if (value === undefined) return undefined;
+/**
+ * Resolve a LocalizedString to a scalar for `lang`, with nl as the guaranteed fallback.
+ *
+ * EXPORTED since quick task 260831-lm4, because it now resolves two kinds of value,
+ * not one. It was written for the TEMPLATE's display strings; the intake skill now
+ * ALSO emits every string it authors as `{nl, fr, en}`, and those AI-generated values
+ * land in the intake ANSWERS. Both need exactly the same rule, so there is exactly one
+ * implementation of it — a second resolver would be free to drift on the fallback and
+ * the two halves of the same screen would then disagree about which language "no
+ * preference" means.
+ *
+ * `value` is typed `unknown` rather than `LocalizedString` because the answer-side
+ * callers genuinely hold unknown data (an old intake's plain string, a new intake's
+ * object, or null). Runtime behaviour for a LocalizedString is UNCHANGED.
+ */
+export function pick(value: unknown, lang: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return value; // already scalar — passthrough
-  const key = lang.slice(0, 2) as "nl" | "fr" | "en";
+  if (typeof value !== "object") return undefined;
+  const obj = value as Partial<Record<string, unknown>>;
+  const key = lang.slice(0, 2);
   // nl is guaranteed present on a locale-object; fr/en optional → fall back to nl (D-05).
-  return value[key] ?? value.nl;
+  const preferred = obj[key] ?? obj.nl;
+  if (typeof preferred === "string") return preferred;
+  // Last resort, and ADDITIVE ONLY — it can fire solely where the line above would
+  // have returned undefined. A model that dropped a variant must still render TEXT
+  // rather than nothing; a template LocalizedString always has nl, so this is
+  // unreachable on the schema path.
+  //
+  // Restricted to the THREE LOCALE KEYS on purpose. Scanning every value would make
+  // `pick` return the first string it finds on ANY object — so a stakeholder row
+  // `{name, role, email}` would resolve to a name and look like a successful
+  // resolution. Callers that hand this function arbitrary answer values (see
+  // `NestorBriefingPDF.asString`) rely on `undefined` meaning "not a localized value".
+  for (const localeKey of ["nl", "fr", "en"] as const) {
+    const candidate = obj[localeKey];
+    if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+  }
+  return undefined;
 }
 
 function resolveOption(opt: LocalizedFieldOption, lang: string): FieldOption {

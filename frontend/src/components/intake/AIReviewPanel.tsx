@@ -6,7 +6,25 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { saveAnswers, type AnswerInput } from "@/lib/api/answers";
 import { reviewIntake } from "@/lib/api/intakes";
+// The i18next SINGLETON, for the non-component code paths in this file (submitReview is
+// a plain async function and cannot call a hook). Components keep using the `i18n` the
+// `useTranslation` hook returns, so they re-render on a language switch.
+import i18nInstance from "@/lib/i18n";
+import { pick } from "@/lib/i18n/localizeSchema";
 import { cn } from "@/lib/utils";
+
+/**
+ * A string the intake skill AUTHORED. Localized (`{nl, fr, en}`) since quick task
+ * 260831-lm4; a plain string on every older run, which is why this stays a union and
+ * why nothing here may assume the object shape.
+ *
+ * THE RULE IN THIS FILE: resolve for DISPLAY, persist the RAW value. Every write path
+ * below (`submitReview`, `persistApprovedField`) hands the ORIGINAL value to the
+ * backend, never `pick(...)` of it. Collapsing on save would silently discard the two
+ * languages the operator is not currently looking at, and there is no second skill run
+ * to regenerate them — the loss would be permanent and invisible.
+ */
+export type LocalizedText = string | { nl?: string; fr?: string; en?: string };
 
 /** Map an answer value into the backend AnswerInput shape (string -> value, else value_json). */
 function toAnswerInput(field_key: string, value: unknown): AnswerInput {
@@ -102,7 +120,8 @@ function toStr(v: unknown): string {
  try { return JSON.stringify(v); } catch { return String(v); }
 }
 
-function getSuggestedFor(fieldKey: string, parsed: ParsedSkillOutput): string | null {
+/** The RAW (possibly localized) suggestion for a replacement-shape key — never resolved. */
+function getSuggestedFor(fieldKey: string, parsed: ParsedSkillOutput): LocalizedText | null {
  if (fieldKey === "bias_radar") return parsed.bias_radar ?? null;
  if (fieldKey === "gaps_flagged") return parsed.gaps_flagged ?? null;
  if (fieldKey === "blind_spots_upstream") return parsed.blind_spots?.upstream ?? null;
@@ -114,11 +133,13 @@ function getSuggestedFor(fieldKey: string, parsed: ParsedSkillOutput): string | 
 /** Inline card for a simple field key (decision_or_goal, audience_description, company_intro)
  *  plus replacement-shape fields (bias_radar, gaps_flagged, blind_spots_*). */
 export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: string; currentValue?: unknown }) {
- const { t } = useTranslation("intake");
+ const { t, i18n } = useTranslation("intake");
  const ctx = useReview();
  if (!ctx) return null;
 
- const handleDecide = async (key: string, d: Decision, valueWhenApproved: string) => {
+ // `valueWhenApproved` is the RAW suggestion (localized object or plain string) — it is
+ // what gets PERSISTED. Only the props handed to InlineSuggestionCard are resolved.
+ const handleDecide = async (key: string, d: Decision, valueWhenApproved: LocalizedText) => {
   ctx.state.setDecision(key, d);
   try {
    if (d.state === "approved") {
@@ -134,7 +155,7 @@ export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: st
   }
  };
 
- // Replacement-shape fields: suggested is a plain string from a different shape.
+ // Replacement-shape fields: the suggestion sits at a different place in the output.
  if ((REPLACEMENT_KEYS as readonly string[]).includes(fieldKey)) {
   const suggested = getSuggestedFor(fieldKey, ctx.parsed);
   if (!suggested) return null;
@@ -142,8 +163,9 @@ export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: st
   return (
    <InlineSuggestionCard
     current={toStr(currentValue)}
-    suggested={suggested}
+    suggested={pick(suggested, i18n.language) ?? ""}
     decision={decision}
+    // RAW, not the resolved string above — see the LocalizedText note.
     onDecide={(d) => handleDecide(fieldKey, d, suggested)}
    />
   );
@@ -154,9 +176,9 @@ export function InlineFieldSuggestion({ fieldKey, currentValue }: { fieldKey: st
  const decision = ctx.state.decisions[fieldKey] ?? { state: "pending" as const };
  return (
   <InlineSuggestionCard
-   current={sug.current ?? toStr(currentValue)}
-   suggested={sug.suggested}
-   rationale={sug.rationale}
+   current={pick(sug.current, i18n.language) ?? toStr(currentValue)}
+   suggested={pick(sug.suggested, i18n.language) ?? ""}
+   rationale={pick(sug.rationale, i18n.language)}
    decision={decision}
    onDecide={(d) => handleDecide(fieldKey, d, sug.suggested)}
   />
@@ -171,23 +193,28 @@ export function InlineResearchQuestionsSuggestions() {
  return <ResearchQuestionsSuggestions parsed={ctx.parsed} state={ctx.state} intakeId={ctx.intakeId} runId={ctx.runId} />;
 }
 
+// D-2 (260831-lm4): only the strings the skill AUTHORS are localized. `current` and
+// `original` are the client's OWN WORDS quoted back, so they stay plain strings —
+// translating them would put words in the client's mouth and would make the diff UI
+// compare a translation against the original. `type` / `domain` / `original_index`
+// are codes, not prose.
 export type ResearchQuestion = {
  original_index?: number;
  current?: string | null;
- suggested: string;
+ suggested: LocalizedText;
  type?: string;
  domain?: string;
- rationale?: string;
+ rationale?: LocalizedText;
 };
 
 export type SuggestionTriple = {
  current?: string | null;
- suggested: string;
- rationale?: string;
+ suggested: LocalizedText;
+ rationale?: LocalizedText;
 };
 
-export type AdditionalQuestion = { text: string; rationale?: string };
-export type DroppedQuestion = { original: string; reason?: string };
+export type AdditionalQuestion = { text: LocalizedText; rationale?: LocalizedText };
+export type DroppedQuestion = { original: string; reason?: LocalizedText };
 
 export type ParsedSkillOutput = {
  decision_or_goal?: SuggestionTriple | null;
@@ -196,9 +223,13 @@ export type ParsedSkillOutput = {
  research_questions_refined?: ResearchQuestion[];
  additional_questions?: AdditionalQuestion[];
  dropped_questions?: DroppedQuestion[];
- bias_radar?: string;
- blind_spots?: { upstream?: string; downstream?: string; perspectief?: string };
- gaps_flagged?: string;
+ bias_radar?: LocalizedText;
+ blind_spots?: {
+  upstream?: LocalizedText;
+  downstream?: LocalizedText;
+  perspectief?: LocalizedText;
+ };
+ gaps_flagged?: LocalizedText;
 };
 
 export type Decision =
@@ -305,7 +336,11 @@ export async function submitReview({
  }
 
  const rqs = parsed.research_questions_refined ?? [];
- const refined: Array<{ text: string; type?: string; domain?: string }> = [];
+ // `text` is LocalizedText, not string: an approved refinement is persisted as the
+ // skill's RAW value so all three languages survive. A `manual` edit is the operator's
+ // own typing and is a plain string by construction — the same way `kept` keeps the
+ // client's own plain `current`.
+ const refined: Array<{ text: LocalizedText; type?: string; domain?: string }> = [];
  rqs.forEach((q, i) => {
  const dec = decisions[`rq_${i}`];
  if (!dec) return;
@@ -329,11 +364,17 @@ export async function submitReview({
    if (!dec || (dec.state !== "approved" && dec.state !== "manual")) return;
    const idx = q.original_index;
    if (idx == null || idx < 0 || idx >= patched.length) return;
+   // RAW again — this value lands in the `research_questions` answer, which is what
+   // the backend brief reads. app/research/brief.py resolves it per report_language.
    const newText = dec.state === "approved" ? q.suggested : dec.value;
    if (!newText) return;
    const cur = patched[idx];
-   const curText = typeof cur === "string" ? cur : ((cur as { text?: string })?.text ?? "");
-   if (curText === newText) return;
+   const curText = typeof cur === "string" ? cur : (cur as { text?: unknown })?.text;
+   // Compare RESOLVED text: `===` on two localized objects is reference equality and
+   // would report every question as changed, defeating the no-op guard.
+   const lang = i18nInstance.language;
+   if (pick(curText, lang) !== undefined && pick(curText, lang) === pick(newText, lang))
+    return;
    patched[idx] =
     cur && typeof cur === "object" ? { ...(cur as object), text: newText } : newText;
    anyPatched = true;
@@ -433,7 +474,8 @@ export function AIReviewTopBanner({
 }
 
 export function AIReviewInfoBanners({ parsed }: { parsed: ParsedSkillOutput }) {
- const { t } = useTranslation("intake");
+ const { t, i18n } = useTranslation("intake");
+ const gaps = pick(parsed.gaps_flagged, i18n.language);
  return (
     <>
  {(parsed.dropped_questions ?? []).length > 0 && (
@@ -442,21 +484,25 @@ export function AIReviewInfoBanners({ parsed }: { parsed: ParsedSkillOutput }) {
  {t("aiReview.droppedTitle")}
  </div>
  <ul className="list-disc space-y-1 pl-5 text-ink font-sans">
- {parsed.dropped_questions!.map((d, i) => (
+ {parsed.dropped_questions!.map((d, i) => {
+ // `original` is the client's own question, quoted back — never localized.
+ const reason = pick(d.reason, i18n.language);
+ return (
  <li key={i}>
  <span className="text-ink">{d.original}</span>
- {d.reason && <span className="text-ink/60"> — {d.reason}</span>}
+ {reason && <span className="text-ink/60"> — {reason}</span>}
  </li>
- ))}
+ );
+ })}
  </ul>
  </div>
  )}
- {parsed.gaps_flagged && (
+ {gaps && (
  <div className="mb-4 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
  {t("aiReview.gapsTitle")}
  </div>
- <Markdown>{parsed.gaps_flagged}</Markdown>
+ <Markdown>{gaps}</Markdown>
  </div>
  )}
  </>
@@ -734,12 +780,13 @@ export function ResearchQuestionsSuggestions({
  intakeId?: string;
  runId?: string;
 }) {
- const { t } = useTranslation("intake");
+ const { t, i18n } = useTranslation("intake");
  const rqs = parsed.research_questions_refined ?? [];
  if (rqs.length === 0) return null;
 
+ // RAW values again — this array is what `persistApprovedField` writes.
  const buildRefined = (overrideIdx: number, overrideDec: Decision) => {
-  const refined: Array<{ text: string; type?: string; domain?: string }> = [];
+  const refined: Array<{ text: LocalizedText; type?: string; domain?: string }> = [];
   rqs.forEach((q, i) => {
    const dec = i === overrideIdx ? overrideDec : state.decisions[`rq_${i}`];
    if (!dec) return;
@@ -791,8 +838,8 @@ export function ResearchQuestionsSuggestions({
  )}
  <InlineSuggestionCard
  current={q.current ?? ""}
- suggested={q.suggested}
- rationale={q.rationale}
+ suggested={pick(q.suggested, i18n.language) ?? ""}
+ rationale={pick(q.rationale, i18n.language)}
  decision={state.decisions[k] ?? { state: "pending" }}
  onDecide={(d) => handleDecide(i, d)}
  />
@@ -807,7 +854,7 @@ export function ResearchQuestionsSuggestions({
 // ============== Extra questions section ==============
 
 export function ExtraQuestionsSection({ state, inline }: { state: AIReviewState; inline?: boolean }) {
- const { t } = useTranslation("intake");
+ const { t, i18n } = useTranslation("intake");
  if (state.extraQuestions.length === 0) {
  if (inline) {
  return <p className="mt-3 text-sm text-ink/60">{t("aiReview.noExtraProposals")}</p>;
@@ -840,8 +887,12 @@ export function ExtraQuestionsSection({ state, inline }: { state: AIReviewState;
  }
  />
  <div className="flex-1">
- <div className="text-sm font-medium text-ink">{q.text}</div>
- {q.rationale && <div className="mt-1 text-xs text-ink/60">{q.rationale}</div>}
+ {/* Display only. `setExtraQuestions` below spreads `x`, so the stored
+     `text` / `rationale` objects survive the include toggle intact. */}
+ <div className="text-sm font-medium text-ink">{pick(q.text, i18n.language)}</div>
+ {pick(q.rationale, i18n.language) && (
+ <div className="mt-1 text-xs text-ink/60">{pick(q.rationale, i18n.language)}</div>
+ )}
  <div className="mt-1 text-xs text-ink/60">{t("aiReview.clientCanInclude")}</div>
  </div>
  </label>

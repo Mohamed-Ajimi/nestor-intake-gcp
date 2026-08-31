@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { IntakeField } from "@/lib/intake-types";
+import { pick } from "@/lib/i18n/localizeSchema";
 import * as storage from "@/lib/api/storage";
 import { toast } from "sonner";
 
@@ -184,12 +185,17 @@ function ProposalListControl({
  disabled?: boolean;
  clientSurface?: boolean;
 }) {
- const { t } = useTranslation("intake");
+ const { t, i18n } = useTranslation("intake");
  // `items` is the FULL stored array and stays the WRITE surface, always. The client filter
  // below is a projection for DISPLAY only — see the trap note on `toggle`.
+ //
+ // 260831-lm4: `text` / `rationale` are AI-AUTHORED, so they are `{nl, fr, en}` objects on
+ // any intake proposed after that date and plain strings on every older one. They are typed
+ // `unknown` and resolved through `pick` at RENDER time only — see the trap note on `toggle`
+ // for why they must never be resolved on the write path.
  const items: Array<{
- text: string;
- rationale?: string;
+ text?: unknown;
+ rationale?: unknown;
  approved?: boolean;
  show_to_client?: boolean;
  }> = Array.isArray(value) ? value : [];
@@ -213,13 +219,22 @@ function ProposalListControl({
  // TRAP (260831-gk7): this maps over `items`, the FULL array — NOT over `visible`. Mapping
  // over the filtered projection would write back only the client-visible subset, silently and
  // permanently DELETING every proposal the operator excluded on the client's first click.
+ //
+ // SECOND TRAP (260831-lm4): the spread carries `text` / `rationale` through UNTOUCHED, as the
+ // stored `{nl, fr, en}` object. Writing back the RESOLVED string instead would collapse each
+ // proposal to whichever language happened to be on screen and destroy the other two on the
+ // first checkbox click — an irreversible loss, since there is no second skill run to
+ // regenerate them.
  const toggle = (i: number) => {
  const next = items.map((it, idx) => (idx === i ? { ...it, approved: !it.approved } : it));
  onChange(next);
  };
  return (
  <div className="space-y-3">
- {visible.map(({ it, i }) => (
+ {visible.map(({ it, i }) => {
+ const text = pick(it.text, i18n.language) ?? "";
+ const rationale = pick(it.rationale, i18n.language);
+ return (
  <label
  key={i}
  className={
@@ -237,14 +252,15 @@ function ProposalListControl({
  onChange={() => toggle(i)}
  />
  <div className="flex-1">
- <div className="text-sm font-medium text-ink">{it.text}</div>
- {it.rationale && (
- <div className="mt-1 text-xs text-ink/60">{it.rationale}</div>
+ <div className="text-sm font-medium text-ink">{text}</div>
+ {rationale && (
+ <div className="mt-1 text-xs text-ink/60">{rationale}</div>
  )}
  <div className="mt-1 text-xs text-ink/60">{t("field.includeInResearch")}</div>
  </div>
  </label>
- ))}
+ );
+ })}
  </div>
  );
 }

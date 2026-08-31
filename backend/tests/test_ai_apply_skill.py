@@ -8,11 +8,14 @@ Test Map, AI-01):
 
 | Case                          | Proves                                                       |
 |-------------------------------|-------------------------------------------------------------|
-| ``apply_success``             | request used model ``claude-sonnet-4-5`` + ``max_tokens``   |
-|                               | 8192; ``skill_runs.output_parsed`` written; status          |
+| ``apply_success``             | request used model ``claude-sonnet-4-5`` + the pinned        |
+|                               | ``max_tokens``; ``skill_runs.output_parsed`` written; status |
 |                               | ``running`` -> ``succeeded``; ``llm_model`` persisted.      |
 | ``apply_bad_json_fails``      | non-JSON Claude output -> status ``failed`` AND             |
 |                               | ``error_message`` set (D-09 failure path).                  |
+| ``apply_truncated_fails``     | ``stop_reason == "max_tokens"`` -> status ``failed`` with a |
+|                               | budget-naming ``error_message``, never a parse error and    |
+|                               | never a half-parsed ``output_parsed`` (D-4, 260831-lm4).    |
 
 RED discipline (07-01 PLAN): external deps are ``importorskip`` (skip-clean when
 absent), but the IMPL modules are HARD-imported, so a missing impl is a
@@ -50,7 +53,11 @@ Identity = identity_mod.Identity
 
 SCHEMA = "nestor"
 APPLY_MODEL = "claude-sonnet-4-5"  # D-06 default for apply-intake-skill
-APPLY_MAX_TOKENS = 8192  # apply-intake-skill.ts request shape
+# Raised from the legacy 8192 by quick task 260831-lm4 (the skill now emits every
+# generated string in nl+fr+en). It is pinned EXACTLY, and deliberately below the
+# ~21333 non-streaming SDK ceiling that `apply.py` documents: a future "just raise
+# it" would break the non-streaming call outright rather than buy more room.
+APPLY_MAX_TOKENS = 20000
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +254,75 @@ def test_apply_skill_bad_json_marks_failed(
             f"a JSON-parse failure must terminate 'failed' (D-09), got {status_val!r}."
         )
         assert error_message, "a failed run must record a non-empty error_message."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# Case: apply_truncated_fails — stop_reason "max_tokens" -> failed, loudly
+# ===========================================================================
+
+
+def test_apply_skill_truncated_response_fails_loudly(
+    engine, set_space, monkeypatch, fake_anthropic
+):
+    """A response cut off at the budget fails with a message that NAMES the budget.
+
+    D-4 (quick task 260831-lm4). Requiring nl+fr+en for every generated string made a
+    ``max_tokens`` cut-off realistic for the first time. Without this guard the
+    truncated JSON is merely unparseable, so the operator sees a generic parse error
+    and concludes the MODEL misbehaved — when the actual cause is the token budget.
+    The response text here is deliberately VALID JSON: the test would pass vacuously
+    against a parse-error implementation if the payload were garbage.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    fake = fake_anthropic(json.dumps({"decision_or_goal": None}))
+
+    # Mark the response truncated without teaching the shared fixture a new knob.
+    inner_create = fake.messages.create
+
+    def _truncated_create(**kwargs):
+        message = inner_create(**kwargs)
+        message.stop_reason = "max_tokens"
+        return message
+
+    fake.messages.create = _truncated_create
+    monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
+
+    app = _build_app()
+    try:
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/skills/apply",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code in (200, 202), (
+            f"apply should still accept + schedule, got {resp.status_code}."
+        )
+
+        row = _latest_skill_run(engine, set_space, space, intake_id)
+        assert row is not None, "no skill_runs row was written."
+        status_val, output_parsed, error_message, _llm_model = row
+        assert status_val == "failed", (
+            f"a truncated response must terminate 'failed', got {status_val!r}."
+        )
+        assert error_message, "a truncated run must record a non-empty error_message."
+        assert str(APPLY_MAX_TOKENS) in error_message, (
+            "the error must NAME the budget that was hit — that is the whole point of "
+            f"the guard; got {error_message!r}."
+        )
+        assert output_parsed is None, (
+            "a truncated response must not persist a half-parsed object, got "
+            f"{output_parsed!r}."
+        )
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)

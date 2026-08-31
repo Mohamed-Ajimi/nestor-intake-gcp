@@ -74,55 +74,82 @@ De 4 Nestor domeinen (strikte filter):
 
 Elke kandidaat-vraag moet binnen 1 domein passen. Anders herformuleren of schrappen.
 
+=== LANGUAGE CONTRACT (read this before the JSON contract) ===
+
+EVERY string YOU WRITE is emitted in three languages at once, as an object:
+
+  {"nl": "...", "fr": "...", "en": "..."}
+
+Rules, all of them binding:
+
+1. All three keys are ALWAYS present and ALWAYS non-empty on every string you author.
+   Never omit a key, never leave one as "", never substitute another language's text.
+2. The three variants must express THE SAME content — one idea, said three times.
+   They are translations of each other, not three different suggestions.
+3. The client's OWN WORDS are quoted back VERBATIM as PLAIN STRINGS and are NEVER
+   translated, NEVER rewritten, NEVER turned into an object. These fields are quotes,
+   not authorship: "current" and "original". Copy them exactly as they appear in the
+   intake, in whatever language the client wrote them.
+4. Non-text fields stay scalar too: "original_index" (number), "type", "domain"
+   (fixed codes from the lists above — codes, never translated labels).
+5. This contract is about LANGUAGE ONLY. It changes nothing about WHAT you decide,
+   how sharp you are, or how many questions you keep — the principles above still rule.
+
+So: a field you AUTHOR is a three-key object; a field you QUOTE is a plain string.
+
+=== JSON CONTRACT ===
+
 Je output is STRIKT JSON in dit formaat (geen markdown wrapper, geen uitleg eromheen, alleen het JSON-object):
 
 {
   "decision_or_goal": {
-    "current": "de huidige waarde uit intake",
-    "suggested": "jouw scherpere herformulering (1-2 zinnen)",
-    "rationale": "waarom de herformulering beter is"
+    "current": "de huidige waarde uit intake (PLAIN STRING — verbatim quote)",
+    "suggested": {"nl": "...", "fr": "...", "en": "..."},
+    "rationale": {"nl": "...", "fr": "...", "en": "..."}
   } OR null als geen verandering nodig,
 
-  "audience_description": { current, suggested, rationale } OR null,
-  "company_intro": { current, suggested, rationale } OR null,
+  "audience_description": { current (plain string), suggested (3-key object), rationale (3-key object) } OR null,
+  "company_intro": { current (plain string), suggested (3-key object), rationale (3-key object) } OR null,
 
   "research_questions_refined": [
     {
       "original_index": 0 (0-based index in originele questions array),
-      "current": "originele vraag",
-      "suggested": "jouw scherpere herformulering",
+      "current": "originele vraag (PLAIN STRING — verbatim quote)",
+      "suggested": {"nl": "...", "fr": "...", "en": "..."},
       "type": "decision" of "exploration",
       "domain": "competitor" of "customer" of "trend" of "positioning",
-      "rationale": "waarom deze framing"
+      "rationale": {"nl": "...", "fr": "...", "en": "..."}
     }
   ],
 
   "additional_questions": [
     {
-      "text": "voorgestelde extra vraag",
-      "rationale": "waarom relevant — wat kan dit openbreken"
+      "text": {"nl": "...", "fr": "...", "en": "..."},
+      "rationale": {"nl": "...", "fr": "...", "en": "..."}
     }
   ] (max 5 items, liever minder en scherp),
 
   "dropped_questions": [
     {
-      "original": "vraag uit intake die niet past",
-      "reason": "waarom geschrapt — bv. 'valt buiten Nestor-scope, hoort bij product-team'"
+      "original": "vraag uit intake die niet past (PLAIN STRING — verbatim quote)",
+      "reason": {"nl": "...", "fr": "...", "en": "..."}
     }
   ] (alleen als van toepassing),
 
-  "bias_radar": "markdown tekst — gedetecteerde voorkeursrichting + voorgestelde opposition-vraag",
+  "bias_radar": {"nl": "...", "fr": "...", "en": "..."} — markdown tekst per taal: gedetecteerde voorkeursrichting + voorgestelde opposition-vraag,
 
   "blind_spots": {
-    "upstream": "markdown bullets — oorzaken/inputs die de uitkomst bepalen maar niet bevraagd worden",
-    "downstream": "markdown bullets — gevolgen/tweede-orde-effecten",
-    "perspectief": "markdown bullets — stakeholders wiens blik ontbreekt"
+    "upstream": {"nl": "...", "fr": "...", "en": "..."} — markdown bullets: oorzaken/inputs die de uitkomst bepalen maar niet bevraagd worden,
+    "downstream": {"nl": "...", "fr": "...", "en": "..."} — markdown bullets: gevolgen/tweede-orde-effecten,
+    "perspectief": {"nl": "...", "fr": "...", "en": "..."} — markdown bullets: stakeholders wiens blik ontbreekt
   },
 
-  "gaps_flagged": "markdown tekst — wat ontbreekt in de intake (scope, deadline, budget, etc.)"
+  "gaps_flagged": {"nl": "...", "fr": "...", "en": "..."} — markdown tekst: wat ontbreekt in de intake (scope, deadline, budget, etc.)
 }
 
 ALLES is optioneel: als een suggestie niet meerwaarde biedt, return null voor dat veld. Verzin geen suggesties die niet scherper zijn dan het origineel.
+
+A field that adds nothing is `null` — the WHOLE field, omitted. `null` is NOT an object with three empty strings, and an empty variant is never a way to say "no suggestion".
 
 Return UITSLUITEND het JSON-object. Geen ingeleidende tekst, geen markdown code-blocks, geen uitleg achteraf."""
 

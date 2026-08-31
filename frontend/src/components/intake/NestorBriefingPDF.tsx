@@ -1,5 +1,11 @@
 import { Document, Page, Text, View, StyleSheet, pdf } from "@react-pdf/renderer";
 import type { IntakeField, IntakeSchema } from "@/lib/intake-types";
+// Pitfall 3 says the react-i18next HOOK has no context here — that is about React
+// context, not about the i18next instance. The SINGLETON is a plain module import and
+// works fine, and it is what FieldDisplay already uses for the same reason. This is not
+// a new language source: it is THE language source, read directly.
+import i18n from "@/lib/i18n";
+import { pick } from "@/lib/i18n/localizeSchema";
 import "./pdfFonts";
 
 const SANS = "Helvetica";
@@ -161,13 +167,25 @@ function asString(v: unknown): string {
   if (typeof v === "object") {
     const o = v as Record<string, unknown>;
     if ("choice" in o) return String(o.choice ?? "");
-    if ("text" in o) return String(o.text ?? "");
+    if ("text" in o) return asString(o.text);
+    // 260831-lm4: a localized {nl, fr, en} — e.g. `decision_or_goal` after the
+    // operator accepted the skill's suggestion. Without this branch it would fall to
+    // the JSON.stringify below and the client would receive a PDF with a raw JSON
+    // blob where the decision should be.
+    const localized = pick(o, i18n.language);
+    if (localized !== undefined) return localized;
     return JSON.stringify(v);
   }
   return String(v);
 }
 
-type Question = { text: string; type?: string; domain?: string; kind?: string };
+/** `text` is AI-authored and may be localized; `type`/`domain`/`kind` are codes. */
+type Question = { text?: unknown; type?: string; domain?: string; kind?: string };
+
+/** The one place this file turns a possibly-localized question into display text. */
+function questionText(q: { text?: unknown }): string {
+  return pick(q.text, i18n.language) ?? "";
+}
 
 type Props = {
   clientName: string;
@@ -190,8 +208,8 @@ export function NestorBriefingPDF({
   const questions: Question[] = refined.length > 0 ? refined : original;
 
   const extra = ((answers.extra_questions_proposed as Array<{
-    text: string;
-    rationale?: string;
+    text?: unknown;
+    rationale?: unknown;
     approved?: boolean;
   }>) ?? []).filter((q) => q.approved === true);
 
@@ -242,7 +260,7 @@ export function NestorBriefingPDF({
           questions.map((q, i) => (
             <View key={i} style={styles.qBlock} wrap={false}>
               <Text style={styles.qNum}>V{i + 1}</Text>
-              <Text style={styles.qText}>{q.text}</Text>
+              <Text style={styles.qText}>{questionText(q)}</Text>
               {(q.type || q.domain || q.kind) && (
                 <Text style={styles.qMeta}>
                   {[q.type || q.kind, q.domain].filter(Boolean).join(" · ").toUpperCase()}
@@ -256,13 +274,16 @@ export function NestorBriefingPDF({
           <>
             <Text style={styles.sectionHeading}>{labels.extraQuestions}</Text>
             <View style={styles.hairline} />
-            {extra.map((q, i) => (
-              <View key={i} style={styles.qBlock} wrap={false}>
-                <Text style={styles.qNum}>E{i + 1}</Text>
-                <Text style={styles.qText}>{q.text}</Text>
-                {q.rationale && <Text style={styles.rationale}>{q.rationale}</Text>}
-              </View>
-            ))}
+            {extra.map((q, i) => {
+              const rationale = pick(q.rationale, i18n.language);
+              return (
+                <View key={i} style={styles.qBlock} wrap={false}>
+                  <Text style={styles.qNum}>E{i + 1}</Text>
+                  <Text style={styles.qText}>{questionText(q)}</Text>
+                  {rationale && <Text style={styles.rationale}>{rationale}</Text>}
+                </View>
+              );
+            })}
           </>
         )}
         <Footer footer={labels.footer} />
@@ -362,8 +383,8 @@ export function buildResearchMarkdown(
   const original = (answers.research_questions as Question[] | undefined) ?? [];
   const questions: Question[] = refined.length > 0 ? refined : original;
   const extra = ((answers.extra_questions_proposed as Array<{
-    text: string;
-    rationale?: string;
+    text?: unknown;
+    rationale?: unknown;
     approved?: boolean;
   }>) ?? []).filter((q) => q.approved === true);
 
@@ -372,7 +393,7 @@ export function buildResearchMarkdown(
   const lines: string[] = [];
   lines.push(labels.header, "");
   questions.forEach((q, i) => {
-    lines.push(`## V${i + 1}. ${q.text}`);
+    lines.push(`## V${i + 1}. ${questionText(q)}`);
     const meta = [q.type || q.kind, q.domain].filter(Boolean).join(" · ");
     if (meta) lines.push(`- Type: ${meta}`);
     lines.push("");
@@ -380,8 +401,9 @@ export function buildResearchMarkdown(
   if (extra.length > 0) {
     lines.push(labels.extraSection, "");
     extra.forEach((q, i) => {
-      lines.push(`### E${i + 1}. ${q.text}`);
-      if (q.rationale) lines.push(`- ${q.rationale}`);
+      lines.push(`### E${i + 1}. ${questionText(q)}`);
+      const rationale = pick(q.rationale, i18n.language);
+      if (rationale) lines.push(`- ${rationale}`);
       lines.push("");
     });
   }
