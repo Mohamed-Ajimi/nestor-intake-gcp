@@ -393,3 +393,126 @@ def test_report_language_is_a_required_field_on_the_live_template():
 
     assert field["required"] is True
     assert {o["value"] for o in field["options"]} == set(brief_mod._RUN_LANGUAGE_NAMES)
+
+
+# ---------------------------------------------------------------------------
+# Localized AI output must NEVER reach a research question as a dict repr
+# (quick task 260831-lm4, task 3 — THE $45 PATH)
+#
+# WHY THESE EXIST. The intake skill now emits every string it AUTHORS as
+# {"nl": ..., "fr": ..., "en": ...}. AIReviewPanel writes those objects straight
+# back into the intake answers on accept. `_item_text` used to do
+# `str(item.get("text") or "")`, which on a dict returns the PYTHON REPR —
+# "{'nl': 'Wat is…', 'fr': 'Quel est…'}". That repr would then be enumerated under
+# "Onderzoeksvragen:" and dispatched as a research question in a run that costs
+# roughly $45. `_item_text` is documented "never raises", so it would have failed
+# silently and expensively.
+# ---------------------------------------------------------------------------
+
+# The two fragments that betray a stringified dict wherever they appear.
+_DICT_REPR_TELLS = ("{'", "'nl'", '"nl"')
+
+
+def _localized(nl, fr, en):
+    """The three-key object the intake skill now emits for every generated string."""
+    return {"nl": nl, "fr": fr, "en": en}
+
+
+def test_item_text_passes_old_scalar_shapes_through_unchanged():
+    """OLD INTAKES MUST KEEP WORKING — there is no backfill (plan: out of scope)."""
+    assert brief_mod._item_text("Vraag als platte string?") == "Vraag als platte string?"
+    assert brief_mod._item_text({"text": "plain"}) == "plain"
+    assert brief_mod._item_text("  ruimte rondom  ") == "ruimte rondom"
+    # Nothing resolvable stays empty rather than becoming "None" or a repr.
+    assert brief_mod._item_text({"text": None}) == ""
+    assert brief_mod._item_text({}) == ""
+
+
+def test_item_text_resolves_a_localized_question_to_a_scalar():
+    """A three-key object resolves to ONE language — never to a stringified dict."""
+    item = {"text": _localized("Wat is de marktomvang?", "Quelle est la taille?", "What size?")}
+
+    for lang, expected in (
+        ("nl", "Wat is de marktomvang?"),
+        ("fr", "Quelle est la taille?"),
+        ("en", "What size?"),
+    ):
+        got = brief_mod._item_text(item, lang)
+        assert got == expected, f"lang={lang!r} resolved to {got!r}"
+        for tell in _DICT_REPR_TELLS:
+            assert tell not in got, (
+                f"{got!r} carries {tell!r} — a localized object reached the question "
+                "text as a stringified dict, which is defect 260831-lm4."
+            )
+
+    # Unknown/absent language falls back to nl rather than to a repr or to "".
+    assert brief_mod._item_text(item) == "Wat is de marktomvang?"
+    assert brief_mod._item_text(item, "de") == "Wat is de marktomvang?"
+
+
+def test_item_text_falls_back_to_any_present_variant():
+    """A model that omitted a variant must still yield TEXT, never a repr."""
+    got = brief_mod._item_text({"text": {"fr": "Seulement en français."}}, "en")
+    assert got == "Seulement en français."
+    for tell in _DICT_REPR_TELLS:
+        assert tell not in got
+
+
+def test_localized_questions_reach_the_brief_in_the_clients_report_language():
+    """END-TO-END, the money path: the enumerated questions carry ONE language.
+
+    The client answered `report_language: fr`, so the French variant is what the
+    engine is asked to research — per the operator's ruling that the brief resolves
+    to report_language.
+    """
+    intake = _intake(
+        answers={
+            "report_language": "fr",
+            "research_questions": [
+                {"text": _localized("Nederlandse vraag?", "Question française?", "English question?")}
+            ],
+            "extra_questions_proposed": [
+                {
+                    "text": _localized("NL extra?", "FR extra?", "EN extra?"),
+                    "approved": True,
+                }
+            ],
+        }
+    )
+    result = brief_mod.assemble_brief(intake, _decomp("Samenvatting."), [])
+
+    assert "Question française?" in result
+    assert "FR extra?" in result
+    assert "Nederlandse vraag?" not in result
+    assert "English question?" not in result
+    for tell in _DICT_REPR_TELLS:
+        assert tell not in result, (
+            f"the assembled brief contains {tell!r} — a localized object was "
+            "stringified into a paid research question."
+        )
+
+
+def test_a_localized_decision_answer_never_reaches_the_decision_block_as_a_repr():
+    """`decision_or_goal` is WRITTEN BY AIReviewPanel from the skill's `suggested`.
+
+    That makes the answer itself a localized object the moment the operator accepts
+    the proposal, so the [DECISION] block — which the engine's Swiss tournament
+    ranks materiality against — is the second place a dict repr could land.
+    """
+    intake = _intake(
+        answers={
+            "report_language": "fr",
+            "decision_or_goal": _localized(
+                "Moeten we uitbreiden?", "Faut-il nous étendre?", "Should we expand?"
+            ),
+            "research_questions": [{"text": "Een vraag."}],
+        }
+    )
+    result = brief_mod.assemble_brief(intake, _decomp("Samenvatting."), [])
+
+    assert "Faut-il nous étendre?" in result
+    for tell in _DICT_REPR_TELLS:
+        assert tell not in result, (
+            f"the assembled brief contains {tell!r} — the decision block carries a "
+            "stringified dict."
+        )
