@@ -50,7 +50,6 @@ const EMPTY_PARSED: ParsedSkillOutput = {};
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner";
-import { ResearchArtifactsBlock } from "@/components/intake/ResearchArtifacts";
 // D-22-5: this page imports the link-only surface, NOT the feed component. The research
 // trigger below stays — `onStartAutoResearch` still calls it. The cancel and resume helpers
 // left with the three handlers that the removed feed element was the only caller of.
@@ -73,7 +72,6 @@ import {
   phaseShowsAIReview,
   phaseShowsContextPack,
   phaseShowsFinalReport,
-  phaseShowsResearch,
   phaseShowsSemanticSearch,
 } from "@/lib/intake-phase";
 
@@ -1043,7 +1041,6 @@ function IntakeDetailPage() {
  const currentPhase = phase ?? "awaiting_client_submission";
  const showAIReview = phaseShowsAIReview(currentPhase);
  const showContextPack = phaseShowsContextPack(currentPhase);
- const showResearch = phaseShowsResearch(currentPhase);
  const showSemanticSearch = phaseShowsSemanticSearch(currentPhase) && hasArtifacts;
  const showFinalReport = phaseShowsFinalReport(currentPhase);
 
@@ -1380,13 +1377,16 @@ function IntakeDetailPage() {
     )}
 
 
-   {showResearch && (
-     <ResearchArtifactsBlock
-       intakeId={intake.id}
-       intakeStatus={intake.status}
-       onStartResearch={() => handleStatusChange("in_research")}
-     />
-   )}
+   {/* The "Research artifacts" block (ResearchArtifactsBlock) was mounted here and
+     removed on operator request 2026-08-31 as dead UI. Its loader hardcoded
+     `setQuestions([]); setArtifacts([])` and the component contained no fetch of any
+     kind, so the only output it could ever render was the empty-state paragraph
+     "No research questions yet…" — shown on intakes that WERE decomposed and whose
+     run had finished. Its own stub comment claimed "the block is gated off", which was
+     false: `phaseShowsResearch` is true for in_research / awaiting_report_upload /
+     awaiting_results_send / completed / archived, so it rendered all along. Do not
+     restore this component — a real research-artifacts surface needs a data path
+     first. The `artifacts` i18n namespace (54 keys × nl/en/fr) went with it. */}
 
 
    {sections.map((section) => {
