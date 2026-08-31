@@ -21,6 +21,14 @@ type Props = {
  // S2 (round-3): un-defer a queued removal (Herstel). The parent filters the queued
  // path back out of its pendingRemovals so a subsequent save no longer deletes it.
  onUndoDeferRemove?: (paths: string[]) => void;
+ // 260831-gk7: marks the CLIENT's validation surface. Today it does exactly one thing — a
+ // proposal_list shows the client ONLY the entries the operator marked
+ // `show_to_client === true`. AIReviewPanel has always written that flag; until now nothing
+ // READ it, so the client would have been shown the proposals the operator deliberately
+ // excluded. The operator's own review surface must never set this: it has to keep seeing
+ // every proposal, including excluded ones, or it can never un-exclude them.
+ // DISPLAY-ONLY — see ProposalListControl, where the write surface stays the full array.
+ clientSurface?: boolean;
 };
 
 const inputCls =
@@ -68,7 +76,7 @@ export function FieldRenderer(props: Props) {
  );
 }
 
-function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove, onUndoDeferRemove }: Props) {
+function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemove, onUndoDeferRemove, clientSurface }: Props) {
  const { t } = useTranslation("intake");
  switch (field.type) {
  case "text":
@@ -152,7 +160,14 @@ function FieldControl({ field, value, onChange, intakeId, disabled, onDeferRemov
  case "download":
  return <DownloadControl field={field} intakeId={intakeId} />;
  case "proposal_list":
- return <ProposalListControl value={value} onChange={onChange} disabled={disabled} />;
+ return (
+ <ProposalListControl
+ value={value}
+ onChange={onChange}
+ disabled={disabled}
+ clientSurface={clientSurface}
+ />
+ );
  default:
  return <p className="text-xs text-red-600">{t("field.unsupported", { type: field.type })}</p>;
  }
@@ -162,25 +177,49 @@ function ProposalListControl({
  value,
  onChange,
  disabled,
+ clientSurface,
 }: {
  value: any;
  onChange: (v: any) => void;
  disabled?: boolean;
+ clientSurface?: boolean;
 }) {
  const { t } = useTranslation("intake");
- const items: Array<{ text: string; rationale?: string; approved?: boolean }> = Array.isArray(value)
- ? value
- : [];
- if (items.length === 0) {
+ // `items` is the FULL stored array and stays the WRITE surface, always. The client filter
+ // below is a projection for DISPLAY only — see the trap note on `toggle`.
+ const items: Array<{
+ text: string;
+ rationale?: string;
+ approved?: boolean;
+ show_to_client?: boolean;
+ }> = Array.isArray(value) ? value : [];
+
+ // Each visible entry carries `i`, its index in the FULL array — never its position in this
+ // filtered projection. On the client's validation surface the operator's curation decides
+ // what is offered; everywhere else (the operator's own review) every proposal is shown.
+ //
+ // `show_to_client === true` is deliberately STRICT rather than `!== false`. An entry with no
+ // explicit operator include is NOT offered to the client. That direction fails safe: the
+ // client sees an empty list the operator can notice and correct, instead of silently being
+ // offered — and able to commission research on — questions the operator rejected.
+ const visible = items
+ .map((it, i) => ({ it, i }))
+ .filter(({ it }) => (clientSurface ? it.show_to_client === true : true));
+
+ if (visible.length === 0) {
  return <p className="text-sm text-ink/60">{t("field.noProposals")}</p>;
  }
+
+ // TRAP (260831-gk7): this maps over `items`, the FULL array — NOT over `visible`. Mapping
+ // over the filtered projection would write back only the client-visible subset, silently and
+ // permanently DELETING every proposal the operator excluded on the client's first click.
  const toggle = (i: number) => {
  const next = items.map((it, idx) => (idx === i ? { ...it, approved: !it.approved } : it));
  onChange(next);
  };
  return (
  <div className="space-y-3">
- {items.map((it, i) => (
+ {visible.map(({ it, i }) => (
  <label
  key={i}
  className={
