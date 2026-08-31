@@ -55,16 +55,40 @@ ended. `emit_safe` was never the defect and is not modified by 15.4-05; the buil
 lambdas were the intolerant part, and they are what changed.
 
 So (i) no longer asserts "a `KeyError` reached the emitter's log". It asserts the
-line SURVIVES, with a count rendered as honestly unknown rather than as `0` — a
-feed row must never assert a number the run did not establish (T-15.3-23). Its
-negative control now shows what the OLD subscript form would have done.
+line SURVIVES. Its negative control still shows what the OLD subscript form would
+have done.
 
-(j) then drives both degraded shapes and asserts THE COUNT OF RECORDED EVENTS,
-which is the load-bearing part: before the fix these record ZERO events, so a
+AND THEN 260831-ksq REMOVED THE COUNT ALTOGETHER
+------------------------------------------------
+`emit_safe` is STILL not modified — it never was the defect, in 15.4-05 or now.
+What changed in 260831-ksq is the line's WORDING: the `agent_done` row for a
+research angle reads `Angle NN done · {provider}` and renders no fact count in
+any form. `_fact_count_label` and `_UNKNOWN_FACTS` are gone with it.
+
+The honest-unknown rule (T-15.3-23 — never print a number the run did not
+establish) is NOT weakened by that; it simply has no remaining site on this line,
+because the line no longer claims a number at all. The rule stays live everywhere
+else it applies, including the own-research done line further down this file,
+which is a DIFFERENT line and is untouched.
+
+Why the count went: `_fact_count_label` printed a real number only when the
+provider result carried a countable `facts` list, and three of the four streams
+(`gemini`, `openai`, `claude`) return a `{status, report}` prose envelope that
+never has one. The overwhelming majority of rows therefore read "an unknown
+number of facts", which is noise on an operator's screen. The operator was told
+the `own` stream loses a real number and asked for the removal anyway.
+
+The D-V01-7 HISTORY BELOW STANDS UNCHANGED and is the reason (i) and (j) still
+count rows rather than merely checking that nothing raised.
+
+(j) drives all four degraded shapes and asserts THE COUNT OF RECORDED EVENTS,
+which is the load-bearing part: before 15.4-05 these recorded ZERO events, so a
 test that only checked "nothing raised" would have passed against the bug. And
-because a tolerant helper is a weaker guarantee than a structural one, (j) keeps
-a D-06 proof AT THIS SITE by forcing the label helper itself to raise — if
-anyone ever hoists `build()` above `emit_safe`'s try, that test fails loudly.
+because a structural guarantee is what actually holds the row, (j) keeps a D-06
+proof AT THIS SITE by forcing the row-text builder `_agent_done_text` itself to
+raise — if anyone ever hoists `build()` above `emit_safe`'s try, that test fails
+loudly. That lever is deliberately a NAMED function with one real production
+caller: monkeypatching something production does not call would prove nothing.
 
 NO LLM CALL, NO DATABASE, NO NETWORK, NO KEY, NO MOCKING LIBRARY. The two
 operations in `runs/run_events.py` that touch Postgres are module-level test
@@ -803,12 +827,17 @@ async def test_a_result_missing_the_keys_the_done_line_reads_still_records_its_l
     designs it to and the run was unaffected — but THE ROW WAS LOST, about twenty
     of them on run 7dcf51d5 (D-V01-7).
 
-    The reason the subscript was chosen still stands: a `.get(..., 0)` would print
-    "0 facts" for an angle whose count is merely UNKNOWN, and a feed row must not
-    assert a number the run never established (T-15.3-23). So the rule is kept
-    and the intolerance is dropped — `_fact_count_label` renders the unknown in
-    words. This test now asserts the LINE SURVIVES all three shapes, and that no
-    build failure is reported for any of them.
+    The reason the subscript was chosen still stands as history: a `.get(..., 0)`
+    would have printed "0 facts" for an angle whose count is merely UNKNOWN, and a
+    feed row must not assert a number the run never established (T-15.3-23).
+    15.4-05 kept that rule and dropped the intolerance.
+
+    260831-ksq then removed the count from this line entirely, so there is no
+    number on it to be honest OR dishonest about. What this test asserts is
+    therefore unchanged in substance and stronger in wording: the LINE SURVIVES
+    all three shapes, no build failure is reported for any of them, and NONE of
+    the six recorded rows carries a count in any form — not a real one, not a
+    fabricated zero, not the old honest-unknown clause.
     """
     persisted: list[dict] = []
 
@@ -821,20 +850,16 @@ async def test_a_result_missing_the_keys_the_done_line_reads_still_records_its_l
     monkeypatch.setattr(run_events, "_read_max_seq", _max_seq)
     monkeypatch.setattr(run_events, "_writer", _writer)
 
-    # THE NEGATIVE CONTROL, first, and it is now a control on the FIX rather than
-    # on the defect: the construction the OLD line performed genuinely raises on
-    # both degraded shapes, so a green run below cannot mean "these inputs were
-    # harmless all along" — it means the tolerant helper is doing the work.
+    # THE NEGATIVE CONTROL, first, and it is a control on the FIX rather than on
+    # the defect: the construction the OLD line performed genuinely raises on both
+    # degraded shapes, so a green run below cannot mean "these inputs were harmless
+    # all along". Since 260831-ksq the line reads neither key, so nothing about
+    # these shapes can reach it — but the control is kept because it is what makes
+    # the six-row assertion below mean something.
     with pytest.raises(KeyError):
         len({"status": "success", "report": "r"}["facts"])
     with pytest.raises(TypeError):
         len({"status": "success", "report": "r", "facts": None}["facts"])
-    # And the helper that replaced it survives both, without inventing a zero.
-    assert rd._fact_count_label({"status": "success", "report": "r"}) == rd._UNKNOWN_FACTS
-    assert (
-        rd._fact_count_label({"status": "success", "report": "r", "facts": None})
-        == rd._UNKNOWN_FACTS
-    )
 
     shapes = {
         "well_formed": {
@@ -896,18 +921,23 @@ async def test_a_result_missing_the_keys_the_done_line_reads_still_records_its_l
         f"provider must not cost the row: {[row['text'] for row in done]}"
     )
     texts = [row["text"] for row in done]
-    assert sum("2 facts" in text for text in texts) == 2, (
-        f"the well-formed fact count never made it into a row: {texts}"
-    )
-    degraded_texts = [text for text in texts if rd._UNKNOWN_FACTS in text]
-    assert len(degraded_texts) == 4, (
-        f"the two degraded shapes did not record honest-unknown lines: {texts}"
-    )
-    for text in degraded_texts:
+    # 260831-ksq: NO ROW CARRIES A COUNT — and that now includes the WELL-FORMED
+    # shape, whose `facts: [1, 2]` is genuinely countable. This is the assertion
+    # that inverted: it used to demand `2 facts` on exactly two of the six rows.
+    for text in texts:
         assert not re.search(r"\d+\s+facts", text), (
-            f"a degraded angle rendered a COUNT it never established: {text!r}"
+            f"a done row rendered a fact count, which 260831-ksq removed: {text!r}"
         )
-        assert "0 facts" not in text
+        assert "0 facts" not in text, f"a fabricated zero reached the feed: {text!r}"
+        assert "facts" not in text, (
+            f"the word 'facts' survives on a done row in some form: {text!r}"
+        )
+        assert "unknown number" not in text, (
+            f"the old honest-unknown clause survives on a done row: {text!r}"
+        )
+    assert sorted(texts) == sorted(
+        ["Angle 01 done · openai", "Angle 02 done · openai"] * 3
+    ), f"the done rows changed shape across the three provider shapes: {texts}"
 
 
 def test_a_summary_whose_inputs_are_malformed_costs_the_line_not_the_divider(
@@ -969,10 +999,12 @@ def test_a_stage_that_reported_no_summary_block_still_summarises_cleanly(monkeyp
 # have passed against the bug, which is the failure mode this whole phase exists
 # to stop. `len(...) == 1` is what fails without the helpers.
 #
-# The second rule these tests pin is the honest one: a count that could not be
-# established renders as UNKNOWN. `0` would be a number the run is claiming to
-# have measured, and a feed row must not assert something the run never
-# established (T-15.3-23).
+# The second rule these tests pin was the honest one: a count that could not be
+# established renders as UNKNOWN rather than as `0` (T-15.3-23). Since 260831-ksq
+# the line renders NO count at all, so that rule has no site here to protect — and
+# the tests below pin the stronger, simpler contract instead: the text is exactly
+# `Angle NN done · {provider}` for every shape, healthy or degraded. A row that is
+# identical whatever the provider returned cannot fabricate anything.
 # ===========================================================================
 
 
@@ -1005,10 +1037,23 @@ async def _one_angle_returning(monkeypatch, result: dict) -> list:
     )
 
 
-async def test_j_a_healthy_angle_still_renders_its_fact_count(monkeypatch):
-    """The unchanged case, asserted FIRST. Without it the three degraded tests
-    below would pass just as happily against a helper that had given up on
-    counting altogether and printed "unknown" for every angle ever run."""
+async def test_j_a_healthy_angle_renders_no_fact_count(monkeypatch):
+    """The COUNTABLE case, asserted FIRST, and it is the sharp end of 260831-ksq.
+
+    This shape carries `facts: [1, 2, 3]` — a real, sized list the old
+    `_fact_count_label` would have rendered as `3 facts`. The removal is not
+    "we stopped printing a number we never had"; it drops a number we DID have,
+    on the one stream that has it. The operator was told that and asked for the
+    removal anyway, because three of the four streams return a `{status, report}`
+    prose envelope with no `facts` at all, so the clause read "an unknown number
+    of facts" on the overwhelming majority of rows.
+
+    Asserting it here rather than only on the degraded shapes is what stops a
+    future edit from quietly reintroducing a count "just for the healthy case".
+
+    The `meta` dict is the operator's explicit carve-out and is UNCHANGED — the
+    ask was about visible text, not recorded metadata, so `cost` still rides.
+    """
     recorder = _install(monkeypatch)
 
     results = await _one_angle_returning(
@@ -1019,10 +1064,14 @@ async def test_j_a_healthy_angle_still_renders_its_fact_count(monkeypatch):
 
     done = recorder.of("agent_done")
     assert len(done) == 1, f"expected one done line for one angle: {recorder.kinds()}"
-    assert done[0]["text"] == "Angle 01 done — 3 facts · openai", (
+    assert done[0]["text"] == "Angle 01 done · openai", (
         f"the healthy done line changed shape: {done[0]['text']!r}"
     )
-    assert done[0]["text"].endswith("facts · openai")
+    assert not re.search(r"\d+\s+facts", done[0]["text"]), (
+        f"a countable result put its count back on the row: {done[0]['text']!r}"
+    )
+    assert "facts" not in done[0]["text"]
+    # UNCHANGED — meta was deliberately not touched by 260831-ksq.
     assert done[0]["meta"]["angle"] == 1
     assert done[0]["meta"]["provider"] == "openai"
     assert done[0]["meta"]["cost"] == pytest.approx(1.5)
@@ -1041,12 +1090,25 @@ async def test_j_a_degraded_result_still_records_exactly_one_done_line(
     monkeypatch, shape, why
 ):
     """Four shapes a degrading provider really does return. Each must still
-    produce ONE `agent_done` row, attributable, with the count admitted as
-    unknown rather than fabricated as zero.
+    produce ONE `agent_done` row, attributable.
 
-    The `str` case is not padding: `len("none found")` is 10, so a helper that
-    merely called `len` would print "10 facts" — a number invented out of a
-    provider's prose, which is worse than the vanished row it replaced.
+    `len(done) == 1` IS THE POINT OF THIS TEST and is kept verbatim across
+    260831-ksq: it is the D-V01-7 lost-row guarantee. Before 15.4-05 each of these
+    shapes recorded ZERO rows — the build lambda raised, `emit_safe` swallowed it
+    exactly as D-06 designs it to, and the feed showed an angle that started and
+    never ended, about twenty times on run 7dcf51d5. The helper that used to carry
+    that tolerance is now DELETED, so this assertion is also what proves the
+    guarantee survived its removal.
+
+    All four shapes are kept for the same reason they were added: these are what a
+    degrading provider really returns, and none of them may cost the row. The
+    `str` case is still not padding, though its reason has changed — it used to
+    matter because `len("none found")` is 10 and a naive helper would have printed
+    "10 facts"; it matters now because it is a live shape and the row must be
+    identical for it too.
+
+    The wording assertions inverted: there is no count on this line in any form,
+    so the text is byte-identical to the healthy angle's.
     """
     recorder = _install(monkeypatch)
 
@@ -1060,12 +1122,18 @@ async def test_j_a_degraded_result_still_records_exactly_one_done_line(
         f"{recorder.kinds()}"
     )
     text = done[0]["text"]
-    assert rd._UNKNOWN_FACTS in text, (
-        f"the count was not admitted as unknown: {text!r}"
+    assert text == "Angle 01 done · openai", (
+        f"the degraded done line ({why}) is not the count-free row: {text!r}"
     )
     assert "0 facts" not in text, f"a fabricated zero reached the feed: {text!r}"
     assert not re.search(r"\d+\s+facts", text), (
         f"a count the run never established was rendered anyway: {text!r}"
+    )
+    assert "facts" not in text, (
+        f"the word 'facts' survives on a degraded done row: {text!r}"
+    )
+    assert "unknown number" not in text, (
+        f"the old honest-unknown clause survives on a degraded done row: {text!r}"
     )
     # STILL ATTRIBUTABLE. A row nobody can tie to an angle or a provider is only
     # marginally better than no row.
@@ -1079,18 +1147,32 @@ async def test_j_the_done_line_is_still_built_inside_the_emitters_try(
 ):
     """D-06, PROVEN AT THIS SITE, AFTER the site stopped raising on its own.
 
-    `_fact_count_label` promising never to raise is a promise by one helper.
-    `build=lambda:` is the STRUCTURAL guarantee that whatever is built here is
-    built inside `emit_safe`'s try — the thing that survives a future edit to
-    the helper. Forcing the helper to raise is the only way to keep asserting
-    it: if anyone ever "tidies" `emit_safe` by hoisting `build()` above its
-    `try`, this test fails with the RuntimeError escaping into `run_angles`.
+    `build=lambda:` is the STRUCTURAL guarantee that whatever the row is made of
+    is made INSIDE `emit_safe`'s try. Hoisting `build()` above that `try` is the
+    "cleanup" that lost about twenty `agent_done` rows on run 7dcf51d5 (D-V01-7),
+    and it looks like tidying, which is why a test has to stand on it.
+
+    Forcing the row's text builder to raise is the only way to keep asserting that
+    here, because the site no longer raises on its own. The lever moved in
+    260831-ksq: it used to be `_fact_count_label`, which that plan DELETED, and it
+    is now `_agent_done_text` — signature `(angle_no, provider)`, hence a `_boom`
+    of two positional args.
+
+    THE LEVER MUST BE SOMETHING PRODUCTION ACTUALLY CALLS. That is the entire
+    reason `_agent_done_text` is a named module-level function rather than an
+    inline f-string in the thunk. Monkeypatching a function the emission does not
+    call would leave the thunk raising nothing, the row emitting normally, and
+    this test RED against correct code — and a test that is red against correct
+    code gets deleted, which is how the proof is lost. Do not inline the builder.
+
+    If this test ever passes while the construction is hoisted out of the thunk,
+    the assertion has gone vacuous and must be re-pointed, not relaxed.
     """
 
-    def _boom(_result):
-        raise RuntimeError("synthetic label failure for the D-06 site proof")
+    def _boom(_angle_no, _provider):
+        raise RuntimeError("synthetic row-text failure for the D-06 site proof")
 
-    monkeypatch.setattr(rd, "_fact_count_label", _boom)
+    monkeypatch.setattr(rd, "_agent_done_text", _boom)
     recorder = _install(monkeypatch)
 
     caplog.clear()
