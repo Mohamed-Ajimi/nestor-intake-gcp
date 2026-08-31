@@ -68,3 +68,26 @@ first full-suite execution recorded for them in this session.
 in a fixture docstring, not an assertion, and `conftest.py` is outside this task's
 declared file list — left alone rather than widened the change surface. Worth a one-line
 fix in any future pass that touches that file.
+
+---
+
+## OPERATOR RULING 2026-08-31 — DEF-QK-01 is CLOSED: the context pack STAYS DUTCH
+
+**Ruling, verbatim:** *"context pack should stay in dutch as the nestor admins are dutch speakers
+anyways"*.
+
+**The premise was checked and holds.** `ContextPackBlock` has exactly ONE render site —
+`routes/admin.pulse.intakes.$id.tsx:1348`, an admin route. It is never rendered on a client route
+(the `intake.$id.results.tsx:21` occurrence is a COMMENT, not a render). So the pack is an internal
+artifact read by Dutch-speaking operators, and `CONTEXT_PACK_SKILL_PROMPT:168`'s explicit
+*"Schrijf in vloeiend Nederlands"* is CORRECT rather than defective. **Do not "fix" it** — a future
+reader who finds that line while grepping for the language defect will think it was missed.
+
+**The one consequence, accepted:** `brief.py:648` folds `context_pack_text` into the engine prompt
+**verbatim and untruncated**, and `derive_decision_statement` → `_decision_from_context_pack`
+(`:448-505`) extracts the DECISION STATEMENT from it. That statement is what the engine's tournament
+ranks claim materiality against. So on a `report_language: fr` run, the decision statement the engine
+reasons against is Dutch while the report it writes is French — mixed-language input to a directive
+that says *"Write EVERYTHING in {lang} and ONLY {lang} … Never mix languages"*. Judged workable and
+mildly lossy, NOT a blocker. If a future run shows Dutch leaking into a non-Dutch report, this is the
+first place to look.
