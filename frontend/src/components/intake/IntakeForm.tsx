@@ -482,13 +482,24 @@ export function IntakeForm({
  <div className="space-y-6">
  {section.fields.map((f) => (
  <div key={f.key}>
+ {/* 260831-gk7. `editable` is `status === "draft"` (routes/intake.$id.tsx), and the
+     validation phase is entered at status `reviewed` — so in that phase EVERY field
+     was disabled, including the AI-proposed extra questions the client is being asked
+     to choose between. The checkboxes rendered and did nothing.
+
+     Only `proposal_list` is re-opened, and only in the validation phase. The rest of
+     the form stays read-only on purpose: those answers were validated at submission,
+     and re-opening them after review would let the client silently rewrite reviewed
+     content. A proposal is different in kind — it is a decision we are ASKING the
+     client to make, which is why it alone becomes editable here. */}
  <FieldRenderer
  field={f}
  value={answers[f.key]}
  onChange={(v) => handleChange(f.key, v)}
  intakeId={intakeId}
  error={errors[f.key]}
- disabled={!editable}
+ disabled={!editable && !(isValidationPhase && f.type === "proposal_list")}
+ clientSurface={isValidationPhase}
  />
  {isValidationPhase && (
  <ValidationDiffForField
