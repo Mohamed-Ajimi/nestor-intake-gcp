@@ -48,15 +48,33 @@ from app.db.repository import (
     SkillRunRepository,
 )
 
-# max_tokens for the apply call — legacy parity (apply-intake-skill.ts:229).
-_APPLY_MAX_TOKENS = 8192
+# max_tokens for the apply call. Raised from the legacy 8192
+# (apply-intake-skill.ts:229) by quick task 260831-lm4: the system prompt now
+# requires every GENERATED string in nl+fr+en, so the JSON object the model has to
+# fit is roughly 3x its old size on the authored fields.
+#
+# ⚠ DO NOT RAISE THIS FURTHER WITHOUT SWITCHING TO STREAMING. The call below is
+# NON-STREAMING (``messages.create``), and the Anthropic SDK REFUSES a
+# non-streaming request whose max_tokens exceeds ~21333 output tokens. 24576 (a
+# naive 3x) would therefore not be a bigger budget — it would break the call
+# outright. 20000 sits under that ceiling with ~2.4x headroom on a payload that
+# grows by LESS than 3x, because the client's own echoed words (``current`` /
+# ``original``) deliberately stay scalar and untranslated (D-2).
+_APPLY_MAX_TOKENS = 20000
 
-# The instruction prefix the legacy prepended to the rendered intake markdown
-# (apply-intake-skill.ts:234) — carried verbatim so the user message matches.
+# The SDK's non-streaming output ceiling, named so the number above is checkable
+# rather than folklore. Anything at or above this must stream instead.
+_ANTHROPIC_NON_STREAMING_MAX_TOKENS = 21333
+
+# The instruction prefix prepended to the rendered intake markdown. The legacy
+# (apply-intake-skill.ts:234) wrote it in Dutch; it is ENGLISH here because it is an
+# instruction to the MODEL, not client-facing copy, and a Dutch instruction wrapper
+# reinforced exactly the Dutch-only output this skill was fixed to stop producing
+# (quick task 260831-lm4). The meaning is unchanged.
 _APPLY_USER_PREFIX = (
-    "Pas de nestor-intake skill toe op deze intake. Output: STRIKT JSON volgens "
-    "het schema in de system-prompt. Geen markdown, geen uitleg, alleen het "
-    "JSON-object.\n\n---\n\n"
+    "Apply the nestor-intake skill to this intake. Output: STRICT JSON per the "
+    "schema in the system prompt. No markdown, no explanation, only the JSON "
+    "object.\n\n---\n\n"
 )
 
 
@@ -95,10 +113,11 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
 
     READ: load the intake + its answers + the display client name into a PLAIN dict DTO
     (no live ORM rows cross the session boundary). CALL: build the user message and invoke
-    Claude (``claude-sonnet-4-5``, ``max_tokens=8192``, verbatim system prompt) holding NO
-    DB connection. WRITE: parse the JSON object and finalize the ``skill_runs`` row —
-    ``succeeded`` + ``output_parsed`` on success, ``failed`` + ``error_message`` on a parse
-    error (D-09). The model id + prompts + token/cost are persisted for parity/observability.
+    Claude (``claude-sonnet-4-5``, ``max_tokens=_APPLY_MAX_TOKENS``, verbatim system prompt)
+    holding NO DB connection. WRITE: parse the JSON object and finalize the ``skill_runs``
+    row — ``succeeded`` + ``output_parsed`` on success, ``failed`` + ``error_message`` on a
+    parse error or on a ``max_tokens`` truncation (D-09). The model id + prompts + token/cost
+    are persisted for parity/observability.
     """
     model = get_settings().model_apply_intake
 
@@ -129,6 +148,23 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
             system=NESTOR_INTAKE_SKILL_PROMPT,
             messages=[{"role": "user", "content": dto["user_message"]}],
         )
+        # D-4 (quick 260831-lm4): a response cut off at the budget is a BUDGET
+        # failure, not a model failure. Tripling the required output made this
+        # realistic for the first time. Without this branch the truncated JSON is
+        # merely unparseable, and `extract_json` reports a generic parse error that
+        # reads to the operator like the model produced garbage — sending them to
+        # re-run the skill instead of to the token budget. `getattr` because the
+        # test doubles are not required to grow a new attribute for this check.
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            return {
+                "error": (
+                    f"Claude response truncated: hit the max_tokens budget of "
+                    f"{_APPLY_MAX_TOKENS}, so the JSON object is incomplete. Raising "
+                    f"the budget requires switching to a streaming call — the "
+                    f"non-streaming SDK ceiling is ~"
+                    f"{_ANTHROPIC_NON_STREAMING_MAX_TOKENS} output tokens."
+                )
+            }
         return {
             "raw": message.content[0].text,
             "input_tokens": message.usage.input_tokens,
