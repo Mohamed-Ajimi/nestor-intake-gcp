@@ -31,11 +31,12 @@ Design decisions:
     insert_placeholder / finalize_row methods remain in writer.py (unused by this client)
     so writer.py callers are not broken.
 
-  - Long-poll progress events (15.3-04): the two deep-research poll loops narrate
-    themselves onto the run feed -- dispatch, a strided progress line stating
-    elapsed minutes and attempt number IN WORDS, reconnects, timeouts and
-    provider-reported failures. This exists because on 2026-07-27 a run mid
-    long-poll was read as a stall from log silence and idle CPU, and it was not.
+  - Long-poll run-feed events (15.3-04, narrowed 2026-08-31): the two
+    deep-research poll loops report reconnects, timeouts and provider-reported
+    failures onto the run feed. They no longer announce dispatch and no longer
+    emit a strided progress line -- those four emissions were removed on operator
+    request because they were noise in the live feed, so a long poll is now
+    silent for up to 35 minutes by design (see the comment above _CURRENT_RUN).
     The events are best-effort and cannot fail a call; the audit row, its payload
     and its hash chain are untouched by them.
 
@@ -94,25 +95,33 @@ RESUME_REDISPATCH = (
 )
 
 # ---------------------------------------------------------------------------
-# 15.3-04 — A LONG POLL MUST BE DISTINGUISHABLE FROM A STALL, IN WORDS.
+# A LONG POLL IS SILENT ON THE RUN FEED, BY DESIGN.
 #
 # On 2026-07-27 an operator watched a flat CPU trace and silent logs, concluded
 # a run had hung, and was WRONG: it was mid deep-research long poll and resumed
 # on its own twenty-five minutes later. The misreading cost an hour, produced a
 # defect report that had to be withdrawn, and very nearly re-executed a paid run
 # from the start. THE RUN ROW AND THE FEED ARE THE ONLY AUTHORITIES; log silence
-# and idle CPU are not evidence of anything. The events below are the fix, and
-# they only work if they say, in a sentence, that the wait is expected.
+# and idle CPU are not evidence of anything.
 #
-# _POLL_EVENT_STRIDE: one progress line every N poll attempts. At the default
-# poll_interval of 30 s a stride of 10 is one line every five minutes -- a
-# handful over a 35-minute wait rather than seventy (T-15.3-33). Env-overridable
-# in the house idiom; a value below 1 is clamped to 1 rather than dividing by
-# zero inside a paid loop.
+# 15.3-04 answered that incident with two feed lines per provider: a dispatch
+# announcement, and a strided heartbeat restating elapsed minutes, attempt
+# number and a sentence asserting the wait was expected. Those four emissions,
+# and the stride constant plus its NESTOR_RUN_EVENT_POLL_STRIDE override that
+# paced them, were REMOVED on operator request 2026-08-31: the operator watches
+# the live feed and judged them noise. A deep-research call is therefore silent
+# on the feed for up to 35 minutes, deliberately.
+#
+# The exact wording is deliberately NOT quoted here. An absence gate greps this
+# file for those literals, and a comment reciting them would read as a live
+# emission and turn the gate red on correct code.
+#
+# The incident above is kept because the silence is now expected rather than
+# diagnostic, so the 2026-07-27 misreading is EASIER to make, not harder. What
+# still reaches the feed is every provider-reported failure, every give-up and
+# every rejoin -- see the agent_fail emissions in both poll loops. Restoring the
+# heartbeat is a decision to re-open with the operator, not a bug to fix.
 # ---------------------------------------------------------------------------
-_POLL_EVENT_STRIDE = max(
-    1, int(os.environ.get("NESTOR_RUN_EVENT_POLL_STRIDE", "10") or 10)
-)
 
 #: The run a two-phase deep-research call belongs to.
 #:
@@ -1489,28 +1498,6 @@ class AuditedLLMClient:
                                 cb_exc,
                             )
 
-                # THE WAIT IS ANNOUNCED BEFORE IT STARTS. Everything after this
-                # line is silence on every other surface for up to 35 minutes.
-                if _run is not None:
-                    run_events.emit_safe(
-                        _run,
-                        stage="deep_research",
-                        kind="thinking",
-                        build=lambda: (
-                            f"Waiting on Google {agent} — background research "
-                            f"dispatched, polling every {poll_interval}s for up "
-                            f"to {max_attempts * poll_interval / 60:.0f} minutes. "
-                            "A long silence here is the normal shape of this "
-                            "call.",
-                            {
-                                "provider": "google",
-                                "model": agent,
-                                "max": max_attempts,
-                                "wait_s": poll_interval,
-                            },
-                        ),
-                    )
-
                 for _attempt in range(max_attempts):
                     await asyncio.sleep(poll_interval)
                     try:
@@ -1580,39 +1567,6 @@ class AuditedLLMClient:
                             "status": "error",
                             "error_message": f"Research failed: {error}",
                         }
-
-                    # THE HEARTBEAT, and the whole point of this task. It is
-                    # emitted HERE — after the GET has come back and after the
-                    # terminal checks — so the line can state what the provider
-                    # itself reported rather than merely that we are still in a
-                    # loop. Every clause is load-bearing to the operator's
-                    # decision: elapsed minutes and attempt number say how far
-                    # into the budget the wait is, and the sentence says in words
-                    # that this is a WAIT. The stride is what keeps a 35-minute
-                    # poll to a handful of lines instead of seventy.
-                    if _run is not None and (_attempt + 1) % _POLL_EVENT_STRIDE == 0:
-                        run_events.emit_safe(
-                            _run,
-                            stage="deep_research",
-                            kind="thinking",
-                            build=lambda _n=_attempt: (
-                                "Still waiting on Google "
-                                f"{agent} — {(_n + 1) * poll_interval / 60:.0f} min "
-                                f"elapsed, poll {_n + 1} of {max_attempts}, "
-                                f"provider still reports "
-                                f"{interaction.get('status') or 'no status'}. The "
-                                "provider has not answered yet; a deep-research "
-                                "call routinely runs for tens of minutes. THIS IS "
-                                "A WAIT, NOT A STALL.",
-                                {
-                                    "provider": "google",
-                                    "model": agent,
-                                    "attempt": _n + 1,
-                                    "max": max_attempts,
-                                    "wait_s": poll_interval,
-                                },
-                            ),
-                        )
 
                 timeout_msg = (
                     f"Research timed out after {max_attempts * poll_interval / 60:.0f} minutes"
@@ -1861,26 +1815,6 @@ class AuditedLLMClient:
                             "resume would re-dispatch it",
                             cb_exc,
                         )
-                # Announced BEFORE the wait, for the same reason as Gemini's.
-                if _run is not None:
-                    run_events.emit_safe(
-                        _run,
-                        stage="deep_research",
-                        kind="thinking",
-                        build=lambda: (
-                            f"Waiting on OpenAI {model} — background research "
-                            f"dispatched, polling every {poll_interval}s for up "
-                            f"to {max_attempts * poll_interval / 60:.0f} minutes. "
-                            "A long silence here is the normal shape of this "
-                            "call.",
-                            {
-                                "provider": "openai",
-                                "model": model,
-                                "max": max_attempts,
-                                "wait_s": poll_interval,
-                            },
-                        ),
-                    )
 
             # ---- Polling loop ----
             # R7: on a resume the first iteration EVALUATES the response we just
@@ -1934,32 +1868,6 @@ class AuditedLLMClient:
                             ),
                         )
                     return {"status": "error", "error_message": "Research ended incomplete"}
-
-                # The heartbeat. Same wording contract as Gemini's, same stride,
-                # and for the same reason: this is the only surface on which a
-                # long wait and a hang look different.
-                if _run is not None and (_attempt + 1) % _POLL_EVENT_STRIDE == 0:
-                    run_events.emit_safe(
-                        _run,
-                        stage="deep_research",
-                        kind="thinking",
-                        build=lambda _n=_attempt: (
-                            f"Still waiting on OpenAI {model} — "
-                            f"{(_n + 1) * poll_interval / 60:.0f} min elapsed, "
-                            f"poll {_n + 1} of {max_attempts}, provider still "
-                            f"reports {getattr(response, 'status', None) or 'no status'}. "
-                            "The provider has not answered yet; a deep-research "
-                            "call routinely runs for tens of minutes. THIS IS A "
-                            "WAIT, NOT A STALL.",
-                            {
-                                "provider": "openai",
-                                "model": model,
-                                "attempt": _n + 1,
-                                "max": max_attempts,
-                                "wait_s": poll_interval,
-                            },
-                        ),
-                    )
 
             timeout_msg = (
                 f"Research timed out after {max_attempts * poll_interval / 60:.0f} minutes"
