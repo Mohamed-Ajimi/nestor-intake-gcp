@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import { localizeSchema, pick } from "@/lib/i18n/localizeSchema";
 import type { LocalizedIntakeSchema } from "@/lib/intake-types";
 
 // localizeSchema flattens the multi-locale SOURCE schema (label/title/... as
@@ -122,5 +122,50 @@ describe("localizeSchema", () => {
     expect(seen).not.toContain('"nl"');
     expect(seen).not.toContain('"fr"');
     expect(seen).not.toContain('"en"');
+  });
+});
+
+// `pick` was exported by quick task 260831-lm4 so the FOUR surfaces that render
+// AI-GENERATED strings (FieldRenderer, FieldDisplay, AIReviewPanel, NestorBriefingPDF)
+// share ONE resolution rule with the schema pass instead of growing their own. These
+// pin the behaviours those callers depend on.
+describe("pick (the shared resolver for AI-generated localized strings)", () => {
+  it("passes a plain string through unchanged — OLD INTAKES ARE NOT MIGRATED", () => {
+    expect(pick("Een vraag zonder vertalingen?", "fr")).toBe("Een vraag zonder vertalingen?");
+    expect(pick("", "nl")).toBe("");
+  });
+
+  it("resolves a three-key AI object to the active language", () => {
+    const value = { nl: "Nederlandse vraag", fr: "Question française", en: "English question" };
+    expect(pick(value, "nl")).toBe("Nederlandse vraag");
+    expect(pick(value, "fr")).toBe("Question française");
+    expect(pick(value, "en")).toBe("English question");
+    // Region-tagged locales resolve on the first two characters.
+    expect(pick(value, "fr-BE")).toBe("Question française");
+  });
+
+  it("falls back to nl, then to any present variant, never to nothing", () => {
+    const noEn = { nl: "Nederlands", fr: "Français" };
+    expect(pick(noEn, "en")).toBe("Nederlands");
+    expect(pick(noEn, "de")).toBe("Nederlands");
+    // A model that dropped nl must still yield TEXT rather than undefined.
+    expect(pick({ fr: "Seulement français" }, "en")).toBe("Seulement français");
+  });
+
+  it("returns undefined for null, undefined and non-localized objects", () => {
+    expect(pick(null, "nl")).toBeUndefined();
+    expect(pick(undefined, "nl")).toBeUndefined();
+    expect(pick(42, "nl")).toBeUndefined();
+    // THE GUARD THAT MATTERS: an arbitrary answer object is NOT a localized value.
+    // If `pick` scanned every value it would return "Jan" here and the caller
+    // (NestorBriefingPDF.asString) would print a name where a decision belongs.
+    expect(pick({ name: "Jan", role: "CFO" }, "nl")).toBeUndefined();
+    expect(pick({ choice: "other", text: "max 15 slides" }, "nl")).toBeUndefined();
+  });
+
+  it("never returns a stringified object", () => {
+    const resolved = pick({ nl: "N", fr: "F", en: "E" }, "fr") ?? "";
+    expect(resolved).not.toContain("{");
+    expect(resolved).not.toContain("nl");
   });
 });

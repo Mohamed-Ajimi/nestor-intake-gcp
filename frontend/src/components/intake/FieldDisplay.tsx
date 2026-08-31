@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import { useTranslation } from "react-i18next";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
+import { pick } from "@/lib/i18n/localizeSchema";
 import { Download } from "lucide-react";
 import { toast } from "sonner";
 import type { IntakeField } from "@/lib/intake-types";
@@ -166,9 +167,15 @@ function ValueRenderer({
  <div className="space-y-4">
  {items.map((it, i) => {
  const obj = (it as Record<string, unknown>) ?? {};
- const text = textKey ? (obj[textKey] as string | undefined) : undefined;
+ // 260831-lm4: this is the `research_questions` render path, and AIReviewPanel
+ // patches an accepted refinement's `text` straight from the skill's `suggested`
+ // — a {nl, fr, en} object. Rendering that object directly would not merely look
+ // wrong, it would THROW ("Objects are not valid as a React child") and blank the
+ // whole intake detail page. `pick` also passes plain strings through, so every
+ // pre-260831 intake renders exactly as before.
+ const text = textKey ? pick(obj[textKey], i18n.language) : undefined;
  const kind = obj["kind"] as string | undefined;
- const rationale = obj["rationale"] as string | undefined;
+ const rationale = pick(obj["rationale"], i18n.language);
  if (text !== undefined) {
  return (
  <div key={i} className="flex gap-3">
@@ -229,7 +236,11 @@ function ValueRenderer({
  );
  }
  case "proposal_list": {
- const items = (value as Array<{ text?: string; rationale?: string; approved?: boolean }>) ?? [];
+ // `text` / `rationale` are AI-AUTHORED and localized since 260831-lm4 — typed
+ // `unknown` and resolved through the one shared `pick` (scalar passthrough keeps
+ // every older intake rendering unchanged).
+ const items =
+ (value as Array<{ text?: unknown; rationale?: unknown; approved?: boolean }>) ?? [];
  if (!Array.isArray(items) || items.length === 0) {
  return <span className="text-ink/40">—</span>;
  }
@@ -250,9 +261,11 @@ function ValueRenderer({
  )}
  </div>
  <div className="flex-1 space-y-1">
- <div className="font-sans text-ink">{item.text}</div>
- {item.rationale && (
- <div className="font-sans text-sm italic text-ink/60">{item.rationale}</div>
+ <div className="font-sans text-ink">{pick(item.text, i18n.language)}</div>
+ {pick(item.rationale, i18n.language) && (
+ <div className="font-sans text-sm italic text-ink/60">
+ {pick(item.rationale, i18n.language)}
+ </div>
  )}
  <div className="font-mono text-xs uppercase tracking-wider">
  {item.approved ? (
