@@ -918,7 +918,11 @@ async def classify_parent(
 
             model = _RANK_MODEL
         except Exception:  # noqa: BLE001 — a missing constant is not a crash
-            model = "gemini-2.5-flash"
+            # MIRRORS workshop_rank._RANK_MODEL and must be changed WITH it, or
+            # this fallback silently downgrades the classifier to the old model
+            # on the one path where the import failed. Moved from
+            # gemini-2.5-flash by quick task 260901-lf2 (2026-09-01).
+            model = "gemini-3.7-flash"
 
     prompt = _CLASSIFY_PROMPT.format(
         questions_block=_render_block(labels),

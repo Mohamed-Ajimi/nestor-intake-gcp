@@ -74,7 +74,17 @@ log = logging.getLogger(__name__)
 #   _GATE_RETRIES      EXTRA attempts after the first, transient failures only.
 #   _GATE_BACKOFF_S    base sleep; attempt N sleeps _GATE_BACKOFF_S * 2**N.
 #   _CONTEXT_MAX_CHARS ceiling on the client-brief block pasted into the prompt.
-_GATE_MODEL = "gemini-2.5-flash"
+#: Moved from gemini-2.5-flash by quick task 260901-lf2 (2026-09-01), on MEASURED
+#: evidence: all 267 real Gemini-Flash prompts from run fb9484dd were replayed
+#: through both models at the production config (maxOutputTokens=4096,
+#: temperature=0, thinkingConfig.thinkingBudget=0), zero errors either side. The
+#: driving finding was POSITION BIAS on the pairwise judge, where option A is
+#: always listed first: 2.5 picked A 69.9% of the time, 3.7 picked A 58.4%.
+#: NOTE 3.7 THINKS ANYWAY despite thinking_budget=0, so the "thinking disabled"
+#: constraint in the module docstring above is now an INTENT WE REQUEST AND DO NOT
+#: GET on this model. The feared regression did NOT occur (see workshop_rank.py),
+#: and output tokens rise 4.2x -- a cost the operator accepted (+$1.50/run).
+_GATE_MODEL = "gemini-3.7-flash"
 _GATE_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GATE_BATCH", "40"))
 _GATE_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GATE_CONCURRENCY", "4"))
 _GATE_RETRIES = int(os.environ.get("NESTOR_TRIBUNAL_GATE_RETRIES", "2"))

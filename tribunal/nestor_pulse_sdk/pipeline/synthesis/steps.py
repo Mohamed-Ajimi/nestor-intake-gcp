@@ -1428,6 +1428,31 @@ chunk_guard = _phase2_stub("chunk_guard")
 # Step 3: ClaimDistiller — un-stubbed in Plan 01-13 Task 2.
 # ---------------------------------------------------------------------------
 
+#: ⛔ DELIBERATELY STILL gemini-2.5-flash. DO NOT "FINISH THE JOB".
+#: Quick task 260901-lf2 (2026-09-01) moved the FIVE tribunal Flash sites to
+#: gemini-3.7-flash (gates, grouping, report_planner, workshop_rank,
+#: workshop_admission) and LEFT THIS ONE ALONE ON PURPOSE. Two reasons, both
+#: specific to this call site:
+#:
+#:  1. IT WAS NOT EXERCISED BY THE EVIDENCE. The decision rests on replaying all
+#:     267 real Gemini-Flash prompts from run fb9484dd through both models. This
+#:     path is the D-14 fallback that only fires when a stream fails to return a
+#:     fact list, and EVERY stream complied in fb9484dd -- so it contributed
+#:     ZERO of those 267 prompts. There is no evidence whatsoever for its
+#:     behaviour under 3.7. The other five sites have measured evidence; this one
+#:     would be a guess wearing the same commit message.
+#:
+#:  2. IT HAS A DOCUMENTED FORMAT-FRAGILITY INCIDENT. The V-01 defect: the
+#:     distiller returned 278 well-formed claims and the parser dropped EVERY ONE
+#:     because the model emitted the literal string `<TAB>` instead of a tab
+#:     character. See `_split_distiller_line` below and
+#:     tests/test_distiller_separators.py, which replays those four recorded
+#:     responses. A model swap on an UNEXERCISED, FORMAT-CRITICAL parser path is
+#:     precisely the risk that produced that incident.
+#:
+#: test_factlist_fallback.py pins this literal (`_DISTILLER_MODEL ==
+#: "gemini-2.5-flash"`), so changing it here turns that test RED. That test is
+#: the guard for this comment -- read both before touching either.
 _DISTILLER_MODEL = "gemini-2.5-flash"
 # Output ceiling per distill call — the MODEL MAXIMUM for gemini-2.5-flash
 # (fix 2026-06-11). The old 4096 silently truncated extraction at ~29 claims:

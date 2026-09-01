@@ -91,7 +91,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_GROUPER_MODEL = "gemini-2.5-flash"
+#: Moved from gemini-2.5-flash by quick task 260901-lf2 (2026-09-01). See the
+#: rationale block at gates.py `_GATE_MODEL` -- one measured replay of run
+#: fb9484dd's 267 real Flash prompts moved all five Flash sites together.
+#: NOTE 3.7 THINKS ANYWAY despite thinking_budget=0, so the "thinking disabled"
+#: constraint in the module docstring above is an INTENT WE REQUEST AND DO NOT GET
+#: on this model. Output tokens rise 4.2x; the operator accepted the cost.
+_GROUPER_MODEL = "gemini-3.7-flash"
 _GROUPER_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_BATCH", "40"))
 _GROUPER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_CONCURRENCY", "4"))
 

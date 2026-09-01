@@ -205,8 +205,24 @@ log = logging.getLogger(__name__)
 #   _CRITIQUE_ENABLED        the A/B off-switch (grouping._CLUSTER_ENABLED's
 #                            idiom). Off => every candidate is KEEP, zero calls.
 # ---------------------------------------------------------------------------
+#: DEFAULT moved from gemini-2.5-flash by quick task 260901-lf2 (2026-09-01). The
+#: os.environ.get override is DELIBERATELY KEPT so the A/B switch still works.
+#: THIS IS THE SITE THE CHANGE WAS MADE FOR. On the pairwise tournament judge
+#: below, where option A is always listed first, the 267-prompt replay of run
+#: fb9484dd measured 2.5 picking A 69.9% of the time against 3.7's 58.4% -- 2.5
+#: was ranking research questions substantially by LIST POSITION. 23% of
+#: tournament verdicts flip between the two models (77% agreement, 124/161).
+#: ⚠ READ THE `_CRITIQUE_*` WARNING ABOVE BEFORE ACTING ON IT: it says enabling
+#: thinking swings the critic to 17-18 KEEP, "a critic that rejects nothing".
+#: THAT WARNING IS STILL TRUE OF 2.5 AND IS NOT TO BE DELETED -- but it did NOT
+#: reproduce here. 3.7 thinks despite thinking_budget=0, and on candidate
+#: screening it was MORE decisive at BOTH ends, not less: 2.5 gave
+#: KEEP 9 / WEAK 35 / KILL 0, while 3.7 gave KEEP 17 / WEAK 21 / KILL 6.
+#: The KILL path the warning protects got STRONGER, not weaker.
+#: ⚠ THIS CONSTANT ALSO SETS workshop_evolve._META_MODEL BY INHERITANCE (its
+#: env default is this value), so the evolve meta-review call moves with it.
 _RANK_MODEL = os.environ.get(
-    "NESTOR_TRIBUNAL_WORKSHOP_RANK_MODEL", "gemini-2.5-flash"
+    "NESTOR_TRIBUNAL_WORKSHOP_RANK_MODEL", "gemini-3.7-flash"
 )
 _EVOLVE_MODEL = os.environ.get(
     "NESTOR_TRIBUNAL_WORKSHOP_EVOLVE_MODEL", "claude-sonnet-5"

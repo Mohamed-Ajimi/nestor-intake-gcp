@@ -29,7 +29,19 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_PLANNER_MODEL = "gemini-2.5-flash"
+#: Moved from gemini-2.5-flash by quick task 260901-lf2 (2026-09-01). See the
+#: rationale block at gates.py `_GATE_MODEL` -- one measured replay of run
+#: fb9484dd's 267 real Flash prompts moved all five Flash sites together.
+#: NOTE 3.7 THINKS ANYWAY despite thinking_budget=0, so the "thinking disabled"
+#: invariant named in the module docstring above is an INTENT WE REQUEST AND DO
+#: NOT GET on this model. Output tokens rise 4.2x; the operator accepted the cost.
+#: ⚠ THIS SITE HAS THE TIGHTEST OUTPUT CEILING OF THE FIVE (`_MAX_OUTPUT_TOKENS`
+#: = 1536, below) and 3.7 spends output tokens on reasoning, so it is the Flash
+#: site most exposed to truncation. WHICH OF THE 267 REPLAYED PROMPTS WERE
+#: PLANNER PROMPTS WAS NOT BROKEN OUT, so this specific interaction is NOT
+#: separately evidenced -- only the aggregate zero-error result is. A live run is
+#: what settles it.
+_PLANNER_MODEL = "gemini-3.7-flash"
 _MAX_OUTPUT_TOKENS = 1536
 _RESEARCH_CHAR_BUDGET = 60_000  # cap the prose fed to the planner (cost guard)
 
