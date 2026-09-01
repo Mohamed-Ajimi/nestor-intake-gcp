@@ -10,7 +10,9 @@ Coverage:
   1. clear-brief path: needs_clarification always False, >=1 stakes-tagged focus
      area, taxonomy in {A,B,C,D}, stakes in {low,med,high}.
   2. audited egress: the call goes through anthropic_messages (NOT gemini_generate),
-     model == "claude-sonnet-4-6".
+     model == "claude-sonnet-5" (moved off claude-sonnet-4-6 by quick task
+     260901-j6w, 2026-09-01), that model is EQUAL to the skeptic model, and it
+     resolves to a real price row (the G-7 NULL-cost guard).
   3. multi-line fenced RESEARCH_PROMPT: RESEARCH_PROMPT_START/END blocks parse into
      research_prompt strings with inner newlines preserved.
   4. backward-compat: every focus_area dict has a 'focus_area' str key so
@@ -179,14 +181,60 @@ class TestClearBrief:
         )
 
     def test_audited_anthropic_messages_called_once(self):
-        """The single LLM egress is anthropic_messages on claude-sonnet-4-6."""
+        """The single LLM egress is anthropic_messages on claude-sonnet-5."""
         self._call()
         assert len(self.audited.calls) == 1
         call = self.audited.calls[0]
-        assert call["model"] == "claude-sonnet-4-6"
+        assert call["model"] == "claude-sonnet-5", (
+            f"the intake call went out on {call['model']!r}. Quick task 260901-j6w "
+            f"moved this stage to claude-sonnet-5; a literal is pinned here (rather "
+            f"than a comparison against _INTAKE_MODEL, which would be tautological "
+            f"and green for ANY value) so an unintended model drift turns this red."
+        )
         # anthropic_messages receives a messages list, not gemini `contents`.
         assert isinstance(call["messages"], list)
         assert call["messages"][0]["role"] == "user"
+
+    def test_intake_model_equals_skeptic_model(self):
+        """The documented intake/skeptic equality invariant, pinned as a RELATIONSHIP.
+
+        `intake.py`'s module docstring states "same literal as the skeptic model"
+        and calls it a DO-NOT-RELAX invariant, but until quick task 260901-j6w
+        nothing tested it -- the two constants live in different modules and could
+        drift apart silently. This arm is deliberately NOT a literal: it stays true
+        and stays meaningful across any future model move, and fails only if the
+        pair actually diverges.
+        """
+        from nestor_pulse_sdk.pipeline.tribunal.intake import _INTAKE_MODEL
+        from nestor_pulse_sdk.pipeline.tribunal.pipeline import _SKEPTIC_MODEL
+
+        assert _INTAKE_MODEL == _SKEPTIC_MODEL, (
+            f"intake model {_INTAKE_MODEL!r} has drifted from skeptic model "
+            f"{_SKEPTIC_MODEL!r}. intake.py documents these as one literal; move "
+            f"both or neither."
+        )
+
+    def test_intake_model_has_a_price_row(self):
+        """G-7 guard: the intake model must resolve in cost_prices.json.
+
+        compute() returns None for an unknown model, the caller writes NULL
+        cost_usd, and SUM(cost_usd) silently SKIPS it -- so a model swap that
+        forgets its price row destroys cost tracking without failing anything.
+        Mirrors the `is not None` arm test_synthesis_opus5.py carries for
+        claude-opus-5, and is the reason that defect cannot recur here.
+        """
+        from decimal import Decimal
+
+        from nestor_pulse_sdk.audit import cost_table as ct
+        from nestor_pulse_sdk.pipeline.tribunal.intake import _INTAKE_MODEL
+
+        cost = ct.compute("anthropic", _INTAKE_MODEL, 1_000_000, 1_000_000, 0, 0)
+        assert cost is not None, (
+            f"anthropic/{_INTAKE_MODEL} has NO row in audit/cost_prices.json, so "
+            f"compute() returned None and every intake call would write NULL "
+            f"cost_usd (the booked G-7 defect). Add the price row."
+        )
+        assert cost > Decimal(0)
 
 
 # ---------------------------------------------------------------------------

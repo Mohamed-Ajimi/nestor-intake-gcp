@@ -357,7 +357,7 @@ _DECISION_MAX_CHARS = 4000
 # `workshop._WORKSHOP_MODEL` resolves to, read FROM THE ENV DIRECTLY rather than by
 # importing `workshop` — that import would be circular.
 _GROUP_MODEL = os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_GROUP_MODEL") or os.environ.get(
-    "NESTOR_TRIBUNAL_WORKSHOP_MODEL", "claude-sonnet-4-6"
+    "NESTOR_TRIBUNAL_WORKSHOP_MODEL", "claude-sonnet-5"
 )
 _GROUP_MAX_TOKENS = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_GROUP_MAX_TOKENS", "4096"))
 _GROUP_RETRIES = int(os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_GROUP_RETRIES", "2"))

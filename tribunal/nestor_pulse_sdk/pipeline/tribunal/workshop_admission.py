@@ -584,7 +584,12 @@ async def admit_invented_angles(
 
             model = _WORKSHOP_MODEL
         except Exception:  # noqa: BLE001 — a missing constant is not a crash
-            model = "claude-sonnet-4-6"
+            # MUST TRACK `workshop._WORKSHOP_MODEL` — this branch exists only to
+            # mirror it when the import above fails. Moved with it off
+            # claude-sonnet-4-6 by quick task 260901-j6w. A divergence here is
+            # silent: the run would bill against a differently-priced model on a
+            # path nothing routinely exercises.
+            model = "claude-sonnet-5"
 
     async def _on_retry(attempt: int, maximum: int, wait_s: float, _label: str) -> None:
         if feed is None or handle is None:

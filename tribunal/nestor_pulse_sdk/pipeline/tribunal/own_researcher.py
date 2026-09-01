@@ -141,7 +141,7 @@ _MAX_SEARCHES = int(os.environ.get("NESTOR_TRIBUNAL_OWN_MAX_SEARCHES", "6"))
 _MAX_FETCH_USES = int(os.environ.get("NESTOR_TRIBUNAL_OWN_MAX_FETCH", "6"))
 _MAX_PAUSE_TURNS = int(os.environ.get("NESTOR_TRIBUNAL_OWN_MAX_PAUSES", "3"))
 _MAX_TOKENS = int(os.environ.get("NESTOR_TRIBUNAL_OWN_MAX_TOKENS", "8192"))
-_MODEL = os.environ.get("NESTOR_TRIBUNAL_OWN_MODEL", "claude-sonnet-4-6")
+_MODEL = os.environ.get("NESTOR_TRIBUNAL_OWN_MODEL", "claude-sonnet-5")
 
 #: Characters of a search RESULT line rendered back to the model. The same 240
 #: `gates._gate_batch`, `grouping._cluster_block` and `serpapi._clean_results`

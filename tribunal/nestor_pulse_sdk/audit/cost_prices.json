@@ -22,6 +22,13 @@
     "cache_read": 0.50,
     "cache_creation_5m": 6.25
   },
+  "_claude_sonnet_5_source": "Quick task 260901-j6w, 2026-09-01. THE ENGINE'S WORKHORSE MODEL -- the operator moved the six production tribunal defaults (skeptic, intake, workshop, evolve, grouping, own-researcher) from claude-sonnet-4-6 to claude-sonnet-5 on this date. The skeptic stage alone measured 79% of run cost on run fb9484dd ($19.68 of $24.78 priced), so this row prices the single most expensive stage in the pipeline. prompt 2.00 and completion 10.00 are the OFFICIAL published Anthropic rates (pricing page, verified 2026-09-01), as are cache_read 0.20 and cache_creation_5m 2.50 -- and note that those two ALSO happen to equal Anthropic's standard 0.1x and 1.25x multipliers applied to prompt, the identical derivation every other anthropic/* row in this file uses (opus-4-5: 15 / 1.5 / 18.75; opus-5: 5 / 0.50 / 6.25; sonnet-4-6: 3 / 0.30 / 3.75). They agree, so nothing is being passed off as a reading that is not one. WHY THIS ROW IS LOAD-BEARING AND NOT COSMETIC: compute() returns None for an unknown model, the caller writes NULL cost_usd, and SUM(cost_usd) silently skips it -- the booked G-7 defect. Swapping the model without adding this row would have destroyed cost tracking for 79% of every run's spend, silently. The sonnet-4-6 row below is DELIBERATELY RETAINED: historical runs, the untouched critique/ tooling, and the legacy claude deep-research adapter (tools/claude_adapter.py) all still resolve against it. THE PROJECTED SAVING IS ARITHMETIC, NOT AN OBSERVED RESULT: 33% cheaper per token on paper, ~13% after adjusting for the ~30% token inflation of the newer tokenizer, but a different model may use different token volumes AND a different number of tool-use turns. The real figure is unknown until a run executes.",
+  "anthropic/claude-sonnet-5": {
+    "prompt": 2.0,
+    "completion": 10.0,
+    "cache_read": 0.20,
+    "cache_creation_5m": 2.50
+  },
   "anthropic/claude-sonnet-4-6": {
     "prompt": 3.0,
     "completion": 15.0,

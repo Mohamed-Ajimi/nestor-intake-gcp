@@ -136,7 +136,7 @@ log = logging.getLogger(__name__)
 #   _ORIENT_MAX_CONFLICTS   brief-vs-world flags kept per question.
 # ---------------------------------------------------------------------------
 _WORKSHOP_MODEL = os.environ.get(
-    "NESTOR_TRIBUNAL_WORKSHOP_MODEL", "claude-sonnet-4-6"
+    "NESTOR_TRIBUNAL_WORKSHOP_MODEL", "claude-sonnet-5"
 )
 _ORIENT_MAX_QUESTIONS = int(
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_ORIENT_QUESTIONS", "8")

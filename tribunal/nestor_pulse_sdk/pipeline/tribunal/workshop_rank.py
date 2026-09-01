@@ -209,7 +209,7 @@ _RANK_MODEL = os.environ.get(
     "NESTOR_TRIBUNAL_WORKSHOP_RANK_MODEL", "gemini-2.5-flash"
 )
 _EVOLVE_MODEL = os.environ.get(
-    "NESTOR_TRIBUNAL_WORKSHOP_EVOLVE_MODEL", "claude-sonnet-4-6"
+    "NESTOR_TRIBUNAL_WORKSHOP_EVOLVE_MODEL", "claude-sonnet-5"
 )
 _CRITIQUE_BATCH = int(
     os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_CRITIQUE_BATCH", "40")

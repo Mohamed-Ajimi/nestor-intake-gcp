@@ -36,7 +36,9 @@ downstream shape compatibility (the vestigial ``needs_input`` run status, the
 populated by this module.
 
 LLM call invariants (critical, DO NOT relax):
-  - model: claude-sonnet-4-6 (same literal as the skeptic model)
+  - model: claude-sonnet-5 (same literal as the skeptic model — they are kept
+    EQUAL deliberately; if one moves, move both. Quick task 260901-j6w moved the
+    pair off claude-sonnet-4-6 on 2026-09-01.)
   - routed through audited.anthropic_messages (grep gate — keeps the audit hash
     chain + cost rollup intact; NEVER a direct provider call, NEVER the Anthropic
     agent SDK query entry point which owns its own egress)
@@ -56,7 +58,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_INTAKE_MODEL = "claude-sonnet-4-6"
+_INTAKE_MODEL = "claude-sonnet-5"
 _MAX_OUTPUT_TOKENS = 2048
 
 # Fenced markers delimiting the multi-line, self-contained RESEARCH_PROMPT block

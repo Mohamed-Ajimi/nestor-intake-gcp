@@ -247,8 +247,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: Anthropic model for skeptic calls
-_SKEPTIC_MODEL = "claude-sonnet-4-6"
+#: Anthropic model for skeptic calls. Moved off claude-sonnet-4-6 by quick task
+#: 260901-j6w (2026-09-01): this stage measured 79% of run cost on run fb9484dd
+#: ($19.68 of $24.78 priced), and sonnet-5 is published at $2/$10 per MTok against
+#: sonnet-4-6's $3/$15. Its price row in audit/cost_prices.json is LOAD-BEARING —
+#: without it compute() returns None and every skeptic call writes NULL cost_usd.
+_SKEPTIC_MODEL = "claude-sonnet-5"
 
 # Skeptic-stage guards (added after a sequential-skeptic overnight hang on a broad
 # brief). NO claim cap — every claim still gets skeptics — but they run CONCURRENTLY
