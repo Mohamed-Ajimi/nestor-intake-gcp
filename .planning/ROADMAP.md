@@ -166,7 +166,8 @@ green.** Detail: `15.8-13-SUMMARY.md` § FINDING-1 and `.planning/STATE.md` § G
 
 Plans:
 
-- [x] TBD (run /gsd-plan-phase 15.8 to break down) (completed 2026-08-05)
+- [x] TBD (run /gsd-plan-phase 15.8 to break down)
+ (completed 2026-08-05)
 
 ### Phase 15.7: Research Engine Redesign — Creative Workshop Loop (Wave 4) (INSERTED)
 
@@ -675,6 +676,51 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
+
+### Phase 23.1: Platform hardening: authorization boundary, space deactivation cascade, AI cost control, tribunal run ownership, and CI coverage (INSERTED)
+
+**Goal:** Close the verified authorization, cost-control and run-ownership defects found by the 2026-09-03 audit, without breaking the live client surface. Every operator-only verb is gated by ONE shared `_superadmin_gate` (existence-hidden 404) while the nine client-reachable routes stay open and pinned by test; deactivating a space actually revokes its members; a second concurrent AI skill run is refused by a DB invariant and context-pack can no longer flip an arbitrary intake to `decomposed`; a displaced Tribunal worker can no longer heartbeat or finalize a run it lost, and the two non-idempotent paid Tribunal endpoints become safe under concurrency; CI stops being blind to the non-integration suite and the frontend gates.
+**Requirements**: SEC-01 (server-side role enforcement on every operator verb), SEC-02 (space deactivation revokes access), COST-01 (no duplicate paid work), TENANT-02 (no cross-tenant access — unchanged, must stay green)
+**Depends on:** Phase 23
+**Plans:** 15 plans
+
+**Authority:** `23.1-CONTEXT.md` — verified findings, the client stay-open list, and decisions D-23.1-01..10. Where the source audit and CONTEXT disagree, CONTEXT wins.
+
+**Cost:** ZERO provider spend. No research run is triggered by this phase.
+
+Plans:
+**Wave 1** *(nine file-disjoint plans; no dependencies)*
+
+- [ ] 23.1-01-PLAN.md — wave 1 — D-23.1-01: promote `_superadmin_gate` into `app/auth/gates.py`; `research_routes.py` imports it; its denial suite stays green untouched
+- [ ] 23.1-02-PLAN.md — wave 1 — the client stay-open pin suite for all ten client routes, PROVED non-vacuous by applying the gate to `GET /skill-runs` and observing RED
+- [ ] 23.1-03-PLAN.md — wave 1 — D-23.1-03: space deactivation cascades to its members (IdP disable + revoke); reactivate restores only what the cascade took down
+- [ ] 23.1-04-PLAN.md — wave 1 — D-23.1-05: `patch_if` compare-and-swap; context-pack can only reach `decomposed` from `validated_by_client`, else the run finalizes `failed`
+- [ ] 23.1-05-PLAN.md — wave 1 — D-23.1-06: `worker_id` fence on the tribunal heartbeat and both terminal writes
+- [ ] 23.1-06-PLAN.md — wave 1 — D-23.1-07 + D-23.1-08: advisory-locked report-proposal generation, compare-and-swap on `POST /answer`, and a `brief` max_length
+- [ ] 23.1-07-PLAN.md — wave 1 — CONTEXT § 6: thread identity explicitly through the finalize writers, delete `_ACTIVE_IDENTITY`, and move the pool-check accessor into the db seam (turns the red D-03 guard green)
+- [ ] 23.1-08-PLAN.md — wave 1 — frontend hygiene: uninstall `rehype-raw`, delete two dead components, one `StatusPill`
+- [ ] 23.1-09-PLAN.md — wave 1 — D-23.1-10: gitignore tfstate, correct DEPLOY.md against `deploy-api.sh`, reconcile CLAUDE.md's `decomposed` ceiling with the live research router
+
+**Wave 2** *(blocked on 23.1-01 + 23.1-02)*
+
+- [ ] 23.1-10-PLAN.md — wave 2 — D-23.1-02: gate the eight intake operator verbs, with denial, no-side-effect and superadmin-still-works arms
+- [ ] 23.1-11-PLAN.md — wave 2 — D-23.1-02: ONE router-level gate on `ai_router`, with zero-provider-call and zero-new-skill_runs assertions
+
+**Wave 3** *(blocked on 23.1-11 — shares `ai_routes.py`)*
+
+- [ ] 23.1-12-PLAN.md — wave 3 — D-23.1-04: alembic 0014 partial unique index on `skill_runs (intake_id, skill) WHERE status='running'`, duplicate pre-flight, and the 409 translation
+
+**Wave 4** *(blocked on 23.1-12 — alembic linearity)*
+
+- [ ] 23.1-13-PLAN.md — wave 4 — alembic 0015: drop the dead `skill_runs.started_at` column
+
+**Wave 5** *(blocked on 23.1-07 + 23.1-13 — D-23.1-09 lands CI LAST)*
+
+- [ ] 23.1-14-PLAN.md — wave 5 — fix the three remaining red non-integration tests, widen `cloudbuild.test.yaml` with a collection assertion, add tsc+vitest to `frontend/cloudbuild.yaml`; lint deliberately deferred (DEF-23.1-02)
+
+**Wave 6** *(blocked on 23.1-14)*
+
+- [ ] 23.1-15-PLAN.md — wave 6 — `23.1-UAT.md` operator hand-off, the tribunal Cloud Build gate, the deploy, and LIVE observation of the 404/200 boundary
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
