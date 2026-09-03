@@ -1,237 +1,138 @@
-# CONTINUE HERE — handoff 2026-08-10
+# CONTINUE HERE — handoff 2026-09-01
 
-**Supersedes the 2026-08-06 handoff entirely.** That one's central warning — *"the engine on disk is
-NOT the engine that is deployed"* — **has been discharged.** Everything is deployed. Do not re-apply
-it.
-
-Branch `master`, HEAD `96564b4`, tree clean. **798 commits ahead of `origin/master` — still never
-pushed.**
+**Supersedes the 2026-08-10 handoff entirely.** Branch `master`, HEAD `300be1a`, tree clean apart
+from untracked `.claude/`.
 
 ---
 
 ## The one fact that shapes everything below
 
-**Three services are live at tag `20260806-175613`, and NOT ONE RUN HAS EXECUTED ON THEM.**
+**Everything on disk is deployed, and nothing has run on it.**
 
-Re-verified 2026-08-10: newest audit write anywhere in the bucket is still `2026-08-05T19:21:31Z`,
-run prefix count still **9**. So the deploy is real, and **every change in it is unexercised**. The
-language wiring, the report-size directive and the widened gate context have never once run in
-production.
+Six changes shipped across 2026-08-31 and 2026-09-01, in three deploys. The last one put two new
+models into the engine. **No research run has executed since.** Every cost and quality number in this
+file is arithmetic or replay — not observation.
 
-| service | revision (verified live 2026-08-10) |
-|---|---|
-| `tribunal-api` | `tribunal-api-20260806-175613-180706` |
-| `tribunal-worker` | `tribunal-worker-20260806-175613-180925` |
-| `nestor-api` | `nestor-api-00045-hdw` |
-
-Digests were verified built==deployed at deploy time (`status.imageDigest`, never
-`containers[0].image` — G-1). Worker env carries `NESTOR_TRIBUNAL_UNCAPPED` as its **only**
-`NESTOR_TRIBUNAL_*`, so the new gate caps (**4000/4000**) and the validated Wave-4 config are the
-code defaults that actually run.
+The next real run is the first evidence. It costs ~$29, so it is a deliberate spend.
 
 ---
 
-## ⛔ READ THIS BEFORE RUNNING ANY gcloud COMMAND
+## Live state (all digest-proven)
 
-**The active account had silently switched to `mohamed.ajimi@agiliz.com`** between 08-06 and 08-10.
-Four accounts exist on this machine. **Nestor Pulse = `tools@dotto.be` /
-`project-cb01b861-cb4a-438d-b9a`.**
-
-```bash
-gcloud config list --format="value(core.account,core.project)"   # BOTH, every time
-gcloud config set account tools@dotto.be                          # if wrong
-```
-
-⚠ **AND THE NEW HALF OF THIS TRAP, which cost real confusion today:**
-**`--format='value(...)'` renders a PERMISSION ERROR as an EMPTY STRING.** Three services and a whole
-bucket listing came back blank and read exactly like *"the resources are gone"*. They were fine; the
-identity was wrong. **When a `value()` read comes back empty, re-run it without `--format` before
-believing it.**
-
----
-
-## ⛔ THE NEXT MEASURED RUN IS A NEW BASELINE, NOT A COMPARISON
-
-Two independent dimensions of comparability with `368ff3a0` are gone:
-
-- **`260806-lvt`** changed the report's **shape** (language directive + client-chosen length now
-  reach synthesis);
-- **`260806-o96`** changed **which claims reach paid verification** (the gate now sees whole
-  questions, not 120-char join keys).
-
-**Say this out loud before anyone builds a comparison table.** The right frame for the next run is
-*"does the new behaviour appear at all"*, not *"is it better than 368ff3a0"*.
-
-### What to look for in that first run, in priority order
-
-1. **Does the report come out in ONE named language?** The strong directive (*"Write EVERYTHING in
-   {lang} and ONLY {lang} … Never mix languages"*) has **never fired in production**. Confirm the
-   dispatch assignments now say *"Report all findings in Dutch."* rather than *"…in the language of
-   the assignment above."* — readable straight from the audit bucket.
-2. **Did the client's chosen report size take effect?** `368ff3a0` delivered **356,352 chars**
-   against a form whose largest option offers *"approx. 10-20 pages"*. Expect materially shorter for
-   a `compact`/`standard` intake — but it is a **target, not a cap** (see G-17).
-3. **Did the gate see whole questions?** Pull one gate call and check the decision context is
-   ~1165 chars of full sentences, not 576 chars of mid-word cuts.
-4. Everything else.
-
----
-
-## Where the phase stands
-
-**Phase 15.8 is 14/15.** The only incomplete plan is `15.8-15`, and within it only **Task 3 — the
-combined Phase-15\* browser UAT + operator sign-off.** It costs nothing and closes the phase.
-`verify_chain` is GREEN on `368ff3a0`, so the Art. 12 hard-stop is clear.
-
----
-
-## What shipped 2026-08-06 (all live, all unexercised)
-
-| commit | |
-|---|---|
-| `74cdf94` `5e6425c` `70f9f11` | `260806-dn8` — report synthesis → `claude-opus-5`, caps 8192→20000, price row, G-10 |
-| `39fec86` `1de2346` `911318c` | `260806-lvt` — intake report **language + size** wired through to synthesis |
-| `85c3aa9` | `260806-o96` — the claim gate gets the **whole question**; both gate caps → 4000 |
-
-Full narrative: **`.planning/SESSION-260806.md`**. Run evidence:
-**`docs/tribunal-run-reports/run-20260805-368ff3a0-DISPATCH.md`** (all 19 dispatched sub-questions +
-the gate context verbatim).
-
-### Two off switches were found, not one
-
-`260806-lvt` began as "wire the language through". While grounding it, `pipeline.py`'s zero-touch
-path turned out to hardcode `report_spec=None`, so `_spec_directives` returned `""` on every seam run
-and the `REPORT SHAPING (client-chosen — honor these)` block **the engine already knew how to emit**
-reached zero prompts. The intake had asked *"Gewenste omvang van het rapport"* all along; the answer
-died on that line.
-
----
-
-## Open decisions — the ball is with the operator
-
-| # | Decision | State |
+| Service | Revision | Tag |
 |---|---|---|
-| 1 | **Trigger the first run on the new code.** Nothing validates any of it until then | **OPEN** |
-| 2 | **Task 3** browser UAT + sign-off — the only thing left in 15.8 | **OPEN** |
-| 3 | **G-13** — should `brief_conflicts` be *researched* at all, or only *reported*? Its content had real value (the void-premise finding was the run's headline), so the fix is to reshape it into a question, not to suppress it | **NEEDS RULING** |
-| 4 | Revoke `roles/logging.logWriter` on `nestor-run@` (granted 2026-08-06, accepted as reversible) | **OPEN** |
-| 5 | Commit the § 15.2.k queue-check config (G-3) — **but see the cheaper canary method below** | **OPEN** |
-| 6 | **Push 798 commits to `origin/master`** | **OPEN** |
+| `nestor-frontend` | `00035-zz2` | `20260901-…`/`20260831-160956` |
+| `nestor-api` | `00047-ghp` | `20260831-124920` |
+| `tribunal-api` | **`00023-bc6`** | `20260901-134253` |
+| `tribunal-worker` | **`00009-fkm`** | `20260901-134253` |
+
+Audit bucket: **10 run prefixes**, newest write `2026-08-31T08:43:24Z`. No run triggered by any deploy.
 
 ---
 
-## Gaps
+## What changed in the engine, and what deliberately did not
 
-**Closed since the last handoff:** G-10 (deployed) · **G-5** (answered by measurement, fixed,
-deployed — the cap everyone suspected was innocent; `_LABEL_MAX_CHARS = 120` was the defect).
-
-| id | Gap |
+| Stage | Now runs |
 |---|---|
-| **G-7** | **Deep research bills at exactly $0.00, so the `cost_usd IS NULL` guard no longer detects the floor. Highest priority — now the oldest open gap.** The Opus 5 price row did NOT fix it; it prevented a *new* instance of the same class |
-| **G-12** | **19 members dispatched vs 15 winners recorded** (7+6+5+1). ⛔ **Measure before fixing** — `research_division.py` already logs the per-group member count at dispatch; read that first. Fixing before measuring risks correcting the right number |
-| **G-13** | **A `brief_conflicts` entry was dispatched as a paid research sub-question**, cut mid-URL at exactly 600 chars (`_SUBQ_CHARS`). Needs decision 3 above |
-| **G-14** | The `cross_cutting` flag is stamped on the winner dict and **never persisted**, so "were both cross-cutting slots filled" is permanently unmeasurable |
-| **G-15** | **Group 1 sat at the 7-member cap with two near-duplicates.** Cheap fix: dedup *inside* the assembled group, where the cap actually binds — not a tighter global threshold |
-| **G-16** | **`output_form` (Notion / PDF / other) is asked on the intake and read by nothing.** Same four touch points as the size wiring |
-| **G-17** | **The report-length directive is a TARGET, NOT A CAP.** The real ceiling is the per-section token budget × one section per client question — that is what produced 356,352 chars. If reports still overshoot after the first run, this is the next lever |
-| G-1 | `containers[0].image` is a mutable **TAG** — read `status.imageDigest`. Runbook digest-pin proofs still flagged, not edited |
-| G-2 | `nestor-frontend` had **no** digest baseline; `nestor-api`'s was truncated to 8 hex chars |
-| G-3 | § 15.2.k queue recipe still uncommitted — **but no longer the cheapest queue check** (see canary below) |
-| G-4 | `DATABASE_URL_WORKER` parse — strip the query string BEFORE the last path segment (db is `nestor`) |
-| G-6 | Discovery section has a quote but **0 URLs / 0 citations** → provenance FAIL |
-| G-8 | `assignment_yield.cost_usd` NULL on all 12 → D-R8 unanswerable |
-| G-9 | Source `resolution_status` 2% resolved; `unresolved_anchors` 1 → 19 |
-| G-11 | `own` still listed in "Configured streams" though D-R5 removed it (0 rows dispatched) |
-| — | **Refuted claims are unreadable** — deleted from `claim`, only orphaned verdicts survive |
-| — | **Corroboration merge key is still normalised exact text.** V-01 failed with keys too GRANULAR (396→396); `368ff3a0` failed with keys too COARSE (241→4). Opposite errors, same zero merges |
+| Skeptic, intake, workshop, grouping, evolve, admission | **`claude-sonnet-5`** ($2/$10) |
+| Gates, grouping, report planner, rank, admission, evolve-meta | **`gemini-3.7-flash`** |
+| **Claim distiller** | **`gemini-2.5-flash` — LEFT ON PURPOSE** |
+| **`claude` deep-research stream** (`tools/claude_adapter.py`) | **`claude-sonnet-4-6` — LEFT ON PURPOSE** |
+
+⛔ **Do not "finish the job" on either exception.**
+
+- The **distiller** contributed ZERO of the 267 replayed prompts (it is the D-14 fallback; every
+  stream returned its own fact list), and it feeds `_split_distiller_line` — the parser behind the
+  V-01 incident where **278 well-formed claims were all dropped** because the model emitted the
+  literal string `<TAB>`. `test_factlist_fallback.py:1739` pins the literal as a guard.
+- The **claude DR adapter** drives every `low`-stakes angle plus the high-stakes redundancy copy.
+  Moving it changes research OUTPUT, not just cost. Because it is unchanged, the UI label at
+  `pipeline.py:4762` (`"Claude claude-sonnet-4-6 +web"`) is still TRUE — do not "fix" it.
 
 ---
 
-## Three generalisations worth more than the specifics
+## ⛔ WHAT THE NEXT RUN MUST CHECK
 
-- **When a cap is suspected, measure what reaches the CONSUMER, not the cap.** G-5's suspected cap
-  had 52% headroom; a constant nobody listed as a suspect was the entire defect.
-- **Which services a change touches is a MEASUREMENT WITH AN EXPIRY DATE, not a fact.** D-W5-16 said
-  "two services"; it was right when written and wrong on 08-06. Re-derive from the diff **every**
-  deploy — skipping `nestor-api` would have left the whole fix inert while reading as deployed.
-- **When a truncated identifier reaches a reader, resolve it on the READ path instead of widening the
-  identifier.** Second time this has paid off (G-10, then G-5). Widening an identity key renames
-  every stored value.
+Projected total ≈ **$29** (was $27.79): −$2.62 from Sonnet 5, +$1.50 from Gemini 3.7.
 
----
-
-## Standing cautions
-
-**Reading a run — cheap and underused**
-- ⭐ **The GCS audit bucket IS a read surface and the agent can read it.** `gcloud storage ls`/`cat`
-  on `gs://…-nestor-audit/runs/<run_id>/`. **`request.query` is the FULL untruncated assignment.**
-  Read-only, no Cloud Build, no spend. D-W5-18's "no read surface" is true of the **yield tables**
-  and false of the **bucket**.
-- ⚠ A `for f in $(gcloud storage ls …); do gcloud storage cat "$f" > out; done` loop **silently
-  produced 0-byte files for 3 of 4**. Always `ls -la` after — a 0-byte blob reads like an empty
-  audit record.
-- ⚠ The 2000-char audit truncation in the `d6bb3aae` forensics applies to **`gemini-2.5-flash`**
-  calls, NOT to deep-research dispatch payloads.
-- ⭐ **`gcloud builds log <id>` WORKS and is not classifier-blocked** — that is how to read test
-  counts when `builds submit` streams nothing because the config logs to Cloud Logging.
-- **Judge the engine from the delivered report** (`output` row, `format='markdown'`) — not the claim
-  table, not the logs.
-
-**Spend safety**
-- ⭐ **The always-on worker is its own canary.** At `minScale=1` polling every 2s, any claimable row
-  would ALREADY have been claimed and would be writing audit blobs. So listing the audit bucket for
-  the newest write answers *"is anything running or claimable"* **read-only, ~30s, no DB credential,
-  no Cloud Build.** Used twice on the 08-06 deploy; cheaper and stronger than § 15.2.k.
-- **`min-instances=0` does NOT stop a worker booting — the loop CLAIMS FIRST, SLEEPS LAST.**
-- **The verification stage works. Do not touch it.**
-
-**Tests + CI**
-- **`tribunal/cloudbuild.test-engine.yaml`** — one single-quoted `bash -c '…'` block capped at
-  10,000 chars. **No apostrophes anywhere inside it.** `EXPECTED_FILES` and the test path move in
-  **one** edit; it is **44**.
-- ⛔ **`test_synthesize_report.py` is NOT in the gate's `WANTED` list.** Tests written there never run
-  in CI. **Extract the real 44-file list from the config; never trust a filename.**
-- **Never pipe a build or test command through `tail`** — that returns the pipe's exit code.
-- Local runner: `Nestor\.venv\Scripts\python.exe` (3.11.9). `pipeline.py` DOES import there.
-  Full 44-file gate ~60s. **Docker absent.** The 6 `PYTEST_CURRENT_TEST` 32767-char errors are
-  present at every commit and are not yours.
-- A stdlib-only Python at `C:/Users/ajimimo/google-cloud-sdk/platform/bundledpython/python.exe`
-  (3.14). ⛔ **Never use the `ast`-lift harness for name resolution — it manufactures missing names.**
-
-**Code traps**
-- ⚠ **THREE similarly-named caps exist**: `pipeline._GATE_DECISION_CONTEXT_CHARS` (4000) ·
-  `gates._CONTEXT_MAX_CHARS` (4000) · `workshop._CONTEXT_MAX_CHARS` (2000, unrelated). **Grep by
-  module, never by name.** The first two truncate the same string **in series** — raising one alone
-  is inert, and a test now pins the relationship.
-- ⚠ **`FieldRenderer` stores an `allow_text` radio as `{choice, text}`**, a plain radio as a bare
-  string. `_first_nonempty` would `str()` the dict into its repr and report the answer as **unset**.
-- **`_LABEL_MAX_CHARS = 120` is an IDENTITY key, not a size guard.** Never widen it. A parked note
-  once called it "safe to remove"; that note was wrong.
-
-**Ops**
-- **Tenant binding is mandatory** for `run_event`, `assignment_yield`, `workshop_round_yield`:
-  `SET LOCAL app.tenant_id` in the SAME transaction. An unbound query **RAISES** — do not read an
-  error as an empty table.
-- **`options.logging: CLOUD_LOGGING_ONLY`** is required for query output; the `logging.logWriter`
-  grant alone is not enough.
-- **`nestor-run@` holds `secretAccessor` at SECRET scope**, not project scope. A project-level check
-  reads as a false negative.
-- **`--set-secrets` in the deploy SCRIPTS is CORRECT** — they compose the full set on purpose.
-  The `--update-secrets` rule governs hand-typed `gcloud run services update`.
-- **`.planning/` is gitignored** (`.gitignore:32`) — new files need `git add -f`, and so does any
-  path under it even when tracked.
-- **Worktrees have failed here repeatedly.** For single-plan work, run sequentially on master.
-- The agent HAS read-only gcloud; `add-iam-policy-binding` and `logging read` are blocked by the
-  **Claude Code permission classifier**. The artifact-producing `builds submit` was blocked once and
-  went through on retry after the operator said to proceed.
+1. **Is the rejected register EMPTY?** `workshop_rank.py:190` warns that thinking produces "a critic
+   that rejects nothing". Replay measured the *opposite* (3.7 gave 6 KILLs where 2.5 gave 0), but
+   3.7 **ignores `thinkingBudget=0` on real prompts**. If the register comes back empty, revert the
+   Flash change — that is the failure the warning describes.
+2. **`report_planner`** has the tightest ceiling (`_MAX_OUTPUT_TOKENS = 1536`) while 3.7 spends output
+   on reasoning it will not disable. Truncated plans show there first.
+3. **Cost.** If it lands far from $29 the token assumptions were wrong.
+4. **Do the deep-research calls still write GCS audit blobs?** Run `3d29c936` (intake-side id;
+   tribunal id `fb9484dd`) wrote 444 objects — confirm that still happens.
 
 ---
 
-## Suggested next action
+## Cost: what is known, and the three gaps
 
-**Close 15.8 with Task 3 (free), then trigger one run.** Nothing about the three deployed changes is
-validated until something executes — and the first run is a **new baseline**, so treat it as
-"does the new behaviour appear", not "is it better".
+Full detail in the `run-cost-anatomy-and-gaps` memory. Headlines:
 
-Before triggering: re-check the queue with the canary method (30s, free), and **verify the gcloud
-account** — it drifted once already.
+- **The skeptic stage is 79% of run cost**, and cost is **linear in claim-group count, ~$0.11/group**
+  (73 groups → $8.49 … 178 groups → $35.44). Volume elsewhere is irrelevant: 267 Gemini Flash calls
+  cost $0.22 while 4 Opus calls cost $4.51.
+- ⛔ **Prompt caching is NOT waste.** It saved 14–30% in all six runs. A ~1:1 create/read ratio looks
+  like a leak and is the BEST observed. Never infer waste from a ratio without pricing the alternative.
+- **The $25 budget governor has never fired** — `NESTOR_TRIBUNAL_UNCAPPED=1` (Phase 13 decision D-07)
+  makes `over_budget()` return `False` before it queries. **2 of 6 runs exceeded $25.** Operator
+  ruling 2026-09-01: **leave it uncapped**; surface cost on the run page instead.
+
+**Three gaps — any "run cost" figure is incomplete:**
+
+1. The **9 deep-research angles are unpriced** (they return `{status, report}` with no usage) — the
+   most expensive calls contribute $0.00.
+2. The **backend has a second, non-reconciling cost system**: `skill_runs.cost_estimate_usd` from a
+   hardcoded `in*3 + out*15` legacy Sonnet rate, applied whatever model ran.
+3. **Embeddings and Whisper are uncosted entirely.**
+
+Plus: the UI section titled **"True itemized cost"** can only render a total — its payload is
+`{cost_usd_total, cost_pending}`, and the total excludes the research calls.
+
+---
+
+## Open items, in the order I would take them
+
+1. **Trigger a run** and check the four things above. Everything else is blocked on evidence.
+2. **Earn the distiller evidence** — replay `test_distiller_separators.py`'s four recorded responses
+   through 3.7 and check the separator format survives. Cheap, and it closes the last model gap.
+3. **Build the real cost breakdown into the app** — the rows exist (`provider · model · tokens ·
+   cost_usd`, one per call) at `GET /api/audit/runs/{run_id}/calls`. Group by provider/model behind
+   that section so the "itemized" label stops lying.
+4. **Price the deep-research calls** (gap 1), then point the backend at `cost_prices.json` (gap 2).
+5. **RAG for research questions** — still waiting on the proposal from the last stakeholder meeting.
+   This is the one item blocked on THEM, and it is the natural agenda for the workshop.
+
+---
+
+## Standing decisions taken this session
+
+- **Budget stays uncapped.**
+- **Do not add Perplexity as a 4th research stream.** Measured: its Agent API preset `high` returns
+  `openai/gpt-5.6-sol` — the model `NESTOR_OPENAI_DR_MODEL` already runs. It would buy correlation,
+  not coverage. Its citations are `[web:N]` markers with no raw URLs, so `_extract_urls` would
+  silently extract nothing. (`perplexity/sonar` as a cheap replacement for the dropped `own` stream
+  is still an open idea — 39 s, 11 cited URLs, $0.009, versus `own`'s 2 URLs per run.)
+- **The context pack stays Dutch** (operator ruling 2026-08-31).
+- A **stakeholder email** was drafted 2026-09-01 covering status, the cost-reporting gap, the pending
+  RAG proposal, and a demo + workshop request once Yanick is back. Not yet sent.
+
+---
+
+## Traps confirmed again this session
+
+- **A repo-root `grep -rn` is unsound.** `.claude/worktrees/agent-af281d695d9b34c35/` is an orphaned
+  stale copy of the whole repo (not a registered worktree). Scope every gate to an explicit path with
+  `-I --exclude-dir=__pycache__`. It made a correct deletion read as incomplete twice today.
+- **A grep gate matches prose ABOUT the thing.** Two verify gates I wrote were unsatisfiable because
+  the mandated explanatory comment quotes the string it forbids. Settle counts by **AST**.
+- **The `>=3.12` floor is `backend/`'s only.** `tribunal/pyproject.toml` says `>=3.11` and the local
+  interpreter is 3.11.9 — the engine suite DOES run locally. Read the pyproject of the package you
+  are testing.
+- **`gcloud builds submit` was NOT classifier-blocked** this session (it was on 2026-08-13).
+- **The gcloud account drifts to `tools@epicimpact.be` mid-session** — pin `--account=tools@dotto.be`
+  on every command.
+- **The run id in the UI URL is not the tribunal run id.** `/admin/pulse/runs/3d29c936…` ↔ audit
+  prefix `fb9484dd…`. Match by newest write time.
