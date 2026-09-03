@@ -122,3 +122,87 @@ def test_unknown_future_role_is_denied():
 
     assert exc.value.status_code == 404
 
+
+
+def test_research_routes_uses_the_shared_gate_object():
+    """``research_routes._superadmin_gate`` IS ``gates.superadmin_gate`` — one object.
+
+    ``is``, not a name check (threat T-23.1-03): a copy-pasted function under the same
+    private name would satisfy any name-based assertion and is precisely what D-23.1-01
+    forbids. All nine ``Depends(_superadmin_gate)`` sites in that module resolve through
+    this one alias, so this single assertion binds every one of them.
+    """
+    from app.api import research_routes
+
+    assert research_routes._superadmin_gate is gates.superadmin_gate
+
+
+def test_research_routes_defines_no_gate_of_its_own():
+    """``research_routes.py`` no longer DEFINES a superadmin gate — it imports one.
+
+    Non-vacuous when written: at the base commit this file contained
+    ``def _superadmin_gate(...)`` and this assertion was FALSE.
+
+    Scoped to that ONE file's text on purpose — a whole-tree grep would match
+    :mod:`app.auth.gates` itself and go vacuous.
+
+    NOTE ON SCOPE — plan 23.1-01's original form of this assertion was "the substring
+    ``role != "superadmin"`` appears nowhere in research_routes.py". That form is wrong for
+    this codebase and is deliberately NOT used: after the promotion the module still holds
+    NINE in-body role re-checks that its own docstrings label "Open Q2 defense-in-depth" —
+    a second wall BEHIND the gate, not copies of it. Deleting them to satisfy a grep would
+    remove security in a plan whose entire premise is behaviour-identical promotion. What
+    D-23.1-01 forbids is a second gate DEFINITION, and that is what is asserted here.
+    """
+    from pathlib import Path
+
+    from app.api import research_routes
+
+    source = Path(research_routes.__file__).read_text(encoding="utf-8")
+
+    assert "def _superadmin_gate" not in source
+
+
+def test_every_gated_research_route_resolves_the_gate_before_the_repo():
+    """The ordering contract, pinned on the LIVE routes rather than left to a comment.
+
+    The gate's null-space 404 only wins because FastAPI resolves the signature in order and
+    ``Depends(superadmin_gate)`` precedes ``Depends(get_tenant_repo)``. Reorder any one
+    signature and that route starts answering a null-space user with the repo's 403 —
+    an existence oracle, and a change no reviewer would see as a security edit. Nothing
+    pinned this before the gate was moved; moving it is exactly when it could be lost.
+
+    Asserted for EVERY route that depends on the gate, so a tenth gated verb inherits the
+    check for free rather than needing someone to remember it.
+    """
+    import inspect
+
+    from app.api.research_routes import research_router
+    from app.db.session import get_tenant_repo
+
+    checked = 0
+    for route in research_router.routes:
+        params = list(inspect.signature(route.endpoint).parameters.values())
+        gate_pos = next(
+            (i for i, p in enumerate(params)
+             if getattr(p.default, "dependency", None) is gates.superadmin_gate),
+            None,
+        )
+        if gate_pos is None:
+            continue
+        checked += 1
+        repo_pos = next(
+            (i for i, p in enumerate(params)
+             if getattr(p.default, "dependency", None) is get_tenant_repo),
+            None,
+        )
+        if repo_pos is not None:
+            assert gate_pos < repo_pos, (
+                f"{route.path}: superadmin_gate must be declared BEFORE get_tenant_repo "
+                f"(gate at {gate_pos}, repo at {repo_pos}) or a null-space user gets the "
+                f"repo's 403 instead of the existence-hidden 404"
+            )
+
+    # Guards the guard: a rename or a refactor that stops the gate resolving here would
+    # otherwise leave this test green while checking nothing.
+    assert checked == 9, f"expected 9 gated research routes, found {checked}"

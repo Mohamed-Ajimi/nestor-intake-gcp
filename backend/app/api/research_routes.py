@@ -80,6 +80,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 
 from app.auth.dependencies import get_current_identity
+
+# D-23.1-01: the superadmin gate is now the ONE shared object in app/auth/gates.py.
+# Aliased to its former private name so not one Depends(_superadmin_gate) site below
+# has to change — the promotion is behaviour-identical by construction.
+from app.auth.gates import superadmin_gate as _superadmin_gate
 from app.auth.identity import Identity
 from app.core.config import get_settings
 from app.db import audit
@@ -150,22 +155,17 @@ def _next_research_status(current: str) -> str:
         )
 
 
-def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Identity:
-    """Superadmin role gate as a DEPENDENCY (existence-hidden 404, Pitfall 5).
-
-    Declared BEFORE ``get_tenant_repo`` in the resume/download/re-verify signatures so
-    it resolves first: a non-superadmin caller — including a null-space user — hits this
-    404 before ``get_tenant_repo`` can raise its null-space default-deny 403 (which
-    would leak that the endpoint exists; the denial suite pins EXACTLY 404).
-
-    Defined HERE, above the first handler that depends on it, rather than beside the
-    download handlers: :func:`resume_research` (15.2-19) sits directly after
-    :func:`trigger_research`, and a ``Depends`` default is evaluated at def time, so a
-    later definition would be a NameError at import.
-    """
-    if identity.role != "superadmin":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
-    return identity
+# The superadmin gate was DEFINED here until D-23.1-01; it now lives in
+# app/auth/gates.py and is imported at module top under this same private name.
+# One gate, one convention, one test surface — the intake operator verbs and
+# ai_router depend on that SAME object, and a per-route role comparison is how
+# verb number ten gets missed.
+#
+# Its ordering rule is UNCHANGED and still binds every signature below:
+# Depends(_superadmin_gate) is declared BEFORE Depends(get_tenant_repo) so the gate
+# resolves first and a non-superadmin — including a null-space user — hits its
+# existence-hidden 404 before get_tenant_repo can raise its null-space default-deny
+# 403, which would leak that the endpoint exists. The denial suite pins EXACTLY 404.
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +177,10 @@ def _superadmin_gate(identity: Identity = Depends(get_current_identity)) -> Iden
 # this module has the parameterised ``{intake_id}`` there. Declaring it after them
 # is the class of bug that is invisible in review and indistinguishable from a
 # working denial in production: a perfectly authorized caller would get a 404 that
-# looks exactly like the existence-hidden one. It sits directly beneath
-# :func:`_superadmin_gate` because a ``Depends`` default is evaluated at def time —
-# any earlier and the gate would be a NameError at import.
+# looks exactly like the existence-hidden one. (Until D-23.1-01 it also had to sit
+# beneath the gate's own ``def``, because a ``Depends`` default is evaluated at def
+# time and an earlier position would have been a NameError at import. The module-top
+# import satisfies that trivially now; only the ROUTE order above still binds.)
 #
 # (The route segments differ at the literal, so today's declaration order is not
 # what makes this correct — but the ordering is asserted by a test rather than left
