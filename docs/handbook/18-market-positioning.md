@@ -25,7 +25,30 @@ and delivery workflow.
 
 ## 18.2 The categories it is compared against
 
-There are four things a buyer might reasonably compare Nestor Pulse with.
+There are four things a buyer might reasonably compare Nestor Pulse with. The two axes that separate
+them are **how much of the work is adversarial** (does anything actively try to break a claim before
+it reaches the client) and **how much of the run is auditable afterwards**.
+
+```mermaid
+quadrantChart
+  title Adversarial depth against auditability
+  x-axis "Little auditability" --> "Fully auditable run"
+  y-axis "Single-pass generation" --> "Adversarial verification"
+  quadrant-1 "Where Nestor Pulse sits"
+  quadrant-2 "Rigorous but unauditable"
+  quadrant-3 "One prompt, one report"
+  quadrant-4 "Logged but unchallenged"
+  "OpenAI / Gemini Deep Research": [0.22, 0.18]
+  "Perplexity": [0.15, 0.12]
+  "Consultancy desk research": [0.30, 0.55]
+  "Agent frameworks (DIY)": [0.45, 0.35]
+  "Enterprise market-intel suites": [0.62, 0.25]
+  "Nestor Pulse": [0.88, 0.86]
+```
+
+⚠ The placement of everything except Nestor Pulse is **editorial judgement, not measurement.** No
+competitive benchmark has been run. What is measured about Nestor Pulse itself is listed in § 18.5;
+treat this chart as a map of the argument, not as evidence for it.
 
 ### 18.2.1 Off-the-shelf deep-research products (OpenAI Deep Research, Gemini Deep Research, Perplexity)
 

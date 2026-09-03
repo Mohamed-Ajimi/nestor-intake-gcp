@@ -30,9 +30,25 @@ constants are deliberately older than the rest, and the reasons are written into
 | Mail | Resend | — | — | — |
 
 These are the values in code; a live service may carry different environment overrides, which was
-not determined from the repository. No call sets a temperature. Every Claude call is non-streaming,
-which is why the 21,333 ceiling matters: the Anthropic SDK refuses a non-streaming request above it,
-so the obvious "triple it to 24,576" would have broken the call outright.
+not determined from the repository. Every Claude call is non-streaming, which is why the 21,333
+ceiling matters: the Anthropic SDK refuses a non-streaming request above it, so the obvious "triple
+it to 24,576" would have broken the call outright.
+
+**Sampling temperature is set where the API permits it and deliberately omitted where it does not.**
+This is worth stating precisely, because the omission looks like an oversight and is not one:
+
+| Call | Temperature | Why |
+|---|---|---|
+| Tournament judge | `0.0` (`critique/judge.py:176`) | A ranking pass must be reproducible; the same pair must not swap winners between rounds |
+| Content comparison | `0.0` (`critique/content_compare.py:98`, `:168`) | Same |
+| Claim distiller (Gemini) | `0.0` with `thinking_budget=0` (`pipeline/synthesis/steps.py:1539`, `:1548`) | Extraction, not judgement. Thinking is switched off explicitly rather than left to the default |
+| Synthesis (Opus 5) | **none passed** (`pipeline/synthesis/steps.py:161-165`) | On Opus 5 extended thinking is on by default, and with thinking on `temperature`, `top_p` and `top_k` are rejected with an **HTTP 400** |
+
+The synthesis case is a trap the code comments against by name: an earlier `temperature=0.2` was
+removed, and the docstring says not to "restore" it as a lost setting, because
+`AuditedLLMClient.anthropic_messages` forwards `**kwargs` verbatim to `messages.create`, so an
+unrecognised or forbidden key is a hard 400 rather than a warning. The same rule is why that call
+passes neither `thinking` nor `budget_tokens`. Nothing in the pipeline sets `top_p` or `top_k`.
 
 **Planned:** Voyage `voyage-3-large` at 1,024 dimensions for the Q&A chat, with Claude Haiku
 answering (chapter 17 · M-05). Not built; the dimension must be validated against current vendor
@@ -66,6 +82,39 @@ it.
 | **Report writer** | Anthropic | `claude-opus-5` | none | 20,000 per section and for the wrap; thinking on by default |
 | Quality gate (LLM-judge option) | Anthropic | `claude-sonnet-4-6` | selected by `NESTOR_QUALITY_GATE` | 1,024 per rubric dimension |
 | Blind critique judge, content comparison (dev tools) | Anthropic | `claude-sonnet-4-6` | none | 4,096 / 6,144 |
+
+Read as a division of labour rather than a list, the allocation has a shape: **Claude reasons and
+writes, Gemini Flash ranks and gates, Gemini Pro scrubs, and the three deep-research streams are
+bought from three vendors on purpose.**
+
+```mermaid
+flowchart TD
+  subgraph WS["Question workshop — generation is Claude, judgement is Flash"]
+    W1["claude-sonnet-5<br/>orientation · candidates · evolve · admission"]
+    W2["gemini-3.7-flash<br/>critique · tournament judge · meta-review · classifier"]
+  end
+  subgraph DR["Deep research — three vendors, succeed on 2 of 3"]
+    D1["Google<br/>deep-research-max-preview-04-2026<br/>background job, polled 70×30s"]
+    D2["OpenAI<br/>gpt-5.6-sol<br/>background responses + web_search_preview"]
+    D3["Anthropic<br/>claude-sonnet-4-6 + web tools<br/>NO background job — research inside the turn"]
+  end
+  subgraph VG["Gates and verification"]
+    G1["gemini-3.7-flash — gates"]
+    G2["claude-sonnet-5 — group skeptic<br/>79% of run cost"]
+  end
+  subgraph SY["Synthesis"]
+    S1["gemini-2.5-flash — claim distiller<br/>PINNED by a separator test"]
+    S2["gemini-2.5-pro — scrubber · conflict detector"]
+    S3["gemini-3.7-flash — report planner"]
+    S4["claude-opus-5 — report writer<br/>20,000 tokens/section, thinking on"]
+  end
+  WS --> DR --> VG --> SY
+```
+
+Two allocations in that diagram are deliberately *older* than the rest and must not be "finished":
+the Claude deep-research stream stays on `claude-sonnet-4-6` because its model id is coupled to
+research output rather than only to cost, and the claim distiller stays on `gemini-2.5-flash` because
+its separator priority order is pinned by a replay test.
 
 ## 11.4 How each deep-research provider is driven
 
@@ -315,3 +364,14 @@ first.
 | −$2.62 from Sonnet 5, +$1.50 from Gemini 3.7, a projected total near $29 | ⛔ **Arithmetic.** Neither model has ever executed a run |
 | That the new Flash model does not empty the rejected register in production | ⛔ **Unknown.** It ignores a zero thinking budget on real prompts; the next run's register is the test (chapter 16 § 16.10) |
 | That the report planner does not truncate under 3.7 | ⛔ **Unknown.** Tightest ceiling of the five sites |
+
+## 11.11 Where to look
+
+| To find | Open |
+|---|---|
+| A backend model id | `backend/app/core/config.py`; the inventory is [21](21-configuration-reference.md) § 21.3 |
+| An engine model id | the `NESTOR_*_MODEL` tables in [21](21-configuration-reference.md) § 21.7 |
+| How a deep-research provider is driven | `tribunal/nestor_pulse_sdk/audit/audited_llm_client.py` |
+| The price table | `tribunal/nestor_pulse_sdk/` cost module; override with `COST_PRICES_PATH` |
+| Why a model was chosen | § 11.5 above, and [17 — Decision log](17-decision-log.md) |
+| What a run actually cost | [16 — Operations runbook](16-operations-runbook.md) § 16.6 |

@@ -1,38 +1,45 @@
 # Quick Task 260903-fbt — The Nestor Pulse Handbook
 
-**Date:** 2026-09-03
+**Date:** 2026-09-03 (written), 2026-09-03 (gap-fill review pass — see § 8)
 **Base commit:** `c8b8583` (asserted before any edit; tree clean apart from untracked `.claude/`)
-**Status:** COMMITTED and PUSHED. Documentation only — **zero code changed, zero spend, no deploy**.
+**Status:** COMMITTED. ⛔ **NOT PUSHED** — `git push` is blocked by the permission classifier and
+must be run by the operator. Documentation only: **zero code changed, zero spend, no deploy**.
 
 ---
 
 ## 1. What was produced
 
-`docs/handbook/`, 21 chapters, **7,793 lines**, 31 Mermaid diagrams, verified at `c8b8583`.
+`docs/handbook/`, **24 chapters, 8,801 lines, 40 Mermaid diagrams**, verified at `c8b8583`.
 
 | # | Chapter | Lines |
 |---|---|---|
-| 00 | README and index | 116 |
+| 00 | README and index | 111 |
 | 01 | Executive overview | 152 |
-| 02 | History and timeline | 233 |
+| 02 | History and timeline | 253 |
 | 03 | Architecture | 262 |
 | 04 | Domain model and lifecycles | 229 |
-| 05 | Data model | 400 |
+| 05 | Data model | 660 |
 | 06 | Backend: the intake API | 653 |
 | 07 | AI skills | 500 |
 | 08 | The research seam | 772 |
-| 09 | Tribunal: service, worker, events, audit, cost, citations | 340 |
-| 10 | Tribunal: the research pipeline | 330 |
-| 11 | Models and providers | 250 |
+| 09 | Tribunal: service, worker, events, audit, cost, citations | 553 |
+| 10 | Tribunal: the research pipeline | 655 |
+| 11 | Models and providers | 377 |
 | 12 | Frontend | 747 |
 | 13 | Infrastructure and deploy | 522 |
-| 14 | Security and compliance | 207 |
-| 15 | Quality and testing | 162 |
-| 16 | Operations runbook | 210 |
+| 14 | Security and compliance | 219 |
+| 15 | Quality and testing | 189 |
+| 16 | Operations runbook | 243 |
 | 17 | Decision log | 372 |
-| 18 | Market positioning | 173 |
-| 19 | Known gaps and roadmap | 129 |
-| 20 | Glossary | 190 |
+| 18 | Market positioning | 196 |
+| 19 | Known gaps and roadmap | 167 |
+| 20 | Glossary | 180 |
+| 21 | Configuration reference | 437 |
+| 22 | Development workflow | 219 |
+| 23 | Repository map | 133 |
+
+⚠ An earlier revision of this summary carried per-chapter line counts from a draft state and claimed
+the work had been pushed. Both were wrong; the table above is measured and the push is still owed.
 
 `README.md` gained a pointer paragraph. Nothing else outside `docs/handbook/` and `.planning/`.
 
@@ -97,6 +104,8 @@ file, `write-13` corrected twelve derived ranges.
   frontend test count (136 `it()` cases counted in the files against 140 reported in STATE.md), and
   which Anthropic secret wins at runtime on the engine services (the deploy mounts `Nestor_Claude2`,
   the in-process bootstrap re-exports `Nestor_Claude`).
+  **SUPERSEDED in part by § 8.2:** the test-count difference was resolved (loop-generated tests).
+  The Anthropic-secret question remains open and needs a live `describe`.
 
 ## 6. What this does not claim
 
@@ -120,3 +129,74 @@ mermaid diagrams: 31
 No test suite covers documentation; the checks above are the gate. The repository's own gates were
 not run because no source file changed (`git diff --stat` over `backend/`, `frontend/` and
 `tribunal/` is empty for this task).
+
+---
+
+## 8. Gap-fill review pass (2026-09-03, second pass)
+
+The handbook was audited against the tree rather than re-read for style. The audit method was to
+compare structure and claims to the repository: heading outline of all chapters, diagram census,
+every "not determined from the code" placeholder, and a sweep for tree paths that no chapter
+referenced.
+
+### 8.1 Three factual errors found and corrected
+
+| Chapter | Was | Is |
+|---|---|---|
+| 11 § 11.2 | "No call sets a temperature." | **False.** `critique/judge.py:176` and `critique/content_compare.py:98,168` pass `temperature=0.0`, and the Gemini distiller passes `0.0` with `thinking_budget=0` (`synthesis/steps.py:1539,1548`). The synthesis call deliberately passes **none**, because with Opus 5 extended thinking on, `temperature`/`top_p`/`top_k` are an **HTTP 400** (`steps.py:161-165`). Replaced with a four-row table and the "do not restore it" trap |
+| 19 § 19.2 | The wallet cap is `_D6_MAX_WINNERS = 15` | **Two constants were conflated.** `_D6_MAX_WINNERS = 32` (`research_division.py:260`) is the dispatch cap and the real wallet; `_WINNERS_MAX = 15` (`workshop_rank.py:1012`) is the workshop cap. The old text understated the spend ceiling by 2× |
+| 01 § 01.7, 02 § 02.7 | "27 phase directories, 30 quick tasks" | Measured: **30** phase directories, **31** quick tasks at `c8b8583` |
+
+Also corrected: `00-README.md` claimed twenty diagrams and twenty chapters.
+
+### 8.2 Three open questions closed
+
+- **The 136-vs-140 frontend test count is arithmetic, not a discrepancy.**
+  `funnelLabels.test.ts:222` puts two `it()` declarations inside a loop over the three locale
+  catalogues (`:215-219`), so two static declarations register six tests: 136 − 2 + 6 = **140**.
+  Both numbers were right; only one is countable with grep. (ch. 12 § 12.16)
+- ⚠ **The structural scope-ceiling guard cannot pass, and is therefore inert.** Two tests named
+  `test_app_exposes_no_deep_research_route` (`test_scope_guard_ai.py:141`,
+  `test_no_run_research_route.py:61`) scan `main.app.routes` for a token set including the bare word
+  `research`, while `research_router` is mounted **unconditionally** (`app/main.py:152`) with eleven
+  matching paths. If the imports succeed the assertion cannot hold, so the test fails; if it passes,
+  it skipped. There is no third outcome, and since the 2026-08-31 run reported four failures with
+  neither of these among them, they skipped. The *preventive* shell guard
+  (`ci_no_run_research.sh`) is correct and unaffected — it deliberately never matches the bare
+  token. Fix: narrow the token set to the verbs the ceiling forbids. (ch. 15 § 15.7, propagated to
+  ch. 06 and ch. 19)
+- **Sampling parameters** — see 8.1.
+
+### 8.3 Three chapters added
+
+| # | Chapter | Why it was a gap |
+|---|---|---|
+| 21 | Configuration reference, 437 lines | The system has ~136 `NESTOR_*` engine dials plus the backend's typed settings and the frontend's build-time values, and **no chapter indexed any of them**. The only way to find a dial was to grep the engine. Extracted mechanically with defaults, grouped by subsystem, with the spend-bounding dials ranked and the six dead-or-test-only names called out |
+| 22 | Development workflow, 219 lines | The project mandates a planned workflow in `CLAUDE.md` and carries 638 tracked planning files, and the handbook mentioned it in **one line**. Now documents the artefact tree, the change lifecycle, phases vs quick tasks, waves and the stale-base trap, what a gate is worth, and identifier/honesty discipline |
+| 23 | Repository map, 133 lines | `docs/design/`, `attached_assets/` and `AGENTS.md` were referenced by **zero** chapters. Now every tracked path has an owner, including the tracked residue (two `.claude-phase18-*.tmp` image-tag files, the Replit set, and `tribunal/nestor_pulse/` — the four-file rejected predecessor that is easily mistaken for the engine) |
+
+### 8.4 Nine diagrams added
+
+Five chapters had none. Added: the project timeline (02), the model division of labour (11), the
+incident triage tree (16 — first branch is the silent feed that has already cost real money), the
+positioning quadrant (18, explicitly labelled editorial not measured), the gap dependency graph
+(19), the configuration-flow diagram and two workflow diagrams (21, 22), and the repository tree
+(23). Census: **31 → 40**.
+
+### 8.5 Structural consistency
+
+"Where to look" tables were added to chapters 11, 14, 15 and 16, which lacked the closing table that
+chapters 03–13 all carry. Chapters 01, 02, 17, 18, 19 and 20 still lack one by design: they are
+narrative or registers whose sources are named in the header block.
+
+### 8.6 Verification
+
+```
+24 files, 8,801 lines
+internal links: 0 broken
+code fences: balanced in all 24 files
+mermaid diagrams: 40
+git diff --stat over backend/ frontend/ tribunal/ infra/: EMPTY
+```
+
+⛔ Still not verified by running the system, and still not pushed.

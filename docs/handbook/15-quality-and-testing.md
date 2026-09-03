@@ -145,12 +145,28 @@ Kept because every entry recurred at least once after it was first written down.
 
 ## 15.7 Known contradictions and gaps
 
-- Two backend tests (`test_scope_guard_ai.py::test_app_exposes_no_deep_research_route`,
-  `test_no_run_research_route.py`) assert that no mounted route path contains `research`, while the
-  research router mounts eleven such paths. Both tests `importorskip` the app module and predate the
-  router; whether they fail or skip in CI was not determined from the repository. Four other backend
-  tests were failing and proven pre-existing on 2026-08-31 (`test_ci_guard_raw_db`,
-  `test_mail_render`, two in `test_research_runs_migration`).
+- ⚠ **The structural scope-ceiling guard cannot pass, and is therefore inert.** Two backend tests
+  share the name `test_app_exposes_no_deep_research_route`
+  (`tests/test_scope_guard_ai.py:141`, `tests/test_no_run_research_route.py:61`). Both import the
+  production app and scan `main.app.routes` for a forbidden token set that includes the bare word
+  `research`. `research_router` is included **unconditionally** at `app/main.py:152`, and eleven of
+  its path literals contain exactly that token (`app/api/research_routes.py:190,248,383,527,732,792,876,931,975,1028,1148`).
+
+  This resolves without running anything: **if the `importorskip` calls succeed the assertion cannot
+  hold, so the test fails; if the test passes, it skipped.** There is no third outcome. Since the
+  2026-08-31 backend run reported four failures and neither of these was among them, they skipped in
+  that environment — which means the guard that is supposed to prove the scope ceiling was not
+  proving it. `firebase-admin` is a declared dependency (`backend/pyproject.toml:20`), so in a
+  correctly provisioned CI environment the import succeeds and both tests fail instead.
+
+  The *preventive* twin is unaffected and correct: `scripts/ci_no_run_research.sh` deliberately
+  anchors on real invocation syntax and documents that it must never match the bare token, the
+  `in_research` enum value, or component names, so it passes on this tree for the right reason. The
+  broken guard is the structural one. Fixing it means narrowing the token set to the verbs the
+  ceiling actually forbids (`run-research`, `run_research`, `tribunal`) rather than the topic word
+  the seam legitimately uses.
+- Four other backend tests were failing and proven pre-existing on 2026-08-31
+  (`test_ci_guard_raw_db`, `test_mail_render`, two in `test_research_runs_migration`).
 - `cloudbuild.test.yaml` runs only `-m integration`; the backend's non-integration unit tests are not
   run by any Cloud Build configuration. No Cloud Build trigger is wired; every gate is run by hand.
 - The engine's historical full-suite configuration has 42 real skips under host networking and is
@@ -160,3 +176,14 @@ Kept because every entry recurred at least once after it was first written down.
   have executed once (`368ff3a0`) before three further fixes shipped.
 - The audit-blob redaction matches key names only, and the response half of a blob is not redacted
   at all; a positive scan of the bucket would require rotating the SerpAPI key.
+
+## 15.8 Where to look
+
+| To run or read | Open |
+|---|---|
+| The backend suite | `backend/tests/`, `backend/pyproject.toml` for markers |
+| The engine suite and replay fixtures | `tribunal/nestor_pulse_sdk/tests/` |
+| The frontend suite | the nine `*.test.ts` files under `frontend/src/lib/` |
+| The CI guard scripts | `backend/scripts/`, and [13](13-infrastructure-and-deploy.md) § 13.9 |
+| Which gates a build runs | `cloudbuild.test.yaml`, `tribunal/cloudbuild.*.yaml` |
+| How a change is gated before it lands | [22 — Development workflow](22-development-workflow.md) |

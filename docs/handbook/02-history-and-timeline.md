@@ -18,6 +18,26 @@ wired it to the intake, delivered the first real research runs, and then, driven
 revealed, redesigned the engine's core in five waves. As of 2026-09-03 the system is fully deployed
 and the redesigned engine, with its newest models, has yet to execute a live run.
 
+```mermaid
+timeline
+  title Two milestones and six research runs in eleven weeks (2026-06-18 to 2026-09-03)
+  section Inherited
+    Before 2026-06-18 : Third-party build, broken RLS : No tests, auth guard disabled
+  section v1.0 — GCP re-platform
+    2026-06-18 : Project scoped, 12 phases : Schema, Cloud SQL, Identity Platform
+    2026-07-20 : Cutover complete : Flow ends at decomposed
+  section v1.1 — Tribunal integration
+    2026-07-20 : Engine re-homed : First seam run b188a83e, $1.60
+    2026-07-22 : Run 4cbb5311 : Silent-green, skeptic arm off
+    2026-07-27 : Run d6bb3aae aborted : Workshop ranked the wrong input
+    2026-07-28 : Run 7dcf51d5 (V-01) : TAB parser lost 278 claims
+    2026-07-29 : Redesign spec, five waves : Workshop, tournament, gates
+    2026-08-05 : Run 368ff3a0 : All five waves, first full engine
+    2026-08-13 : Phases 21-23 : Run feed, verification page, legibility
+    2026-08-31 : Run fb9484dd : Cost anatomy, $27.79, 444 calls
+    2026-09-01 : Sonnet 5 + Gemini 3.7 : Never executed a run
+```
+
 ## 02.2 Where the code came from
 
 ### The original application
@@ -219,11 +239,11 @@ Six runs; two exceeded the $25 governor that has never been enabled (chapter 17 
 The project used a phase/plan/wave workflow (GSD) throughout: each phase has a context document
 recording the operator's decisions, numbered plans executed by isolated worktree agents, a
 verification report, and where relevant a UAT ledger. Commits are named `type(NN-MM): …` for plan
-work and `type(quick-YYMMDD-xxx)` for the 30 quick tasks. The rules the project learned about its
+work and `type(quick-YYMMDD-xxx)` for the 31 quick tasks. The rules the project learned about its
 own instruments (gates that go vacuous, worktrees on a stale base, `builds submit | tail` reporting
 the pipe's status, the `ast`-lift harness manufacturing names) are catalogued in chapter 15.
 
-Statistics at `c8b8583`: 1,718 commits, one principal author, one tag, 27 phase directories, 30
+Statistics at `c8b8583`: 1,718 commits, one principal author, one tag, 30 phase directories, 31
 quick tasks, 59 backend test files, 94 engine test files, 9 frontend test files.
 
 ## 02.8 What is not yet done

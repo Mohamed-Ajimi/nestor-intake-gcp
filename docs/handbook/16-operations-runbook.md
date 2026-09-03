@@ -160,6 +160,28 @@ near 1:1 is the best observed, not a leak. Cost is linear in claim groups at rou
 
 ## 16.7 Incident playbook
 
+Start here, because the first branch is the one that has already cost real money. A silent feed
+during `deep_research` is the **normal** shape of the call, not a stall: on 2026-07-27 that silence
+was misread, cost an hour, and nearly re-executed a paid run.
+
+```mermaid
+flowchart TD
+  A["Something looks wrong"] --> B{"Is the feed simply silent?"}
+  B -->|Yes| C{"Current stage = deep_research?"}
+  C -->|Yes| D["✅ DO NOTHING.<br/>Providers are polled up to 35 min per angle.<br/>The waiting lines were removed from the feed<br/>by operator ruling 2026-08-31"]
+  C -->|No| E{"Silent > 20 min outside deep_research?"}
+  E -->|Yes| F["Check the worker revision is up<br/>and the heartbeat is advancing"]
+  E -->|No| D
+  B -->|No| G{"What is the symptom?"}
+  G -->|"Run nobody triggered,<br/>just after a deploy"| H["A booting worker claimed a queued run<br/>(claims FIRST, sleeps LAST).<br/>Stop it from the UI.<br/>Prevent: deploy the worker LAST,<br/>after proving the queue empty"]
+  G -->|"Hundreds of failures<br/>in seconds, then parked"| I["Provider hard wall.<br/>Top up or wait, then RESUME.<br/>⛔ Never retry — a retry re-spends<br/>every stage before the wall"]
+  G -->|"Re-executes hourly"| J["Stale-reclaim window below run length.<br/>Confirm NESTOR_WORKER_STALE_MINUTES=60"]
+  G -->|"Download locked,<br/>chain broken"| K["Re-verify ONCE.<br/>Still broken = incident.<br/>Nothing leaves on a broken chain"]
+  G -->|"cost_pending never clears,<br/>or cost looks too round"| L["Missing or stale price row.<br/>Add all four token-class prices.<br/>⛔ Never a NULL-rate row —<br/>it prices as a confident $0.00"]
+```
+
+The table restates the same branches with the detail each one needs.
+
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | The feed has been silent for 20+ minutes during `deep_research` | Normal: providers are polled for up to 35 minutes per angle | Nothing. On 2026-07-27 this silence was misread as a stall, cost an hour and nearly re-executed a paid run |
@@ -208,3 +230,14 @@ The engine models deployed on 2026-09-01 have never executed a run. When one is 
 4. **Did the deep-research calls still write audit blobs?** Run `fb9484dd` wrote 444 objects.
 
 Everything else in chapter 19 is blocked on that evidence.
+
+## 16.11 Where to look
+
+| To do | Open |
+|---|---|
+| Change a cap before a run | [21 — Configuration reference](21-configuration-reference.md) § 21.8 |
+| Understand what a stage is doing | [10 — The pipeline](10-tribunal-pipeline.md) |
+| Deploy a fix | [13 — Infrastructure and deploy](13-infrastructure-and-deploy.md) § 13.6 |
+| Read a past run's forensics | `docs/tribunal-run-reports/` |
+| Check the live position and next steps | `.planning/STATE.md`, `.planning/CONTINUE-HERE.md` |
+| Find every open item | [19 — Known gaps and roadmap](19-known-gaps-and-roadmap.md) |

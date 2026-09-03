@@ -205,3 +205,15 @@ put `cache_creation_tokens` outside the hash, both follow from this.
   check on merge.
 - ⛔ No `.tsx` render test covers the frontend's role-gated surfaces; the backend is the authority,
   and that is where the tests are.
+
+## 14.10 Where to look
+
+| To verify | Open |
+|---|---|
+| Token verification and identity resolution | `backend/app/auth/` |
+| The tenant repository and the GUC it sets | `backend/app/db/` |
+| The row-level security policies themselves | the migrations under `backend/` and `tribunal/nestor_pulse_sdk/alembic/`; quoted in [05](05-data-model.md) |
+| Cross-tenant denial proofs | `backend/tests/` |
+| The seam's caller gate | `tribunal/nestor_pulse_sdk/auth/`, described in [09](09-tribunal-service.md) § 09.4 |
+| The audit chain | `tribunal/nestor_pulse_sdk/audit/hash_chain.py` |
+| Where a secret is read | [21 — Configuration reference](21-configuration-reference.md) § 21.4 and § 21.6 |

@@ -10,6 +10,35 @@
 Everything here is a fact about the tree at `c8b8583` or a ruling recorded in the planning files.
 Items are grouped by what unblocks them. The single most important line in the chapter is the first.
 
+Almost everything open is blocked on the same thing, which is why the chapter is ordered the way it
+is:
+
+```mermaid
+flowchart TD
+  RUN["⛔ ONE RESEARCH RUN<br/>~$29 · never executed on the<br/>2026-09-01 engine models"]
+
+  RUN --> E1["Is the rejected register empty?<br/>(revert the Flash change if so)"]
+  RUN --> E2["Are report plans truncated?"]
+  RUN --> E3["Is cost near the $29 projection?"]
+  RUN --> E4["Did deep research write audit blobs?"]
+
+  RUN --> P19["Phase 19 — Q&A chat<br/>over the findings"]
+  RUN --> P24["Phase 24 — deliberate re-runs<br/>+ steering note"]
+  RUN --> UAT["The staged, unrun UAT ledgers"]
+
+  IND["Independent of the run"] --> F1["Frontend dead code + legacy<br/>credential residue — deletable now"]
+  IND --> F2["The scope-ceiling guard that<br/>cannot pass (15.7)"]
+  IND --> F3["Cost itemisation: proxy the<br/>engine's /calls endpoint to the UI"]
+  IND --> F4["Mock backend's seven missing<br/>research verbs"]
+  IND --> F5["Phase 20 chores + key rotations"]
+
+  style RUN stroke-width:3px
+```
+
+The four review-finding clusters in § 19.3 that touch `workshop_rank.py`, `question_grouping.py` and
+`pipeline.py` sit in between: they are code fixes that need no run to *make*, but only a run can show
+whether they mattered.
+
 ## 19.1 What has never run
 
 ⛔ **Everything on disk is deployed, and the deployed engine has not executed a run since
@@ -44,8 +73,17 @@ the engine's `GET /api/audit/runs/{run_id}/calls` and are not proxied to the pag
 
 **The budget governor has never fired.** `NESTOR_TRIBUNAL_UNCAPPED=1` makes `over_budget()` return
 `False` before it queries; two of six runs exceeded the $25 default. Operator ruling 2026-09-01:
-leave it uncapped, surface cost instead. The question caps (`_D6_MAX_WINNERS = 15`, `_MAX_ANGLES = 28`,
-groups ≤ 5) are therefore the wallet.
+leave it uncapped, surface cost instead. The question caps are therefore the wallet:
+`_D6_MAX_WINNERS = 32` (`pipeline/tribunal/research_division.py:260`), `_MAX_ANGLES = 28`
+(`:309`), and groups ≤ 5.
+
+⚠ **Two different winner caps exist and are easy to conflate.** `_D6_MAX_WINNERS` (32) bounds the
+winners the research division will dispatch; `_WINNERS_MAX` (15,
+`pipeline/tribunal/workshop_rank.py:1012`) bounds what the workshop tournament promotes per round.
+The workshop cap is the one that binds first in practice, but the dispatch cap is the one that
+bounds spend, and it is more than twice the workshop figure. An earlier draft of this chapter
+recorded the wallet cap as 15; that was the workshop constant, and the correction matters because it
+understated the ceiling by 2×.
 
 ## 19.3 Open defects and review findings
 
@@ -60,7 +98,7 @@ groups ≤ 5) are therefore the wallet.
 | Engine, audit redaction | `_redact_dict` matches key names only and `upload_audit_body` leaves the response half unredacted; blobs sit under 7-year retention. A positive bucket scan requires rotating the SerpAPI key | Open |
 | Engine, cost table | `gemini-2.5-pro` is tiered ($1.25/$10 ≤200k tokens, $2.50/$15 above); the table encodes the lower tier only. `gemini-3.7-flash`'s price is introductory and doubles on 2027-01-01 | Recorded 2026-09-01 |
 | Engine, distiller | `_DISTILLER_MODEL` deliberately stays on `gemini-2.5-flash`; the separator replay through 3.7 (`test_distiller_separators.py`'s four recorded responses) is owed before it can move | Owed |
-| Backend, scope tests | Two tests assert no mounted route path contains `research` while the research router mounts eleven; whether they fail or skip was not determined | To verify |
+| Backend, scope tests | Two tests assert no mounted route path contains `research` while the research router mounts eleven unconditionally. ⚠ The guard **cannot pass while importing successfully** — it fails or it skipped, so the scope ceiling is currently unproven by test. The preventive shell guard is correct and unaffected (15.7) | Open, fix by narrowing the token set |
 | Backend, tests | Four failures proven pre-existing on 2026-08-31: `test_ci_guard_raw_db`, `test_mail_render`, two in `test_research_runs_migration` | Open |
 | Backend, mail | Research completion/failure/parked mails render nl-only regardless of recipient locale | Open |
 | Backend, context pack | Section 12 (questions verbatim) is described in the prompt as appended automatically and is appended nowhere | Open |

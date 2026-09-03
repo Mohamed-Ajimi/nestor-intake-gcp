@@ -17,16 +17,18 @@ check.
 
 ## Reading paths
 
-Nobody needs all twenty chapters. Pick a path.
+Nobody needs all twenty-three chapters. Pick a path.
 
 | If you are | Read | Then |
 |---|---|---|
 | A stakeholder or client-side decision maker | [01 Executive overview](01-executive-overview.md) → [18 Market positioning](18-market-positioning.md) | [19 Known gaps and roadmap](19-known-gaps-and-roadmap.md) |
-| A new engineer | [01](01-executive-overview.md) → [03 Architecture](03-architecture.md) → [04 Domain model](04-domain-model-and-lifecycles.md) → [05 Data model](05-data-model.md) | the module chapter you are touching, then [15 Quality and testing](15-quality-and-testing.md) and [13 Infrastructure and deploy](13-infrastructure-and-deploy.md) |
-| The operator | [16 Operations runbook](16-operations-runbook.md) | [10 The pipeline](10-tribunal-pipeline.md) for what a stage is doing, [11 Models and providers](11-models-and-providers.md) for cost |
+| A new engineer | [01](01-executive-overview.md) → [23 Repository map](23-repository-map.md) → [03 Architecture](03-architecture.md) → [04 Domain model](04-domain-model-and-lifecycles.md) → [05 Data model](05-data-model.md) | the module chapter you are touching, then [22 Development workflow](22-development-workflow.md), [15 Quality and testing](15-quality-and-testing.md) and [13 Infrastructure and deploy](13-infrastructure-and-deploy.md) |
+| The operator | [16 Operations runbook](16-operations-runbook.md) | [10 The pipeline](10-tribunal-pipeline.md) for what a stage is doing, [11 Models and providers](11-models-and-providers.md) for cost, [21 Configuration](21-configuration-reference.md) § 21.8 for the caps that bound spend |
 | An auditor or security reviewer | [14 Security and compliance](14-security-and-compliance.md) | [05](05-data-model.md) for the isolation at storage level, [09 Tribunal service](09-tribunal-service.md) § 09.6 for the audit chain |
+| About to change a setting or a limit | [21 Configuration reference](21-configuration-reference.md) | [11](11-models-and-providers.md) if it is a model, [16](16-operations-runbook.md) § 16.6 if it is cost |
+| About to change the repository | [22 Development workflow](22-development-workflow.md) | [15](15-quality-and-testing.md) § 15.6 before writing an acceptance criterion |
 | Planning the next phase | [19](19-known-gaps-and-roadmap.md) → [17 Decision log](17-decision-log.md) | [02 History and timeline](02-history-and-timeline.md) for why the order was what it was |
-| Looking up a term or an identifier | [20 Glossary](20-glossary.md) | |
+| Looking up a term or an identifier | [20 Glossary](20-glossary.md) | [23](23-repository-map.md) to find which chapter owns a path |
 
 ## Contents
 
@@ -52,6 +54,9 @@ Nobody needs all twenty chapters. Pick a path.
 | 18 | [Market positioning](18-market-positioning.md) | explanation | What it is compared against, where it leads, where others lead, and what is measured versus projected |
 | 19 | [Known gaps and roadmap](19-known-gaps-and-roadmap.md) | reference | What has never run, the cost gaps, every open defect, the deferred ledger, the planned phases |
 | 20 | [Glossary](20-glossary.md) | reference | Every term, acronym, identifier family, status and stage vocabulary |
+| 21 | [Configuration reference](21-configuration-reference.md) | reference | Every environment variable in all four services, with defaults: the typed backend settings, the build-time frontend values, and the engine's ~136 tuning dials grouped by subsystem |
+| 22 | [Development workflow](22-development-workflow.md) | explanation and how-to | How a change gets in: the planning record, the lifecycle from ruling to deploy, waves and worktrees, what a gate is worth, identifier and honesty discipline |
+| 23 | [Repository map](23-repository-map.md) | reference | Every tracked path, what it is, and which chapter owns it — including the residue that should be deleted rather than understood |
 
 ## Conventions
 
@@ -69,9 +74,10 @@ repository, the chapter says "not determined from the code" rather than guessing
 **Reasoning is written as context, options, decision, consequence.** Module chapters link to
 [chapter 17](17-decision-log.md) by identifier rather than restating a rationale.
 
-**Diagrams are Mermaid**, so they render on GitHub without a build step. Twenty of them: system
-context and containers, three sequence flows, the three state machines, both entity diagrams, the
-pipeline, the workshop loop, the deploy order, the route tree and the isolation layers.
+**Diagrams are Mermaid**, so they render on GitHub without a build step. Forty of them, including
+system context and containers, three sequence flows, the three state machines, both entity diagrams,
+the pipeline, the workshop loop, the deploy order, the route tree, the isolation layers, the project
+timeline, the model division of labour, the incident triage tree and the change lifecycle.
 
 ## Honesty markers
 

@@ -142,7 +142,7 @@ The comparison with the market is in chapter 18. The short form:
 | Engine (`tribunal/`) | Python 3.11, 14 tables in schema `tribunal`, 18 Alembic migrations, 94 test files, 13 pipeline stages |
 | Frontend (`frontend/`) | React 19 + TanStack Start, 46 shadcn primitives, 3 locales × 4 namespaces × 1,005 keys, 9 test files |
 | Infrastructure | Terraform by construction (state never adopted), 10 Cloud Build configs, 4 Cloud Run services, 2 Cloud Run Jobs |
-| Planning record | 27 phase directories, 30 quick tasks, a decision log of roughly 200 identified decisions |
+| Planning record | 30 phase directories, 31 quick tasks, a decision log of roughly 200 identified decisions |
 
 ## 01.8 How to read the rest
 
