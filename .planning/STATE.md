@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-03T10:43:18.446Z"
-last_activity: 2026-09-03 -- THE HANDBOOK is written: docs/handbook/ 21 chapters, 7793 lines, verified at c8b8583. Docs only, zero code, zero spend, no deploy. Tree still FULLY DEPLOYED and the 2026-09-01 engine models have STILL never executed a run.
+last_updated: "2026-09-03T16:04:49.589Z"
+last_activity: "2026-09-03 -- Phase 23.1 INSERTED and PLANNED (15 plans, 6 waves, committed 2ca7336) after an external audit was re-verified against 047dcfe: 6 of 9 findings held, 3 were miscalibrated, 1 was unsupported, and the authorization hole proved WIDER than reported (9 ungated operator verbs, not 2). Measured backend baseline: 4 failed / 450 passed / 1 skipped. ZERO code changed, ZERO spend, no deploy. Tree still FULLY DEPLOYED and the 2026-09-01 engine models have STILL never executed a run."
 progress:
-  total_phases: 20
+  total_phases: 21
   completed_phases: 15
   total_plans: 145
   completed_plans: 143
-  percent: 75
+  percent: 71
 ---
 
 # Project State
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 23 (report-legibility-business-friendly-funnel-labels-and-an-hon) — EXECUTING
-Plan: 1 of 3
+Phase: 23.1 (platform-hardening-authorization-boundary-space-deactivation) — PLANNING
+Plan: 0 of 0 (not planned yet)
 Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
 **NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.
 **No run has been triggered and no measurement exists.** What is done is the credential-free
@@ -470,6 +470,7 @@ Progress: [██████████] 100%
 - Phase 15.3 inserted after Phase 15: Research run page — engine run-events + dedicated run route. Operator decisions 2026-07-27: (a) ships in the SAME deploy batch as the 15.2 gap fixes, (b) engine events are built BEFORE the UI. Does not block 15.2's operator deploy; must merge to master before that deploy's image build. (URGENT)
 - Phase 15.4 inserted after Phase 15: Research Engine Redesign — Extraction Repair (Wave 1): the <TAB> parser defect that dropped 278 claims, the loud zero-claims warning, the gemini fact-list retry, redirect resolution at ingest. Scope = ENGINE-REDESIGN-SPEC.md § 2 only; ships alone and is measured by one live run before waves 2-5. (URGENT)
 - Phase 21 added 2026-08-10: Research Run Feed Completion. Operator UAT of the run page found four defects, three of which trace to ONE root cause — Phase 15.3 shipped the run-event contract but wired only 4 of 13 stages (measured: `deep_research` 24 emit sites, `own_research` 7, `workshop` 2, `research_division` 2, and **zero** for `distill`/`merge`/`gate`/`verify`/`adjudicate`/`coverage`/`conflict`/`synthesize`). The silent stages render as a label with nothing under it, and their empty bodies are also why the "Show more" toggle reveals nothing. Separately: `RunFeed.tsx` renders `agent_run` with a perpetual spinner because the feed is append-only (start and finish are two rows, not one row updating), and `VerificationReport` exists but is wired only to the intake card, never to the run page. **Sequenced BEFORE the first measured run** so the ~$45 validates the engine changes and the feed together. (URGENT)
+- Phase 23.1 inserted after Phase 23: Platform hardening: authorization boundary, space deactivation cascade, AI cost control, tribunal run ownership, and CI coverage (URGENT)
 
 ### Decisions
 
