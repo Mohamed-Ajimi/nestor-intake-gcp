@@ -8,6 +8,12 @@ This project is deliberately **isolated** from the Tribunal/ADK research-engine 
 (`MOELD/Nestor`). It covers **everything BEFORE the research stage** — Tribunal is explicitly
 out of scope here (the flow stops at status `decomposed`: validated questions + context pack ready).
 
+## Documentation
+
+**[The Nestor Pulse Handbook](docs/handbook/00-README.md)** is the complete, verified account of the
+system: architecture, every module, both data models, the decision log, the models used and why,
+operations, and the known gaps. Start there. Twenty-one chapters, verified against commit `c8b8583`.
+
 ## Scope
 
 **In:**
