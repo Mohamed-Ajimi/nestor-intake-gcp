@@ -682,14 +682,14 @@ Plans:
 **Goal:** Close the verified authorization, cost-control and run-ownership defects found by the 2026-09-03 audit, without breaking the live client surface. Every operator-only verb is gated by ONE shared `_superadmin_gate` (existence-hidden 404) while the nine client-reachable routes stay open and pinned by test; deactivating a space actually revokes its members; a second concurrent AI skill run is refused by a DB invariant and context-pack can no longer flip an arbitrary intake to `decomposed`; a displaced Tribunal worker can no longer heartbeat or finalize a run it lost, and the two non-idempotent paid Tribunal endpoints become safe under concurrency; CI stops being blind to the non-integration suite and the frontend gates.
 **Requirements**: SEC-01 (server-side role enforcement on every operator verb), SEC-02 (space deactivation revokes access), COST-01 (no duplicate paid work), TENANT-02 (no cross-tenant access — unchanged, must stay green)
 **Depends on:** Phase 23
-**Plans:** 15 plans
+**Plans:** 16 plans
 
 **Authority:** `23.1-CONTEXT.md` — verified findings, the client stay-open list, and decisions D-23.1-01..10. Where the source audit and CONTEXT disagree, CONTEXT wins.
 
 **Cost:** ZERO provider spend. No research run is triggered by this phase.
 
 Plans:
-**Wave 1** *(nine file-disjoint plans; no dependencies)*
+**Wave 1** *(ten file-disjoint plans; no dependencies)*
 
 - [ ] 23.1-01-PLAN.md — wave 1 — D-23.1-01: promote `_superadmin_gate` into `app/auth/gates.py`; `research_routes.py` imports it; its denial suite stays green untouched
 - [ ] 23.1-02-PLAN.md — wave 1 — the client stay-open pin suite for all ten client routes, PROVED non-vacuous by applying the gate to `GET /skill-runs` and observing RED
@@ -700,6 +700,7 @@ Plans:
 - [ ] 23.1-07-PLAN.md — wave 1 — CONTEXT § 6: thread identity explicitly through the finalize writers, delete `_ACTIVE_IDENTITY`, and move the pool-check accessor into the db seam (turns the red D-03 guard green)
 - [ ] 23.1-08-PLAN.md — wave 1 — frontend hygiene: uninstall `rehype-raw`, delete two dead components, one `StatusPill`
 - [ ] 23.1-09-PLAN.md — wave 1 — D-23.1-10: gitignore tfstate, correct DEPLOY.md against `deploy-api.sh`, reconcile CLAUDE.md's `decomposed` ceiling with the live research router
+- [ ] 23.1-16-PLAN.md — wave 1 — D-23.1-13: `_find_membership` filters on NO status in either arm, so login-sync mints claims for a `deactivated`/`space_deactivated` member; add the active allow-list to both arms so a partial cascade cannot leave a member authenticating
 
 **Wave 2** *(blocked on 23.1-01 + 23.1-02)*
 
