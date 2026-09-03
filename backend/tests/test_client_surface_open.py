@@ -34,9 +34,16 @@ moment someone gates ``storage_router``.
 23.1 in BOTH directions (not pinned here, not gated there).
 
 THESE ASSERTIONS ARE GREEN AT HEAD BY DESIGN — that is what a regression pin is, and it is
-also why a regression pin proves nothing on its own: a suite that was always green cannot
-tell you it would have caught anything. Plan 23.1-02 Task 2 closes that hole by MUTATION and
-records the measurement here.
+also why a regression pin proves nothing on its own. Plan 23.1-02 Task 2 closed that hole by
+MUTATION: an inline ``if identity.role != "superadmin": raise HTTPException(404, ...)`` was
+added as the first statement of ``list_skill_runs``, and
+``test_skill_runs_list_open_to_user`` went RED with an observed **404** where 200 is
+asserted; the mutation was then reverted and the suite went green again. The permanent,
+machine-checked residue of that measurement is ``test_mutation_proof_is_recorded``, which
+walks the resolved dependency tree of row 7's route RECURSIVELY — including the
+``include_router(...)`` context dependencies, which FastAPI 0.141's lazy ``_IncludedRouter``
+keeps OUT of ``route.dependant`` — and fails the moment ``superadmin_gate`` appears anywhere
+in it, whether attached to the handler, to ``intake_router``, or to an enclosing include.
 
 EXACT STATUS CODES ONLY: never a not-equal-404 comparison, never a less-than-400 range
 check, never a tuple-membership test. A tolerant comparison is green for a 500 and for the
@@ -758,3 +765,113 @@ def test_client_route_inventory_is_pinned():
         f"positive 2xx reachability test), then update this set. A removal is equally a "
         f"defect unless the client caller was removed with it."
     )
+
+
+# ===========================================================================
+# The mutation proof, in permanent machine-checked form
+# ===========================================================================
+
+
+def _resolved_dependency_calls(route, inherited) -> list:
+    """Return every callable reachable from ``route``'s resolved dependency tree.
+
+    Walks THREE sources, because a gate can be attached at any of them and checking only one
+    is a false pass:
+
+    1. ``route.dependant.dependencies``, RECURSIVELY — covers ``Depends(...)`` in the
+       handler signature, ``@router.get(dependencies=[...])``, and
+       ``APIRouter(prefix=..., dependencies=[...])`` (verified: a router-level dependency IS
+       baked into the leaf's dependant at ``add_api_route`` time).
+    2. The ``include_router(..., dependencies=[...])`` context of every enclosing
+       ``_IncludedRouter`` — which FastAPI 0.141 keeps OUT of ``route.dependant``. This is
+       exactly the shape D-23.1-02 prescribes for ``ai_router``, so omitting it would make
+       the whole assertion vacuous against the gating style the phase actually uses.
+    3. The sub-dependencies of each of those include-level callables, resolved with
+       ``get_dependant`` and walked with the same recursion.
+    """
+    from fastapi.dependencies.utils import get_dependant
+
+    def _walk(dependant) -> list:
+        found = []
+        for sub in dependant.dependencies:
+            found.append(sub.call)
+            found.extend(_walk(sub))
+        return found
+
+    calls = _walk(route.dependant)
+    for dep in inherited:
+        call = getattr(dep, "dependency", None)
+        if call is None:
+            continue
+        calls.append(call)
+        calls.extend(_walk(get_dependant(path="/", call=call)))
+    return calls
+
+
+def test_mutation_proof_is_recorded():
+    """``GET /intakes/{id}/skill-runs`` carries NO superadmin gate, anywhere in its tree.
+
+    THE PERMANENT FORM OF THE TASK-2 MEASUREMENT. The mutation itself (an inline
+    ``if identity.role != "superadmin": raise HTTPException(404, ...)`` at the top of
+    ``list_skill_runs``) turned ``test_skill_runs_list_open_to_user`` RED with an observed
+    404 and was then reverted — that proved the reachability suite is not vacuous, but it
+    left nothing behind in CI. This test is what remains: it is FALSE the moment anyone
+    attaches ``superadmin_gate`` to row 7, whether on the handler, on ``intake_router``, or
+    on an enclosing ``include_router(...)``.
+
+    IT WAS ITSELF PROVED FALSIFIABLE, by a SECOND temporary mutation — ``intake_router``
+    reconstructed as ``APIRouter(prefix="/intakes", tags=["intakes"],
+    dependencies=[Depends(superadmin_gate)])``, which is exactly the ROUTER-LEVEL shape
+    D-23.1-02 prescribes for ``ai_router``. This test went RED with the resolved tree
+    ``['superadmin_gate', 'get_current_identity', HTTPBearer, 'get_skill_run_repo', ...]``,
+    and went green again on revert. A top-level-only check would have missed the nested
+    ``get_current_identity`` under the gate; a name-string check would have matched a
+    lookalike.
+
+    Identity is compared with ``is``: a name-string comparison would pass on a lookalike
+    (any local named ``superadmin_gate``) and fail on a legitimate re-export.
+    """
+    gates = pytest.importorskip("app.auth.gates")
+    main = pytest.importorskip("app.main")
+    superadmin_gate = gates.superadmin_gate
+
+    target = [
+        (route, inherited)
+        for path, route, inherited in _flatten_routes(main.app.routes)
+        if path == "/intakes/{intake_id}/skill-runs"
+        and "GET" in (getattr(route, "methods", None) or set())
+    ]
+    assert len(target) >= 1, (
+        "GET /intakes/{intake_id}/skill-runs is not mounted on the app at all — the CLIENT "
+        "form (IntakeForm.tsx:16) calls it."
+    )
+
+    for route, inherited in target:
+        calls = _resolved_dependency_calls(route, inherited)
+        assert not any(call is superadmin_gate for call in calls), (
+            "SEC-01 / 23.1-CONTEXT.md § 1 VIOLATION: superadmin_gate is in the resolved "
+            "dependency tree of GET /intakes/{intake_id}/skill-runs. That route is read by "
+            "the CLIENT intake form (IntakeForm.tsx:16) and renders the proposal tick "
+            "shipped 2026-08-31. Gating it breaks a live client feature. Resolved tree: "
+            f"{[getattr(c, '__name__', repr(c)) for c in calls]}"
+        )
+        # SELF-CHECK ON THE WALKER, so the assertion above cannot go green by finding
+        # nothing. ``protected_router`` attaches ``get_current_identity`` through its own
+        # ``APIRouter(dependencies=[...])``, which FastAPI 0.141 propagates via the INCLUDE
+        # CONTEXT and NOT via ``route.dependant`` — so this pair proves both arms of
+        # ``_resolved_dependency_calls`` are live: the inherited arm resolves the identity
+        # dependency, and the recursive arm resolves the handler's own repo dependency.
+        assert any(
+            getattr(dep, "dependency", None) is dependencies.get_current_identity
+            for dep in inherited
+        ), (
+            "the INCLUDE-CONTEXT arm of the walker found nothing. Either the route lost its "
+            "auth dependency, or FastAPI changed where include_router(...) dependencies "
+            "live — in which case _resolved_dependency_calls must be re-verified before the "
+            "gate assertion above can be trusted (23.1-11 gates ai_router at ROUTER level, "
+            "so a walker blind to that arm is a false pass)."
+        )
+        assert any(call is session_mod.get_skill_run_repo for call in calls), (
+            "the RECURSIVE arm of the walker found nothing — the handler's own "
+            "get_skill_run_repo dependency is missing from the resolved tree."
+        )
