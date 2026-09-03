@@ -32,18 +32,18 @@ it reaches the client) and **how much of the run is auditable afterwards**.
 ```mermaid
 quadrantChart
   title Adversarial depth against auditability
-  x-axis "Little auditability" --> "Fully auditable run"
-  y-axis "Single-pass generation" --> "Adversarial verification"
-  quadrant-1 "Where Nestor Pulse sits"
-  quadrant-2 "Rigorous but unauditable"
-  quadrant-3 "One prompt, one report"
-  quadrant-4 "Logged but unchallenged"
-  "OpenAI / Gemini Deep Research": [0.22, 0.18]
-  "Perplexity": [0.15, 0.12]
-  "Consultancy desk research": [0.30, 0.55]
-  "Agent frameworks (DIY)": [0.45, 0.35]
-  "Enterprise market-intel suites": [0.62, 0.25]
-  "Nestor Pulse": [0.88, 0.86]
+  x-axis Little auditability --> Fully auditable run
+  y-axis Single-pass generation --> Adversarial verification
+  quadrant-1 Where Nestor Pulse sits
+  quadrant-2 Rigorous but unauditable
+  quadrant-3 One prompt one report
+  quadrant-4 Logged but unchallenged
+  Off-the-shelf deep research: [0.22, 0.18]
+  Perplexity: [0.15, 0.12]
+  Consultancy desk research: [0.30, 0.55]
+  DIY agent frameworks: [0.45, 0.35]
+  Enterprise market intel suites: [0.62, 0.25]
+  Nestor Pulse: [0.88, 0.86]
 ```
 
 ⚠ The placement of everything except Nestor Pulse is **editorial judgement, not measurement.** No
