@@ -71,16 +71,31 @@ Tests
   15. test_brief_still_rejects_empty (static)
   16. test_brief_accepts_the_analytic_worst_case (static)
 
-The LIVE tests use the session-scoped testcontainers Postgres from
-`conftest.py`, which SKIPS cleanly (never errors) when Docker is unreachable --
-so this file is safe in `tribunal/cloudbuild.test.yaml`, which sets no
-DATABASE_URL and has no Docker-in-Docker.
+WHERE THESE PROOFS ACTUALLY RUN -- read this before trusting a green build
+-------------------------------------------------------------------------
+`tribunal/cloudbuild.test.yaml` runs this whole directory, so it COLLECTS this
+file, but its own header records a measured limitation: the testcontainers
+fixture does NOT start there ("host" network_mode is incompatible with
+port_bindings), so `postgres_container` skips and every test depending on it
+skips with it. In that gate only the six STATIC tests below execute; the ten
+LIVE ones skip. `cloudbuild.test-critical.yaml` names four files and this is
+not one of them.
+
+So: as committed, the concurrency proofs in this file run in NO CI gate. They
+were executed locally against a real testcontainers Postgres (16 passed) and
+observed RED against the unfixed code -- that evidence is real, but it is not
+continuous. The `run_api_engine` fixture therefore ALSO accepts an explicit
+`DATABASE_URL`, which is the pattern `cloudbuild.test-critical.yaml` and
+`cloudbuild.test-rls.yaml` use (`docker run --network=host postgres:15` plus a
+DSN), so a gate that names this file can execute these proofs rather than skip
+them. Wiring that gate belongs to plan 23.1-14, not here.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from pathlib import Path
@@ -160,8 +175,40 @@ def test_report_proposal_route_is_get_not_post() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LIVE harness -- testcontainers Postgres via conftest's `async_engine`.
+# LIVE harness
 # ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def run_api_engine(request):
+    """Async engine for the LIVE proofs: an explicit `DATABASE_URL` when one is
+    provided, otherwise conftest's testcontainers Postgres.
+
+    The DATABASE_URL branch is not decoration. `cloudbuild.test.yaml` collects
+    this file but cannot start testcontainers (see the module docstring), so
+    every LIVE proof here skips in that gate. A gate that hands pytest a DSN --
+    the `cloudbuild.test-critical.yaml` / `cloudbuild.test-rls.yaml` pattern --
+    can actually execute them. `test_advisory_lock_exactly_once.py` reads
+    DATABASE_URL the same way and with the same scheme guard.
+
+    The container fixture is resolved LAZILY so the DSN path never starts a
+    container it does not need, and so the skip (Docker unreachable) still comes
+    from conftest rather than from an error here.
+    """
+    sa_asyncio = pytest.importorskip("sqlalchemy.ext.asyncio")
+
+    url = os.environ.get("DATABASE_URL") or ""
+    if not url.startswith("postgresql+asyncpg://"):
+        container = request.getfixturevalue("postgres_container")
+        url = container.get_connection_url().replace(
+            "postgresql+psycopg2://", "postgresql+asyncpg://"
+        )
+
+    engine = sa_asyncio.create_async_engine(url, echo=False, future=True)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
 
 def _claims(tenant_id, user_id=None):
     from nestor_pulse_sdk.auth.provider import AuthClaims
@@ -175,7 +222,7 @@ def _claims(tenant_id, user_id=None):
     )
 
 
-async def _make_sessionmaker(async_engine):
+async def _make_sessionmaker(engine):
     """Create the model schema on the ephemeral DB and return a sessionmaker.
 
     `Base.metadata.create_all` (not alembic) is deliberate: migration 0008
@@ -192,10 +239,10 @@ async def _make_sessionmaker(async_engine):
     # test has not already imported them -- an order-dependent green.
     import nestor_pulse_sdk.db.models  # noqa: F401
 
-    async with async_engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     return async_sessionmaker(
-        async_engine, class_=AsyncSession, expire_on_commit=False
+        engine, class_=AsyncSession, expire_on_commit=False
     )
 
 
@@ -317,7 +364,7 @@ async def _count_outputs(Session, set_tenant, tenant_id, run_id, fmt):
 # ---------------------------------------------------------------------------
 
 async def test_concurrent_proposal_reads_generate_exactly_once(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """TWO concurrent GETs on the SAME uncached run must produce EXACTLY ONE
     paid generation and EXACTLY ONE cached Output row, and both callers must
@@ -326,7 +373,7 @@ async def test_concurrent_proposal_reads_generate_exactly_once(
     Without the advisory lock this fails with TWO recorded generation calls --
     the double spend CONTEXT section 4 found.
     """
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _project_id, run_id = await _seed_run(Session, set_tenant)
     await _seed_synthesis_cache(Session, set_tenant, tenant_id, run_id)
     user = _claims(tenant_id)
@@ -355,13 +402,13 @@ async def test_concurrent_proposal_reads_generate_exactly_once(
     assert first["run_id"] == str(run_id) and second["run_id"] == str(run_id)
 
 
-async def test_warm_cache_proposal_never_generates(async_engine, set_tenant) -> None:
+async def test_warm_cache_proposal_never_generates(run_api_engine, set_tenant) -> None:
     """A run that already has a cached proposal must be served from cache with
     ZERO generation calls -- the lock must not turn a free read into a paid
     one."""
     from nestor_pulse_sdk.db.models import Output
 
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _project_id, run_id = await _seed_run(Session, set_tenant)
     await _seed_synthesis_cache(Session, set_tenant, tenant_id, run_id)
     cached = {"focus_areas": ["already"], "length": "short", "tables": []}
@@ -389,13 +436,13 @@ async def test_warm_cache_proposal_never_generates(async_engine, set_tenant) -> 
 
 
 async def test_distinct_runs_proposals_do_not_serialize(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """The lock is PER RUN, not global: two callers for two DIFFERENT uncached
     runs must both generate, and their generations must genuinely OVERLAP in
     time (asserted on recorded intervals, not on a flaky wall-clock threshold).
     """
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, project_id, run_a = await _seed_run(Session, set_tenant)
     _t, _p, run_b = await _seed_run(
         Session, set_tenant, tenant_id=tenant_id, project_id=project_id
@@ -425,14 +472,14 @@ async def test_distinct_runs_proposals_do_not_serialize(
 
 
 async def test_proposal_without_cached_bundle_is_409(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """No cached research bundle -> still 409 with the existing message, no
     generation, and the lock released with the transaction (a later caller for
     the same run is not blocked)."""
     from fastapi import HTTPException
 
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _project_id, run_id = await _seed_run(Session, set_tenant)
     user = _claims(tenant_id)
 
@@ -537,11 +584,11 @@ async def _gather_answers(n, Session, set_tenant, tenant_id, user, run_id, **kw)
     return ok, errs
 
 
-async def test_answer_single_run_happy_path(async_engine, set_tenant) -> None:
+async def test_answer_single_run_happy_path(run_api_engine, set_tenant) -> None:
     """The externally visible contract is unchanged by the CAS: mode 'run', the
     paused run ends `cancelled` with `completed_at` set, and exactly ONE queued
     child carries the folded brief."""
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _p, run_id = await _seed_run(
         Session, set_tenant, status="needs_input", brief="Base brief."
     )
@@ -569,13 +616,13 @@ async def test_answer_single_run_happy_path(async_engine, set_tenant) -> None:
 
 
 async def test_answer_single_run_not_needs_input_is_409(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """A run that is not awaiting clarification still 409s with the existing
     message, and NO child run is created (counted, not inferred)."""
     from fastapi import HTTPException
 
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _p, run_id = await _seed_run(Session, set_tenant, status="completed")
     user = _claims(tenant_id)
 
@@ -597,7 +644,7 @@ async def test_answer_single_run_not_needs_input_is_409(
 
 
 async def test_concurrent_answers_queue_exactly_one_run(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """TWO concurrent answers on the SAME needs_input run: exactly ONE 201 and
     one 409, and exactly ONE new queued run in the DATABASE.
@@ -607,7 +654,7 @@ async def test_concurrent_answers_queue_exactly_one_run(
     """
     from fastapi import HTTPException
 
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _p, run_id = await _seed_run(
         Session, set_tenant, status="needs_input", brief="Base brief."
     )
@@ -631,12 +678,12 @@ async def test_concurrent_answers_queue_exactly_one_run(
 
 
 async def test_answer_comparison_only_answered_engines_get_children(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """Comparison branch contract, unchanged: only the answered engines get
     children, the unanswered sibling stays needs_input, and every child shares
     the parent's comparison_id (answering one arm never restarts the others)."""
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     comparison_id = uuid.uuid4()
     tenant_id, project_id, run_a = await _seed_run(
         Session, set_tenant, status="needs_input", engine="tribunal",
@@ -670,12 +717,12 @@ async def test_answer_comparison_only_answered_engines_get_children(
 
 
 async def test_concurrent_comparison_answers_replace_each_sibling_once(
-    async_engine, set_tenant
+    run_api_engine, set_tenant
 ) -> None:
     """Two concurrent callers answering BOTH arms: each paused sibling is
     replaced AT MOST ONCE. Counted per engine on the DB, not on the responses.
     """
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     comparison_id = uuid.uuid4()
     tenant_id, project_id, run_a = await _seed_run(
         Session, set_tenant, status="needs_input", engine="tribunal",
@@ -704,11 +751,11 @@ async def test_concurrent_comparison_answers_replace_each_sibling_once(
     assert by_status.get("needs_input", []) == []
 
 
-async def test_answer_unknown_run_is_404(async_engine, set_tenant) -> None:
+async def test_answer_unknown_run_is_404(run_api_engine, set_tenant) -> None:
     """An unknown run id is still a 404, ahead of any CAS."""
     from fastapi import HTTPException
 
-    Session = await _make_sessionmaker(async_engine)
+    Session = await _make_sessionmaker(run_api_engine)
     tenant_id, _p, _run_id = await _seed_run(Session, set_tenant)
     user = _claims(tenant_id)
 
