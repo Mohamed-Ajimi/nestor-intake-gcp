@@ -26,6 +26,17 @@ the engine FACTORIES that ``session.py`` / ``ai_session.py`` import are patched 
 conftest engines so the production ``get_tenant_repo`` + the poll driver's ``tenant_session``
 writes run verbatim locally. ``get_current_identity`` is overridden to a fabricated Identity
 (the one boundary that genuinely cannot run locally — the IdP).
+
+ACTOR CHANGE, 23.1-17 (D-23.1-16). Every TRIGGER case above now acts as ``_superadmin()``
+and takes the ``superadmin_engine`` fixture. ``POST /intakes/{id}/research`` is the router's
+one SPENDING verb (~$45, ``NESTOR_TRIBUNAL_UNCAPPED=1``) and was its last ungated write; it
+is gated with ``superadmin_gate`` now, so the role=``user`` actor these cases used until
+23.1-17 gets an existence-hidden 404 and would make every one of them fail on the gate
+rather than on the behaviour they exist to pin. The two SSE-stream cases deliberately keep
+``_user``: ``stream_research_run`` is NOT gated (an ``EventSource`` cannot set an
+Authorization header — see D-23.1-16's out-of-scope note). The DENIAL side of the gate — the
+404s, the no-side-effect proof and the ordering mutation — lives in
+``tests/test_research_trigger_gate.py``; this file stays the behaviour suite.
 """
 
 from __future__ import annotations
@@ -76,6 +87,19 @@ def _as(identity: "Identity"):
     return _override
 
 
+def _superadmin() -> "Identity":
+    """A superadmin Identity — the ONLY role the trigger accepts since 23.1-17.
+
+    ``POST /intakes/{id}/research`` is gated with ``superadmin_gate`` (D-23.1-16): it is
+    the router's one SPENDING verb (~$45 per call, ``NESTOR_TRIBUNAL_UNCAPPED=1``) and a
+    role=``user`` now gets the existence-hidden 404. Every trigger case below therefore
+    acts as a superadmin; the SSE-stream cases keep ``_user`` because
+    ``stream_research_run`` is deliberately NOT gated (SSE / ``EventSource`` cannot set an
+    Authorization header). The denial side lives in ``tests/test_research_trigger_gate.py``.
+    """
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
 def _patch_engines(monkeypatch, user_engine) -> None:
     """Patch the engine factories both session.py and ai_session.py imported.
 
@@ -85,6 +109,48 @@ def _patch_engines(monkeypatch, user_engine) -> None:
     """
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
     monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: user_engine)
+
+
+#: Same literal test_mail_endpoints / test_operator_verb_gate use, so the app_superadmin
+#: role's password stays stable no matter which suite touches it first.
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral test only
+
+
+def _patch_superadmin_engine(monkeypatch, sa_engine) -> None:
+    """Swap ``get_superadmin_engine`` in BOTH namespaces.
+
+    Needed since 23.1-17 gated the trigger: a superadmin caller routes through
+    ``get_superadmin_engine`` (D-05 two-engine routing) in ``session.py`` for
+    ``get_tenant_repo`` AND in ``ai_session.py`` for ``read_brief_inputs`` + the trigger's
+    own short commit tx. Patching one namespace only would leave half the path pointed at
+    a real engine.
+    """
+    monkeypatch.setattr(session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+    monkeypatch.setattr(ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS ``app_superadmin`` (connect-as, not SET ROLE).
+
+    Faithful to production's two-engine routing (D-05): ``current_user = 'app_superadmin'``
+    makes the 0003/0011 bypass policies match. Shape copied from
+    ``test_operator_verb_gate.superadmin_engine``.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +300,7 @@ def _data_payloads(resp) -> list:
 
 
 def test_trigger_decomposed_ok(
-    engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
 ):
     """POST on a decomposed intake → 202, status flipped, queued run, driver scheduled."""
     from fastapi.testclient import TestClient
@@ -245,9 +311,10 @@ def test_trigger_decomposed_ok(
     _seed_intake(engine, set_space, space, intake_id, status="decomposed")
     _seed_decomposition_and_questions(engine, set_space, space, intake_id)
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -269,7 +336,9 @@ def test_trigger_decomposed_ok(
         _cleanup(engine, space)
 
 
-def test_trigger_wrong_status_409(engine, set_space, monkeypatch, fake_tribunal_client):
+def test_trigger_wrong_status_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
     """POST on a non-decomposed intake → 409, no run inserted, no seam call."""
     from fastapi.testclient import TestClient
 
@@ -278,9 +347,10 @@ def test_trigger_wrong_status_409(engine, set_space, monkeypatch, fake_tribunal_
     _seed_space(engine, space)
     _seed_intake(engine, set_space, space, intake_id, status="submitted")
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -294,7 +364,9 @@ def test_trigger_wrong_status_409(engine, set_space, monkeypatch, fake_tribunal_
         _cleanup(engine, space)
 
 
-def test_trigger_no_questions_422(engine, set_space, monkeypatch, fake_tribunal_client):
+def test_trigger_no_questions_422(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
     """POST on a decomposed intake with ZERO validated questions → 422 (empty-brief guard).
 
     Live finding 2026-07-21: an empty brief makes the engine park the run as
@@ -309,9 +381,10 @@ def test_trigger_no_questions_422(engine, set_space, monkeypatch, fake_tribunal_
     _seed_intake(engine, set_space, space, intake_id, status="decomposed")
     # Deliberately NO _seed_decomposition_and_questions and no question answers.
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -328,7 +401,7 @@ def test_trigger_no_questions_422(engine, set_space, monkeypatch, fake_tribunal_
 
 
 def test_retrigger_after_dead_run_202(
-    engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
 ):
     """POST on an in_research intake whose latest run is parked/dead → 202 (retry path).
 
@@ -347,9 +420,10 @@ def test_retrigger_after_dead_run_202(
         engine, set_space, space, intake_id, uuid.uuid4(), "needs_input", attempt=1
     )
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -364,7 +438,9 @@ def test_retrigger_after_dead_run_202(
         _cleanup(engine, space)
 
 
-def test_retrigger_while_running_409(engine, set_space, monkeypatch, fake_tribunal_client):
+def test_retrigger_while_running_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
     """POST on an in_research intake with an ACTIVE run → 409, no second run."""
     from fastapi.testclient import TestClient
 
@@ -377,9 +453,10 @@ def test_retrigger_while_running_409(engine, set_space, monkeypatch, fake_tribun
         engine, set_space, space, intake_id, uuid.uuid4(), "running", attempt=1
     )
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -394,7 +471,7 @@ def test_retrigger_while_running_409(engine, set_space, monkeypatch, fake_tribun
 
 
 def test_brief_never_opts_into_gates(
-    engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
 ):
     """The brief handed to create_run has NO [INTERACTIVE_REPORT] and enumerates questions."""
     from fastapi.testclient import TestClient
@@ -405,9 +482,10 @@ def test_brief_never_opts_into_gates(
     _seed_intake(engine, set_space, space, intake_id, status="decomposed")
     _seed_decomposition_and_questions(engine, set_space, space, intake_id)
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -429,7 +507,9 @@ def test_brief_never_opts_into_gates(
         _cleanup(engine, space)
 
 
-def test_attempt_cap_3(engine, set_space, monkeypatch, fake_tribunal_client):
+def test_attempt_cap_3(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
     """A 4th trigger (3 prior runs) → needs_investigation, NO create_run call, no flip."""
     from fastapi.testclient import TestClient
 
@@ -444,9 +524,10 @@ def test_attempt_cap_3(engine, set_space, monkeypatch, fake_tribunal_client):
             engine, set_space, space, intake_id, uuid.uuid4(), status="failed", attempt=i + 1
         )
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         resp = TestClient(app).post(
             f"/intakes/{intake_id}/research",
@@ -470,7 +551,7 @@ def test_attempt_cap_3(engine, set_space, monkeypatch, fake_tribunal_client):
 
 
 def test_completion_mail_to_trigger_user(
-    engine, set_space, monkeypatch, fake_tribunal_client, fake_resend
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
 ):
     """A completed run mails the acting user (fake_resend recipient == the trigger user)."""
     from fastapi.testclient import TestClient
@@ -482,8 +563,9 @@ def test_completion_mail_to_trigger_user(
     _seed_decomposition_and_questions(engine, set_space, space, intake_id)
     # Default metrics_script ends in completed → the completion mail path runs.
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
-    acting = _user(space)
+    acting = _superadmin()
     app = _build_app()
     app.dependency_overrides[get_current_identity] = _as(acting)
     try:

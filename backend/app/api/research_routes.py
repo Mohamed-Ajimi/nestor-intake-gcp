@@ -4,7 +4,9 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
 403 discipline the intake surface uses (D-04 / D-07):
 
 * ``POST /intakes/{intake_id}/research`` (:func:`trigger_research`, SEAM-03) — the discrete
-  "start deep research" verb (NOT a generic ``PATCH status``). It flips ``decomposed →
+  "start deep research" verb (NOT a generic ``PATCH status``), and the ONE verb here that
+  SPENDS. Superadmin-only since 23.1-17 (D-23.1-16); it was the router's last ungated
+  write and cost ~$45 a call. It flips ``decomposed →
   in_research`` on the allow-listed transition map, enforces the 3-attempt cap (D-04),
   composes a pause-gate-safe brief, inserts the ``research_runs`` row, audits ``{from,to}``
   in the SAME tx, schedules the pool-safe poll driver, and returns ``202`` with the run id.
@@ -250,15 +252,33 @@ def locate_research_run(
 def trigger_research(
     intake_id: str,
     background: BackgroundTasks,
+    # ORDER IS LOAD-BEARING AND THIS IS THE ROUTER'S HARDEST SIGNATURE. ``repo`` used to
+    # be declared first; the gate MUST stay above it. FastAPI resolves the signature in
+    # order, so with the gate below, a null-space caller gets get_tenant_repo's 403
+    # ("No space — not authorized") instead of the existence-hidden 404 — an existence
+    # oracle for the one verb whose existence is worth the most to learn.
+    identity: Identity = Depends(_superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
-    """Start deep research for a ``decomposed`` intake (SEAM-03).
+    """Start deep research for a ``decomposed`` intake (SEAM-03) — SUPERADMIN ONLY.
 
     Flips ``decomposed → in_research``, composes a pause-gate-safe brief, inserts the
     ``research_runs`` row (``status=queued``, ``attempt=n``), audits ``{from,to}`` in the
     SAME tx, schedules the pool-safe poll driver, and returns ``202 {research_run_id}``.
 
+    SUPERADMIN ONLY (D-23.1-16). This is the ONE verb on this router that SPENDS: it
+    schedules ``run_poll_driver``, a Tribunal run costing roughly $45 that runs with
+    ``NESTOR_TRIBUNAL_UNCAPPED=1``. Until 23.1-17 it took ``get_current_identity`` and no
+    role gate while every FREE verb around it was gated — an oversight, not a decision:
+    the phase's scope survey read ``intake_routes.py`` and never gave this file the same
+    treatment (23.1-CONTEXT.md § 15). Measured before the fix: a role=``user`` in the
+    intake's own space got 202, the flip, a queued ``research_runs`` row and a dispatched
+    driver. Its only frontend caller is the admin route ``admin.pulse.intakes.$id.tsx``,
+    so the gate breaks no client surface. Denial is proved WITHOUT side effect in
+    ``tests/test_research_trigger_gate.py`` — no run row, no status flip, no task.
+
+    * 404 for a non-superadmin caller, including a null-space one (``_superadmin_gate``,
+      declared FIRST — see the signature comment).
     * 404 if the (in-scope) intake does not exist (D-07 — existence hidden; never 403/200).
     * 409 if the current status is not ``decomposed`` (the scope-ceiling wall).
     * When ``_MAX_ATTEMPTS`` prior research runs already exist for the intake, the next
@@ -347,6 +367,12 @@ def trigger_research(
     # The superadmin path (no own space) writes into the intake's OWN space via
     # create_in_space; the user path uses create() (space_id injected from the
     # Identity). space_id is NEVER a request input (TENANT-02).
+    #
+    # Since 23.1-17 the gate above admits ONLY superadmins, so the ``create()`` arm is
+    # unreachable in production. It is KEPT, deliberately, as the same "Open Q2
+    # defense-in-depth" second wall the other nine verbs on this router keep their
+    # in-body role re-checks for: deleting it would make relaxing the gate silently
+    # write a run row into the CALLER's space instead of the intake's.
     intake_space_id = intake.space_id
     values = dict(intake_id=intake_id, status="queued", attempt=attempt)
     with tenant_session(identity) as txs:

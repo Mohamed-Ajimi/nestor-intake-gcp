@@ -129,7 +129,7 @@ def test_research_routes_uses_the_shared_gate_object():
 
     ``is``, not a name check (threat T-23.1-03): a copy-pasted function under the same
     private name would satisfy any name-based assertion and is precisely what D-23.1-01
-    forbids. All nine ``Depends(_superadmin_gate)`` sites in that module resolve through
+    forbids. All ten ``Depends(_superadmin_gate)`` sites in that module resolve through
     this one alias, so this single assertion binds every one of them.
     """
     from app.api import research_routes
@@ -205,4 +205,14 @@ def test_every_gated_research_route_resolves_the_gate_before_the_repo():
 
     # Guards the guard: a rename or a refactor that stops the gate resolving here would
     # otherwise leave this test green while checking nothing.
-    assert checked == 9, f"expected 9 gated research routes, found {checked}"
+    #
+    # Was 9; raised to 10 by plan 23.1-17, which gated ``trigger_research`` (D-23.1-16 —
+    # the ~$45 paid trigger, the router's last ungated write). RAISED, never relaxed: the
+    # count is the anti-vacuity guard, and turning it into ``>= 9`` to make a new route
+    # fit would delete the only thing that notices when the gate stops resolving.
+    #
+    # 10 of the router's 11 routes. The eleventh is ``stream_research_run``, which takes
+    # only ``get_current_identity`` and is EXCLUDED by D-23.1-16 pending assessment: it is
+    # SSE, an ``EventSource`` cannot set an Authorization header, so gating it blind could
+    # break the live run feed. A known gap, not an oversight repeated.
+    assert checked == 10, f"expected 10 gated research routes, found {checked}"
