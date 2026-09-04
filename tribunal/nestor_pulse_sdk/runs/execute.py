@@ -65,7 +65,13 @@ log = structlog.get_logger(__name__)
 # 64-bit per-run advisory lock (transaction-scoped, auto-releases on
 # commit/rollback/crash). 64-bit md5 key, NOT the int4 string-hash builtin --
 # see module docstring (T-13-07).
-_ADVISORY_LOCK_SQL = text(
+#
+# PUBLIC (D-23.1-07): `runs/api.py::get_report_proposal` takes the SAME per-run
+# lock so two concurrent proposal GETs cannot both pay for a generation. The two
+# callers MUST keep importing this ONE object rather than each spelling the SQL
+# out -- a second copy could drift in its key expression, and two different keys
+# would silently stop serialising the same run (threat T-23.1-25).
+ADVISORY_LOCK_SQL = text(
     "SELECT pg_advisory_xact_lock(('x' || md5(:run_id))::bit(64)::bigint)"
 )
 
@@ -132,7 +138,7 @@ async def execute_run_locked(claimed: dict) -> None:
     async with sessionmaker() as session:
         async with session.begin():
             # Acquire the transaction-scoped 64-bit advisory lock for this run.
-            await session.execute(_ADVISORY_LOCK_SQL, {"run_id": str(run_id)})
+            await session.execute(ADVISORY_LOCK_SQL, {"run_id": str(run_id)})
             # Atomically CONSUME the claim while holding the lock (fencing
             # token — see _CONSUME_CLAIM_SQL). Zero rows -> not ours anymore.
             result = await session.execute(

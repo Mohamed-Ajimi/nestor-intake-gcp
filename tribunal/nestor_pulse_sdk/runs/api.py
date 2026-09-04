@@ -23,6 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nestor_pulse_sdk.auth.deps import get_db_session, get_current_user
 from nestor_pulse_sdk.auth.provider import AuthClaims
 from nestor_pulse_sdk.db.models import Run, Project, Output
+# D-23.1-07: the proposal GET takes the SAME per-run advisory lock the executor
+# uses, so the key expression can never diverge (T-23.1-25). This import is
+# safe at module level and must STAY at module level: `runs/execute.py` imports
+# `runs/worker.py` LAZILY (inside execute_run_locked) precisely to keep the
+# import graph acyclic, and nothing in execute.py's module-level chain reaches
+# `runs/api.py`. Do not "fix" this into a function-local import.
+from nestor_pulse_sdk.runs.execute import ADVISORY_LOCK_SQL
 from nestor_pulse_sdk.runs.schemas import (
     AnswerRequest,
     AuditBody,
@@ -380,12 +387,35 @@ async def get_report_proposal(
     run was zero-touch (no cached proposal) but has a cached research bundle, a
     proposal is generated on demand from that bundle and cached — so any
     completed Tribunal run can be reshaped without re-running research.
+
+    D-23.1-07 — WHY THIS BILLABLE GET IS SAFE UNDER CONCURRENCY:
+      The URL, the method and the on-demand generation are UNCHANGED; the
+      shaping panel depends on all three, and moving the verb to a POST was the
+      explicitly REJECTED alternative (a breaking change for a live UI that buys
+      nothing the lock does not). What changed is that generation now runs under
+      the SAME per-run `ADVISORY_LOCK_SQL` that `runs/execute.py` uses, and the
+      proposal cache is RE-READ UNDER THAT LOCK. That re-read is the entire
+      mechanism: a second concurrent caller blocks at the lock, and when it
+      proceeds the first caller's committed INSERT is visible (Postgres' default
+      READ COMMITTED gives each statement a fresh snapshot), so it returns the
+      cache instead of paying a second time.
+
+      The lock does NOT introduce a long-held transaction. `auth/deps.py::
+      get_db_session` yields INSIDE `session.begin()`, so this handler was
+      ALREADY holding one transaction across the `build_report_proposal` await
+      before this change. The lock serialises a long transaction that already
+      existed; it is per-run, never global (T-23.1-24). Do not "optimise" it
+      away.
     """
     import json as _json
 
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "run not found")
+
+    # Serialise every caller for THIS run before the first read that can lead to
+    # a paid generation. Transaction-scoped: released when the response commits.
+    await session.execute(ADVISORY_LOCK_SQL, {"run_id": str(run_id)})
 
     async def _latest(fmt: str):
         body = (await session.execute(
