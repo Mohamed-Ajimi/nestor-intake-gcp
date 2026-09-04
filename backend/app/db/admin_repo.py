@@ -43,10 +43,35 @@ from app.db.models.intake import IntakeTemplate
 from app.db.models.membership import OrganizationMembership
 from app.db.models.organization import Organization
 
-# App-level allowed status set (NOT a PG enum — mirrors the model docstrings). The
-# route layer only ever passes these two literals.
+# App-level allowed status set (NOT a PG enum — mirrors the model docstrings).
 _STATUS_ACTIVE = "active"
 _STATUS_DEACTIVATED = "deactivated"
+
+# The space-cascade status (SEC-02 / D-23.1-03, D-23.1-11). A THIRD value exists so the
+# reactivate inverse can be SELECTIVE: it restores exactly the memberships the cascade
+# took down and never un-fires a member who was deactivated INDIVIDUALLY before the space
+# went down. With only two values, deactivate-then-reactivate a space would be an
+# undocumented way to restore revoked access.
+#
+# NO MIGRATION IS NEEDED: ``organization_memberships.status`` is a plain ``String`` with a
+# server_default and no PG enum / CHECK constraint (``models/membership.py:43``, migration
+# 0006), so a third value simply stores.
+#
+# WHY IT READS AS INACTIVE EVERYWHERE BY CONSTRUCTION: every membership-status read in
+# ``backend/app/`` that carries LOGIC is an ALLOW-LIST (``== "active"``) at five sites —
+# ``admin_repo.py`` :meth:`find_active_membership` and :meth:`count_active_superadmins`,
+# ``admin_routes.py``'s last-superadmin guard, ``intake_routes.py``'s member lookup, and
+# ``me_routes.py``'s membership resolution. There is not one deny-list
+# (``!= "deactivated"``) comparison, so an unknown value reads as "not active" rather than
+# as "not deactivated". A future deny-list would silently break that, which is why
+# ``tests/test_space_deactivation_cascade.py`` pins both directions.
+#
+# NOT the whole picture (D-23.1-11 CORRECTED / D-23.1-13): there is a SIXTH site,
+# ``_find_membership`` in ``app/auth/session.py``, and it is a NO-list — no status
+# predicate at all — so login-sync would mint claims for a cascaded member. That is closed
+# separately by D-23.1-13 (plan 16) and is what makes this cascade safe when an IdP call
+# fails. Do not restate the survey as "five sites, no deny-list anywhere".
+_STATUS_SPACE_DEACTIVATED = "space_deactivated"
 
 
 def _as_uuid(value: Any) -> uuid.UUID:
@@ -113,6 +138,30 @@ class AdminRepo:
                 OrganizationMembership.status == _STATUS_ACTIVE,
             )
         ).scalar_one_or_none()
+
+    def list_memberships_for_space(self, organization_id):
+        """Return EVERY membership row of one space, regardless of ``status`` (SEC-02).
+
+        The space-deactivation cascade's read half. It is deliberately status-BLIND, and
+        that is load-bearing for the RETRY path: the IdP call cannot join the request
+        transaction, so a member whose ``deactivate_user`` call failed is already
+        ``space_deactivated`` in the DB while still enabled in the IdP. A status-filtered
+        accessor would hand a second press of ``POST /spaces/{id}/deactivate`` an empty
+        list and the retry would silently do nothing.
+
+        Explicitly filtered on ``organization_id``: this module has no ``_scope`` wall
+        (D-05) — every method runs on the ``app_superadmin`` engine (0003 bypass), so this
+        WHERE clause is the only thing keeping the cascade inside one tenant.
+        """
+        return (
+            self._s.execute(
+                select(OrganizationMembership).where(
+                    OrganizationMembership.organization_id == _as_uuid(organization_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     def create_membership(
         self,
