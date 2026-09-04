@@ -182,3 +182,11 @@ DEF-23.1-03 were NOT touched and remain stale.
 Additionally, the D-23.1-10 ceiling correction was applied to `CLAUDE.md` only. Any other doc
 stating that the flow ends at `decomposed` still asserts the superseded v1.0 scope. A doc-sync
 pass should carry both corrections outward.
+
+## DEF-23.1-11-01 — `app/main.py` ai_router mount comment is stale (comment-only)
+
+Found by plan 23.1-11. `main.py:153-162` still states that `ai_router` inherits
+`get_current_identity` "and nothing more". Since `c9d0587` it also carries ONE router-level
+`Depends(superadmin_gate)`. `main.py` was not in plan 11's `files_modified`, so the clause was
+not applied. No behavioural effect — the gate lives on the router object in `ai_routes.py`.
+Exact replacement wording is in `23.1-11-SUMMARY.md` § Deviations 4. Pick up in 23.1-15.
