@@ -338,9 +338,19 @@ async def execute_run(claimed: dict) -> None:
                             "cost_usd_total = COALESCE("
                             "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "
                             # Guard: a user cancel (status='cancelled') must win.
-                            "WHERE id=:id AND status='running'"
+                            # Fence: and only the OWNER may park (D-23.1-06). A park
+                            # moves the row OFF 'running', which disarms the new
+                            # owner's own status guard -- so an unfenced park is a
+                            # way around the fence on the terminal writes, and a
+                            # user-visible one: the run would sit asking a human to
+                            # answer questions from an abandoned execution.
+                            "WHERE id=:id AND status='running' AND worker_id = :wid"
                         ),
-                        {"q": _json.dumps(questions), "id": claimed["id"]},
+                        {
+                            "q": _json.dumps(questions),
+                            "id": claimed["id"],
+                            "wid": WORKER_ID,
+                        },
                     )
             return
 
@@ -359,9 +369,11 @@ async def execute_run(claimed: dict) -> None:
                             "UPDATE run SET status='needs_report_spec', "
                             "cost_usd_total = COALESCE("
                             "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "
-                            "WHERE id=:id AND status='running'"
+                            # Cancel guard + D-23.1-06 ownership fence; see the
+                            # needs_input park above for why a park needs both.
+                            "WHERE id=:id AND status='running' AND worker_id = :wid"
                         ),
-                        {"id": claimed["id"]},
+                        {"id": claimed["id"], "wid": WORKER_ID},
                     )
             return
 
@@ -438,13 +450,16 @@ async def execute_run(claimed: dict) -> None:
                             "cost_usd_total = COALESCE("
                             "(SELECT SUM(cost_usd) FROM audit_log WHERE run_id = :id), 0) "
                             # Guard: a user cancel (status='cancelled') must win.
-                            "WHERE id=:id AND status='running'"
+                            # Fence: and only the OWNER may park (D-23.1-06); see
+                            # the needs_input park above for the full reasoning.
+                            "WHERE id=:id AND status='running' AND worker_id = :wid"
                         ),
                         {
                             "park_status": _park_status,
                             "e": _preason,
                             "vsummary": _pjson.dumps(_psummary, ensure_ascii=False),
                             "id": claimed["id"],
+                            "wid": WORKER_ID,
                         },
                     )
             return
@@ -581,7 +596,11 @@ async def execute_run(claimed: dict) -> None:
                 _set_summary = (
                     "verification_summary = CAST(:vsummary AS JSONB), " if _has_summary else ""
                 )
-                _params = {"id": claimed["id"], "final_status": _final_status}
+                _params = {
+                    "id": claimed["id"],
+                    "final_status": _final_status,
+                    "wid": WORKER_ID,
+                }
                 if _has_summary:
                     _params["vsummary"] = _json.dumps(_summary, ensure_ascii=False)
                 completed = await session.execute(
@@ -593,7 +612,35 @@ async def execute_run(claimed: dict) -> None:
                         # Guard: only a still-running run completes. A user cancel
                         # (status='cancelled') makes this a no-op, so the cancelled
                         # state — and the cancel verdict — sticks.
-                        "WHERE id=:id AND status='running'"
+                        #
+                        # OWNERSHIP FENCE (D-23.1-06). The second predicate is
+                        # ADDITIVE: without the status clause a cancel stops
+                        # winning, without the ownership clause a worker displaced
+                        # by a stale reclaim can stamp a terminal status over a run
+                        # the NEW owner is still executing. `:wid` is the module
+                        # WORKER_ID -- this process -- and never claimed['worker_id'],
+                        # which after a reclaim is a stale in-memory copy that would
+                        # make the predicate trivially true for the displaced worker.
+                        #
+                        # Narrowing this UPDATE deliberately narrows the two Output
+                        # INSERTs below, because they are gated on
+                        # `completed.rowcount`: a displaced worker must write neither
+                        # a report body nor a rejected-claims ledger onto a run it
+                        # lost. Two Output rows for one run would leave the audit
+                        # chain with two report bodies and no way to say which one a
+                        # human actually read.
+                        #
+                        # The predicate is appended AFTER the status clause on
+                        # purpose. test_status_gates.py and test_gate_replay.py both
+                        # assert the whole WHERE prefix up to and including the
+                        # status clause as an exact substring, so reordering the two
+                        # predicates would break those cancel-guard regression tests
+                        # without touching the guard they exist to protect. (The
+                        # literal is deliberately not repeated here: it is also
+                        # COUNTED by test_checkpoint_resume.py, and a comment that
+                        # inflates a counted grep is the vacuous gate this
+                        # repository keeps getting bitten by.)
+                        "WHERE id=:id AND status='running' AND worker_id = :wid"
                     ),
                     _params,
                 )
@@ -640,9 +687,14 @@ async def execute_run(claimed: dict) -> None:
         return
     except Exception as exc:
         log.exception("run_failed", run_id=str(claimed["id"]))
-        # FAILURE: update status to failed -- but only if the run is still running.
-        # If the user cancelled (and the failure is the cancel tearing down an
-        # in-flight provider call), the 'cancelled' verdict must win.
+        # FAILURE: update status to failed -- but only if the run is still running
+        # AND this process still owns it. If the user cancelled (and the failure is
+        # the cancel tearing down an in-flight provider call), the 'cancelled'
+        # verdict must win; if a stale reclaim moved the run to another worker, the
+        # displaced process must not write its own crash onto the new owner's run
+        # (D-23.1-06). An unfenced failure write is if anything worse than an
+        # unfenced success one: it moves the row off 'running' and so disarms the
+        # real owner's own status guard on the way past.
         async with sessionmaker() as session:
             async with session.begin():
                 # SET LOCAL app.tenant_id BEFORE any tenant-scoped query (T-06-02)
@@ -650,9 +702,9 @@ async def execute_run(claimed: dict) -> None:
                 await session.execute(
                     text(
                         "UPDATE run SET status='failed', completed_at=NOW(), error_message=:e "
-                        "WHERE id=:id AND status='running'"
+                        "WHERE id=:id AND status='running' AND worker_id = :wid"
                     ),
-                    {"e": str(exc)[:1000], "id": claimed["id"]},
+                    {"e": str(exc)[:1000], "id": claimed["id"], "wid": WORKER_ID},
                 )
     finally:
         # Stop asserting liveness on EVERY exit path -- success, RunCancelled and
