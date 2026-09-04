@@ -78,8 +78,10 @@ export function CitationTierGlyph({ quality_tier }: { quality_tier: 1 | 2 | 3 })
  * is the panel's job, never the marker's.
  *
  * SECURITY (T-22-06): `citation.title` is engine-authored from remote page metadata and is
- * rendered as a PLAIN TEXT CHILD. It must never be routed through `MdText` / `ReactMarkdown` —
- * `rehype-raw` is a project dependency, which would turn a hostile page title into stored XSS.
+ * rendered as a PLAIN TEXT CHILD. Keep it that way. `rehype-raw` WAS a project dependency and
+ * was removed in phase 23.1 (T-23.1-30) precisely because it renders author-supplied HTML with
+ * no sanitiser, which would turn a hostile page title into stored XSS. It must not be
+ * reintroduced; any future raw-HTML need goes through a sanitiser with an explicit allow-list.
  *
  * The HoverCard is CONTROLLED on purpose: a click while the card is open would otherwise leave
  * a floating preview sitting on top of the panel it just opened. `setOpen(false)` before

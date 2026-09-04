@@ -1,6 +1,5 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
 
 export type MarkerType = "v" | "!" | "?" | "x";
 
@@ -71,8 +70,17 @@ export function BattlecardMarkdown({
     <div className="text-sm leading-relaxed text-ink">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeRaw]}
         components={{
+          // UNREACHABLE SINCE PHASE 23.1 (DEF-23.1-01). The `marker` and `conf` handlers
+          // below only ever fired because `rehype-raw` turned the raw <marker>/<conf> tags
+          // emitted by `transformContent` into real nodes. `rehype-raw` was REMOVED — it
+          // renders author-supplied HTML with no sanitiser — so react-markdown now drops
+          // those raw tags and neither badge renders.
+          //
+          // They are kept so a reinstatement is a one-line change. Restoring plain
+          // `rehype-raw` is NOT the correct fix: it restores the unsanitised-HTML
+          // capability for every caller. Use `rehype-sanitize` with a schema that allows
+          // exactly `marker[data-type]` and `conf[data-level]`.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           marker: ({ "data-type": dataType }: any) => (
             <MarkerBadge type={(dataType as MarkerType) || "v"} />
