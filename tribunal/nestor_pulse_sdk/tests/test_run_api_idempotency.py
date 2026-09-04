@@ -66,6 +66,10 @@ Tests
   10. test_answer_comparison_only_answered_engines_get_children (LIVE)
   11. test_concurrent_comparison_answers_replace_each_sibling_once (LIVE)
   12. test_answer_unknown_run_is_404 (LIVE)
+  13. test_brief_accepts_exactly_one_million_chars (static)
+  14. test_brief_rejects_one_char_over_the_bound (static)
+  15. test_brief_still_rejects_empty (static)
+  16. test_brief_accepts_the_analytic_worst_case (static)
 
 The LIVE tests use the session-scoped testcontainers Postgres from
 `conftest.py`, which SKIPS cleanly (never errors) when Docker is unreachable --
@@ -713,3 +717,84 @@ async def test_answer_unknown_run_is_404(async_engine, set_tenant) -> None:
             Session, set_tenant, tenant_id, user, uuid.uuid4(), answers="a",
         )
     assert ei.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The brief bound (CONTEXT section 5) -- a request-body DoS guard
+# ---------------------------------------------------------------------------
+
+_BRIEF_MAX = 1_000_000
+# The analytic worst case for a real brief, from the producer side: the FULL
+# context pack rides into the brief verbatim and untruncated
+# (`backend/app/research/brief.py::assemble_brief` step 5), and that text is a
+# Claude generation capped at `_CONTEXT_PACK_MAX_TOKENS = 8192`
+# (`backend/app/ai/skills/context_pack.py`) -- roughly 32 KB of characters. The
+# enumerated research questions and the decision/report blocks add far less.
+_ANALYTIC_WORST_CASE = 60_000
+
+
+def _run_request(brief: str):
+    from nestor_pulse_sdk.runs.schemas import CreateRunRequest
+
+    return CreateRunRequest(
+        project_id=uuid.uuid4(), brief=brief, engine="tribunal",
+        idempotency_key=uuid.uuid4(),
+    )
+
+
+def _compare_request(brief: str):
+    from nestor_pulse_sdk.runs.schemas import CreateCompareRequest
+
+    return CreateCompareRequest(
+        project_id=uuid.uuid4(), brief=brief, engines=["tribunal", "adk"],
+        comparison_id=uuid.uuid4(),
+    )
+
+
+def test_brief_accepts_exactly_one_million_chars() -> None:
+    """The bound is inclusive: exactly 1,000,000 characters is valid on BOTH
+    request models."""
+    brief = "x" * _BRIEF_MAX
+    assert len(_run_request(brief).brief) == _BRIEF_MAX
+    assert len(_compare_request(brief).brief) == _BRIEF_MAX
+
+
+def test_brief_rejects_one_char_over_the_bound() -> None:
+    """1,000,001 characters is a pydantic ValidationError on BOTH models, which
+    FastAPI surfaces as a 422 -- the body is refused at the schema boundary
+    instead of being carried into a provider prompt (T-23.1-23)."""
+    from pydantic import ValidationError
+
+    brief = "x" * (_BRIEF_MAX + 1)
+    with pytest.raises(ValidationError):
+        _run_request(brief)
+    with pytest.raises(ValidationError):
+        _compare_request(brief)
+
+
+def test_brief_still_rejects_empty() -> None:
+    """The `min_length=1` floor is untouched by adding a ceiling."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _run_request("")
+    with pytest.raises(ValidationError):
+        _compare_request("")
+
+
+def test_brief_accepts_the_analytic_worst_case() -> None:
+    """A brief the size of the analytic worst case must still be accepted.
+
+    This is the regression guard that matters: the bound is a DoS guard on the
+    request body, NOT a content policy. Tightening it toward a real brief's
+    size would silently 422 somebody's research. ROADMAP Phase 24 D-RR-3 also
+    adds a superadmin steering note to this field with NO length cap and no
+    truncation -- 1 MB is chosen to leave that feature room.
+    """
+    brief = "x" * _ANALYTIC_WORST_CASE
+    assert len(_run_request(brief).brief) == _ANALYTIC_WORST_CASE
+    assert len(_compare_request(brief).brief) == _ANALYTIC_WORST_CASE
+    assert _BRIEF_MAX > _ANALYTIC_WORST_CASE * 15, (
+        "the bound must keep an order of magnitude of headroom over a real "
+        "brief so it never becomes a silent truncation"
+    )

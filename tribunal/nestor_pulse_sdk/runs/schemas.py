@@ -105,10 +105,29 @@ def bundle_readable(status: str) -> bool:
     return status in BUNDLE_READABLE_STATUSES
 
 
+_BRIEF_BOUND_DESCRIPTION = (
+    "The research brief. The 1,000,000-character ceiling is a request-body "
+    "denial-of-service guard, NOT a content policy: a real brief lands well "
+    "under ~60 KB, because its dominant term is the context pack, which rides "
+    "in verbatim and untruncated but is itself a generation capped at 8192 "
+    "output tokens (~32 KB of characters). WARNING for a future editor: "
+    "ROADMAP Phase 24 D-RR-3 adds a superadmin steering note to this field "
+    "with NO length cap and no truncation -- 1 MB is chosen to leave that "
+    "room. Tightening this toward a real brief's size would 422 that feature "
+    "and would silently refuse somebody's research."
+)
+
+
 class CreateRunRequest(BaseModel):
     """POST /api/runs request body."""
     project_id: uuid.UUID
-    brief: str = Field(min_length=1)
+    # CONTEXT section 5 / D-23.1-08 sibling fix (T-23.1-23): min_length had no
+    # matching ceiling, so an arbitrarily large body could ride into a provider
+    # prompt. See _BRIEF_BOUND_DESCRIPTION for the number's derivation.
+    brief: str = Field(
+        min_length=1, max_length=1_000_000,
+        description=_BRIEF_BOUND_DESCRIPTION,
+    )
     engine: Engine                  # D-02: required, no default
     uploaded_documents: list[UploadedDoc] = []
     idempotency_key: uuid.UUID      # client-generated per RESEARCH line 513
@@ -123,7 +142,12 @@ class CreateCompareRequest(BaseModel):
     same children instead of double-charging.
     """
     project_id: uuid.UUID
-    brief: str = Field(min_length=1)
+    # Same bound as CreateRunRequest -- the fan-out sends this same brief to
+    # >=2 engines, so an unbounded body here is the MORE expensive of the two.
+    brief: str = Field(
+        min_length=1, max_length=1_000_000,
+        description=_BRIEF_BOUND_DESCRIPTION,
+    )
     engines: list[Engine] = Field(min_length=2)
     uploaded_documents: list[UploadedDoc] = []
     comparison_id: uuid.UUID        # client-generated; groups the children
