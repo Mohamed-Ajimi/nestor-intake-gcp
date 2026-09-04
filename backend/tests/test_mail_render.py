@@ -94,10 +94,51 @@ def test_admin_validated_cta_is_admin_route_no_token():
 
 
 def test_invite_carries_link():
-    """render_invite is the ONLY render that carries its action link (D-09)."""
+    """render_invite is the ONLY render that carries its action link (D-09).
+
+    ROOT CAUSE of this test's prior failure (23.1-14): the jinja environment has
+    ``autoescape`` ON by design (``app/mail/render.py:16-20``, the T-10-01 XSS
+    guard), and a real Firebase action link carries a query string — so its ``&``
+    renders as ``&amp;``. The old ``assert action_link in html`` compared the RAW
+    url against ESCAPED output and could only ever have passed with the XSS guard
+    OFF. The renderer is correct; the assertion was wrong.
+
+    So this now asserts BOTH halves: the escaped link IS present (D-09 — the
+    invite really does carry its action link, and a mail client resolves
+    ``&amp;`` back to ``&``), and the raw un-escaped form is ABSENT. The second
+    half is what keeps the test meaningful — it PROVES autoescape is on rather
+    than accidentally proving it is off, so this test now fails if someone
+    disables the guard.
+    """
     action_link = "https://auth.example/action?mode=resetPassword&oobCode=XYZ123"
+    escaped_link = "https://auth.example/action?mode=resetPassword&amp;oobCode=XYZ123"
     html = render.render_invite(cta_url=action_link, app_base_url=_BASE)
-    assert action_link in html
+
+    # D-09: the link IS carried, in its HTML-escaped form, inside the CTA href.
+    assert escaped_link in html
+    assert f'href="{escaped_link}"' in html
+    # T-10-01: the raw ampersand form must NOT survive — autoescape is ON.
+    assert action_link not in html
+
+
+def test_invite_autoescapes_hostile_cta_url():
+    """A cta_url breaking out of the href attribute is escaped (T-10-01).
+
+    This is the property ``test_invite_carries_link`` was reaching for. The
+    invite is the one template that interpolates a URL into an ``href``
+    (``templates/{locale}/invite.html.j2:11``), so it is the one place an
+    attribute-breakout would land. A hostile url must emit no live tag and no
+    closing quote.
+    """
+    hostile = 'https://evil.example/a"><script>alert(1)</script>'
+    html = render.render_invite(cta_url=hostile, app_base_url=_BASE)
+
+    # No live tag, and the attribute was never closed early.
+    assert "<script>" not in html
+    assert '"><script>' not in html
+    # The escaped forms are what actually rendered.
+    assert "&lt;script&gt;" in html
+    assert "&#34;" in html
 
 
 def test_autoescape_guards_project_title():

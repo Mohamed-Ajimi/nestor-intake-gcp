@@ -4,20 +4,31 @@ and 0012 ``research_run_chain_bundle`` (Phase 17, RUN-03).
 Split in two:
 
   * A pure SOURCE/AST suite (no DB, no Docker) that runs on the dev box (D-10):
-    revision chaining (0011 -> 0010), both RLS policy forms present, the three
-    index names matching the ORM 1:1, and the grants (app_superadmin + env-guarded
-    runtime-SA DO-block) — mirrors ``test_grant_migration.py``'s no-DB discipline.
-    Phase-17 adds the 0012 add-column suite: it chains 0012 -> 0011, adds exactly
-    the three nullable columns (``chain_status`` / ``chain_broken_at`` /
-    ``bundle_key``), and touches NO RLS policy, grant, or index (the new columns
-    inherit ``research_runs``' existing FORCE-RLS row policy from 0011).
+    revision chaining (0011 -> 0010), both RLS policy forms present, and the three
+    index names matching the ORM 1:1. Phase-17 adds the 0012 add-column suite: it
+    chains 0012 -> 0011, adds exactly the three nullable columns (``chain_status``
+    / ``chain_broken_at`` / ``bundle_key``), and touches NO RLS policy, grant, or
+    index (the new columns inherit ``research_runs``' existing FORCE-RLS row
+    policy from 0011).
 
   * An ``integration``-marked suite that consumes the conftest ``engine`` fixture
     (which runs ``alembic upgrade head`` as the non-superuser owner) and asserts
     against the LIVE schema: the table exists, both ``research_runs`` RLS policies
-    exist (``pg_policies``), the three named indexes exist (``pg_indexes``), and
-    the three Phase-17 columns exist and are nullable (``information_schema``).
+    exist (``pg_policies``), the three named indexes exist (``pg_indexes``), the
+    three Phase-17 columns exist and are nullable, and — added in phase 23.1 —
+    the 0011 grants and the 0012 no-default property, both read out of
+    ``information_schema`` rather than out of the migration's source text.
     Skipped cleanly on a box with no Docker/DSN (Wave-0 harness contract).
+
+⚠ Phase 23.1 (plan 14) moved the GRANT and the no-``server_default`` checks from
+the source suite into the integration suite, because both were asserting on raw
+migration TEXT and both were RED (see the comment block above
+``test_research_runs_grants_app_superadmin_crud``). Several remaining source
+assertions are green today only by luck and share the same shape — notably
+``test_status_default_queued_not_remapped``'s ``"succeeded" not in src`` and
+``test_0012_no_rls_policy_grant_or_index``'s ``"GRANT" not in src``, each of
+which a single new docstring sentence would turn red. They were left alone here
+(out of this plan's scope); they are recorded as a deferred item.
 
 Authoritative references:
 - .planning/phases/16-research-trigger-progress-bridge/16-01-PLAN.md Task 2.
@@ -134,18 +145,6 @@ def test_declares_three_named_indexes_matching_orm() -> None:
         assert f'"{idx}"' in src, f"migration missing index {idx}"
 
 
-def test_carries_grants() -> None:
-    """Explicit app_superadmin GRANT + the env-guarded runtime-SA DO-block are present."""
-    src = _source()
-    assert (
-        f"GRANT SELECT, INSERT, UPDATE, DELETE ON {SCHEMA}.{TABLE} TO app_superadmin"
-        in src
-    )
-    # Env-guarded runtime-SA grant (RUNTIME_DB_USER + pg_roles existence guard).
-    assert "RUNTIME_DB_USER" in src
-    assert "pg_roles" in src
-
-
 def test_status_default_queued_not_remapped() -> None:
     """status server_default is 'queued'; the skill-run 'succeeded' literal is absent."""
     src = _source()
@@ -214,14 +213,6 @@ def test_0012_no_rls_policy_grant_or_index() -> None:
     assert "op.create_index" not in src, "0012 must not create an index"
     assert "CREATE POLICY" not in src, "0012 must not create an RLS policy"
     assert "GRANT" not in src, "0012 must not issue a GRANT"
-
-
-def test_0012_no_server_default_on_new_columns() -> None:
-    """The three columns are added WITHOUT a server_default (completion path sets them)."""
-    src = _source_0012()
-    assert "server_default" not in src, (
-        "0012 columns must be NULL until the completion path writes them"
-    )
 
 
 def test_0012_symmetric_downgrade_drops_three_columns() -> None:
@@ -317,4 +308,138 @@ def test_research_runs_chain_bundle_columns_nullable(engine) -> None:
         )
         assert nullable_by_name[col] == "YES", (
             f"column {col} must be nullable (is_nullable={nullable_by_name[col]!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 23.1 (plan 14) — the two tests below REPLACE source-text greps that
+# could never have passed. Both now assert against the schema `alembic upgrade
+# head` actually built, via the conftest `engine` fixture.
+#
+# WHY BEHAVIOURAL, NOT A BETTER GREP:
+#
+#   * `test_carries_grants` used to build
+#     f"GRANT ... ON {SCHEMA}.{TABLE} TO app_superadmin" from its OWN constants
+#     and look for that INTERPOLATED string in the migration's RAW SOURCE, where
+#     it exists only as an f-string with `{SCHEMA}.{_NEW_TABLE}` placeholders
+#     (0011_research_runs.py:242-244). It could never have matched.
+#   * `test_0012_no_server_default_on_new_columns` used to assert
+#     `"server_default" not in src` over the whole 0012 file — and 0012's own
+#     docstring says the columns are added "with NO ``server_default``". It
+#     matched prose ABOUT the thing instead of the thing.
+#
+# A cleverer regex is one docstring edit away from the same failure, and a
+# source grep proves only what the file SAYS, never what the database GOT. The
+# old assertions were DELETED rather than kept alongside: a text assertion that
+# "also passes" is the trap, because it goes on reading green while meaning
+# nothing.
+# ---------------------------------------------------------------------------
+
+
+@integration
+def test_research_runs_grants_app_superadmin_crud(engine) -> None:
+    """app_superadmin really holds SELECT/INSERT/UPDATE/DELETE on the built table.
+
+    Asserts each privilege SEPARATELY so a partial grant names the missing one
+    instead of reporting an opaque set mismatch.
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT privilege_type FROM information_schema.role_table_grants "
+                "WHERE table_schema = :schema AND table_name = :tbl "
+                "AND grantee = 'app_superadmin'"
+            ),
+            {"schema": SCHEMA, "tbl": TABLE},
+        ).all()
+    granted = {r[0] for r in rows}
+
+    for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+        assert privilege in granted, (
+            f"app_superadmin is missing {privilege} on {SCHEMA}.{TABLE} "
+            f"(holds: {sorted(granted) or 'nothing'})"
+        )
+
+
+@integration
+def test_research_runs_grants_runtime_sa_when_configured(engine) -> None:
+    """The env-guarded runtime-SA grant, asserted behaviourally or SKIPPED honestly.
+
+    0011's `_grant_new_table_to_runtime_sa` only fires when `RUNTIME_DB_USER` is
+    set (0011_research_runs.py:106-128) — in the test container it is normally
+    unset, so there is nothing to observe. This SKIPS with an explicit reason in
+    that case rather than asserting something vacuous: a skip that says why is
+    honest; an assertion that passes because the thing never ran is not.
+    """
+    import os
+
+    from sqlalchemy import text
+
+    role = os.environ.get("RUNTIME_DB_USER", "").strip()
+    if not role:
+        pytest.skip(
+            "RUNTIME_DB_USER unset — 0011's runtime-SA GRANT did not run in this "
+            "database, so there is no grant to observe (env-guarded by design)."
+        )
+
+    with engine.connect() as conn:
+        role_exists = conn.execute(
+            text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}
+        ).first()
+        if role_exists is None:
+            pytest.skip(
+                f"RUNTIME_DB_USER={role!r} is set but that role does not exist in "
+                "this test database, so 0011 could not have granted to it."
+            )
+        rows = conn.execute(
+            text(
+                "SELECT privilege_type FROM information_schema.role_table_grants "
+                "WHERE table_schema = :schema AND table_name = :tbl "
+                "AND grantee = :role"
+            ),
+            {"schema": SCHEMA, "tbl": TABLE, "role": role},
+        ).all()
+    granted = {r[0] for r in rows}
+
+    for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+        assert privilege in granted, (
+            f"runtime SA {role!r} is missing {privilege} on {SCHEMA}.{TABLE} "
+            f"(holds: {sorted(granted) or 'nothing'})"
+        )
+
+
+@integration
+def test_0012_columns_have_no_server_default(engine) -> None:
+    """0012's three columns really carry NO default in the built schema.
+
+    `column_default IS NULL` in `information_schema.columns` is the property the
+    old source grep was reaching for: the completion path — not the DB — is the
+    sole writer of chain_status / chain_broken_at / bundle_key (D-06).
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name, column_default FROM information_schema.columns "
+                "WHERE table_schema = :schema AND table_name = :tbl "
+                "AND column_name = ANY(:cols)"
+            ),
+            {
+                "schema": SCHEMA,
+                "tbl": TABLE,
+                "cols": list(_CHAIN_BUNDLE_COLUMNS),
+            },
+        ).all()
+    default_by_name = {r[0]: r[1] for r in rows}
+
+    for col in _CHAIN_BUNDLE_COLUMNS:
+        assert col in default_by_name, (
+            f"missing column {col} on {TABLE} (present: {sorted(default_by_name)})"
+        )
+        assert default_by_name[col] is None, (
+            f"column {col} must have NO server_default — the completion path writes "
+            f"it, not the DB (column_default={default_by_name[col]!r})"
         )
