@@ -307,3 +307,246 @@ def test_patch_if_emits_both_predicates_in_one_statement(engine, set_space, two_
             )
     finally:
         _drop_spaces(engine, space_a)
+
+
+# ===========================================================================
+# Task 2 — run_context_pack's allow-listed `decomposed` transition (D-23.1-05)
+# ===========================================================================
+#
+# The allow-list has exactly ONE entry. Derived from the UI, not guessed: the
+# Generate-context-pack button renders in exactly one phase, `awaiting_context_pack`
+# (NextStepBanner.tsx:270), and that phase is derived from
+# `status === "validated_by_client" && !intake.context_pack_artifact_id`
+# (intake-phase.ts:55-58). `reviewed` maps to awaiting_validation_send /
+# awaiting_client_validation and has no such button; `decomposed` maps to
+# awaiting_research_start. So every status below except `validated_by_client` is a
+# status from which NO caller can legitimately launch this skill.
+
+_REFUSED_STATUSES = ["draft", "decomposed", "in_research", "delivered"]
+
+_PACK_TEXT = "# Context Pack\n\nDe gedecomponeerde briefing."
+
+
+def _as_identity(identity: "Identity"):
+    def _override():
+        return identity
+
+    return _override
+
+
+def _build_app():
+    from fastapi import FastAPI
+
+    from app.api.auth_routes import protected_router
+
+    protected_router.include_router(ai_routes_mod.ai_router)
+    app = FastAPI()
+    app.include_router(protected_router)
+    return app
+
+
+def _drive_context_pack(
+    engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+):
+    """Seed an intake at ``seed_status``, run the context-pack skill against a FAKED
+    Claude (zero provider spend), and return the resulting DB rows.
+
+    Returns ``(intake_row, skill_row, artifact_rows)`` where ``intake_row`` is
+    ``(status, context_pack_artifact_id)`` and ``skill_row`` is
+    ``(status, error_message, completed_at, applied_at, output)``.
+    """
+    from sqlalchemy import text
+    from fastapi.testclient import TestClient
+
+    fake = fake_anthropic(_PACK_TEXT)
+    monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
+
+    app = _build_app()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space, f"CAS space ({seed_status})")
+        with engine.begin() as conn:
+            _insert_intake(conn, set_space, space, intake_id, seed_status)
+
+        monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: engine)
+        app.dependency_overrides[get_current_identity] = _as_identity(_user(space))
+        client = TestClient(app)
+        resp = client.post(
+            f"/intakes/{intake_id}/skills/context-pack",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code in (200, 202), (
+            f"the dispatch itself must still succeed, got {resp.status_code} "
+            f"(body={resp.text!r})."
+        )
+        assert fake.calls, "Claude must be called before the transition is evaluated."
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            intake_row = conn.execute(
+                text(
+                    f"SELECT status, context_pack_artifact_id FROM {SCHEMA}.intakes "
+                    "WHERE id = :iid"
+                ),
+                {"iid": intake_id},
+            ).first()
+            skill_row = conn.execute(
+                text(
+                    f"SELECT status, error_message, completed_at, applied_at, output "
+                    f"FROM {SCHEMA}.skill_runs WHERE intake_id = :iid "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"iid": intake_id},
+            ).first()
+            artifact_rows = conn.execute(
+                text(
+                    f"SELECT id, text_content FROM {SCHEMA}.research_artifacts "
+                    "WHERE intake_id = :iid"
+                ),
+                {"iid": intake_id},
+            ).fetchall()
+        return intake_row, skill_row, artifact_rows
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_context_pack_advances_from_validated_by_client(
+    engine, set_space, monkeypatch, fake_anthropic
+):
+    """The ONE allow-listed source status: the artifact is written, the intake becomes
+    `decomposed` and points at it, and the run is `succeeded` with applied_at set."""
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        intake_row, skill_row, artifacts = _drive_context_pack(
+            engine,
+            set_space,
+            monkeypatch,
+            fake_anthropic,
+            space,
+            intake_id,
+            "validated_by_client",
+        )
+        assert intake_row[0] == "decomposed", (
+            f"validated_by_client must advance to decomposed, got {intake_row[0]!r}."
+        )
+        assert len(artifacts) == 1, f"exactly one artifact expected, got {len(artifacts)}."
+        assert str(intake_row[1]) == str(artifacts[0][0]), (
+            "context_pack_artifact_id must point at the new artifact."
+        )
+        assert skill_row[0] == "succeeded", (
+            f"the allowed path must finalize succeeded, got {skill_row[0]!r}."
+        )
+        assert skill_row[3] is not None, "applied_at must mark the finalized output."
+        assert skill_row[2] is not None, "completed_at must be set."
+    finally:
+        _drop_spaces(engine, space)
+
+
+@pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
+def test_context_pack_refuses_disallowed_source_status(
+    engine, set_space, monkeypatch, fake_anthropic, seed_status
+):
+    """From any non-allow-listed status the intake lifecycle is left EXACTLY as it was:
+    the status does not move and context_pack_artifact_id is not set.
+
+    `decomposed` is deliberately in this set — a second run on an already-decomposed
+    intake is refused, because the launching button only renders for
+    validated_by_client (NextStepBanner.tsx:270 / intake-phase.ts:55).
+    """
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        intake_row, _skill_row, _artifacts = _drive_context_pack(
+            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+        )
+        assert intake_row[0] == seed_status, (
+            f"LIFECYCLE CORRUPTED: an intake in {seed_status!r} was moved to "
+            f"{intake_row[0]!r} by the context-pack skill."
+        )
+        assert intake_row[1] is None, (
+            f"a refused context pack must not link an artifact, got {intake_row[1]!r}."
+        )
+    finally:
+        _drop_spaces(engine, space)
+
+
+@pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
+def test_refused_context_pack_never_leaves_a_running_skill_run(
+    engine, set_space, monkeypatch, fake_anthropic, seed_status
+):
+    """The refusal is terminal, not a silent early return (D-23.1-05 / T-23.1-14).
+
+    An orphaned `running` row would survive until sweep_orphaned_skill_runs cleared it
+    30 minutes later, and once 23.1-12's partial unique index on
+    (intake_id, skill) WHERE status='running' lands, it would block every future
+    context-pack run for that intake permanently.
+    """
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        _intake_row, skill_row, _artifacts = _drive_context_pack(
+            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+        )
+        assert skill_row is not None, "the skill run row must exist."
+        assert skill_row[0] != "running", (
+            f"ORPHAN: the refused run from {seed_status!r} was left 'running'."
+        )
+        assert skill_row[0] == "failed", (
+            f"a refused transition must finalize 'failed', got {skill_row[0]!r}."
+        )
+        assert skill_row[2] is not None, (
+            "completed_at must be set on the refused run — a NULL completed_at is what "
+            "the orphan sweep looks for."
+        )
+        assert skill_row[3] is None, (
+            "applied_at must NOT be set: nothing was applied to the intake."
+        )
+    finally:
+        _drop_spaces(engine, space)
+
+
+@pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
+def test_refused_context_pack_keeps_the_paid_output_unlinked(
+    engine, set_space, monkeypatch, fake_anthropic, seed_status
+):
+    """The Claude call is already paid for by the time the transition is evaluated, so the
+    artifact row is KEPT (append-only history) — just never linked onto the intake."""
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        intake_row, skill_row, artifacts = _drive_context_pack(
+            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+        )
+        assert len(artifacts) == 1, (
+            f"the paid context pack must still be persisted, got {len(artifacts)} rows."
+        )
+        assert artifacts[0][1] == _PACK_TEXT, "the artifact must carry the generated text."
+        assert intake_row[1] is None, "...but the intake must NOT point at it."
+        assert str(artifacts[0][0]) in (skill_row[4] or ""), (
+            "the failed run's output must name the kept artifact's id so an operator can "
+            f"find it; output={skill_row[4]!r}."
+        )
+    finally:
+        _drop_spaces(engine, space)
+
+
+@pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
+def test_refusal_message_is_a_readable_sentence(
+    engine, set_space, monkeypatch, fake_anthropic, seed_status
+):
+    """error_message names the observed status and the skill in plain language — it is
+    what the operator sees in SkillRunProgress, not a stack trace."""
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    try:
+        _intake_row, skill_row, _artifacts = _drive_context_pack(
+            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+        )
+        message = skill_row[1] or ""
+        assert seed_status in message, (
+            f"the message must name the observed status {seed_status!r}: {message!r}"
+        )
+        assert "context pack" in message.lower(), (
+            f"the message must name what was attempted: {message!r}"
+        )
+        assert "Traceback" not in message, (
+            f"the refusal is not an exception and must not carry a traceback: {message!r}"
+        )
+    finally:
+        _drop_spaces(engine, space)
