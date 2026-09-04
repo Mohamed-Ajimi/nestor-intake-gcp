@@ -46,6 +46,20 @@ def _user(space_id: uuid.UUID) -> "Identity":
     return Identity(uid=f"u-{space_id}", email="u@x", role="user", space_id=str(space_id))
 
 
+def _superadmin() -> "Identity":
+    """FIXTURE-ONLY (plan 23.1-11) — the identity these route-driving cases now need.
+
+    ``ai_router`` carries a router-level ``Depends(superadmin_gate)`` (D-23.1-02), so a
+    role=``user`` caller gets an existence-hidden 404 and never reaches the pipeline these
+    cases measure. Re-identifying the CALLER changes nothing they assert: the write path
+    takes the audited ``create_in_space`` branch against the intake's OWN space, so every
+    row still lands in that space. The user-path RLS confinement is proved by
+    ``test_ai_cross_tenant.py``, which drives ``tenant_session`` directly and needs no route.
+    """
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
+
 def _as(identity: "Identity"):
     def _override():
         return identity
@@ -53,8 +67,45 @@ def _as(identity: "Identity"):
     return _override
 
 
-def _patch_engine_factories(monkeypatch, user_engine) -> None:
+def _patch_engine_factories(monkeypatch, user_engine, sa_engine=None) -> None:
     monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: user_engine)
+    if sa_engine is not None:
+        # FIXTURE-ONLY (plan 23.1-11): the superadmin write path routes through
+        # get_superadmin_engine (D-05), so the gated cases need it patched too.
+        monkeypatch.setattr(
+            ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+
+
+#: Password granted to app_superadmin for the connect-as engine (test only — the SAME
+#: literal test_mail_endpoints / test_operator_verb_gate use, so the role's password stays
+#: stable no matter which suite touches it first).
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """FIXTURE-ONLY (plan 23.1-11) — a second engine connecting AS ``app_superadmin``.
+
+    Faithful to production's two-engine routing (D-05): ``current_user = 'app_superadmin'``
+    makes the 0003 ``*_superadmin_all`` bypass policy match. ``app_superadmin`` is a plain
+    non-superuser LOGIN role, so this proves the bypass POLICY + GRANTs, not superuser
+    ambient authority. Shape copied from ``test_operator_verb_gate.superadmin_engine``.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 def _build_app():
@@ -140,7 +191,7 @@ def test_download_delegates_to_gcs(monkeypatch):
 
 
 def test_transcribe_faked_whisper_writes_scoped_transcripts(
-    engine, set_space, monkeypatch, fake_openai
+    engine, set_space, monkeypatch, fake_openai, superadmin_engine
 ):
     """Faked Whisper -> verbose_json request + space-scoped transcripts rows (no audio)."""
     from sqlalchemy import text
@@ -167,8 +218,10 @@ def test_transcribe_faked_whisper_writes_scoped_transcripts(
     app = _build_app()
     try:
         source_id = _seed_intake_with_audio_source(engine, set_space, space, intake_id)
-        _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space))
+        # FIXTURE-ONLY (plan 23.1-11): the superadmin write path needs its own engine.
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        # FIXTURE-ONLY (plan 23.1-11): ai_router is superadmin-gated (D-23.1-02).
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
 
         resp = client.post(

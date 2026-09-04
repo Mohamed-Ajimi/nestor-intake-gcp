@@ -54,6 +54,52 @@ def _user(space_id: uuid.UUID) -> "Identity":
     return Identity(uid=f"u-{space_id}", email="u@x", role="user", space_id=str(space_id))
 
 
+def _superadmin() -> "Identity":
+    """FIXTURE-ONLY (plan 23.1-11) — the identity the route-driving cases below now need.
+
+    ``ai_router`` carries a router-level ``Depends(superadmin_gate)`` (D-23.1-02), so a
+    role=``user`` caller gets an existence-hidden 404 and never reaches the CAS transition
+    these cases measure. Re-identifying the CALLER changes nothing they assert: the
+    allow-listed transition, the refusal message and the unlinked artifact are all
+    properties of ``run_context_pack``, not of the caller's role, and the write path takes
+    the audited ``create_in_space`` branch against the intake's OWN space. The
+    ``patch_if``-level cases above drive the repository directly and keep their ``_user``
+    identity — the cross-tenant CAS proof is unchanged.
+    """
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
+#: Password granted to app_superadmin for the connect-as engine (test only — the SAME
+#: literal test_mail_endpoints / test_operator_verb_gate use, so the role's password stays
+#: stable no matter which suite touches it first).
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """FIXTURE-ONLY (plan 23.1-11) — a second engine connecting AS ``app_superadmin``.
+
+    Faithful to production's two-engine routing (D-05): ``current_user = 'app_superadmin'``
+    makes the 0003 ``*_superadmin_all`` bypass policy match. ``app_superadmin`` is a plain
+    non-superuser LOGIN role, so this proves the bypass POLICY + GRANTs, not superuser
+    ambient authority. Shape copied from ``test_operator_verb_gate.superadmin_engine``.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
+
+
 def _create_space(conn, space_id: uuid.UUID, name: str) -> None:
     from sqlalchemy import text
 
@@ -346,7 +392,7 @@ def _build_app():
 
 
 def _drive_context_pack(
-    engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+    engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status, sa_engine
 ):
     """Seed an intake at ``seed_status``, run the context-pack skill against a FAKED
     Claude (zero provider spend), and return the resulting DB rows.
@@ -369,7 +415,12 @@ def _drive_context_pack(
             _insert_intake(conn, set_space, space, intake_id, seed_status)
 
         monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: engine)
-        app.dependency_overrides[get_current_identity] = _as_identity(_user(space))
+        # FIXTURE-ONLY (plan 23.1-11): ai_router is superadmin-gated (D-23.1-02), and the
+        # superadmin write path routes through get_superadmin_engine (D-05).
+        monkeypatch.setattr(
+            ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+        app.dependency_overrides[get_current_identity] = _as_identity(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_id}/skills/context-pack",
@@ -411,7 +462,7 @@ def _drive_context_pack(
 
 
 def test_context_pack_advances_from_validated_by_client(
-    engine, set_space, monkeypatch, fake_anthropic
+    engine, set_space, monkeypatch, fake_anthropic, superadmin_engine
 ):
     """The ONE allow-listed source status: the artifact is written, the intake becomes
     `decomposed` and points at it, and the run is `succeeded` with applied_at set."""
@@ -425,6 +476,7 @@ def test_context_pack_advances_from_validated_by_client(
             space,
             intake_id,
             "validated_by_client",
+            superadmin_engine,
         )
         assert intake_row[0] == "decomposed", (
             f"validated_by_client must advance to decomposed, got {intake_row[0]!r}."
@@ -444,7 +496,7 @@ def test_context_pack_advances_from_validated_by_client(
 
 @pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
 def test_context_pack_refuses_disallowed_source_status(
-    engine, set_space, monkeypatch, fake_anthropic, seed_status
+    engine, set_space, monkeypatch, fake_anthropic, seed_status, superadmin_engine
 ):
     """From any non-allow-listed status the intake lifecycle is left EXACTLY as it was:
     the status does not move and context_pack_artifact_id is not set.
@@ -456,7 +508,14 @@ def test_context_pack_refuses_disallowed_source_status(
     space, intake_id = uuid.uuid4(), uuid.uuid4()
     try:
         intake_row, _skill_row, _artifacts = _drive_context_pack(
-            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+            engine,
+            set_space,
+            monkeypatch,
+            fake_anthropic,
+            space,
+            intake_id,
+            seed_status,
+            superadmin_engine,
         )
         assert intake_row[0] == seed_status, (
             f"LIFECYCLE CORRUPTED: an intake in {seed_status!r} was moved to "
@@ -471,7 +530,7 @@ def test_context_pack_refuses_disallowed_source_status(
 
 @pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
 def test_refused_context_pack_never_leaves_a_running_skill_run(
-    engine, set_space, monkeypatch, fake_anthropic, seed_status
+    engine, set_space, monkeypatch, fake_anthropic, seed_status, superadmin_engine
 ):
     """The refusal is terminal, not a silent early return (D-23.1-05 / T-23.1-14).
 
@@ -483,7 +542,14 @@ def test_refused_context_pack_never_leaves_a_running_skill_run(
     space, intake_id = uuid.uuid4(), uuid.uuid4()
     try:
         _intake_row, skill_row, _artifacts = _drive_context_pack(
-            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+            engine,
+            set_space,
+            monkeypatch,
+            fake_anthropic,
+            space,
+            intake_id,
+            seed_status,
+            superadmin_engine,
         )
         assert skill_row is not None, "the skill run row must exist."
         assert skill_row[0] != "running", (
@@ -525,14 +591,21 @@ def test_refused_context_pack_never_leaves_a_running_skill_run(
 
 @pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
 def test_refused_context_pack_keeps_the_paid_output_unlinked(
-    engine, set_space, monkeypatch, fake_anthropic, seed_status
+    engine, set_space, monkeypatch, fake_anthropic, seed_status, superadmin_engine
 ):
     """The Claude call is already paid for by the time the transition is evaluated, so the
     artifact row is KEPT (append-only history) — just never linked onto the intake."""
     space, intake_id = uuid.uuid4(), uuid.uuid4()
     try:
         intake_row, skill_row, artifacts = _drive_context_pack(
-            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+            engine,
+            set_space,
+            monkeypatch,
+            fake_anthropic,
+            space,
+            intake_id,
+            seed_status,
+            superadmin_engine,
         )
         assert len(artifacts) == 1, (
             f"the paid context pack must still be persisted, got {len(artifacts)} rows."
@@ -549,14 +622,21 @@ def test_refused_context_pack_keeps_the_paid_output_unlinked(
 
 @pytest.mark.parametrize("seed_status", _REFUSED_STATUSES)
 def test_refusal_message_is_a_readable_sentence(
-    engine, set_space, monkeypatch, fake_anthropic, seed_status
+    engine, set_space, monkeypatch, fake_anthropic, seed_status, superadmin_engine
 ):
     """error_message names the observed status and the skill in plain language — it is
     what the operator sees in SkillRunProgress, not a stack trace."""
     space, intake_id = uuid.uuid4(), uuid.uuid4()
     try:
         _intake_row, skill_row, _artifacts = _drive_context_pack(
-            engine, set_space, monkeypatch, fake_anthropic, space, intake_id, seed_status
+            engine,
+            set_space,
+            monkeypatch,
+            fake_anthropic,
+            space,
+            intake_id,
+            seed_status,
+            superadmin_engine,
         )
         message = skill_row[1] or ""
         assert seed_status in message, (

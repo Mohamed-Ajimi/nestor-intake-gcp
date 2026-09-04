@@ -11,6 +11,12 @@ the ~120s call and the per-space GUC is re-issued on the write session (T-7-02 /
 
 Locked invariants realized here:
 
+* SEC-01 / COST-01 / D-23.1-02 — the whole router is OPERATOR-ONLY. ``ai_router`` carries
+  ONE router-level ``Depends(superadmin_gate)`` (plan 23.1-11), so a role=``user`` caller
+  gets the existence-hidden ``404`` before any handler body runs and can never fire paid
+  Claude/OpenAI/Whisper work. See the comment on the router construction below for why the
+  gate is on the ROUTER and not on the seven handlers. ``tests/test_ai_router_gate.py`` is
+  the denial proof; ``tests/test_client_surface_open.py`` is the counterweight.
 * TENANT-02 / T-7-03 — the tenant key is NEVER read from the path/body/query/LLM. The tenant
   scope comes solely from the verified ``Identity``; ``create_running_skill_run`` scopes the
   row to that tenant. There is NO request model carrying a tenant field (the grep gate).
@@ -45,14 +51,33 @@ from app.ai.skills import (
     run_transcribe,
 )
 from app.auth.dependencies import get_current_identity
+from app.auth.gates import superadmin_gate
 from app.auth.identity import Identity
 from app.core.config import get_settings
 from app.db.ai_session import IntakeNotInScopeError, create_running_skill_run
 
-# The AI feature router. NO auth dependency of its own — mounted UNDER protected_router in
-# app/main.py (inherits Depends(get_current_identity)). prefix mirrors intake_router so the
-# AI verbs hang off the same /intakes/{intake_id} resource.
-ai_router = APIRouter(prefix="/intakes", tags=["ai"])
+# The AI feature router. It inherits Depends(get_current_identity) from protected_router
+# (mounted UNDER it in app/main.py) and carries ONE router-level Depends(superadmin_gate) of
+# its own — D-23.1-02, "one dependency, not seven". prefix mirrors intake_router so the AI
+# verbs hang off the same /intakes/{intake_id} resource; the two are separate APIRouter
+# objects, so this gate reaches only the seven routes below and never intake_router's client
+# surface (tests/test_client_surface_open.py pins that half).
+#
+# ROUTER LEVEL AND NOT SEVEN PER-ROUTE COPIES, for two reasons that are not style:
+#
+#  1. A route ADDED to this router later is gated BY CONSTRUCTION. Seven per-route copies
+#     would leave route number eight open — which is exactly how the six extra ungated
+#     operator verbs in 23.1-CONTEXT.md § 1's table came to exist in the first place.
+#  2. FastAPI PREPENDS router-level dependencies to each route's own list, so the gate
+#     resolves before every handler dependency and before the handler body. That satisfies
+#     app/auth/gates.py's ordering contract STRUCTURALLY rather than by remembering to put a
+#     parameter in the right position — and it is what makes a null-space user receive the
+#     existence-hidden 404 instead of _dispatch_skill_run's 403 existence oracle.
+ai_router = APIRouter(
+    prefix="/intakes",
+    tags=["ai"],
+    dependencies=[Depends(superadmin_gate)],
+)
 
 
 def _dispatch_skill_run(identity: Identity, intake_id: str, skill: str, llm_model: str) -> str:
