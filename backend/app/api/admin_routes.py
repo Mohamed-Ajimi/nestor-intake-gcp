@@ -41,7 +41,17 @@ from app.auth import admin_users
 from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
 from app.db import audit
-from app.db.admin_repo import AdminRepo
+from app.db.admin_repo import (
+    AdminRepo,
+    # The membership-status vocabulary lives with the accessors that read it. Imported
+    # rather than re-typed as literals here so the space cascade's third value
+    # (``space_deactivated``) can never drift between the write side (this module) and
+    # the allow-list reads (``admin_repo.py``) — a silent drift would make the selective
+    # reactivate restore nothing.
+    _STATUS_ACTIVE,
+    _STATUS_DEACTIVATED,
+    _STATUS_SPACE_DEACTIVATED,
+)
 from app.db.session import get_admin_session
 from app.mail import render as mail_render
 from app.mail import resend as mail_resend
@@ -501,23 +511,133 @@ def update_space(
     return _space_view(repo.get_space(space_id))
 
 
+def _apply_to_idp(uids: list[str], apply, *, verb: str) -> list[str]:
+    """Call an ``admin_users`` verb once per uid; return the uids it FAILED for.
+
+    The Admin SDK cannot join the request transaction, so the cascade's enforcement half
+    is a best-effort loop rather than part of the atomic write. It never returns early: a
+    member the IdP rejects must not shield the members after them in the list. Failures
+    are logged here (uid + exception) and reported to the caller as a COUNT only — never
+    as identifiers in a response body (T-06-09).
+    """
+    failed: list[str] = []
+    for uid in uids:
+        try:
+            apply(uid)
+        except Exception:  # noqa: BLE001 -- any SDK/transport error is "still enabled"
+            _log.exception("space cascade: %s failed for uid=%s", verb, uid)
+            failed.append(uid)
+    return failed
+
+
 @admin_router.post("/spaces/{space_id}/deactivate")
 def deactivate_space(
     space_id: str,
     repo: AdminRepo = Depends(get_admin_session),
     identity: Identity = Depends(get_current_identity),
 ) -> SpaceView:
-    """Soft-deactivate a space (status -> ``deactivated``) + audit. NO hard-delete (D-10)."""
-    rowcount = repo.set_space_status(space_id, "deactivated")
-    if rowcount == 0:
+    """Deactivate a space AND every member in it (SEC-02 / D-23.1-03). NO hard-delete (D-10).
+
+    Flipping ``organizations.status`` is BOOKKEEPING, not enforcement: nothing in any auth
+    path reads that column (23.1-CONTEXT § 2) and this handler deliberately does not add
+    such a read — D-23.1-03 rejects an org-status lookup in ``get_current_identity``
+    because ``dependencies.py`` has no DB call by design (D-06). The ENFORCEMENT is the
+    same per-user machinery :func:`deactivate_user` uses, applied once per member:
+    ``admin_users.deactivate_user`` = ``update_user(disabled=True)`` +
+    ``revoke_refresh_tokens``, which the AUTH-04 ``check_revoked=True`` boundary
+    (``dependencies.py:78``) turns into a rejection on the member's NEXT request.
+
+    Order (PLANNING RULING #2 — the IdP cannot join the DB transaction):
+      1. 404 if the space does not exist; read its memberships ONCE.
+      2. Both T-5-15 guards, evaluated against that list BEFORE any write: never disable
+         the ACTING superadmin, and never take the last active superadmin(s) down.
+      3. DB: flip every affected membership to ``space_deactivated`` (a THIRD status, so
+         :func:`reactivate_space` can restore exactly what this took and never un-fire an
+         individually deactivated member) and the space to ``deactivated``.
+      4. IdP: one ``deactivate_user`` per member with a non-null ``provider_user_id``,
+         collecting failures instead of stopping at the first.
+      5. All-clear -> 200. Any failure -> commit the DB flip and the audit row FIRST
+         (so the record of intent survives), then 502 whose detail carries a COUNT only —
+         the uids go to the audit ``metadata`` and the log, never to the browser.
+
+    SAFE TO PRESS TWICE. Step 3 is idempotent and step 4 is idempotent, and the member
+    list deliberately includes rows that are ALREADY ``space_deactivated``, so re-issuing
+    this verb on an already-deactivated space re-attempts the IdP call for every member —
+    which is the only way a member whose disable failed in an earlier attempt ever gets
+    disabled. A status-filtered member list would make the retry a silent no-op.
+    """
+    space = repo.get_space(space_id)
+    if space is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Space not found")
+
+    memberships = list(repo.list_memberships_for_space(space_id))
+
+    # T-5-15 self-lockout guards — 409 BEFORE any DB write and before any IdP call, and
+    # evaluated against the list already read (no second query, no re-derivation in the
+    # loop). These are the per-user guards at :func:`deactivate_user` raised to the space.
+    if any(m.provider_user_id and m.provider_user_id == identity.uid for m in memberships):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Cannot deactivate yourself")
+
+    cascaded_superadmins = sum(
+        1
+        for m in memberships
+        if m.role == "superadmin" and m.status == _STATUS_ACTIVE
+    )
+    # ``> 0`` matters: a space holding NO active superadmin cascades zero of them, and
+    # ``0 >= count`` would refuse every deactivation on an installation whose superadmins
+    # have no membership rows at all (the count is global). The guard only bites when this
+    # space actually holds active superadmins AND they are all of the remaining ones.
+    if cascaded_superadmins > 0 and cascaded_superadmins >= repo.count_active_superadmins():
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Cannot deactivate the last active superadmin"
+        )
+
+    # The cascade set: active members plus any already carrying the cascade status (the
+    # retry path). An individually ``deactivated`` member is left exactly as they are —
+    # they must stay deactivated through a later reactivate.
+    targets = [
+        m
+        for m in memberships
+        if m.status in (_STATUS_ACTIVE, _STATUS_SPACE_DEACTIVATED)
+    ]
+
+    for membership in targets:
+        if membership.status != _STATUS_SPACE_DEACTIVATED:
+            repo.set_membership_status(membership.id, _STATUS_SPACE_DEACTIVATED)
+    repo.set_space_status(space_id, _STATUS_DEACTIVATED)
+
+    # A membership whose provider_user_id is NULL (created before the IdP account exists)
+    # has nothing to disable — it is still flipped above, just skipped here.
+    uids = [m.provider_user_id for m in targets if m.provider_user_id]
+    failed = _apply_to_idp(uids, admin_users.deactivate_user, verb="deactivate_user")
+
     audit.log(
         repo.session,
         actor_uid=identity.uid,
         event_type="space.deactivated",
         target=space_id,
-        metadata={},
+        space_id=space.id,
+        metadata={
+            "members_cascaded": len(targets),
+            "idp_disabled": len(uids) - len(failed),
+            # Identifiers belong in the audit trail (T-23.1-10 repudiation), NOT in the
+            # response body (T-23.1-11 / T-06-09).
+            "idp_failed_uids": failed,
+        },
     )
+
+    if failed:
+        # Commit the flip + the audit row BEFORE raising: the request tx would otherwise
+        # roll back on the exception, erasing the record of a cascade that DID disable
+        # some members in the IdP. Verified against SQLAlchemy 2.0's ``sessionmaker.begin``
+        # — an explicit commit here survives the raise and the dependency exits cleanly.
+        repo.session.commit()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Space deactivated, but {len(failed)} of {len(uids)} members could not be "
+            "disabled in the identity provider. Re-issue this request to retry.",
+        )
+
     return _space_view(repo.get_space(space_id))
 
 
@@ -527,17 +647,61 @@ def reactivate_space(
     repo: AdminRepo = Depends(get_admin_session),
     identity: Identity = Depends(get_current_identity),
 ) -> SpaceView:
-    """Reactivate a space (status -> ``active``) + ``space.reactivated`` audit."""
-    rowcount = repo.set_space_status(space_id, "active")
-    if rowcount == 0:
+    """Reactivate a space and ONLY the members its deactivation took down (SEC-02).
+
+    The SELECTIVE inverse of :func:`deactivate_space`. It restores exactly the memberships
+    carrying ``space_deactivated`` and deliberately leaves ``deactivated`` rows alone: a
+    member fired INDIVIDUALLY before the space went down must stay fired. Without the
+    third status value, deactivate-then-reactivate a space would be an undocumented way to
+    restore revoked access (T-23.1-08).
+
+    Same order and the same honesty as deactivate — DB flip first, then one
+    ``admin_users.reactivate_user`` (``update_user(disabled=False)``) per restored member,
+    then 200, or a committed flip plus a 502 carrying a COUNT only. Claims are NOT
+    re-issued (A3 — login-sync is idempotent). Safe to press twice: the flip is idempotent
+    and un-disabling an already-enabled account is a no-op, so a retry re-attempts any
+    member the IdP call failed for.
+
+    As on deactivate, ``organizations.status`` is bookkeeping — the IdP flag is what lets
+    the member back in.
+    """
+    space = repo.get_space(space_id)
+    if space is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Space not found")
+
+    memberships = list(repo.list_memberships_for_space(space_id))
+    # EXACTLY the cascade's own rows. Never ``!= _STATUS_ACTIVE`` — that would sweep up
+    # the individually deactivated.
+    targets = [m for m in memberships if m.status == _STATUS_SPACE_DEACTIVATED]
+
+    for membership in targets:
+        repo.set_membership_status(membership.id, _STATUS_ACTIVE)
+    repo.set_space_status(space_id, _STATUS_ACTIVE)
+
+    uids = [m.provider_user_id for m in targets if m.provider_user_id]
+    failed = _apply_to_idp(uids, admin_users.reactivate_user, verb="reactivate_user")
+
     audit.log(
         repo.session,
         actor_uid=identity.uid,
         event_type="space.reactivated",
         target=space_id,
-        metadata={},
+        space_id=space.id,
+        metadata={
+            "members_restored": len(targets),
+            "idp_enabled": len(uids) - len(failed),
+            "idp_failed_uids": failed,
+        },
     )
+
+    if failed:
+        repo.session.commit()
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Space reactivated, but {len(failed)} of {len(uids)} members could not be "
+            "re-enabled in the identity provider. Re-issue this request to retry.",
+        )
+
     return _space_view(repo.get_space(space_id))
 
 
