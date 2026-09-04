@@ -51,6 +51,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.auth.dependencies import get_current_identity
+from app.auth.gates import superadmin_gate
 from app.auth.identity import Identity
 from app.core.config import get_settings
 from app.intake_canonical import (
@@ -856,8 +857,8 @@ def _resolve_recipient_locales(
 @intake_router.get("/{intake_id}/members")
 def list_members(
     intake_id: str,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> list[MemberView]:
     """List the intake space's ACTIVE members ({id, email}), or 404 (D-07 / T-10-13).
 
@@ -872,6 +873,12 @@ def list_members(
     only from rows ``if row.email`` and would 422-reject the whole send if such a row were
     preselected by the picker. Excluding it here keeps the picker's preselect-all default
     sendable and never renders a blank, label-less checkbox row (WR-02).
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     intake = repo.get(intake_id)
     if intake is None:
@@ -895,8 +902,8 @@ def list_members(
 def send_validation_mail(
     intake_id: str,
     body: MailRecipients,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Send the validation-request mail; stamp ``validation_link_sent_at`` on 2xx only.
 
@@ -905,6 +912,12 @@ def send_validation_mail(
     token-free ``{app_base_url}/intake/{intake_id}`` app route (NOTIF-01). On a
     successful send the ``validation_link_sent_at`` column is stamped and a ``mail.sent``
     audit row (no link) is written; on a send failure neither is (D-16 / Pitfall 1).
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     return _run_intake_send(
         intake_id, body, repo, identity, is_reminder=False, is_results=False
@@ -915,14 +928,20 @@ def send_validation_mail(
 def send_reminder_mail(
     intake_id: str,
     body: MailRecipients,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Send the reminder (isReminder) validation mail; writes NO timestamp (legacy parity).
 
     404 on a cross-space/unknown intake id (D-07). Same recipient resolution + CTA as the
     validation send, but the reminder path stamps NO column (there is no reminder-sent
     column — legacy parity) and still audits ``mail.sent`` on a successful send only.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     return _run_intake_send(
         intake_id, body, repo, identity, is_reminder=True, is_results=False
@@ -933,8 +952,8 @@ def send_reminder_mail(
 def send_results_mail(
     intake_id: str,
     body: MailRecipients,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Send the results-ready mail; stamp ``results_link_sent_at`` on 2xx only.
 
@@ -943,6 +962,12 @@ def send_results_mail(
     ``{app_base_url}/intake/{intake_id}/results`` app route (NOTIF-01). On a successful
     send the ``results_link_sent_at`` column is stamped + a ``mail.sent`` audit row (no
     link) written; on failure neither is (D-16 / Pitfall 1).
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     return _run_intake_send(
         intake_id, body, repo, identity, is_reminder=False, is_results=True
@@ -953,8 +978,8 @@ def send_results_mail(
 def send_intake_mail(
     intake_id: str,
     body: MailRecipients,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> dict:
     """Send the intake-invite mail (draft only); writes NO timestamp column.
 
@@ -965,6 +990,12 @@ def send_intake_mail(
     ``{app_base_url}/intake/{intake_id}`` app route (NOTIF-01). On a successful send
     a ``mail.sent`` audit row (no link) is written; there is no intake-sent-at column
     (no migration — like the reminder path), so nothing is stamped.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     return _run_intake_send(
         intake_id,
@@ -1356,8 +1387,8 @@ def _send_admin_validated(intake) -> None:
 @intake_router.post("/{intake_id}/review")
 def review_intake(
     intake_id: str,
+    identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
-    identity: Identity = Depends(get_current_identity),
 ) -> IntakeView:
     """Advance an intake along the review transition (``submitted`` -> ``reviewed``),
     auditing the change in the SAME tx.
@@ -1365,6 +1396,12 @@ def review_intake(
     404 if the (in-scope) intake does not exist (D-07); 409 if the current status is not in
     the review allow-list. The ``audit_log`` row is written on ``repo.session`` (one-tx,
     QA-04 / Pitfall 2); ``metadata`` is structured ``{"from","to"}`` only (T-06-09).
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied here, not at the
+    scope check. The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and
+    a null-space caller gets that 404 rather than the repo's null-space 403, which would
+    leak that this endpoint exists.
     """
     intake = repo.get(intake_id)
     if intake is None:
@@ -1518,7 +1555,7 @@ def _send_report_mail(session, identity: Identity, intake, recipient_ids: list[s
 def deliver_report(
     intake_id: str,
     body: DeliverBody,
-    identity: Identity = Depends(get_current_identity),
+    identity: Identity = Depends(superadmin_gate),
 ) -> IntakeView:
     """Deliver the staged report: link it, flip in_research -> delivered, mail the client.
 
@@ -1539,6 +1576,10 @@ def deliver_report(
     purpose: the artifact write + the intake patch must commit TOGETHER (one tx) BEFORE the
     mail is attempted. This mirrors ``research_routes.trigger`` (committed-before-schedule) and
     is why a request-injected repo (its own separate tx) is NOT used for the write here.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied before the
+    handler body opens its ``tenant_session`` at all.
     """
     # (1) Flip + link + audit — ONE committed tenant tx (the primary delivery effect).
     with tenant_session(identity) as txs:
@@ -1591,7 +1632,7 @@ def deliver_report(
 def replace_report(
     intake_id: str,
     body: DeliverBody,
-    identity: Identity = Depends(get_current_identity),
+    identity: Identity = Depends(superadmin_gate),
 ) -> IntakeView:
     """Repoint the delivered report to a NEW file; status stays ``delivered`` (D-04/D-05).
 
@@ -1605,6 +1646,10 @@ def replace_report(
     (``/report`` CTA) and ``results_link_sent_at`` re-stamped on a 2xx; an empty
     ``recipients`` is a SILENT replace (the default path — the client gets the newest file with
     no fresh mail). A mail failure leaves the (already committed) new link intact.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02): a
+    role=``user`` caller — including the intake's own client — is denied before the
+    handler body opens its ``tenant_session`` at all.
     """
     # (1) Repoint + audit — ONE committed tenant tx (status stays delivered).
     with tenant_session(identity) as txs:

@@ -63,6 +63,17 @@ def _user(space_id: uuid.UUID) -> "Identity":
     return Identity(uid=f"u-{space_id}", email="u@x", role="user", space_id=str(space_id))
 
 
+def _superadmin() -> "Identity":
+    """FIXTURE-ONLY (plan 23.1-10) — the operator identity the delivery verbs now require.
+
+    ``POST /deliver`` and ``POST /report/replace`` are superadmin-only via
+    ``superadmin_gate`` (23.1-CONTEXT.md § 1 / D-23.1-02): a role=``user`` caller gets an
+    existence-hidden 404. The seven cases below drive those verbs, so their CALLER changed
+    from a client to an operator. Not one assertion did.
+    """
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
 def _as(identity: "Identity"):
     def _override():
         return identity
@@ -88,6 +99,51 @@ def _patch_engine_factories(monkeypatch, user_engine) -> None:
     monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
     ai_session = pytest.importorskip("app.db.ai_session")
     monkeypatch.setattr(ai_session, "get_engine", lambda *a, **k: user_engine)
+
+
+#: FIXTURE-ONLY (plan 23.1-10). Password granted to app_superadmin for the connect-as engine
+#: (test only — the same literal test_mail_endpoints.py uses, so the role's password is stable
+#: no matter which suite touches it first).
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral CI/test only
+
+
+def _patch_superadmin_engine(monkeypatch, sa_engine) -> None:
+    """FIXTURE-ONLY (plan 23.1-10) — swap ``get_superadmin_engine`` in BOTH namespaces.
+
+    ``deliver_report`` / ``replace_report`` write through ``ai_session.tenant_session``, which
+    resolves the engine via ``ai_session``'s OWN import, while ``get_tenant_repo`` resolves it
+    via ``session``'s. A superadmin caller reaches both, so patching one would leave half the
+    surface pointed at a real engine.
+    """
+    monkeypatch.setattr(session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+    ai_session = pytest.importorskip("app.db.ai_session")
+    monkeypatch.setattr(ai_session, "get_superadmin_engine", lambda *a, **k: sa_engine)
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """FIXTURE-ONLY (plan 23.1-10) — an engine connecting AS ``app_superadmin``.
+
+    Copied verbatim from ``test_mail_endpoints.superadmin_engine``. Faithful to production's
+    two-engine routing (D-05): ``current_user = 'app_superadmin'`` makes the 0003
+    ``*_superadmin_all`` bypass policy match. ``app_superadmin`` is a plain non-superuser
+    LOGIN role (conftest's ``_ensure_app_superadmin``), so this proves the bypass POLICY and
+    the GRANTs, not superuser ambient authority.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +314,7 @@ def _key(space_id, intake_id, name="report.pdf") -> str:
 
 def test_deliver_transition_links_artifact_and_flips_status(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """POST /deliver on an in_research intake -> 200 delivered, artifact linked, mail sent once."""
     from fastapi.testclient import TestClient
 
@@ -275,7 +331,10 @@ def test_deliver_transition_links_artifact_and_flips_status(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")  # WR-01
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/deliver",
@@ -305,7 +364,7 @@ def test_deliver_transition_links_artifact_and_flips_status(
 
 def test_deliver_wrong_status_returns_409(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """POST /deliver on a decomposed intake -> 409 (the in_research-only transition wall)."""
     from fastapi.testclient import TestClient
 
@@ -322,7 +381,10 @@ def test_deliver_wrong_status_returns_409(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/deliver",
@@ -349,7 +411,7 @@ def test_deliver_wrong_status_returns_409(
 
 def test_pdf_only_rejects_non_pdf(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """POST /deliver with a .docx storage_path -> 422 (server-side PDF-only, D-10)."""
     from fastapi.testclient import TestClient
 
@@ -366,7 +428,10 @@ def test_pdf_only_rejects_non_pdf(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/deliver",
@@ -395,7 +460,7 @@ def test_pdf_only_rejects_non_pdf(
 
 def test_deliver_forged_key_returns_404(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """POST /deliver with a storage_path under ANOTHER space/intake prefix -> 404 (D-08)."""
     from fastapi.testclient import TestClient
 
@@ -413,7 +478,10 @@ def test_deliver_forged_key_returns_404(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         # A key under space_b/intake_b — not the owned intake's reports/ prefix.
         forged = _key(space_b, intake_b)
@@ -441,7 +509,7 @@ def test_deliver_forged_key_returns_404(
 
 def test_deliver_mail_targets_resolved_email_and_stamps(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A successful deliver sends to the resolved active-member email and stamps the sent-at."""
     from fastapi.testclient import TestClient
 
@@ -458,7 +526,10 @@ def test_deliver_mail_targets_resolved_email_and_stamps(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/deliver",
@@ -491,7 +562,7 @@ def test_deliver_mail_targets_resolved_email_and_stamps(
 
 def test_deliver_mail_failure_leaves_delivered_timestamp_null(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A send() that RAISES leaves the intake delivered but results_link_sent_at NULL (T-18-05)."""
     from fastapi.testclient import TestClient
 
@@ -508,6 +579,9 @@ def test_deliver_mail_failure_leaves_delivered_timestamp_null(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
         # Force the delivery mail to raise (simulates a Resend transport failure).
         import app.mail.resend as resend_mod
@@ -517,7 +591,7 @@ def test_deliver_mail_failure_leaves_delivered_timestamp_null(
 
         monkeypatch.setattr(resend_mod, "send", _raise)
 
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/deliver",
@@ -549,7 +623,7 @@ def test_deliver_mail_failure_leaves_delivered_timestamp_null(
 
 def test_replace_repoints_artifact_keeps_delivered(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """POST /report/replace on a delivered intake -> new artifact id, status STILL delivered."""
     from fastapi.testclient import TestClient
 
@@ -569,7 +643,10 @@ def test_replace_repoints_artifact_keeps_delivered(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         # Silent replace (no recipients) — the default path (D-05).
         resp = client.post(

@@ -325,10 +325,24 @@ def _build_app():
 
 
 def _cleanup_spaces(engine, *space_ids) -> None:
+    """Delete the seeded organizations AND this suite's audit rows.
+
+    The audit sweep is NOT belt-and-braces. ``audit_log.space_id`` is a plain nullable column
+    with NO ForeignKey, deliberately, so the trail outlives its space (``models/audit.py``) —
+    dropping the organization does NOT cascade the rows away. The superadmin arms in this file
+    legitimately write ``mail.sent`` and ``intake.status_changed`` rows, and
+    ``test_mail_endpoints._count_mail_sent_audit`` counts ``mail.sent`` GLOBALLY (the conftest
+    owner engine is not space-filtered), so leaving them behind turns that pre-existing test
+    red purely on collection order. Measured: without this sweep it saw 6 rows where it
+    asserts 1. A new suite must leave the audit table as it found it.
+    """
     from sqlalchemy import text
 
     with engine.begin() as conn:
         for sid in space_ids:
+            conn.execute(
+                text(f"DELETE FROM {SCHEMA}.audit_log WHERE space_id = :id"), {"id": sid}
+            )
             conn.execute(
                 text(f"DELETE FROM {SCHEMA}.organizations WHERE id = :id"), {"id": sid}
             )
@@ -1013,9 +1027,9 @@ def test_all_eight_operator_verbs_depend_on_the_shared_gate():
         if p == "/intakes/research/runs/{run_id}/locate"
         and "GET" in (getattr(r, "methods", None) or set())
     ]
-    assert len(known_gated) == 1, (
+    assert len(known_gated) >= 1, (
         "the known-gated control route GET /intakes/research/runs/{run_id}/locate is not "
-        f"mounted (found {len(known_gated)}); the self-check cannot run."
+        "mounted at all; the self-check cannot run."
     )
     control_calls = _resolved_dependency_calls(*known_gated[0])
     assert any(call is superadmin_gate for call in control_calls), (
@@ -1034,16 +1048,26 @@ def test_all_eight_operator_verbs_depend_on_the_shared_gate():
             for p, r, i in flat
             if p == path and method in (getattr(r, "methods", None) or set())
         ]
-        assert len(targets) == 1, (
-            f"{method} {path} is mounted {len(targets)} times on the app (expected exactly "
-            f"1) — 23.1-CONTEXT.md § 1 names it as an operator verb."
+        assert len(targets) >= 1, (
+            f"{method} {path} is NOT mounted on the app — 23.1-CONTEXT.md § 1 names it as an "
+            f"operator verb, so it cannot simply have vanished."
         )
         checked += 1
-        calls = _resolved_dependency_calls(*targets[0])
-        if not any(call is superadmin_gate for call in calls):
-            missing.append(
-                f"{method} {path} -> {[getattr(c, '__name__', repr(c)) for c in calls]}"
-            )
+        # EVERY mount is checked, not just the first. ``app.main.app`` includes the
+        # module-global ``protected_router`` LAZILY (D-23.1-14), so the router object it
+        # holds is LIVE: every other suite's ``_build_app()`` doing
+        # ``protected_router.include_router(intake_router)`` adds another mount that shows up
+        # here (measured: 11 mounts of GET /members under a full-suite run). "Exactly one
+        # mount" is therefore a claim about registration hygiene, not about the gate — it is
+        # owned by ``test_client_surface_open.test_client_route_inventory_is_pinned``.
+        # Requiring the gate on ALL mounts is strictly stronger than requiring it on one.
+        for route, inherited in targets:
+            calls = _resolved_dependency_calls(route, inherited)
+            if not any(call is superadmin_gate for call in calls):
+                missing.append(
+                    f"{method} {path} -> {[getattr(c, '__name__', repr(c)) for c in calls]}"
+                )
+                break
 
     assert checked == 8, f"expected to audit exactly 8 operator verbs, audited {checked}"
     assert not missing, (

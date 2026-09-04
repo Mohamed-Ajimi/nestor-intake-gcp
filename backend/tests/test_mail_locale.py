@@ -394,7 +394,7 @@ def _count_mail_sent_audit(engine, space_id):
 @pytestmark_integration
 def test_recipient_membership_locale_fr_gets_fr_variant(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A recipient with membership.locale='fr' receives the FR results variant (D-07 override)."""
     from fastapi.testclient import TestClient
 
@@ -411,7 +411,12 @@ def test_recipient_membership_locale_fr_gets_fr_variant(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -433,7 +438,7 @@ def test_recipient_membership_locale_fr_gets_fr_variant(
 @pytestmark_integration
 def test_recipient_inherits_space_default_en(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A recipient with no override inherits the space default_locale='en' (D-07 chain)."""
     from fastapi.testclient import TestClient
 
@@ -450,7 +455,12 @@ def test_recipient_inherits_space_default_en(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -472,7 +482,7 @@ def test_recipient_inherits_space_default_en(
 @pytestmark_integration
 def test_recipient_falls_back_to_nl(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A recipient with no override in an nl-default space gets the NL variant (chain base)."""
     from fastapi.testclient import TestClient
 
@@ -489,7 +499,12 @@ def test_recipient_falls_back_to_nl(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -510,7 +525,7 @@ def test_recipient_falls_back_to_nl(
 @pytestmark_integration
 def test_mixed_locale_list_sends_correct_variant_per_recipient(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A mixed-locale recipient list renders+sends the correct variant to each recipient."""
     from fastapi.testclient import TestClient
 
@@ -530,10 +545,15 @@ def test_mixed_locale_list_sends_correct_variant_per_recipient(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
         # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
         # assert the DELTA around the action rather than an absolute total.
         audit_before = _count_mail_sent_audit(engine, space_a)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -568,7 +588,7 @@ def test_mixed_locale_list_sends_correct_variant_per_recipient(
 @pytestmark_integration
 def test_admin_ui_language_does_not_affect_variant(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """The sending admin's own membership.locale never leaks into the recipient's variant."""
     from fastapi.testclient import TestClient
 
@@ -587,8 +607,13 @@ def test_admin_ui_language_does_not_affect_variant(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
         # The Identity carries NO locale — locale is resolved from the recipient's row only.
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -613,7 +638,7 @@ def test_admin_ui_language_does_not_affect_variant(
 @pytestmark_integration
 def test_locale_send_failure_preserves_d16(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A send failure in the per-locale loop returns success=False with NO stamp / NO audit (D-16)."""
     from fastapi.testclient import TestClient
 
@@ -630,6 +655,11 @@ def test_locale_send_failure_preserves_d16(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): POST /mail/results is now superadmin-only
+        # (23.1-CONTEXT.md § 1 / D-23.1-02); only the IDENTITY changed — the locale
+        # resolution this test measures is server-side and per RECIPIENT, never the
+        # sender's, so every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
         import app.mail.resend as resend_mod
 
@@ -641,7 +671,7 @@ def test_locale_send_failure_preserves_d16(
         # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
         # assert the DELTA around the action rather than an absolute total.
         audit_before = _count_mail_sent_audit(engine, space_a)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",

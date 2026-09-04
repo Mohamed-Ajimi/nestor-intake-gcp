@@ -428,7 +428,7 @@ def test_superadmin_answers_upsert_lands_in_intake_space(engine, monkeypatch, su
 # ===========================================================================
 
 
-def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch):
+def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch, superadmin_engine):
     """draft->submitted->reviewed->validated_by_client all 200; a forbidden submit -> 409.
 
     The forbidden case (submit from ``validated_by_client``) has NO allow-list entry, so it
@@ -443,6 +443,9 @@ def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch):
             _create_space(conn, space_id, "Transitions Space")
 
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): /review is superadmin-only via superadmin_gate
+        # (D-23.1-02), so the operator engine must be live for the one operator call below.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_id))
         client = TestClient(app)
         hdr = {"Authorization": "Bearer ignored-overridden"}
@@ -455,7 +458,13 @@ def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch):
         assert submit.status_code == 200, f"draft->submitted should be 200, got {submit.status_code}"
         assert submit.json()["status"] == "submitted"
 
+        # FIXTURE-ONLY (plan 23.1-10): /review is now superadmin-only (23.1-CONTEXT.md § 1 /
+        # D-23.1-02) — a role=user caller gets an existence-hidden 404. Only the CALLER of
+        # this one step changed; the client resumes for the validate below and the transition
+        # sequence, the statuses and every assertion in this test are untouched.
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         review = client.post(f"/intakes/{intake_id}/review", headers=hdr)
+        app.dependency_overrides[get_current_identity] = _as(_user(space_id))
         assert review.status_code == 200, f"submitted->reviewed should be 200, got {review.status_code}"
         assert review.json()["status"] == "reviewed"
 

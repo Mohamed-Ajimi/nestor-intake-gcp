@@ -224,7 +224,7 @@ def _count_mail_sent_audit(engine, space_id):
 # ===========================================================================
 
 
-def test_members_read_active_only(engine, set_space, two_spaces, monkeypatch, fake_resend):
+def test_members_read_active_only(engine, set_space, two_spaces, monkeypatch, fake_resend, superadmin_engine):
     """GET /intakes/{id}/members returns ACTIVE {id, email} rows and EXCLUDES a deactivated one."""
     from fastapi.testclient import TestClient
 
@@ -241,7 +241,10 @@ def test_members_read_active_only(engine, set_space, two_spaces, monkeypatch, fa
             _insert_member(conn, space_a, "gone@x.com", status="deactivated")
 
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.get(
             f"/intakes/{intake_a}/members",
@@ -269,7 +272,7 @@ def test_members_read_active_only(engine, set_space, two_spaces, monkeypatch, fa
 
 def test_timestamp_on_success_only(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A successful validation send stamps validation_link_sent_at; a raised send leaves it NULL.
 
     Success path: ``fake_resend`` captures the send, the handler stamps
@@ -295,7 +298,10 @@ def test_timestamp_on_success_only(
         # WR-01: APP_BASE_URL must be set or _run_intake_send refuses (success=False).
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
 
         # --- success path: stamp written, one mail.sent audit ---
@@ -347,7 +353,7 @@ def test_timestamp_on_success_only(
 
 def test_unset_app_base_url_refuses_send(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """With APP_BASE_URL unset, a client-facing send is REFUSED (200 + success=False) — WR-01.
 
     A relative `/intake/{id}` CTA is a dead link in every mail client and the logo renders
@@ -371,10 +377,13 @@ def test_unset_app_base_url_refuses_send(
         # Explicitly ensure APP_BASE_URL is UNSET for this case.
         monkeypatch.delenv("APP_BASE_URL", raising=False)
         _patch_engine_factories(monkeypatch, engine)
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
         # Shared-DB safety: other tests' mail.sent rows are visible to this count, so
         # assert the DELTA around the action rather than an absolute total.
         audit_before = _count_mail_sent_audit(engine, space_a)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/validation",
@@ -408,7 +417,7 @@ def test_unset_app_base_url_refuses_send(
 
 def test_members_read_excludes_null_email(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """GET /intakes/{id}/members EXCLUDES an ACTIVE member whose email is NULL (WR-02).
 
     An email-less active membership can never be a recipient (the send resolver would 422 the
@@ -441,7 +450,10 @@ def test_members_read_excludes_null_email(
             )
 
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.get(
             f"/intakes/{intake_a}/members",
@@ -466,7 +478,7 @@ def test_members_read_excludes_null_email(
 
 def test_reminder_writes_no_timestamp(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A reminder send succeeds but stamps NO column (no reminder-sent column — legacy parity)."""
     from fastapi.testclient import TestClient
 
@@ -483,7 +495,10 @@ def test_reminder_writes_no_timestamp(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")  # WR-01
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/reminder",
@@ -508,7 +523,7 @@ def test_reminder_writes_no_timestamp(
 
 def test_results_stamps_results_sent_at(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A results send stamps results_link_sent_at (and not validation_link_sent_at) on success."""
     from fastapi.testclient import TestClient
 
@@ -525,7 +540,10 @@ def test_results_stamps_results_sent_at(
 
         monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")  # WR-01
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/results",
@@ -550,7 +568,7 @@ def test_results_stamps_results_sent_at(
 # ===========================================================================
 
 
-def test_no_free_address(engine, set_space, two_spaces, monkeypatch, fake_resend):
+def test_no_free_address(engine, set_space, two_spaces, monkeypatch, fake_resend, superadmin_engine):
     """A body carrying an extra ``to``/``email`` field is REJECTED (422) — no free address (D-06).
 
     ``MailRecipients`` forbids extra fields, so a smuggled recipient address is a 422 and never
@@ -570,7 +588,10 @@ def test_no_free_address(engine, set_space, two_spaces, monkeypatch, fake_resend
             member = _insert_member(conn, space_a, "legit@x.com")
 
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/validation",
@@ -601,7 +622,7 @@ def test_no_free_address(engine, set_space, two_spaces, monkeypatch, fake_resend
 
 def test_deactivated_recipient_rejected(
     engine, set_space, two_spaces, monkeypatch, fake_resend
-):
+, superadmin_engine):
     """A deactivated member's id is NOT emailable — the send is 422 and NO mail is sent (T-10-13).
 
     The recipient resolver only matches ACTIVE memberships, so a deactivated id is rejected
@@ -621,7 +642,10 @@ def test_deactivated_recipient_rejected(
             gone = _insert_member(conn, space_a, "gone@x.com", status="deactivated")
 
         _patch_engine_factories(monkeypatch, engine)
-        app.dependency_overrides[get_current_identity] = _as(_user(space_a))
+        # FIXTURE-ONLY (plan 23.1-10): the verb this test drives is now superadmin-only
+        # (D-23.1-02); only the IDENTITY changed, every assertion below is untouched.
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
         resp = client.post(
             f"/intakes/{intake_a}/mail/validation",
