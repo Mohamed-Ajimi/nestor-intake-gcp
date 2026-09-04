@@ -558,3 +558,376 @@ def test_alembic_check_reports_no_drift(engine):
             "most likely the ORM index name / predicate does not match 0014's:\n"
             f"{exc}"
         )
+
+
+# ===========================================================================
+# Route half — the DB's refusal, translated into a readable 409
+# ===========================================================================
+
+#: Substrings that must NEVER reach a client. A leaked constraint or driver name is
+#: information disclosure (T-23.1-51) and reads to the operator like a crash rather than
+#: like "that run is already going".
+_FORBIDDEN_IN_DETAIL = (
+    "IntegrityError",
+    "UniqueViolation",
+    "psycopg",
+    "pg8000",
+    "sqlalchemy",
+    "SQL:",
+    "23505",
+    "duplicate key",
+    INDEX_NAME,
+)
+
+#: (route path suffix, skill literal, the ai_routes background handler to no-op).
+_DISPATCH_ROUTES = [
+    ("skills/apply", "apply-intake-skill", "run_apply_intake_skill"),
+    ("skills/context-pack", "context-pack", "run_context_pack"),
+    ("embeddings", "generate-embeddings", "run_embeddings"),
+]
+
+#: Password granted to app_superadmin for the connect-as engine (test only — the SAME
+#: literal the other AI suites use, so the role's password stays stable no matter which
+#: suite touches it first).
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral test only
+
+
+def _superadmin() -> "Identity":
+    """``ai_router`` is superadmin-gated (D-23.1-02, plan 23.1-11) — a user gets 404."""
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
+def _as(identity: "Identity"):
+    def _override():
+        return identity
+
+    return _override
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS ``app_superadmin`` (the D-05 two-engine routing).
+
+    ``app_superadmin`` is a plain non-superuser LOGIN role, so the superadmin write path
+    exercises the 0003 bypass POLICY + GRANTs rather than superuser ambient authority.
+    Shape copied from ``test_ai_apply_skill.superadmin_engine``.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                f"ALTER ROLE app_superadmin WITH LOGIN PASSWORD '{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD)
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
+
+
+def _build_app():
+    from fastapi import FastAPI
+
+    from app.api.auth_routes import protected_router
+
+    protected_router.include_router(ai_routes_mod.ai_router)
+    app = FastAPI()
+    app.include_router(protected_router)
+    return app
+
+
+def _patch_engine_factories(monkeypatch, user_engine, sa_engine=None) -> None:
+    monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: user_engine)
+    if sa_engine is not None:
+        monkeypatch.setattr(
+            ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+        )
+
+
+def _freeze_background_tasks(monkeypatch) -> None:
+    """No-op every AI background handler so the dispatched run STAYS ``running``.
+
+    Under ``TestClient`` a background task runs synchronously after the response, which
+    would finalize the run and make the second dispatch legal — the conflict this suite
+    measures would never occur. No-opping them freezes the run in flight, which is the
+    real-world state a double-click hits.
+
+    It also guarantees ZERO PROVIDER SPEND: no Anthropic/OpenAI client is ever
+    constructed, because the only code that would construct one never runs. The point
+    under test is the SYNCHRONOUS dispatch step, which precedes the background task on
+    every one of the six dispatching routes.
+    """
+    for handler in (
+        "run_apply_intake_skill",
+        "run_context_pack",
+        "run_embeddings",
+        "run_extract_insights",
+        "run_structure_answers",
+        "run_transcribe",
+    ):
+        monkeypatch.setattr(ai_routes_mod, handler, lambda *a, **k: None)
+
+
+def _count_runs(engine, set_space, space_id, intake_id) -> int:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        return conn.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.{TABLE} WHERE intake_id = :iid"),
+            {"iid": intake_id},
+        ).scalar_one()
+
+
+@pytest.mark.parametrize("path,skill,_handler", _DISPATCH_ROUTES)
+def test_second_dispatch_of_the_same_skill_returns_409(
+    engine, set_space, monkeypatch, superadmin_engine, path, skill, _handler
+):
+    """202 then 409, and exactly ONE ``skill_runs`` row — the double-click is not paid for.
+
+    Parametrized over three of the six dispatching routes to prove the arm lives in
+    ``_dispatch_skill_run`` and is inherited, not copy-pasted per route.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        first = client.post(f"/intakes/{intake_id}/{path}")
+        assert first.status_code == 202, (
+            f"the FIRST dispatch must be accepted, got {first.status_code} "
+            f"(body={first.text!r})"
+        )
+
+        second = client.post(f"/intakes/{intake_id}/{path}")
+        assert second.status_code == 409, (
+            "a second dispatch while the first is still running must be a 409 — a 500 "
+            f"would mean the IntegrityError escaped untranslated. got "
+            f"{second.status_code} (body={second.text!r})"
+        )
+
+        assert _count_runs(engine, set_space, space, intake_id) == 1, (
+            "the refused dispatch must leave exactly ONE row. More than one means the "
+            "index did not arbitrate; the whole point of COST-01 is that the operator "
+            "does not pay twice."
+        )
+        rows = _runs_for(engine, set_space, space, intake_id, skill)
+        assert len(rows) == 1 and rows[0][1] == "running"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_409_detail_names_the_skill_and_leaks_no_driver_string(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """The body is a readable sentence, not a database error (T-23.1-51).
+
+    Asserted on the RESPONSE BODY, not merely on the status code: a 409 whose detail
+    carries ``duplicate key value violates unique constraint
+    "uq_skill_runs_one_running_per_intake_skill"`` discloses the schema and reads to the
+    operator like a crash.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 202
+        conflict = client.post(f"/intakes/{intake_id}/skills/apply")
+        assert conflict.status_code == 409
+
+        body = conflict.json()
+        detail = body.get("detail")
+        assert isinstance(detail, str) and detail, (
+            f"the 409 must carry a plain-string detail (the frontend transport reads it "
+            f"verbatim), got {body!r}"
+        )
+        assert "apply-intake-skill" in detail, (
+            f"the detail must name the skill so the operator knows WHICH run is in "
+            f"flight, got {detail!r}"
+        )
+        raw = conflict.text
+        for needle in _FORBIDDEN_IN_DETAIL:
+            assert needle.lower() not in raw.lower(), (
+                f"the 409 body leaks {needle!r} — a driver/constraint string is "
+                f"information disclosure and reads like a crash. body={raw!r}"
+            )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_second_dispatch_of_a_different_skill_still_returns_202(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """The invariant is per-SKILL — two different skills may be in flight together."""
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 202
+        other = client.post(f"/intakes/{intake_id}/skills/context-pack")
+        assert other.status_code == 202, (
+            "a DIFFERENT skill on the same intake must still dispatch — over-broad "
+            f"blocking would be an outage, not a saving. got {other.status_code} "
+            f"(body={other.text!r})"
+        )
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_same_skill_after_the_first_run_finished_still_returns_202(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """The ordinary retry path: once the run is terminal, the next dispatch is accepted."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 202
+        # Finalize it the way the background task would (D-09 terminal literal).
+        with engine.begin() as conn:
+            set_space(conn, space)
+            conn.execute(
+                text(
+                    f"UPDATE {SCHEMA}.{TABLE} SET status = 'succeeded' "
+                    "WHERE intake_id = :iid"
+                ),
+                {"iid": intake_id},
+            )
+
+        again = client.post(f"/intakes/{intake_id}/skills/apply")
+        assert again.status_code == 202, (
+            "re-running a skill after the previous run finished must be accepted — this "
+            "is the case that would break under a NON-partial unique index. got "
+            f"{again.status_code} (body={again.text!r})"
+        )
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_a_conflict_does_not_poison_the_following_request(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """The failed flush must not leave a rolled-back session in play (T-23.1-52).
+
+    A SQLAlchemy session that has seen a failed flush raises ``PendingRollbackError`` on
+    its next statement, which would turn the clean 409 into a 500 — for the CONFLICTING
+    request or for the one after it. ``tenant_session``'s ``maker.begin()`` exit rolls the
+    transaction back and returns the connection; this case proves it by driving a further
+    request through the same machinery afterwards.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    other_intake = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
+                    "VALUES (:id, :space_id, 'submitted')"
+                ),
+                {"id": other_intake, "space_id": space},
+            )
+
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 202
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 409
+
+        # Same skill, DIFFERENT intake — a fresh session through the same code path.
+        after = client.post(f"/intakes/{other_intake}/skills/apply")
+        assert after.status_code == 202, (
+            "the request after a conflict must succeed cleanly — a 500 here means the "
+            "rolled-back session was reused (PendingRollbackError). got "
+            f"{after.status_code} (body={after.text!r})"
+        )
+        assert _count_runs(engine, set_space, space, other_intake) == 1
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_search_route_is_unaffected(
+    engine, set_space, monkeypatch, superadmin_engine
+):
+    """The one NON-dispatching AI route never touches ``_dispatch_skill_run`` — still 200.
+
+    Guards the blast radius: the new ``except`` arm sits in ``_dispatch_skill_run``, and
+    ``GET /intakes/{id}/search`` does not go through it. A regression here would mean the
+    arm was added somewhere far too broad.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        _freeze_background_tasks(monkeypatch)
+        monkeypatch.setattr(ai_routes_mod, "semantic_search", lambda *a, **k: [])
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 202
+        assert client.post(f"/intakes/{intake_id}/skills/apply").status_code == 409
+
+        found = client.get(f"/intakes/{intake_id}/search", params={"q": "anything"})
+        assert found.status_code == 200, (
+            f"search must be untouched by the conflict arm, got {found.status_code} "
+            f"(body={found.text!r})"
+        )
+        assert found.json() == {"results": []}
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
