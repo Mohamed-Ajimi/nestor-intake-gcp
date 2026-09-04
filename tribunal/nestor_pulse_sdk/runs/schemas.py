@@ -107,14 +107,23 @@ def bundle_readable(status: str) -> bool:
 
 _BRIEF_BOUND_DESCRIPTION = (
     "The research brief. The 1,000,000-character ceiling is a request-body "
-    "denial-of-service guard, NOT a content policy: a real brief lands well "
-    "under ~60 KB, because its dominant term is the context pack, which rides "
-    "in verbatim and untruncated but is itself a generation capped at 8192 "
-    "output tokens (~32 KB of characters). WARNING for a future editor: "
-    "ROADMAP Phase 24 D-RR-3 adds a superadmin steering note to this field "
-    "with NO length cap and no truncation -- 1 MB is chosen to leave that "
-    "room. Tightening this toward a real brief's size would 422 that feature "
-    "and would silently refuse somebody's research."
+    "denial-of-service guard, NOT a content policy. Derivation of the analytic "
+    "worst case for a REAL brief: the dominant term is the context pack, which "
+    "`backend/app/research/brief.py::assemble_brief` carries verbatim and "
+    "UNTRUNCATED but which is itself a generation capped at "
+    "`_CONTEXT_PACK_MAX_TOKENS = 8192` "
+    "(`backend/app/ai/skills/context_pack.py:55`) -- call it ~32 KB of "
+    "characters. Every other component is individually clamped at 400 "
+    "characters in `tribunal/nestor_pulse_sdk/pipeline/tribunal/brief_input.py`: "
+    "questions by `_QUESTION_MAX_CHARS` (:195), the decision statement by "
+    "`_DECISION_MAX_CHARS` (:179, matched to the producer's own bound in "
+    "`brief.py::derive_decision_statement`), and report-block values by "
+    "`_REPORT_VALUE_MAX_CHARS` (:166). Even at forty questions the assembled "
+    "brief lands well under 60,000 characters, so 1 MB is ~17x the worst case. "
+    "WARNING for a future editor: ROADMAP Phase 24 D-RR-3 adds a superadmin "
+    "steering note to this field with NO length cap and no truncation -- 1 MB "
+    "is chosen to leave that room. Tightening this toward a real brief's size "
+    "would 422 that feature and would silently refuse somebody's research."
 )
 
 

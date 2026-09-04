@@ -775,8 +775,12 @@ _BRIEF_MAX = 1_000_000
 # context pack rides into the brief verbatim and untruncated
 # (`backend/app/research/brief.py::assemble_brief` step 5), and that text is a
 # Claude generation capped at `_CONTEXT_PACK_MAX_TOKENS = 8192`
-# (`backend/app/ai/skills/context_pack.py`) -- roughly 32 KB of characters. The
-# enumerated research questions and the decision/report blocks add far less.
+# (`backend/app/ai/skills/context_pack.py:55`) -- roughly 32 KB of characters.
+# Every other component is individually clamped at 400 characters in
+# `tribunal/nestor_pulse_sdk/pipeline/tribunal/brief_input.py`: questions by
+# `_QUESTION_MAX_CHARS` (:195), the decision statement by `_DECISION_MAX_CHARS`
+# (:179) and report-block values by `_REPORT_VALUE_MAX_CHARS` (:166). So even at
+# forty questions the assembled brief lands well under 60,000 characters.
 _ANALYTIC_WORST_CASE = 60_000
 
 
