@@ -105,7 +105,7 @@ def _capture_patch_run(monkeypatch) -> list:
     """
     calls: list = []
 
-    def _fake_patch_run(session, research_run_id, **values):
+    def _fake_patch_run(session, research_run_id, *, identity, **values):
         calls.append((str(research_run_id), values))
 
     monkeypatch.setattr(run_task, "_patch_run", _fake_patch_run)
@@ -299,6 +299,7 @@ def test_finalize_parked_carries_the_cursor_but_still_no_completion_time(monkeyp
             "completed_at": "2026-07-27T09:07:00Z",
         },
         "[park#1] Anthropic monthly cap reached",
+        identity=_superadmin(),
     )
 
     _, values = written[-1]
@@ -328,6 +329,7 @@ def test_the_other_two_finalizers_carry_the_cursor_too(monkeypatch):
         uuid.uuid4(),
         {"status": "completed", "event_seq": 900},
         {"markdown": "# report"},
+        identity=_superadmin(),
     )
     assert written[-1][1]["event_seq"] == 900
 
@@ -336,11 +338,14 @@ def test_the_other_two_finalizers_carry_the_cursor_too(monkeypatch):
         uuid.uuid4(),
         {"status": "failed", "event_seq": 901},
         "boom",
+        identity=_superadmin(),
     )
     assert written[-1][1]["event_seq"] == 901
 
     # The ``on_error`` route passes metrics=None and must not mention the column.
-    run_task.finalize_failed(_StubSession(), uuid.uuid4(), None, "crashed")
+    run_task.finalize_failed(
+        _StubSession(), uuid.uuid4(), None, "crashed", identity=_superadmin()
+    )
     assert "event_seq" not in written[-1][1], (
         "the on_error route has no metrics at all and must patch no cursor"
     )

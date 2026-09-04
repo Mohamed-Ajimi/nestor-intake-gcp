@@ -332,6 +332,7 @@ def finalize_completed(
     metrics: dict[str, Any],
     report: dict[str, Any],
     *,
+    identity: Identity,
     chain_status: str | None = None,
     chain_broken_at: int | None = None,
     bundle_key: str | None = None,
@@ -367,6 +368,7 @@ def finalize_completed(
     _patch_run(
         session,
         research_run_id,
+        identity=identity,
         # Carries the Tribunal literal VERBATIM (D-05), so completed_degraded lands
         # on the row unchanged. Deliberately NOT a predicate — do not "fix" it.
         status=metrics.get("status", "completed"),
@@ -391,6 +393,8 @@ def finalize_failed(
     research_run_id: Any,
     metrics: dict[str, Any] | None,
     error_message: str | None = None,
+    *,
+    identity: Identity,
 ) -> None:
     """WRITE (failed/cancelled): finalize the row to a terminal state VERBATIM.
 
@@ -428,6 +432,7 @@ def finalize_failed(
     _patch_run(
         session,
         research_run_id,
+        identity=identity,
         status=status,
         error_message=error_message or _default_error(metrics),
         completed_at=_seam_datetime(
@@ -459,6 +464,8 @@ def finalize_parked(
     research_run_id: Any,
     metrics: dict[str, Any],
     park_reason: str,
+    *,
+    identity: Identity,
 ) -> None:
     """WRITE (parked): mirror the PAUSE — ``completed_at`` stays NULL on purpose.
 
@@ -494,6 +501,7 @@ def finalize_parked(
     _patch_run(
         session,
         research_run_id,
+        identity=identity,
         status="parked",
         error_message=park_reason,
         current_stage=metrics.get("current_stage"),
@@ -503,16 +511,18 @@ def finalize_parked(
     )
 
 
-def _patch_run(session: Any, research_run_id: Any, **values: Any) -> None:
+def _patch_run(
+    session: Any, research_run_id: Any, *, identity: Identity, **values: Any
+) -> None:
     """PATCH the ``research_runs`` row on the write session via the scoped repo.
 
     The write path runs under a superadmin identity (the trigger actor has no own
     space), so the repo ``_scope`` leaves the statement unchanged and the row is
     reached by id across the intake's space (the 0011 superadmin bypass policy admits
-    the write). ``identity_of`` recovers the driving identity stashed on the session
-    binding so the repo constructs correctly.
+    the write). The driving identity arrives as a REQUIRED keyword argument from the
+    caller so the repo constructs correctly — omitting it is a ``TypeError`` at the
+    call site, not a ``RuntimeError`` deep inside a paid run.
     """
-    identity = identity_of(session)
     rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)
     if rowcount == 0:
         log.error(
@@ -526,17 +536,14 @@ def _patch_run(session: Any, research_run_id: Any, **values: Any) -> None:
         )
 
 
-# The driving identity is threaded to the write helpers via a module-level slot set
-# by run_poll_driver — the release contract's write_fn/on_error receive only
-# (session, dto, result), not the identity, so we stash it for the finalize writers.
-_ACTIVE_IDENTITY: Identity | None = None
-
-
-def identity_of(session: Any) -> Identity:
-    """Return the identity driving the current run (stashed by :func:`run_poll_driver`)."""
-    if _ACTIVE_IDENTITY is None:  # pragma: no cover - always set by run_poll_driver
-        raise RuntimeError("no active identity — call run_poll_driver")
-    return _ACTIVE_IDENTITY
+# There is deliberately NO module-level identity slot here: the driving identity is
+# now a required keyword parameter on every writer above, threaded from
+# run_poll_driver's own ``identity`` argument (the release contract's write_fn /
+# on_error receive only (session, dto, result), so the closures capture it
+# lexically). The slot this replaces was process-global state in a BackgroundTasks
+# worker where two drivers can run concurrently; 23.1-CONTEXT.md § 6 records that it
+# was NOT a tenant-scope bug — the repo ``_scope`` is a no-op for a superadmin, so
+# what a concurrent overwrite changed was only which object supplies ``actor_uid``.
 
 
 def _default_error(metrics: dict[str, Any] | None) -> str:
@@ -667,9 +674,6 @@ def run_poll_driver(
     Never returns a value (a BackgroundTask); never raises out of the task (``on_error``
     swallows exceptions into a ``failed`` finalize).
     """
-    global _ACTIVE_IDENTITY
-    _ACTIVE_IDENTITY = identity
-
     # WARNING on purpose — see the module logger note. This line is the difference
     # between "the task never ran" and "the task died at X" in the next incident.
     log.warning(
@@ -824,6 +828,7 @@ def run_poll_driver(
                 research_run_id,
                 metrics,
                 report,
+                identity=identity,
                 chain_status=completion.get("chain_status"),
                 chain_broken_at=completion.get("chain_broken_at"),
                 bundle_key=completion.get("bundle_key"),
@@ -872,9 +877,7 @@ def run_poll_driver(
             # BEFORE the finalize overwrites it.
             already_notified = False
             try:
-                prior = ResearchRunRepository(
-                    session, identity_of(session)
-                ).get(research_run_id)
+                prior = ResearchRunRepository(session, identity).get(research_run_id)
             except Exception as exc:  # noqa: BLE001 - never block the finalize/mail
                 prior = None
                 # Default to NOT notified: a duplicate mail is a nuisance, a dropped
@@ -896,6 +899,7 @@ def run_poll_driver(
                 research_run_id,
                 metrics,
                 f"{marker} {reason}"[:_MAX_PARK_MESSAGE_CHARS],
+                identity=identity,
             )
 
             if to and not already_notified:
@@ -921,7 +925,9 @@ def run_poll_driver(
                 )
         else:
             error_message = metrics.get("error_message") or _default_error(metrics)
-            finalize_failed(session, research_run_id, metrics, error_message)
+            finalize_failed(
+                session, research_run_id, metrics, error_message, identity=identity
+            )
             if to:
                 html = render_research_failed(
                     project_title=ctx["project_title"],
@@ -938,7 +944,9 @@ def run_poll_driver(
     def on_error(session: Any, ctx: dict[str, Any] | None, exc: Exception) -> None:
         # Finalize the row to EXACTLY failed on ANY exception (D-04). The mail is
         # best-effort — a finalize must never be blocked by a mail failure.
-        finalize_failed(session, research_run_id, None, error_message=str(exc))
+        finalize_failed(
+            session, research_run_id, None, error_message=str(exc), identity=identity
+        )
         if ctx and ctx.get("acting_email"):
             try:
                 html = render_research_failed(

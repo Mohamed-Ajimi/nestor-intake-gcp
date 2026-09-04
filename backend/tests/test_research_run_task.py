@@ -218,6 +218,7 @@ def _capture_finalize(monkeypatch) -> dict:
         metrics,
         report,
         *,
+        identity,
         chain_status=None,
         chain_broken_at=None,
         bundle_key=None,
@@ -229,7 +230,9 @@ def _capture_finalize(monkeypatch) -> dict:
             "bundle_key": bundle_key,
         }
 
-    def _fake_failed(session, research_run_id, metrics, error_message=None):
+    def _fake_failed(
+        session, research_run_id, metrics, error_message=None, *, identity
+    ):
         sink["final"].append(("failed", error_message))
 
     monkeypatch.setattr(run_task, "finalize_completed", _fake_completed)
@@ -248,7 +251,7 @@ def _capture_patch_run(monkeypatch) -> list:
     """
     calls: list = []
 
-    def _fake_patch_run(session, research_run_id, **values):
+    def _fake_patch_run(session, research_run_id, *, identity, **values):
         calls.append((str(research_run_id), values))
 
     monkeypatch.setattr(run_task, "_patch_run", _fake_patch_run)
@@ -912,6 +915,7 @@ def test_finalize_completed_writes_the_engines_completed_at(monkeypatch):
             "completed_at": _COMPLETED_ISO,
         },
         {"markdown": "# report"},
+        identity=_superadmin(),
     )
 
     _, values = written[-1]
@@ -946,6 +950,7 @@ def test_finalize_parked_still_writes_no_completion_time(monkeypatch):
             "started_at": _STARTED_ISO,
         },
         "[park#1] Anthropic monthly cap reached",
+        identity=_superadmin(),
     )
 
     _, values = written[-1]
@@ -1005,6 +1010,7 @@ def test_a_malformed_completed_at_falls_back_to_the_mirror_clock(monkeypatch):
         uuid.uuid4(),
         {"status": "completed", "completed_at": "garbage", "started_at": None},
         {"markdown": "# report"},
+        identity=_superadmin(),
     )
 
     _, values = written[-1]
@@ -1014,6 +1020,91 @@ def test_a_malformed_completed_at_falls_back_to_the_mirror_clock(monkeypatch):
         f"be coerced into a datetime: {values['completed_at']!r}"
     )
     assert "started_at" not in values, "a None started_at must not NULL the column"
+
+
+# ===========================================================================
+# Explicit identity threading (23.1-07) — no module-level identity slot.
+# ===========================================================================
+
+
+def test_two_concurrent_drivers_each_finalize_under_their_own_identity(monkeypatch):
+    """Two finalizes with DIFFERENT identities each reach the repo with their own.
+
+    THIS TEST COULD NOT BE EXPRESSED AT HEAD. The driving identity used to live in a
+    single module-level slot (``_ACTIVE_IDENTITY``) that ``run_poll_driver`` assigned
+    on entry, so in a ``BackgroundTasks`` worker running two drivers concurrently the
+    second assignment won and the first run's finalize audited under the second
+    superadmin's ``actor_uid`` (T-23.1-26). Per 23.1-CONTEXT.md section 6 that was a
+    REPUDIATION defect and not a tenant-scope one — the repo ``_scope`` is a no-op for
+    a superadmin either way — but ``actor_uid`` is the only record of who spent ~$45.
+
+    With identity a required keyword argument there is no shared slot to race on, and
+    the two calls below are order-independent.
+    """
+    seen: list = []
+
+    class _Repo:
+        def __init__(self, session, identity) -> None:
+            self._identity = identity
+
+        def patch(self, row_id, **values):
+            seen.append(self._identity.uid)
+            return 1
+
+    monkeypatch.setattr(run_task, "ResearchRunRepository", _Repo)
+
+    driver_a = Identity(
+        uid="sa-a", email="a@agenic.be", role="superadmin", space_id=None
+    )
+    driver_b = Identity(
+        uid="sa-b", email="b@agenic.be", role="superadmin", space_id=None
+    )
+
+    run_task.finalize_completed(
+        _StubSession([]),
+        uuid.uuid4(),
+        {"status": "completed"},
+        {"markdown": "# a"},
+        identity=driver_a,
+    )
+    run_task.finalize_completed(
+        _StubSession([]),
+        uuid.uuid4(),
+        {"status": "completed"},
+        {"markdown": "# b"},
+        identity=driver_b,
+    )
+
+    assert seen == ["sa-a", "sa-b"], (
+        "each finalize must audit under the identity it was GIVEN; a shared slot "
+        f"would show the same uid twice. Got {seen!r}"
+    )
+
+
+def test_the_module_level_identity_slot_is_gone():
+    """No ``_ACTIVE_IDENTITY`` and no ``identity_of`` survive on the module.
+
+    Asserted by name because a leftover alias is exactly how this kind of change gets
+    half-done: the writers would take the parameter while some other caller still fed
+    itself from process-global state.
+    """
+    assert not hasattr(run_task, "_ACTIVE_IDENTITY"), (
+        "the module-level identity slot must be gone, not merely unused"
+    )
+    assert not hasattr(run_task, "identity_of"), (
+        "identity_of read the slot; leaving it is leaving the slot"
+    )
+
+
+def test_patch_run_without_an_identity_is_a_typeerror():
+    """Omitting identity fails at the CALL SITE, not deep inside a paid run.
+
+    The old ``identity_of`` raised ``RuntimeError`` at write time — after the run had
+    already been paid for. A required keyword-only parameter moves that failure to
+    import/call time where a test or a reviewer sees it.
+    """
+    with pytest.raises(TypeError):
+        run_task._patch_run(_StubSession([]), uuid.uuid4(), status="completed")
 
 
 # ===========================================================================
