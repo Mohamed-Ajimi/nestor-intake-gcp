@@ -71,3 +71,46 @@ Running `eslint --fix` here would rewrite every file's line endings and bury the
 
 The gates for plan 23.1-08 were `tsc` + `vitest` + `scripts/i18n-audit.mjs`, all green.
 A lint-cleanup phase should be scheduled separately.
+
+---
+
+## DEF-23.1-03 — docs outside `frontend/` still name the two deleted components
+
+**Found by:** plan 23.1-08, task 2. **Out of scope, deliberately NOT fixed.**
+
+Plan 23.1-08's `files_modified` covers `frontend/**` only, and its `<done>` grep is scoped to
+`frontend/src`, which is now at zero hits. But `git grep` over TRACKED files repo-wide shows
+the deleted names surviving in documentation:
+
+| File | Line | What it says |
+|------|------|--------------|
+| `CLAUDE.md` | 63 | lists `NestorBriefingPDF.tsx` as a `@react-pdf/renderer` consumer |
+| `AGENTS.md` | 63 | identical line |
+| `docs/handbook/12-frontend.md` | 448, 635, 733 | describes both files as existing dead code |
+| `docs/handbook/19-known-gaps-and-roadmap.md` | 107 | lists both as "Removable" |
+
+Nothing is broken — these are prose, and `docs/handbook/19` in particular is now simply
+DONE rather than wrong. But `CLAUDE.md:63` and `AGENTS.md:63` are load-bearing context files
+read at the start of every session, and they now name a file that does not exist.
+
+A doc-sync pass should update them. Editing them from this plan would have exceeded its
+declared file scope on a wave where isolation is disabled and other plans are writing.
+
+## DEF-23.1-04 — `ContextPackPDF.tsx` and `pdfFonts.ts` are also dead
+
+**Found by:** plan 23.1-08, task 2. **Out of scope, deliberately NOT deleted.**
+
+Task 2 required confirming `pdfFonts.ts` keeps a consumer after `NestorBriefingPDF.tsx` is
+deleted. It does — `ContextPackPDF.tsx:2` — so no third file was dropped and the plan's STOP
+condition did not trigger.
+
+But `ContextPackPDF.tsx` is itself imported by NOTHING. The only apparent hits are a SUBSTRING
+trap: `ContextPackBlock.tsx:73/374/578` define and call a local `downloadContextPackPDF`, the
+jsPDF exporter, which merely CONTAINS the string `ContextPackPDF`. `docs/handbook/12-frontend.md:448`
+independently records the same finding ("not imported by anything; the shipped export is jsPDF").
+
+So the real dead set is `ContextPackPDF.tsx` + `pdfFonts.ts` + the `@react-pdf/renderer`
+dependency, and removing all three together would be the complete cleanup. Plan 23.1-08
+explicitly forbids removing `@react-pdf/renderer`, and deleting a third file was out of its
+scope, so this is left for a follow-up. Note that the dependency removal belongs to the
+dependency phase deferred by `23.1-CONTEXT.md` § 9.
