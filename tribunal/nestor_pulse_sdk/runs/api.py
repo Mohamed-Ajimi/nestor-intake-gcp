@@ -50,6 +50,30 @@ from nestor_pulse_sdk.runs.stages import stages_for
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 
+# D-23.1-08 -- the answer verb's ADMISSION TICKET.
+#
+# `answer_run` used to READ the run, refuse 409 when status != 'needs_input',
+# and only THEN write. Two concurrent callers both passed that check and both
+# queued a replacement run: a double spend AND a forked audit hash-chain (the
+# chain the EU AI Act Art. 12 trail rests on). This conditional UPDATE closes
+# it. Two callers contend on the row lock; the loser's UPDATE re-evaluates its
+# WHERE against the winner's newly committed row version (READ COMMITTED), sees
+# 'cancelled', and matches ZERO rows.
+#
+# The ORDER is load-bearing and is the INVERSE of the old code: the cancel is
+# the ticket, and the replacement child is what the ticket buys. Never create
+# the child first.
+_RETIRE_FOR_ANSWER_SQL = text(
+    """
+    UPDATE run
+       SET status = 'cancelled', completed_at = NOW()
+     WHERE id = :id
+       AND status = 'needs_input'
+    RETURNING id
+    """
+)
+
+
 def _prepend_uploaded_docs(brief: str, uploaded_documents) -> str:
     """Prepend the [UPLOADED DOCUMENTS] marker block (PATTERNS lines 853-862)."""
     if not uploaded_documents:
@@ -287,14 +311,28 @@ async def answer_run(
     audit chain stays clean (Art.12) rather than mutating the paused run. If the
     paused run was part of an A/B comparison, re-runs the SAME set of engines as
     a fresh comparison; otherwise a single run on the same engine.
+
+    D-23.1-08 — READ FOR DATA, CAS FOR ADMISSION:
+      The `select(Run)` below is kept, but ONLY for the 404 and to read `brief`,
+      `engine`, `project_id` and `comparison_id`. It no longer decides whether
+      the caller may write. That decision is `_RETIRE_FOR_ANSWER_SQL`, a
+      conditional UPDATE whose matched-row count is the admission ticket. A
+      later reader will be tempted to collapse those two roles back together —
+      do not: a read that gates a write in a different statement is the race
+      this decision removed.
     """
     run = (await session.execute(
         select(Run).where(Run.id == run_id)
     )).scalar_one_or_none()
     if run is None:
         raise HTTPException(404, "run not found")
-    if run.status != "needs_input":
-        raise HTTPException(409, "run is not awaiting clarification")
+
+    async def _claim_for_retire(target_id) -> bool:
+        """Compare-and-swap `needs_input` -> `cancelled`. True == this caller
+        won the right to queue the replacement for `target_id`."""
+        return (await session.execute(
+            _RETIRE_FOR_ANSWER_SQL, {"id": str(target_id)}
+        )).first() is not None
 
     tenant_uuid = uuid.UUID(user.tenant_id)
     by_engine = payload.answers_by_engine or {}
@@ -326,24 +364,42 @@ async def answer_run(
                 Run.comparison_id == run.comparison_id,
                 Run.status == "needs_input",
             )
+            # Deterministic order == a deterministic ROW-LOCK order. Two
+            # concurrent callers that CAS the same siblings in opposite orders
+            # would deadlock; ordering by id makes that impossible.
+            .order_by(Run.id)
         )).scalars().all()
+        # The entry run's own 409, expressed against a FRESH read of the paused
+        # set rather than the earlier `run` snapshot. This gates no write of its
+        # own -- every write below is CAS-guarded -- so it cannot race.
+        if run.id not in {s.id for s in paused}:
+            raise HTTPException(409, "run is not awaiting clarification")
         children: list[Run] = []
         for s in paused:
             if not _answer_for(s.engine):
                 continue  # user didn't answer this engine -> leave it paused
+            # ADMISSION FIRST: retire the paused run, and only create the child
+            # if this caller is the one that retired it. A sibling whose CAS
+            # matches nothing was already answered by a concurrent caller ->
+            # skip it. One arm losing a race must NOT fail the whole request:
+            # the contract here is per-engine and independent.
+            if not await _claim_for_retire(s.id):
+                continue
             child = Run(
                 tenant_id=tenant_uuid,
                 project_id=s.project_id,
                 engine=s.engine,
                 brief=_fold(s.brief, s.engine),
                 status="queued",
+                # Freshly random per row, and NOT what makes this path safe --
+                # the CAS above is. Deliberately left alone: POST /runs/compare
+                # derives its children's keys DETERMINISTICALLY from
+                # (comparison_id, engine) so a retried POST returns the same
+                # children, and changing the derivation here would disturb that.
                 idempotency_key=uuid.uuid4(),
                 comparison_id=run.comparison_id,  # SAME comparison
             )
             session.add(child)
-            # Retire the paused run it supersedes.
-            s.status = "cancelled"
-            s.completed_at = datetime.now(timezone.utc)
             children.append(child)
         await session.flush()
         return {
@@ -355,18 +411,27 @@ async def answer_run(
             ],
         }
 
-    # Single run: queue a fresh one on the same engine; retire the paused one.
+    # Single run: retire the paused one FIRST -- that CAS is the admission
+    # ticket -- and queue the replacement only if we won it. Zero matched rows
+    # means the run was not (or is no longer) awaiting clarification: either it
+    # never was, or a concurrent caller answered it a moment ago. Both are the
+    # same 409 to the client.
+    if not await _claim_for_retire(run.id):
+        raise HTTPException(409, "run is not awaiting clarification")
     new_run = Run(
         tenant_id=tenant_uuid,
         project_id=run.project_id,
         engine=run.engine,
         brief=_fold(run.brief, run.engine),
         status="queued",
+        # Freshly random per row, and NOT what makes this path safe -- the CAS
+        # above is. Deliberately left alone: POST /runs/compare derives its
+        # children's keys DETERMINISTICALLY from (comparison_id, engine) so a
+        # retried POST returns the same children, and changing the derivation
+        # here would disturb that.
         idempotency_key=uuid.uuid4(),
     )
     session.add(new_run)
-    run.status = "cancelled"
-    run.completed_at = datetime.now(timezone.utc)
     await session.flush()
     return {
         "mode": "run",
