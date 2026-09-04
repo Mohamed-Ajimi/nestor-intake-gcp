@@ -26,6 +26,25 @@ Authoritative references:
 - backend/scripts/seed_dev.py -- the membership select().scalar_one_or_none() the
     sync mirrors, and the ``session_factory`` injection seam reused here
 - D-09 (mocks only; live IdP deferred) / threat_model T-03-02
+
+D-23.1-13 — THE MEMBERSHIP-STATUS BACKSTOP (phase 23.1):
+    Until phase 23.1 ``_find_membership`` filtered on NO status at all — neither the
+    ``provider_user_id`` arm nor the ``email`` arm carried a status predicate — so
+    login-sync would happily mint ``role``/``space_id`` claims for a ``deactivated``
+    and (after plan 23.1-03's space cascade) a ``space_deactivated`` membership. The
+    ONLY thing preventing that was the IdP-side ``disabled=True`` +
+    ``revoke_refresh_tokens`` round-trip.
+
+    The DB predicate added in plan 23.1-16 is a BACKSTOP to that IdP disablement, not
+    a replacement for it. It matters because the cascade issues N IdP calls for N
+    members and commits its DB flip even when some of those calls fail: in that window
+    the database says ``space_deactivated`` while the member can still authenticate.
+    The cases below are written around that window, not around the happy path — a
+    refusal suite that stays green with no predicate in the code is testing nothing.
+
+    Every case asserts on the RECORDED ``set_custom_user_claims`` CALL LIST, not merely
+    on the returned ``SyncResult``: minting a claim is the harm, and a result value
+    alone does not prove nothing was minted.
 """
 
 from __future__ import annotations
@@ -248,4 +267,472 @@ def test_login_sync_invite_created_row(engine):
     assert claims.get("role") == "user", "invite-created row must yield role='user' claim"
     assert str(claims.get("space_id")) == space_id, (
         "the claim's space_id must be the invited user's assigned space (USER-02)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# D-23.1-13 (SEC-01 / SEC-02): only an ACTIVE membership earns a claim.
+#
+# THE WINDOW THESE CASES LIVE IN. Two exclusions bound the defect, and both are
+# outside this file: ``sync_claims_from_membership`` short-circuits with NO DB READ
+# when the token already carries a ``role`` (``ALREADY_SYNCED``), and
+# ``auth_routes.py`` catches ``UserDisabledError`` -> 401 before login-sync runs. What
+# is left is exactly one window — a token WITHOUT baked-in claims requesting a sync,
+# for a member whose IdP disable did not land. That is the partial-cascade failure,
+# and it is what ``test_partial_cascade_failure_is_refused_by_the_db_alone`` drives.
+#
+# ALLOW-LIST, NEVER DENY-LIST. The predicate under test is ``== "active"``. A
+# predicate that merely excluded ``deactivated`` would ADMIT ``space_deactivated``
+# — the exact value plan 23.1-03's cascade writes — so every refusal below is
+# asserted for BOTH inactive values on BOTH arms.
+# ---------------------------------------------------------------------------
+
+
+def _seed_space_with_membership(
+    factory,
+    *,
+    space_id: str,
+    slug: str,
+    email: str | None = None,
+    provider_user_id: str | None = None,
+    role: str = "user",
+    status: str = "active",
+):
+    """Seed one Organization + one OrganizationMembership through the ORM.
+
+    The same seeding path the pre-existing cases use (no raw SQL), factored out
+    because these cases need the SAME row shape at three different ``status``
+    values. Idempotent per space, since the container/engine fixture is
+    session-scoped and rows outlive a single test.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import Organization, OrganizationMembership
+
+    with factory() as s:
+        with s.begin():
+            if s.get(Organization, space_id) is None:
+                s.add(Organization(id=space_id, name=slug, slug=slug))
+            existing = (
+                s.execute(
+                    select(OrganizationMembership).where(
+                        OrganizationMembership.organization_id == space_id
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if existing is None:
+                s.add(
+                    OrganizationMembership(
+                        organization_id=space_id,
+                        email=email,
+                        provider_user_id=provider_user_id,
+                        role=role,
+                        status=status,
+                    )
+                )
+
+
+def _claims_of(mock_set):
+    """Pull the claims payload out of the recorded ``set_custom_user_claims`` call
+    (mirrors the extraction the pre-existing cases do inline)."""
+    _args, kwargs = mock_set.call_args
+    return kwargs.get("claims") if "claims" in kwargs else mock_set.call_args[0][-1]
+
+
+# --- UID ARM ---------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_uid_arm_deactivated_membership_mints_nothing(engine):
+    """A membership matched by ``provider_user_id`` whose status is ``deactivated``
+    must be invisible to login-sync: ``NO_MEMBERSHIP`` and ZERO claim writes.
+
+    The returned ``SyncResult`` is not the property that matters — the claim call
+    list is. A minted ``role``/``space_id`` claim is what every later request's
+    ``get_current_identity`` trusts (``dependencies.py`` makes no DB call, D-06), so
+    one write here hands a revoked member a working session.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b101"
+    uid = "uid-deactivated-1"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="uid-deactivated-space",
+        email="uid-deactivated-1@example.com",
+        provider_user_id=uid,
+        role="user",
+        status="deactivated",
+    )
+
+    decoded = {"uid": uid, "email": "uid-deactivated-1@example.com", "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "a deactivated uid row must mint NOTHING; recorded calls: "
+        f"{mock_set.call_args_list}"
+    )
+
+
+@pytest.mark.integration
+def test_uid_arm_space_deactivated_membership_mints_nothing(engine):
+    """The same on the uid arm for ``space_deactivated`` — the value plan 23.1-03's
+    cascade writes.
+
+    This case is what makes the allow-list non-optional: a deny-list that merely
+    excluded ``deactivated`` would pass every other refusal test in this file and
+    ADMIT this one.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b102"
+    uid = "uid-space-deactivated-1"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="uid-space-deactivated-space",
+        email="uid-space-deactivated-1@example.com",
+        provider_user_id=uid,
+        role="user",
+        status="space_deactivated",
+    )
+
+    decoded = {
+        "uid": uid,
+        "email": "uid-space-deactivated-1@example.com",
+        "email_verified": True,
+    }
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "a space_deactivated uid row must mint NOTHING (a deny-list would admit it); "
+        f"recorded calls: {mock_set.call_args_list}"
+    )
+
+
+@pytest.mark.integration
+def test_uid_arm_active_membership_writes_claim(engine):
+    """The unchanged happy path on the uid arm — kept adjacent to the two refusals
+    so a regression in EITHER direction (over-refusing, or under-refusing) is one
+    file away."""
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b103"
+    uid = "uid-active-1"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="uid-active-space",
+        email="uid-active-1@example.com",
+        provider_user_id=uid,
+        role="user",
+        status="active",
+    )
+
+    decoded = {"uid": uid, "email": "uid-active-1@example.com", "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.WROTE
+    mock_set.assert_called_once()
+    claims = _claims_of(mock_set)
+    assert claims.get("role") == "user"
+    assert str(claims.get("space_id")) == space_id
+
+
+# --- EMAIL ARM -------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_email_arm_deactivated_membership_mints_nothing(engine):
+    """A membership matched ONLY by ``email`` (no ``provider_user_id`` on the row)
+    whose status is ``deactivated`` -> ``NO_MEMBERSHIP``, zero claim writes.
+
+    The email arm is tested independently of the uid arm on purpose: patching one
+    select and missing the other is the exact half-fix D-23.1-13 exists to avoid, and
+    the email arm is the one an attacker self-registering a known address reaches.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b104"
+    email = "email-deactivated-1@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="email-deactivated-space",
+        email=email,
+        provider_user_id=None,
+        role="user",
+        status="deactivated",
+    )
+
+    decoded = {"uid": "uid-no-row-b104", "email": email, "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "a deactivated email-only row must mint NOTHING; recorded calls: "
+        f"{mock_set.call_args_list}"
+    )
+
+
+@pytest.mark.integration
+def test_email_arm_space_deactivated_membership_mints_nothing(engine):
+    """The same on the email arm for ``space_deactivated`` — again the deny-list
+    trap, asserted on the arm a half-fix is most likely to miss."""
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b105"
+    email = "email-space-deactivated-1@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="email-space-deactivated-space",
+        email=email,
+        provider_user_id=None,
+        role="user",
+        status="space_deactivated",
+    )
+
+    decoded = {"uid": "uid-no-row-b105", "email": email, "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "a space_deactivated email-only row must mint NOTHING; recorded calls: "
+        f"{mock_set.call_args_list}"
+    )
+
+
+@pytest.mark.integration
+def test_email_arm_active_membership_writes_claim(engine):
+    """The unchanged happy path on the email arm."""
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b106"
+    email = "email-active-1@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="email-active-space",
+        email=email,
+        provider_user_id=None,
+        role="user",
+        status="active",
+    )
+
+    decoded = {"uid": "uid-no-row-b106", "email": email, "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.WROTE
+    mock_set.assert_called_once()
+    claims = _claims_of(mock_set)
+    assert claims.get("role") == "user"
+    assert str(claims.get("space_id")) == space_id
+
+
+@pytest.mark.integration
+def test_cr01_unverified_email_refused_against_an_active_row(engine):
+    """CR-01 STILL HOLDS after the status predicate lands.
+
+    The pre-existing ``test_unverified_email_does_not_match_seeded_row`` proves the
+    same guard, but this phase adds a way for that test to pass for the WRONG reason:
+    if the seeded row were inactive, the status predicate alone would refuse it and
+    the case would stay green even with ``email_verified`` gating deleted. So this
+    case seeds an ACTIVE superadmin row — the status predicate cannot refuse it, and
+    the ONLY thing standing between the attacker and a superadmin claim is CR-01's
+    ``email_verified`` check in ``sync_claims_from_membership``.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b107"
+    email = "active-victim-superadmin@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="active-victim-space",
+        email=email,
+        provider_user_id=None,
+        role="superadmin",
+        status="active",
+    )
+
+    # Attacker self-registered the known address: signature-valid token, matching
+    # email, but email_verified is falsy and the uid matches no row.
+    decoded = {"uid": "uid-attacker-b107", "email": email, "email_verified": False}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "an unverified email must not inherit an ACTIVE row's claim (CR-01); "
+        f"recorded calls: {mock_set.call_args_list}"
+    )
+
+
+# --- THE PARTIAL-CASCADE SCENARIO — the reason this plan exists -------------
+
+
+@pytest.mark.integration
+def test_partial_cascade_failure_is_refused_by_the_db_alone(engine):
+    """THE WINDOW. The DB is the backstop; the IdP round-trip is the thing that failed.
+
+    Scenario, exactly as plan 23.1-03's cascade can leave production: the operator
+    deactivates a space, the cascade commits the DB flip to ``space_deactivated`` for
+    every member, then its ``deactivate_user`` Admin SDK call for THIS member raises
+    and the cascade reports 502. Nothing about this member's IdP account changed — no
+    ``disabled=True``, no ``revoke_refresh_tokens`` — so their existing ID token is
+    ordinary, signature-valid and non-revoked, and ``auth_routes.py``'s
+    ``UserDisabledError`` -> 401 branch never fires.
+
+    Note what is DELIBERATELY absent from this test: any simulation of IdP-side
+    disablement. That absence IS the test. If login-sync only refuses this member
+    when the IdP also refuses them, then the IdP is the sole control and the cascade's
+    accepted partial-failure mode is a live authorization hole.
+
+    The token carries no ``role`` claim, so the ``ALREADY_SYNCED`` short-circuit does
+    not fire either and the DB read really happens.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b108"
+    uid = "uid-cascade-orphan"
+    email = "cascade-orphan@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="cascade-orphan-space",
+        email=email,
+        provider_user_id=uid,
+        role="superadmin",
+        status="space_deactivated",
+    )
+
+    decoded = {"uid": uid, "email": email, "email_verified": True}
+    assert decoded.get("role") is None, "the ALREADY_SYNCED short-circuit must not fire"
+
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.NO_MEMBERSHIP
+    assert mock_set.call_args_list == [], (
+        "a space_deactivated member whose IdP disable never landed must be refused by "
+        f"the DB alone; recorded calls: {mock_set.call_args_list}"
+    )
+
+
+# --- INDISTINGUISHABILITY --------------------------------------------------
+
+
+@pytest.mark.integration
+def test_deactivated_member_is_indistinguishable_from_a_non_member(engine):
+    """A deactivated member and a user with NO row at all produce the IDENTICAL result.
+
+    Asserted by COMPARING the two results, not by asserting each is
+    ``NO_MEMBERSHIP`` separately. The property being pinned is that a caller cannot
+    tell the two apart (T-23.1-75); two independent ``is NO_MEMBERSHIP`` assertions
+    would still pass if a future change gave one of them its own distinct state, and
+    would say nothing about the pair. Equality says it directly.
+    """
+    factory = _session_factory(engine)
+    space_id = "00000000-0000-0000-0000-00000000b109"
+    uid = "uid-deactivated-b109"
+    email = "deactivated-b109@example.com"
+    _seed_space_with_membership(
+        factory,
+        space_id=space_id,
+        slug="indistinguishable-space",
+        email=email,
+        provider_user_id=uid,
+        role="user",
+        status="deactivated",
+    )
+
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_deactivated:
+        deactivated_result = sync_claims_from_membership(
+            {"uid": uid, "email": email, "email_verified": True},
+            session_factory=factory,
+        )
+
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_stranger:
+        stranger_result = sync_claims_from_membership(
+            {
+                "uid": "uid-stranger-b109",
+                "email": "stranger-b109@example.com",
+                "email_verified": True,
+            },
+            session_factory=factory,
+        )
+
+    assert deactivated_result == stranger_result, (
+        "a deactivated member and a non-member must be INDISTINGUISHABLE; got "
+        f"{deactivated_result!r} vs {stranger_result!r}"
+    )
+    assert deactivated_result is SyncResult.NO_MEMBERSHIP
+    assert mock_deactivated.call_args_list == mock_stranger.call_args_list == []
+
+
+# --- THE CHANGED FALL-THROUGH (ruled in 23.1-CONTEXT § 7, D-23.1-13) -------
+
+
+@pytest.mark.integration
+def test_deactivated_uid_row_falls_through_to_an_active_email_row(engine):
+    """RULED: KEEP the fall-through. Pinned here so it is a decision on record.
+
+    Adding the predicate changes CONTROL FLOW, because the uid arm is an EARLY
+    RETURN. Before the fix, a deactivated uid row was returned and the email arm never
+    ran. After the fix the uid query yields None for that row and control FALLS
+    THROUGH — so this user, who holds a deactivated row in one space AND a separate
+    ACTIVE row in another, is now ADMITTED via the active row where before they were
+    refused.
+
+    THIS IS NOT A LOOSENING. The pre-fix behaviour was ALSO wrong: it handed back the
+    deactivated uid row and login-sync minted claims FROM IT. Both paths were broken;
+    this one is now right. The claim now comes from access the user legitimately
+    holds, it is the same deterministic uid-first policy the docstring describes, and
+    CR-01's ``email_verified`` guard still fences the email arm.
+
+    The assertion is on the SPACE the claim carries, not merely on ``WROTE``: before
+    the fix this returned ``WROTE`` too, from the DEACTIVATED row's space. Asserting
+    the active row's space is what distinguishes the two behaviours.
+    """
+    factory = _session_factory(engine)
+    dead_space = "00000000-0000-0000-0000-00000000b110"
+    live_space = "00000000-0000-0000-0000-00000000b111"
+    uid = "uid-two-rows"
+    email = "two-rows@example.com"
+
+    # Row 1: matched by uid, DEACTIVATED. Pre-fix this short-circuited the email arm.
+    _seed_space_with_membership(
+        factory,
+        space_id=dead_space,
+        slug="fallthrough-dead-space",
+        email=email,
+        provider_user_id=uid,
+        role="user",
+        status="deactivated",
+    )
+    # Row 2: same person, same verified email, a DIFFERENT space, ACTIVE.
+    _seed_space_with_membership(
+        factory,
+        space_id=live_space,
+        slug="fallthrough-live-space",
+        email=email,
+        provider_user_id=None,
+        role="user",
+        status="active",
+    )
+
+    decoded = {"uid": uid, "email": email, "email_verified": True}
+    with patch.object(session_mod.auth, "set_custom_user_claims") as mock_set:
+        result = sync_claims_from_membership(decoded, session_factory=factory)
+
+    assert result is SyncResult.WROTE
+    mock_set.assert_called_once()
+    claims = _claims_of(mock_set)
+    assert str(claims.get("space_id")) == live_space, (
+        "the claim must come from the ACTIVE email row, not the deactivated uid row "
+        f"({dead_space}); got {claims.get('space_id')!r}"
     )
