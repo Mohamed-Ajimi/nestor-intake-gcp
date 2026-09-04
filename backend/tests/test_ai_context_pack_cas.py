@@ -499,6 +499,26 @@ def test_refused_context_pack_never_leaves_a_running_skill_run(
         assert skill_row[3] is None, (
             "applied_at must NOT be set: nothing was applied to the intake."
         )
+
+        # The index 23.1-12 will add is UNIQUE (intake_id, skill) WHERE status='running',
+        # so the invariant that matters is a COUNT over the whole table for this intake,
+        # not just "the newest row is terminal".
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            running = conn.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.skill_runs "
+                    "WHERE intake_id = :iid AND status = 'running'"
+                ),
+                {"iid": intake_id},
+            ).scalar_one()
+        assert running == 0, (
+            f"ORPHAN: {running} skill_runs row(s) for this intake are still 'running' "
+            f"after the refusal from {seed_status!r} — 23.1-12's partial unique index "
+            "would then block every future context-pack run for it."
+        )
     finally:
         _drop_spaces(engine, space)
 
