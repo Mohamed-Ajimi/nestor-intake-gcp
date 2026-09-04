@@ -327,3 +327,66 @@ extra is silently ignored by uv, which means the day it DOES matter it will fail
 missing import rather than as a dependency error. Belongs with the dependency work
 `23.1-CONTEXT.md` § 9 defers to its own phase.
 
+## DEF-23.1-14-03 — D-23.1-15: the tribunal ownership-fence and idempotency proofs run in NO committed gate
+
+**Recorded by:** plan 23.1-14. **NOT FIXED — `tribunal/cloudbuild.test-critical.yaml` is
+OUTSIDE this plan's `files_modified`**, which is exactly four paths
+(`backend/tests/test_mail_render.py`, `backend/tests/test_research_runs_migration.py`,
+`cloudbuild.test.yaml`, `frontend/cloudbuild.yaml`) plus this file. Editing another config
+would have exceeded the declared scope, so this is handed to plan 15 / the operator rather
+than silently dropped. **This is an OPERATOR ITEM.**
+
+### Measured at `4e3a549`, 2026-09-04
+
+Plans 23.1-05 and 23.1-06 built LIVE proofs of the tribunal run-ownership fence and the
+paid-call idempotency races. Which committed Cloud Build config runs them?
+
+| test file | tests | named in a committed `*.yaml`? |
+|---|---|---|
+| `tribunal/nestor_pulse_sdk/tests/test_run_ownership_fence.py` | 16 | **NONE** |
+| `tribunal/nestor_pulse_sdk/tests/test_run_api_idempotency.py` | 16 | **NONE** |
+| `tribunal/nestor_pulse_sdk/tests/test_stale_reclaim.py` | 5 | only `cloudbuild.test-engine.yaml`, which runs `-m "not live"` |
+
+(Search excludes `.claude/`, which carries worktree copies.) So 32 of those 37 tests are
+named nowhere at all, and the remaining 5 are collected by a config that filters their LIVE
+half out.
+
+### Why they cannot simply be picked up by the existing "full suite" config
+
+`tribunal/cloudbuild.test.yaml` mounts the Docker socket, but its testcontainers fixture
+never starts. Its own header (`:27-40`) records the diagnosis verbatim from `pytest -rs`:
+
+    Docker not available for testcontainers:
+    "host" network_mode is incompatible with port_bindings
+
+testcontainers 4.x requests port bindings for the Postgres container it spawns, and docker
+rejects that under the `--network=host` the step requires. So `postgres_container` skips and
+every dependent test skips with it — the build still exits 0, a green "full suite" that
+proves nothing about the DB-backed paths. Plan 05 measured 6 passed / 13 skipped there;
+plan 06 measured 6 static / 10 LIVE skipped.
+
+**Do NOT try to repair the testcontainers path.** All three files skip on an explicit
+`DATABASE_URL` guard instead (`test_run_ownership_fence.py:368`,
+`test_run_api_idempotency.py:199`, `test_stale_reclaim.py:67` — each requiring a
+`postgresql+asyncpg://` DSN), and plan 06 made its file DSN-capable precisely so no rewrite
+is needed: it measured 16 passed against a disposable `postgres:15`.
+
+### The fix — a one-line change plan 15 can make
+
+`tribunal/cloudbuild.test-critical.yaml` is the ONLY config with a real DSN
+(`postgresql+asyncpg://postgres:testpw@localhost:5432/postgres`, `:31`) and it names its
+files BY HAND at `:32`, currently four:
+
+    test_schema_isolation.py  test_advisory_lock_exactly_once.py
+    test_hash_chain_replay.py test_verification_report_endpoint.py
+
+Append the three above to that same `python -m pytest ...` invocation. The files' own
+headers already point at this config as the place they belong —
+`test_run_ownership_fence.py:91` reads "`cloudbuild.test-critical.yaml` (which does) names
+four" — so the gap is self-documented and just never closed.
+
+Two things to check while doing it: that step runs `python:3.11-slim` while the tests are
+otherwise exercised on 3.12, and `test-critical.yaml` names files by hand with **no
+collected-count assertion**, so a mistyped path there is a silent skip. The pattern to copy
+is `cloudbuild.test-engine.yaml:520-560` (`EXPECTED_FILES`), the same one plan 23.1-14 used
+for `cloudbuild.test.yaml`.
