@@ -390,3 +390,51 @@ otherwise exercised on 3.12, and `test-critical.yaml` names files by hand with *
 collected-count assertion**, so a mistyped path there is a silent skip. The pattern to copy
 is `cloudbuild.test-engine.yaml:520-560` (`EXPECTED_FILES`), the same one plan 23.1-14 used
 for `cloudbuild.test.yaml`.
+
+---
+
+## DEF-23.1-14-03 (ADDENDUM, plan 23.1-15, 2026-09-04) — the DISPOSITION stands, the stated MECHANISM for the last 5 tests is wrong
+
+**Do not rewrite the entry above — it is the record of what plan 14 measured.** This addendum
+corrects one mechanism inside it, because acting on the original wording would send someone to
+change a load-bearing line and fix nothing.
+
+**Re-measured at `c700fd0`, 2026-09-04** (searches exclude `.claude/`):
+
+| file | tests | mechanism by which it gates nothing |
+|---|---|---|
+| `test_run_ownership_fence.py` | 16 | named in NO committed yaml — **unchanged, confirmed** |
+| `test_run_api_idempotency.py` | 16 | named in NO committed yaml — **unchanged, confirmed** |
+| `test_stale_reclaim.py` | 5 | named at `cloudbuild.test-engine.yaml:507`, **skips there for lack of a DSN** |
+
+**What the entry above says:** the last 5 are "collected by a config that filters their LIVE half
+out" — i.e. that `-m "not live"` is what loses them.
+
+**What is actually true.** `grep -c 'pytest.mark.live'` over all three files returns **0, 0, 0**.
+Not one of them carries a `live` marker, so `-m "not live"` does not exclude a single test in any
+of them. What loses them is that **`cloudbuild.test-engine.yaml` sets no `DATABASE_URL`**
+(zero occurrences in the file) and `test_stale_reclaim.py:67` skips loudly without a
+`postgresql+asyncpg://` DSN. The config **says so itself** at line 318:
+
+    test_stale_reclaim.py is DB-BOUND and therefore SKIPS in THIS gate,
+
+**Why the distinction is load-bearing.** `cloudbuild.test-engine.yaml:12` records that its
+`not live` filter is deliberate and load-bearing. Someone reading the original wording would try
+to widen that gate by dropping the filter — a change that touches the wrong config, weakens a
+deliberate one, and still leaves all five tests skipping, because the DSN would still be absent.
+
+**Consequence: the honest headline is 37 of 37 gate nothing, not 32 of 37.** The remaining 5 are
+*named* in a config, which is not the same as being *run* by one. A test that is collected and
+then skips is not a gate — `test_stale_reclaim.py:40` says it in its own words: **"A SKIP IN THIS
+FILE IS NOT A PASS."**
+
+**The fix is UNCHANGED** and is the one the entry above already gives: append the three filenames
+to `tribunal/cloudbuild.test-critical.yaml:32`, the only config handing pytest a real DSN. This
+addendum changes the reason, not the remedy.
+
+**Still NOT FIXED, and deliberately so.** `tribunal/cloudbuild.test-critical.yaml` is outside plan
+23.1-15's `files_modified` too (which is `23.1-UAT.md`, this file, and `.planning/STATE.md`).
+⚠ The entry above says "a one-line change plan 15 can make"; plan 15's declared scope excludes the
+file, so it is **presented to the operator in `23.1-UAT.md` § 5.2** with the exact lines to append,
+rather than applied behind their back. That inconsistency between the two documents is recorded
+here rather than resolved silently.
