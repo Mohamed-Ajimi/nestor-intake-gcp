@@ -27,6 +27,7 @@ import type { IntakeField, IntakeSchema, LocalizedIntakeSchema } from "@/lib/int
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
 import { FieldRenderer } from "@/components/intake/FieldRenderer";
+import { StatusPill } from "@/components/intake/_status";
 import { IntakeWorkflowStepper } from "@/components/intake/IntakeWorkflowStepper";
 import {
  AIReviewTopBanner,
@@ -130,8 +131,14 @@ type SkillRun = {
 };
 
 
-// Status values are the stable domain keys; labels/banners/hints are looked up in the
-// admin catalog at render time via t("intakeDetail.status.<value>") etc. (Phase 11).
+// Status values are the stable domain keys. The status DROPDOWN and the banner/hint copy
+// are looked up in the admin catalog at render time via t("intakeDetail.status.<value>"),
+// t("intakeDetail.statusBanner.<value>") and t("intakeDetail.statusHint.<value>") (Phase 11).
+// The status PILL is no longer rendered here: phase 23.1 collapsed this route's duplicate
+// StatusPill onto the shared @/components/intake/_status one, which reads the COMMON
+// catalog (`common:status.<value>`). Both catalogs are held byte-identical across en/nl/fr
+// by src/lib/i18n/statusCatalog.test.ts — keep them that way, and do NOT delete the
+// intakeDetail.status.* keys, which the dropdown below still reads.
 const STATUS_VALUES = [
  "draft",
  "submitted",
@@ -142,17 +149,6 @@ const STATUS_VALUES = [
  "delivered",
  "archived",
 ] as const;
-
-const STATUS_VARIANT: Record<string, { cls: string; mark?: "ink" | "green" | null }> = {
- draft: { cls: "badge-dashed" },
- submitted: { cls: "badge-ink" },
- reviewed: { cls: "badge-outline", mark: "green" },
- validated_by_client: { cls: "badge-ink", mark: "green" },
- decomposed: { cls: "badge-outline" },
- in_research: { cls: "badge-outline", mark: "green" },
- delivered: { cls: "badge-ink" },
- archived: { cls: "badge-outline text-ink/40 border-ink/40" },
-};
 
 // Status banners/hints that exist in the catalog. A value absent from these sets has no
 // banner/hint (guards the render sites, which only show when a catalog entry exists).
@@ -179,21 +175,6 @@ const RESEARCH_SURFACE_STATUSES = new Set(["in_research", "delivered", "archived
 
 // Phase machine lives in @/lib/intake-phase. The detail-page derives a single
 // Phase from intake + latest intake-skill-run + hasResearchArtifacts.
-
-
-function StatusPill({ status }: { status: string | null }) {
- const { t } = useTranslation("admin");
- if (!status) return null;
- const v = STATUS_VARIANT[status] ?? { cls: "badge-outline" };
- const label = t(`intakeDetail.status.${status}`, status).toUpperCase();
- return (
- <span className={cn(v.cls)}>
- {v.mark === "green" && <span className="mark-green" />}
- {v.mark === "ink" && <span className="mark-ink" />}
- {label}
- </span>
- );
-}
 
 function fmt(d: string | null | undefined) {
  if (!d) return "—";
