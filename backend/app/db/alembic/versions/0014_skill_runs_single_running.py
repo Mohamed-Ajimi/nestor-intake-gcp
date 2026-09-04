@@ -88,11 +88,16 @@ Which alembic line
 The INTAKE ``nestor`` line (``backend/app/db/alembic/versions/``), whose head was 0013
 (``0013_research_run_event_seq.py``) and whose version table is the default-schema
 ``alembic_version``. This is NOT the TRIBUNAL line under
-``tribunal/nestor_pulse_sdk/alembic/versions/``, which numbers itself independently (it is
-already past 0015, and DEF-22-06 claims 0019 THERE) and books into
+``tribunal/nestor_pulse_sdk/alembic/versions/``, which numbers itself independently (it
+sits at 0018 today and DEF-22-06 claims 0019 THERE) and books into
 ``tribunal.tribunal_alembic_version`` — two schemas, two version tables, two independent
-revision sequences (v1.1 roadmap decision, Pitfall 2). Do not cross the two lines. Plan
-23.1-13 takes 0015 on THIS line.
+revision sequences (v1.1 roadmap decision, Pitfall 2).
+
+The warning is not theoretical: grepping this repository for ``0014`` finds TWO migration
+files, because the tribunal line already has its own
+(``0014_run_liveness_and_reclaim.py``, an unrelated change to unrelated tables). The two
+are not versions of each other and neither is "ahead" of the other. Do not cross the
+lines. Plan 23.1-13 takes 0015 on THIS line.
 
 Unlike 0013, this revision was applied FOR REAL on the dev box: 0013's docstring line "Live
 ``alembic upgrade`` is DEFERRED ... no local Python, no Docker" is no longer true. Both
