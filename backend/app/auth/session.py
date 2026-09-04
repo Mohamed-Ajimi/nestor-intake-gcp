@@ -56,6 +56,31 @@ from sqlalchemy import select
 from app.db.base import get_sessionmaker
 from app.db.models import OrganizationMembership
 
+# App-level membership-status vocabulary (D-23.1-13 / D-23.1-11).
+#
+# THE VOCABULARY'S HOME is ``models/membership.py:43``: ``status`` is a plain
+# ``String NOT NULL server_default 'active'`` with the app-level set
+# {"active", "deactivated"}, plus "space_deactivated" written by plan 23.1-03's
+# space cascade. No PG enum, no CHECK constraint — it is enforced in code, which is
+# exactly why every read of it must carry an explicit predicate.
+# ``admin_repo.py:48`` holds the sibling definition of this same constant.
+#
+# DUPLICATED RATHER THAN IMPORTED, DELIBERATELY: the auth layer must not depend on
+# the admin repository. Six characters of duplication is a smaller price than that
+# edge in the dependency graph.
+#
+# Consequence of the ``admin_routes.py:236`` interaction — kept VERBATIM from
+# 23.1-CONTEXT.md § 7 (D-23.1-13), so that a reader who meets the status vocabulary
+# here does not file the following as a bug:
+#
+#   individually deactivating an already-cascade-deactivated member flips
+#   `space_deactivated` -> `deactivated`, converting a REVERSIBLE space suspension
+#   into a PERMANENT individual one that a later space reactivate will not restore.
+#   That is "fire someone whose space is currently off", and it is intended.
+#   Skipping the active-count guard is arithmetically safe because
+#   `count_active_superadmins()` already excludes a `space_deactivated` member.
+_STATUS_ACTIVE = "active"
+
 
 class SyncResult(str, Enum):
     """Authoritative outcome of ``sync_claims_from_membership`` (WR-04).
@@ -88,16 +113,56 @@ def _find_membership(session, provider_user_id: str, email: str | None):
     NEVER raise ``MultipleResultsFound``, so the ``/auth/session`` handshake stays a
     deterministic auth decision instead of an unhandled 500 when a user has both a
     uid row and a separate email-only row.
+
+    ONLY ACTIVE MEMBERSHIPS MATCH (D-23.1-13, added phase 23.1 — before it, NEITHER
+    arm carried any status predicate at all):
+    - Both arms filter ``status == _STATUS_ACTIVE``. A ``deactivated`` or a
+      ``space_deactivated`` row is INVISIBLE to login-sync and yields
+      ``SyncResult.NO_MEMBERSHIP`` — indistinguishable from having no row at all.
+      Keep it that way: no fourth ``SyncResult`` state, no distinct message, and
+      nothing logged at the route that would let a caller tell the two apart.
+    - This makes the DATABASE a backstop rather than trusting the IdP
+      ``disabled=True`` + ``revoke_refresh_tokens`` round-trip alone. It matters
+      because plan 23.1-03's space cascade issues N IdP calls for N members and
+      COMMITS its DB flip even when some of those calls fail: in that window the DB
+      says ``space_deactivated`` while the member's ID token is still ordinary,
+      signature-valid and non-revoked, so ``auth_routes.py``'s ``UserDisabledError``
+      -> 401 branch never fires and this function is the only thing left refusing.
+    - ALLOW-LIST, never a deny-list. A predicate that merely excluded the
+      ``deactivated`` value would ADMIT ``space_deactivated`` — precisely the value
+      the cascade writes — and would be the bug this predicate exists to close.
+      (The literal deny-list form is deliberately not spelled out here: plan
+      23.1-16's acceptance gate greps this file for it and requires zero hits.)
     """
     row = (
         session.execute(
             select(OrganizationMembership).where(
-                OrganizationMembership.provider_user_id == provider_user_id
+                OrganizationMembership.provider_user_id == provider_user_id,
+                OrganizationMembership.status == _STATUS_ACTIVE,
             )
         )
         .scalars()
         .first()
     )
+    # THE FALL-THROUGH — RULED IN 23.1-CONTEXT.md § 7 (D-23.1-13): KEEP IT.
+    #
+    # This early return's meaning changed when the status predicate landed above. The
+    # uid arm now means "an ACTIVE row for this uid", so a DEACTIVATED uid row no
+    # longer short-circuits here — the query returns None and control FALLS THROUGH to
+    # the email arm. A user holding a deactivated uid row AND a separate ACTIVE email
+    # row is therefore now ADMITTED, where the pre-fix early return refused them.
+    #
+    # THIS IS NOT A LOOSENING. The pre-fix behaviour was ALSO wrong: the early return
+    # handed back the deactivated row and login-sync MINTED CLAIMS FROM IT. So the
+    # comparison is not "we used to refuse and now we admit" — both paths were broken,
+    # and this one is now right. The claim now comes from an active row the user
+    # legitimately holds; it is the same deterministic uid-first policy described
+    # above; and CR-01's ``email_verified`` gate still fences the email arm, so a
+    # self-registered address cannot walk in.
+    #
+    # Pinned by tests/test_auth_session.py::
+    # test_deactivated_uid_row_falls_through_to_an_active_email_row. Do NOT "restore"
+    # the early return on the strength of seeing a previously-refused case succeed.
     if row is not None:
         return row
     if email is None:
@@ -105,7 +170,8 @@ def _find_membership(session, provider_user_id: str, email: str | None):
     return (
         session.execute(
             select(OrganizationMembership).where(
-                OrganizationMembership.email == email
+                OrganizationMembership.email == email,
+                OrganizationMembership.status == _STATUS_ACTIVE,
             )
         )
         .scalars()
