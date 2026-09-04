@@ -190,3 +190,23 @@ Found by plan 23.1-11. `main.py:153-162` still states that `ai_router` inherits
 `Depends(superadmin_gate)`. `main.py` was not in plan 11's `files_modified`, so the clause was
 not applied. No behavioural effect — the gate lives on the router object in `ai_routes.py`.
 Exact replacement wording is in `23.1-11-SUMMARY.md` § Deviations 4. Pick up in 23.1-15.
+
+## DEF-23.1-13-01 — `infra/DEPLOY-RUNBOOK.md:5790` warns about a column that no longer exists
+
+Found by plan 23.1-13. The ⛔ block at `infra/DEPLOY-RUNBOOK.md:5790` reads
+"`skill_runs.started_at` IS A DEAD COLUMN — do not 'improve' this by switching to it", and the
+paragraph under it describes the column as present-but-unwritten. Migration **0015** (this plan)
+DROPPED it, so the prose now describes a column that is not in the schema.
+
+Not edited here for two reasons: the runbook is outside plan 23.1-13's `files_modified` pathspec,
+and it is an append-only dated deploy log where rewriting a past entry falsifies the record. The
+right shape is probably a dated one-line addendum ("dropped in alembic 0015, phase 23.1"), not an
+edit to the original claim.
+
+No operational risk: the advice the block gives — use `created_at` — remains correct, and the
+warning "do not switch to `started_at`" is now enforced by the schema itself. Impact is a reader
+who trusts the runbook's inventory of columns.
+
+Note for whoever picks this up: `backend/app/db/alembic/versions/0001_baseline_schema.py:300`
+still creates the column and MUST stay that way. It is an applied historical revision; editing it
+desynchronises every database already past 0001.
