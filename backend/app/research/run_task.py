@@ -62,8 +62,8 @@ import httpx
 from app.auth.identity import Identity
 from app.core.config import get_settings
 from app.db.ai_session import run_with_session_release, tenant_session
-from app.db.base import get_engine
 from app.db.repository import IntakeRepository, ResearchRunRepository
+from app.db.session import get_engine_for_pool_check
 from app.mail import resend
 from app.mail.render import (
     render_research_complete,
@@ -235,16 +235,6 @@ def _cursor_values(metrics: dict[str, Any] | None) -> dict[str, Any]:
     """
     seq = _seam_event_seq((metrics or {}).get("event_seq"))
     return {} if seq is None else {"event_seq": seq}
-
-
-def get_engine_for_pool_check() -> Any:
-    """Return the user-path engine — the pool the release contract must not starve.
-
-    Exposed as a thin indirection so the pool-safety test can assert
-    ``engine.pool.checkedout() == 0`` across the CALL phase against the SAME pool the
-    real writes use.
-    """
-    return get_engine()
 
 
 def load_trigger_context(

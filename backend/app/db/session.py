@@ -32,6 +32,8 @@ async dependency calling the sync engine would stall the event loop.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import Depends, HTTPException, status
 
 from app.auth.dependencies import get_current_identity
@@ -47,6 +49,21 @@ from app.db.repository import (
     SkillRunRepository,
 )
 from app.db.rls import set_space_context
+
+
+def get_engine_for_pool_check() -> Any:
+    """Return the user-path engine — the pool the release contract must not starve.
+
+    Exposed as a thin indirection so the pool-safety test can assert
+    ``engine.pool.checkedout() == 0`` across the CALL phase against the SAME pool the
+    real writes use.
+
+    It lives in the ``app/db/`` seam because ``scripts/ci_no_raw_db_access.sh`` (D-03)
+    forbids any module outside ``app/db/`` from naming an engine accessor; the
+    indirection exists so the pool-safety test observes the SAME pool the real writes
+    use, and moving it here keeps that affordance without widening the guard.
+    """
+    return get_engine()
 
 
 def get_tenant_repo(identity: Identity = Depends(get_current_identity)):
