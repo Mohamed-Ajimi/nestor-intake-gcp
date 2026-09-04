@@ -117,6 +117,46 @@ class TenantRepository(Generic[M]):
         )
         return result.rowcount
 
+    def patch_if(self, row_id, expected: dict, **values):
+        """Conditional twin of :meth:`patch` — update by id ONLY IF the row still
+        matches ``expected``; return rowcount (D-23.1-05 compare-and-swap).
+
+        The whole point is that the DATABASE does the comparison: the precondition
+        rides in the same ``UPDATE`` statement's ``WHERE``, so there is no window
+        between a read and a write for a concurrent transaction to slip through.
+        A ``get()`` followed by a ``patch()`` — even inside one transaction — is
+        still read-then-write under READ COMMITTED and does NOT give this guarantee.
+
+        ``expected`` is an explicit dict, NOT keyword arguments, precisely because the
+        predicate dict and the value dict are the same shape: taking both as ``**kwargs``
+        would let a caller send a column into the SET clause that they meant as a
+        precondition, silently and unrecoverably.
+
+        Three notes for callers:
+
+        * ``rowcount == 0`` means "the precondition did not hold" — which is
+          INDISTINGUISHABLE here from "the row does not exist" and from "the row belongs
+          to another space". All three are 0 by design (existence hiding, D-07). A caller
+          that must tell them apart has to re-read; no caller in phase 23.1 does, and the
+          re-read must never become the precondition.
+        * The tenant scope is applied FIRST (``_scope``) and the ``expected`` predicates
+          are ANDed onto it. Adding predicates can only narrow the match, never widen it,
+          so the TENANT-02 wall is not weakened (T-23.1-15 — asserted by the cross-tenant
+          rowcount-0 case in ``test_ai_context_pack_cas.py``).
+        * ``synchronize_session="fetch"`` is copied from :meth:`patch` for the same
+          reason: the default "evaluate" strategy compares a str ``row_id`` against the
+          UUID attribute in Python, never matches, and leaves an already-loaded instance
+          unsynced so a follow-up ``get()`` returns stale attributes.
+        """
+        stmt = self._scope(update(self.model).where(self.model.id == row_id))
+        for column, value in expected.items():
+            stmt = stmt.where(getattr(self.model, column) == value)
+        stmt = stmt.values(**values)
+        result = self._s.execute(
+            stmt, execution_options={"synchronize_session": "fetch"}
+        )
+        return result.rowcount
+
     @property
     def session(self) -> Session:
         """The request's bound ``Session`` — the user-path audit-write target (Pitfall 2).

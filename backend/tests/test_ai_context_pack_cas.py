@@ -151,6 +151,18 @@ def test_patch_if_is_a_noop_when_precondition_fails(engine, set_space, two_space
         with engine.begin() as conn:
             _insert_intake(conn, set_space, space_a, intake_id, "delivered")
 
+        from sqlalchemy import text
+
+        # Snapshot BOTH columns the refused call would write. client_name is NOT NULL
+        # here: 0004's tg_seed_client_name trigger mirrors the organization name onto
+        # it at INSERT, so "unchanged" means "equal to this snapshot", not "NULL".
+        with engine.begin() as conn:
+            set_space(conn, space_a)
+            before = conn.execute(
+                text(f"SELECT status, client_name FROM {SCHEMA}.intakes WHERE id = :iid"),
+                {"iid": intake_id},
+            ).first()
+
         with engine.begin() as conn:
             set_space(conn, space_a)
             repo = IntakeRepository(Session(bind=conn), _user(space_a))
@@ -164,8 +176,6 @@ def test_patch_if_is_a_noop_when_precondition_fails(engine, set_space, two_space
             f"patch_if must affect 0 rows when the precondition fails, got {rowcount}."
         )
 
-        from sqlalchemy import text
-
         with engine.begin() as conn:
             set_space(conn, space_a)
             after = conn.execute(
@@ -178,8 +188,12 @@ def test_patch_if_is_a_noop_when_precondition_fails(engine, set_space, two_space
         assert after[0] == "delivered", (
             f"a refused patch_if must leave status untouched, got {after[0]!r}."
         )
-        assert after[1] is None, (
-            f"a refused patch_if must write NO column, but client_name is {after[1]!r}."
+        assert after[1] == before[1], (
+            f"a refused patch_if must write NO column, but client_name went "
+            f"{before[1]!r} -> {after[1]!r}."
+        )
+        assert after[1] != "SHOULD-NOT-BE-WRITTEN", (
+            "the refused patch_if's SET clause was applied despite rowcount 0."
         )
     finally:
         _drop_spaces(engine, space_a)
