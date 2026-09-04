@@ -1,12 +1,29 @@
-# cloudbuild.test.yaml — QA-01 REQUIRED cross-tenant denial gate (D-09 / T-04-19).
+# cloudbuild.test.yaml — the REQUIRED backend merge gate (QA-01 / D-09 / T-04-19).
 #
-# This Cloud Build config is the merge gate that proves tenant isolation holds: it
-# stands up REAL Postgres (pgvector/pgvector:pg16, matching
-# backend/tests/conftest.py::PGVECTOR_IMAGE so vector(1536) + the schema build work),
+# THIS GATE RUNS THE WHOLE BACKEND SUITE. Until phase 23.1 it filtered pytest down to
+# only the tests carrying the `integration` marker — roughly a third of them — while
+# calling itself the merge gate. CI that runs a third of the suite is not a gate, it is a
+# habit: the ~155 unmarked tests (route contracts, mail render, scope guards, the D-03
+# raw-DB CI guard, the migration source suites) could regress and merge green. D-23.1-09
+# removed that marker filter; the unmarked tests that were red at the time were fixed
+# FIRST, in plan 23.1-14, so this widening lands green rather than blocking every merge.
+#
+# Do NOT re-introduce a marker filter here. If you need a fast subset locally, pass it on
+# the command line; this config is the gate and the gate runs everything.
+#
+# The cross-tenant DENIAL suites remain the most important thing this gate runs, and they
+# are the reason it stands up a real database rather than mocking one:
+#   backend/tests/test_intake_cross_tenant.py    backend/tests/test_ai_cross_tenant.py
+#   backend/tests/test_storage_cross_tenant.py   backend/tests/test_research_cross_tenant.py
+#   backend/tests/test_ai_search_cross_tenant.py backend/tests/test_mail_denial.py
+#   backend/tests/test_tribunal_seam_denial.py   backend/tests/test_space_deactivation_cascade.py
+# A missing or soft gate re-opens the cross-tenant hole the whole phase exists to close
+# (T-04-19). A non-zero pytest exit FAILS the build and blocks the merge.
+#
+# It stands up REAL Postgres (pgvector/pgvector:pg16, matching
+# backend/tests/conftest.py::PGVECTOR_IMAGE so vector(1536) + the schema build work) and
 # creates the out-of-band `app_superadmin` LOGIN role the same way
-# conftest.py::_ensure_app_superadmin does, then runs `pytest backend/tests -m
-# integration`. A non-zero pytest exit FAILS the build, blocking the merge — a missing
-# or soft gate re-opens the cross-tenant hole the whole phase exists to close (T-04-19).
+# conftest.py::_ensure_app_superadmin does.
 #
 # conftest.py honors an explicit DATABASE_URL and BYPASSES testcontainers/Docker
 # entirely (no docker-in-docker needed for the test step), so we expose the pgvector
@@ -59,11 +76,19 @@ steps:
         exit 1
 
   # 3. Install backend deps (incl. the dev group: pytest + the integration suite's
-  #    needs) with uv, then run the integration denial suite against the real DB.
-  #    conftest._ensure_app_superadmin creates the app_superadmin role out-of-band
-  #    using this same DATABASE_URL (the `test` superuser can CREATE ROLE), then
-  #    `alembic upgrade head` builds the schema. A non-zero exit FAILS the build.
-  - id: pytest-integration
+  #    needs) with uv, assert the collection is the size this config claims, then run
+  #    the ENTIRE suite against the real DB. conftest._ensure_app_superadmin creates
+  #    the app_superadmin role out-of-band using this same DATABASE_URL (the `test`
+  #    superuser can CREATE ROLE), then `alembic upgrade head` builds the schema. A
+  #    non-zero exit FAILS the build.
+  #
+  #    `bash` is required here: test_ci_guard.py, test_ci_guard_raw_db.py,
+  #    test_scope_guard_ai.py and test_scope_guard_run_research.py all shell out to
+  #    backend/scripts/*.sh, and they SKIP rather than fail when bash is missing —
+  #    which would be a silent hole in this image. MEASURED 2026-09-04: python:3.12-slim
+  #    ships GNU bash 5.2.37 plus grep/sed/find, and all three guard scripts exit 0
+  #    when run inside it against this tree. No extra install is needed (T-23.1-65).
+  - id: pytest-full-suite
     name: "python:3.12-slim"
     entrypoint: "bash"
     env:
@@ -81,12 +106,94 @@ steps:
         # integration suite uses the dev deps; testcontainers is installed but unused
         # because DATABASE_URL is set (the container path is bypassed).
         uv pip install --system --no-cache-dir -e '.[dev]'
-        # The QA-01 gate: run ONLY the integration-marked denial/isolation suite.
-        # A non-zero pytest exit propagates and fails the build (the required gate).
-        python -m pytest tests -m integration -v
+
+        # ===================================================================
+        # COLLECTION ASSERTION (T-23.1-61) — run BEFORE the suite.
+        #
+        # pytest exits 0 on a collection of zero. An incomplete source upload,
+        # a renamed directory or a module-level import error does not fail this
+        # build by itself: it just makes the gate run LESS than it claims,
+        # and the summary line that prints afterwards describes only whatever
+        # happened to be there. That is the worst false green, so there is
+        # deliberately NO early exit for an empty collection — empty fails here
+        # like every other shortfall.
+        #
+        # TWO numbers, because they catch different things:
+        #
+        #   EXPECTED_DISK_FILES    tests/test_*.py present on disk. Catches an
+        #                          incomplete `builds submit` upload.
+        #   EXPECTED_FILES         files pytest actually collects >=1 test
+        #                          from. Catches a file that is present but
+        #                          silently contributes nothing — a broken
+        #                          import, or a module-level importorskip that
+        #                          started failing.
+        #
+        # The two differ BY ONE ON PURPOSE. tests/test_tribunal_seam_denial.py
+        # does `pytest.importorskip("nestor_pulse_sdk...")` at module level, and
+        # nestor_pulse_sdk is NOT a backend dependency (it is the tribunal
+        # engine, installed from tribunal/), so it collects nothing here. That
+        # is expected; the delta is PRINTED below so a second silent file is
+        # immediately visible rather than absorbed into a round number.
+        #
+        # BOTH numbers move with the test directory, in ONE deliberate edit.
+        # They are not decoration: they are the difference between a gate and a
+        # green tick. Derived by RUNNING the count inside this exact image
+        # (python:3.12-slim) on 2026-09-04, not hand-counted from `ls`.
+        # ===================================================================
+        EXPECTED_DISK_FILES=66
+        EXPECTED_FILES=65
+
+        ls tests/test_*.py | sort -u > /tmp/on_disk.txt
+        python -m pytest tests --collect-only -q 2>/dev/null \
+          | grep -oE '^tests/test_[^:]+\.py' | sort -u > /tmp/collected.txt
+
+        ON_DISK=$$(wc -l < /tmp/on_disk.txt)
+        COLLECTED=$$(wc -l < /tmp/collected.txt)
+
+        echo "collection: $$ON_DISK file(s) on disk, $$COLLECTED collected"
+        echo "on disk but collecting NO tests:"
+        comm -23 /tmp/on_disk.txt /tmp/collected.txt | sed 's/^/    /'
+
+        if [ "$$ON_DISK" -ne "$$EXPECTED_DISK_FILES" ] || \
+           [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
+          echo "############################################################"
+          echo "BACKEND GATE COLLECTION ASSERTION FAILED"
+          echo "  on disk:   $$ON_DISK (this config expects $$EXPECTED_DISK_FILES)"
+          echo "  collected: $$COLLECTED (this config expects $$EXPECTED_FILES)"
+          echo ""
+          echo "This is NOT a test failure and it is NOT a pass. It means this"
+          echo "gate would have run a DIFFERENT set of tests than it claims,"
+          echo "and any pytest summary printed after this point would say"
+          echo "nothing about the difference."
+          echo ""
+          echo "  on disk < expected   -> files did not reach the build (upload,"
+          echo "                          .gcloudignore, or a deleted test)."
+          echo "  collected < on disk  -> a file is present but contributes no"
+          echo "                          tests: broken import, or a"
+          echo "                          module-level skip that started firing."
+          echo "                          The delta is listed above."
+          echo "  either > expected    -> tests were ADDED. Good. Bump the"
+          echo "                          number(s) here, deliberately."
+          echo ""
+          echo "Fix the cause, or change the number(s) on purpose."
+          echo "Do not delete this check."
+          echo "############################################################"
+          exit 1
+        fi
+        echo "collection assertion OK: $$COLLECTED of $$EXPECTED_FILES collected, $$ON_DISK of $$EXPECTED_DISK_FILES on disk"
+
+        # THE GATE: the WHOLE suite, no marker filter (D-23.1-09). `-rs` prints
+        # the reason for every skip, so a test that quietly stops running is
+        # visible in the log instead of being absorbed into the summary count.
+        # A non-zero pytest exit propagates and fails the build.
+        python -m pytest tests -v -rs
 
 # Surface the test logs and keep the build self-contained.
 options:
   logging: CLOUD_LOGGING_ONLY
 
+# 1200s is unchanged and adequate: the full suite measured 183.76s locally
+# (2026-09-04, 599 passed / 2 skipped), against ~106s for the integration-only
+# subset. Even with the dep install the step is far inside the budget, so the
+# timeout was NOT raised speculatively.
 timeout: "1200s"
