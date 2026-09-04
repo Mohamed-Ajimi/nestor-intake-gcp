@@ -53,7 +53,8 @@ export function pick(value: unknown, lang: string): string | undefined {
   // `pick` return the first string it finds on ANY object — so a stakeholder row
   // `{name, role, email}` would resolve to a name and look like a successful
   // resolution. Callers that hand this function arbitrary answer values (see
-  // `NestorBriefingPDF.asString`) rely on `undefined` meaning "not a localized value".
+  // `FieldDisplay`, which calls `pick(obj[textKey], …)` on raw answer objects) rely on
+  // `undefined` meaning "not a localized value".
   for (const localeKey of ["nl", "fr", "en"] as const) {
     const candidate = obj[localeKey];
     if (typeof candidate === "string" && candidate.trim() !== "") return candidate;

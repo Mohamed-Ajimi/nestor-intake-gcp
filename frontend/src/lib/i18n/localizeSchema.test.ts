@@ -125,10 +125,11 @@ describe("localizeSchema", () => {
   });
 });
 
-// `pick` was exported by quick task 260831-lm4 so the FOUR surfaces that render
-// AI-GENERATED strings (FieldRenderer, FieldDisplay, AIReviewPanel, NestorBriefingPDF)
-// share ONE resolution rule with the schema pass instead of growing their own. These
-// pin the behaviours those callers depend on.
+// `pick` was exported by quick task 260831-lm4 so the surfaces that render AI-GENERATED
+// strings share ONE resolution rule with the schema pass instead of growing their own.
+// Three remain — FieldRenderer, FieldDisplay, AIReviewPanel; a fourth, a react-pdf
+// briefing exporter, was deleted as dead code in phase 23.1. These pin the behaviours
+// those callers depend on.
 describe("pick (the shared resolver for AI-generated localized strings)", () => {
   it("passes a plain string through unchanged — OLD INTAKES ARE NOT MIGRATED", () => {
     expect(pick("Een vraag zonder vertalingen?", "fr")).toBe("Een vraag zonder vertalingen?");
@@ -157,8 +158,9 @@ describe("pick (the shared resolver for AI-generated localized strings)", () => 
     expect(pick(undefined, "nl")).toBeUndefined();
     expect(pick(42, "nl")).toBeUndefined();
     // THE GUARD THAT MATTERS: an arbitrary answer object is NOT a localized value.
-    // If `pick` scanned every value it would return "Jan" here and the caller
-    // (NestorBriefingPDF.asString) would print a name where a decision belongs.
+    // If `pick` scanned every value it would return "Jan" here and a caller resolving a
+    // raw answer object (FieldDisplay, FieldRenderer) would print a name where a decision
+    // belongs.
     expect(pick({ name: "Jan", role: "CFO" }, "nl")).toBeUndefined();
     expect(pick({ choice: "other", text: "max 15 slides" }, "nl")).toBeUndefined();
   });
