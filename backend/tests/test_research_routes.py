@@ -27,16 +27,25 @@ conftest engines so the production ``get_tenant_repo`` + the poll driver's ``ten
 writes run verbatim locally. ``get_current_identity`` is overridden to a fabricated Identity
 (the one boundary that genuinely cannot run locally — the IdP).
 
-ACTOR CHANGE, 23.1-17 (D-23.1-16). Every TRIGGER case above now acts as ``_superadmin()``
-and takes the ``superadmin_engine`` fixture. ``POST /intakes/{id}/research`` is the router's
-one SPENDING verb (~$45, ``NESTOR_TRIBUNAL_UNCAPPED=1``) and was its last ungated write; it
-is gated with ``superadmin_gate`` now, so the role=``user`` actor these cases used until
-23.1-17 gets an existence-hidden 404 and would make every one of them fail on the gate
-rather than on the behaviour they exist to pin. The two SSE-stream cases deliberately keep
-``_user``: ``stream_research_run`` is NOT gated (an ``EventSource`` cannot set an
-Authorization header — see D-23.1-16's out-of-scope note). The DENIAL side of the gate — the
-404s, the no-side-effect proof and the ordering mutation — lives in
-``tests/test_research_trigger_gate.py``; this file stays the behaviour suite.
+ACTOR CHANGE, 23.1-17 + 23.1-18 (D-23.1-16). EVERY case in this file — the trigger cases
+and, since 23.1-18, the two SSE-stream cases — acts as ``_superadmin()`` and takes the
+``superadmin_engine`` fixture. Both routes are gated with ``superadmin_gate``, so the
+role=``user`` actor these cases used before would get an existence-hidden 404 and make them
+fail on the gate rather than on the behaviour they exist to pin.
+
+* ``POST /intakes/{id}/research`` — gated in 23.1-17: the router's one SPENDING verb (~$45,
+  ``NESTOR_TRIBUNAL_UNCAPPED=1``) and its last ungated write.
+* ``GET /intakes/{id}/research/stream`` — gated in 23.1-18 (the D-23.1-16 addendum): the
+  router's last ungated route of any kind. It serves the OPERATOR frame (engine stage
+  trace, ``cost_usd_total``, chain-guard state, run-event cursor) and its exclusion from
+  23.1-17 rested on a premise that turned out to be false — the frontend opens it with
+  ``fetch()`` + ``Authorization: Bearer``, and ``EventSource`` appears nowhere in
+  ``frontend/src``. The actor is the ONLY thing that changed in those two cases; not one
+  assertion about the terminal-set discipline was touched.
+
+The DENIAL side of both gates — the 404s, the no-side-effect proof, the still-streams
+counterweight and the ordering mutation — lives in ``tests/test_research_trigger_gate.py``
+and ``tests/test_research_stream_gate.py``; this file stays the behaviour suite.
 """
 
 from __future__ import annotations
@@ -88,14 +97,15 @@ def _as(identity: "Identity"):
 
 
 def _superadmin() -> "Identity":
-    """A superadmin Identity — the ONLY role the trigger accepts since 23.1-17.
+    """A superadmin Identity — the ONLY role either route in this file accepts.
 
-    ``POST /intakes/{id}/research`` is gated with ``superadmin_gate`` (D-23.1-16): it is
-    the router's one SPENDING verb (~$45 per call, ``NESTOR_TRIBUNAL_UNCAPPED=1``) and a
-    role=``user`` now gets the existence-hidden 404. Every trigger case below therefore
-    acts as a superadmin; the SSE-stream cases keep ``_user`` because
-    ``stream_research_run`` is deliberately NOT gated (SSE / ``EventSource`` cannot set an
-    Authorization header). The denial side lives in ``tests/test_research_trigger_gate.py``.
+    ``POST /intakes/{id}/research`` has been gated with ``superadmin_gate`` since 23.1-17
+    (D-23.1-16): it is the router's one SPENDING verb (~$45 per call,
+    ``NESTOR_TRIBUNAL_UNCAPPED=1``). ``GET /intakes/{id}/research/stream`` joined it in
+    23.1-18 (the D-23.1-16 addendum), completing the router at 11 of 11 gated. A
+    role=``user`` gets the existence-hidden 404 on both, so every case in this file acts as
+    a superadmin. The denial sides live in ``tests/test_research_trigger_gate.py`` and
+    ``tests/test_research_stream_gate.py``.
     """
     return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
 
@@ -589,11 +599,15 @@ def test_completion_mail_to_trigger_user(
 # ===========================================================================
 
 
-def test_research_stream_terminal_set(engine, set_space, monkeypatch):
+def test_research_stream_terminal_set(engine, set_space, monkeypatch, superadmin_engine):
     """The SSE stream closes on ``completed`` (does not hang past the terminal).
 
     Seeding the terminal run BEFORE connecting is the mandatory no-hang lever: the stream
     emits the at-connect snapshot, sees ``completed`` in RESEARCH_TERMINAL, and closes to EOF.
+
+    ACTOR ONLY, 23.1-18: ``_user`` -> ``_superadmin`` + ``_patch_superadmin_engine``, because
+    ``stream_research_run`` is now gated. Not one assertion below changed — what this case
+    pins is the RESEARCH terminal set, and it must keep pinning exactly that.
     """
     from fastapi.testclient import TestClient
 
@@ -604,9 +618,10 @@ def test_research_stream_terminal_set(engine, set_space, monkeypatch):
     _seed_intake(engine, set_space, space, intake_id, status="in_research")
     _seed_research_run(engine, set_space, space, intake_id, run_id, status=TERMINAL_COMPLETED)
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         with TestClient(app).stream(
             "GET",
@@ -629,8 +644,12 @@ def test_research_stream_terminal_set(engine, set_space, monkeypatch):
         _cleanup(engine, space)
 
 
-def test_research_stream_cancelled_closes(engine, set_space, monkeypatch):
-    """A ``cancelled`` terminal also closes the stream (RESEARCH_TERMINAL, not success-set)."""
+def test_research_stream_cancelled_closes(engine, set_space, monkeypatch, superadmin_engine):
+    """A ``cancelled`` terminal also closes the stream (RESEARCH_TERMINAL, not success-set).
+
+    ACTOR ONLY, 23.1-18 (see ``test_research_stream_terminal_set``): the route is gated, so
+    the fixture changed and nothing else did.
+    """
     from fastapi.testclient import TestClient
 
     space = uuid.uuid4()
@@ -640,9 +659,10 @@ def test_research_stream_cancelled_closes(engine, set_space, monkeypatch):
     _seed_intake(engine, set_space, space, intake_id, status="in_research")
     _seed_research_run(engine, set_space, space, intake_id, run_id, status=TERMINAL_CANCELLED)
     _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
 
     app = _build_app()
-    app.dependency_overrides[get_current_identity] = _as(_user(space))
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
     try:
         with TestClient(app).stream(
             "GET",

@@ -206,13 +206,64 @@ def test_every_gated_research_route_resolves_the_gate_before_the_repo():
     # Guards the guard: a rename or a refactor that stops the gate resolving here would
     # otherwise leave this test green while checking nothing.
     #
-    # Was 9; raised to 10 by plan 23.1-17, which gated ``trigger_research`` (D-23.1-16 —
-    # the ~$45 paid trigger, the router's last ungated write). RAISED, never relaxed: the
-    # count is the anti-vacuity guard, and turning it into ``>= 9`` to make a new route
-    # fit would delete the only thing that notices when the gate stops resolving.
+    # Was 9; raised to 10 by plan 23.1-17 (``trigger_research``, D-23.1-16 — the ~$45 paid
+    # trigger, the router's last ungated WRITE); raised to 11 by plan 23.1-18
+    # (``stream_research_run``, the D-23.1-16 addendum — the last ungated route of any
+    # kind). RAISED, never relaxed: the count is the anti-vacuity guard, and turning it
+    # into ``>= 10`` to make a new route fit would delete the only thing that notices when
+    # the gate stops resolving.
     #
-    # 10 of the router's 11 routes. The eleventh is ``stream_research_run``, which takes
-    # only ``get_current_identity`` and is EXCLUDED by D-23.1-16 pending assessment: it is
-    # SSE, an ``EventSource`` cannot set an Authorization header, so gating it blind could
-    # break the live run feed. A known gap, not an oversight repeated.
-    assert checked == 10, f"expected 10 gated research routes, found {checked}"
+    # 11 of the router's 11 routes — the boundary is COMPLETE, so this number is now also
+    # a completeness assertion: a twelfth route added to research_router WITHOUT the gate
+    # leaves ``checked`` at 11 and passes here. The count catches the gate breaking, not a
+    # new hole; ``test_every_research_route_is_gated`` below is what catches the hole.
+    #
+    # The stream was excluded from 23.1-17 on the premise that "it is SSE and an
+    # ``EventSource`` cannot set an Authorization header". That premise was FALSE for this
+    # codebase (23.1-CONTEXT.md section 15 addendum): the frontend opens the stream with
+    # ``fetch()`` + ``Authorization: Bearer``, and ``EventSource`` appears nowhere in
+    # ``frontend/src``.
+    assert checked == 11, f"expected 11 gated research routes, found {checked}"
+
+
+def test_every_research_route_is_gated():
+    """EVERY route on ``research_router`` resolves the shared gate — 11 of 11, no exceptions.
+
+    The count above is an anti-vacuity guard on the ordering walk: it notices when the gate
+    STOPS resolving, but a twelfth route added without a gate would leave it at 11 and pass.
+    This assertion is the other half — it is computed from the router's OWN route list, so
+    a new ungated verb fails here by construction and cannot repeat the D-23.1-16 oversight
+    (a whole file surveyed by eye, one route missed, ~$45 a call).
+
+    Non-vacuous when written: at the base commit ``stream_research_run`` took a bare
+    ``Depends(get_current_identity)`` and this assertion was FALSE.
+
+    Walks the LIVE router's resolved signatures, never a grep of the source: a grep for
+    ``Depends(_superadmin_gate)`` counts decorator TEXT, which says nothing about what
+    FastAPI actually resolves for a given endpoint.
+    """
+    import inspect
+
+    from app.api.research_routes import research_router
+
+    ungated = []
+    total = 0
+    for route in research_router.routes:
+        total += 1
+        params = list(inspect.signature(route.endpoint).parameters.values())
+        if not any(
+            getattr(p.default, "dependency", None) is gates.superadmin_gate for p in params
+        ):
+            methods = ",".join(sorted(route.methods or {"?"}))
+            ungated.append(f"{methods} {route.path} ({route.endpoint.__name__})")
+
+    assert ungated == [], (
+        f"{len(ungated)} of {total} routes on research_router do NOT resolve "
+        f"superadmin_gate: {ungated}. Every verb on this router is an operator verb — the "
+        "free ones leak the engine's internals and the paid one spends ~$45 a call."
+    )
+    assert total == 11, (
+        f"research_router is expected to have 11 routes, found {total}. If a route was "
+        "added, gate it and raise this number; if one was removed, lower it. This pins the "
+        "surface so 'all routes are gated' cannot go vacuously true on an empty router."
+    )

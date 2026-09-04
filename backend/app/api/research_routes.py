@@ -29,6 +29,11 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
   what makes a stuck intake re-triggerable again.
 
 * ``GET /intakes/{intake_id}/research/stream`` (:func:`stream_research_run`, RUN-01) — the
+  operator's live run feed, and the router's ELEVENTH route. Superadmin-only since 23.1-18
+  (D-23.1-16 addendum), which completes the boundary: all ELEVEN routes on this router now
+  resolve ``superadmin_gate``. It was excluded from 23.1-17 on the false premise that SSE
+  forces ``EventSource`` (the frontend opens it with ``fetch()`` + a Bearer header, and
+  ``EventSource`` appears nowhere in ``frontend/src``). The
   ONE deliberate ``async def`` handler, cloned from ``intake_routes.stream_skill_runs`` with
   the RESEARCH terminal set ``{completed, completed_degraded, failed, cancelled, parked}``
   (NOT the skill-run success/failed vocabulary — 16-RESEARCH Pitfall 3). ``parked`` joined
@@ -81,8 +86,12 @@ from fastapi.responses import StreamingResponse
 # from a Python clock that may be skewed against it.
 from sqlalchemy import func
 
-from app.auth.dependencies import get_current_identity
-
+# NOTE: this module no longer imports ``get_current_identity``. Every one of its ELEVEN
+# routes resolves ``superadmin_gate`` instead (23.1-18 closed the last one,
+# ``stream_research_run``), and the gate itself depends on ``get_current_identity`` — so
+# the identity is still verified on every call, one level down. AUTH-01 is unaffected: the
+# router is mounted under ``protected_router`` and is never anonymous.
+#
 # D-23.1-01: the superadmin gate is now the ONE shared object in app/auth/gates.py.
 # Aliased to its former private name so not one Depends(_superadmin_gate) site below
 # has to change — the promotion is behaviour-identical by construction.
@@ -1176,9 +1185,31 @@ def _sse_data(view: dict | None) -> str:
 async def stream_research_run(
     intake_id: str,
     request: Request,
-    identity: Identity = Depends(get_current_identity),
+    # SUPERADMIN ONLY since 23.1-18 (D-23.1-16 addendum). This signature has NO
+    # ``get_tenant_repo``, so the "gate above the repo" ordering rule has nothing to order
+    # against here — but the gate being a DEPENDENCY is still what makes the denial
+    # existence-hidden: dependencies resolve before the handler body, so the gate's 404
+    # pre-empts the in-body pre-flight's null-space 403 (measured RED below).
+    identity: Identity = Depends(_superadmin_gate),
 ) -> StreamingResponse:
     """Stream the intake's latest research-run state as ``text/event-stream`` (RUN-01).
+
+    SUPERADMIN ONLY (D-23.1-16 addendum, 23.1-18). This is a READ, not a spend — but the
+    frame it serves is the OPERATOR's diagnostic view: the run id, the engine's
+    ``current_stage`` / ``stage_detail`` trace, ``cost_usd_total``, the chain-guard state
+    (``chain_status`` / ``chain_broken_at`` / ``bundle_key``) and the run-event cursor
+    ``event_seq``. It was the ELEVENTH and LAST route on this router still taking a bare
+    ``get_current_identity``. D-23.1-16 originally excluded it on the grounds that "an
+    ``EventSource`` cannot set an Authorization header" — **that premise was false for this
+    codebase**: ``openResearchStream`` (``frontend/src/lib/api/research.ts:551``) opens it
+    with ``fetch()`` carrying ``Authorization: Bearer ${token}`` from the same
+    ``currentIdToken()`` source ``apiFetch`` uses, and ``EventSource`` appears NOWHERE in
+    ``frontend/src``. Its only mount points are ``admin.pulse.intakes.$id.tsx`` and
+    ``admin.pulse.runs.$runId.index.tsx`` (both via ``ResearchRunProgress``), so no
+    legitimate non-superadmin caller exists. Measured before the gate: a role=``user`` in
+    the intake's own space got 200 ``text/event-stream`` and the full operator frame; a
+    null-space user got the pre-flight's 403 existence oracle. Denial + the
+    still-streams counterweight live in ``tests/test_research_stream_gate.py``.
 
     The ONLY ``async def`` added by this plan (cloned from
     ``intake_routes.stream_skill_runs``): every DB touch goes through
@@ -1187,7 +1218,11 @@ async def stream_research_run(
 
     PRE-FLIGHT (D-04, runs BEFORE the stream opens so the denial test is a plain GET):
     ``check_intake_in_scope`` in the threadpool — a ``PermissionError`` (null-space user)
-    → 403, a falsy result (cross-tenant / missing) → existence-hidden 404.
+    → 403, a falsy result (cross-tenant / missing) → existence-hidden 404. Both arms are
+    now DEFENCE IN DEPTH behind the gate rather than the outer wall: a null-space caller
+    can no longer reach the 403, because only a superadmin gets this far and the superadmin
+    path sets no GUC. Kept, not deleted — it is what still 404s a superadmin asking about
+    an intake that does not exist.
 
     STREAM: a snapshot event at connect, then data events only when the DB state differs
     from the last sent (emit-on-change), a ``: ping`` heartbeat every ~15s, and a hard

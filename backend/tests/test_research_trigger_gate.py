@@ -48,14 +48,17 @@ The superadmin arm additionally takes ``fake_tribunal_client`` / ``fake_resend``
 belt-and-braces: were the recorder ever removed, the seam and the mail egress are still
 faked. The 202 arm therefore asserts the driver was SCHEDULED, never that a run happened.
 
-OUT OF SCOPE, DELIBERATELY — ``GET /intakes/{id}/research/stream``
-(:func:`app.api.research_routes.stream_research_run`) is the tenth route on this router that
-takes only ``get_current_identity``. D-23.1-16 excludes it: it is SSE, an ``EventSource``
-cannot set an ``Authorization`` header, so it may authenticate differently and gating it
-blind could break the live run feed. It is a KNOWN gap, assessed and left, not an oversight
-repeated. Those two are the only ungated routes on the router — the other nine are gated,
-which ``test_superadmin_gate.test_every_gated_research_route_resolves_the_gate_before_the_
-repo`` now pins at ten.
+OUT OF SCOPE FOR THIS PLAN, SINCE CLOSED — ``GET /intakes/{id}/research/stream``
+(:func:`app.api.research_routes.stream_research_run`) was the router's eleventh route and
+the only other one still taking a bare ``get_current_identity`` when this file was written.
+D-23.1-16 excluded it on the premise that "it is SSE, an ``EventSource`` cannot set an
+``Authorization`` header, so gating it blind could break the live run feed". **That premise
+was false for this codebase** and the D-23.1-16 addendum records the correction: the
+frontend opens the stream with ``fetch()`` + ``Authorization: Bearer`` and ``EventSource``
+appears nowhere in ``frontend/src``. Plan 23.1-18 gated it; its denial suite is
+``tests/test_research_stream_gate.py``. The router is now 11 of 11 gated, which
+``test_superadmin_gate.test_every_gated_research_route_resolves_the_gate_before_the_repo``
+pins at eleven and ``test_every_research_route_is_gated`` pins as a completeness check.
 
 HARNESS PROVENANCE. Seeding + engine-patch scaffold COPIED (never imported — no private
 symbol crosses a test module) from ``test_research_routes.py`` (``_seed_space``,

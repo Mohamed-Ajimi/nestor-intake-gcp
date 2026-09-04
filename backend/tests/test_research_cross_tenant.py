@@ -11,8 +11,10 @@ after). This suite is the HTTP-level proof that both new surfaces deny cross-ten
 | ``trigger_cross_tenant_404``            | space-B user POST of space-A's intake → EXACTLY 404      |
 |                                         | (existence-hidden), space-A intake NOT flipped, no run.  |
 | ``stream_cross_tenant_404``            | space-B user GET of space-A's intake stream → EXACTLY 404|
-|                                         | (raised pre-stream; never 403/200).                      |
-| ``stream_null_space_403``               | a null-space user's stream pre-flight → EXACTLY 403.     |
+|                                         | (raised before the stream opens; never 403/200).         |
+| ``stream_null_space_404``               | a null-space user → EXACTLY 404 from ``_superadmin_gate``|
+|                                         | (never the pre-flight's null-space 403). Was ``_403``    |
+|                                         | until 23.1-18 gated the stream — see below.              |
 | ``resume_cross_tenant_404``             | space-B user POST of space-A's resume → EXACTLY 404,     |
 |                                         | NO seam call, space-A run still ``parked``.              |
 | ``resume_user_role_404``                | a user-role caller in the RIGHT space → EXACTLY 404      |
@@ -308,7 +310,18 @@ def test_trigger_cross_tenant_404(
 
 
 def test_stream_cross_tenant_404(engine, set_space, two_spaces, monkeypatch):
-    """space-B user GET of space-A's research stream → plain-GET 404 raised pre-stream."""
+    """space-B user GET of space-A's research stream → plain-GET 404, before any stream.
+
+    MECHANISM NOTE, 23.1-18: the assertion is unchanged and still true, but WHICH wall
+    answers moved. Until 23.1-18 this 404 came from the handler's in-body pre-flight
+    (``check_intake_in_scope`` returning falsy for a foreign intake). The route is now
+    gated with ``superadmin_gate``, which resolves as a DEPENDENCY — before the body — so
+    a role=``user`` is refused on ROLE first and never reaches the tenant check. The
+    pre-flight is still there and still correct (it is what 404s a SUPERADMIN asking about
+    an intake that does not exist); it is simply defence in depth now. Kept as written
+    because the caller-visible contract it pins — a foreign-space caller learns nothing —
+    is exactly what must not regress, whichever wall enforces it.
+    """
     from fastapi.testclient import TestClient
 
     space_a, space_b = two_spaces
@@ -335,12 +348,31 @@ def test_stream_cross_tenant_404(engine, set_space, two_spaces, monkeypatch):
 
 
 # ===========================================================================
-# stream_null_space — a null-space user's stream pre-flight → EXACTLY 403
+# stream_null_space — a null-space user → EXACTLY 404 from the gate (23.1-18)
 # ===========================================================================
 
 
-def test_stream_null_space_403(engine, set_space, monkeypatch):
-    """A ``user`` Identity with ``space_id=None`` → EXACTLY 403 on the stream pre-flight (D-04)."""
+def test_stream_null_space_404(engine, set_space, monkeypatch):
+    """A ``user`` with ``space_id=None`` → EXACTLY 404 from ``superadmin_gate``, not 403.
+
+    STRENGTHENED, NOT WEAKENED, BY 23.1-18. This case was written as
+    ``test_stream_null_space_403`` and asserted the pre-flight's default-deny 403. That was
+    the correct expectation while the stream was the router's one ungated route — but the
+    403 is an EXISTENCE ORACLE: it tells an unauthorized caller that
+    ``/intakes/{id}/research/stream`` is a real endpoint, which is precisely what the
+    existence-hidden convention exists to prevent (``app/auth/gates.py``). The stream is
+    now gated (D-23.1-16 addendum), the gate resolves as a dependency BEFORE the handler
+    body, and this caller gets the same silent 404 every other route on this router gives.
+
+    The sibling rows ``resume_null_space_404`` and ``cancel_null_space_404`` in this same
+    file have asserted exactly this since their routes were gated; this row now matches
+    them instead of being the one exception. RED (pre-gate, measured):
+    403 ``{"detail":"No space — not authorized"}``.
+
+    The 403 arm has NOT been deleted from the code — ``check_intake_in_scope``'s
+    ``PermissionError`` mapping is still in ``stream_research_run`` as defence in depth.
+    It is simply no longer reachable by a non-superadmin, which is the point.
+    """
     from fastapi.testclient import TestClient
 
     space = uuid.uuid4()
@@ -356,8 +388,13 @@ def test_stream_null_space_403(engine, set_space, monkeypatch):
             f"/intakes/{intake_id}/research/stream",
             headers={"Authorization": "Bearer overridden"},
         )
-        assert r.status_code == 403, (
-            f"null-space user must be default-denied 403 on the pre-flight; got {r.status_code}"
+        assert r.status_code == 404, (
+            "null-space user must get the gate's existence-hidden 404 on the stream, "
+            f"never the pre-flight's 403 (an existence oracle); got {r.status_code} "
+            f"({r.text!r})"
+        )
+        assert r.json().get("detail") == "Intake not found", (
+            f"the 404 detail is asserted byte-exact (app/auth/gates.py), got {r.json()!r}"
         )
     finally:
         app.dependency_overrides.clear()
