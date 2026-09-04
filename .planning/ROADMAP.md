@@ -682,7 +682,7 @@ Plans:
 **Goal:** Close the verified authorization, cost-control and run-ownership defects found by the 2026-09-03 audit, without breaking the live client surface. Every operator-only verb is gated by ONE shared `_superadmin_gate` (existence-hidden 404) while the nine client-reachable routes stay open and pinned by test; deactivating a space actually revokes its members; a second concurrent AI skill run is refused by a DB invariant and context-pack can no longer flip an arbitrary intake to `decomposed`; a displaced Tribunal worker can no longer heartbeat or finalize a run it lost, and the two non-idempotent paid Tribunal endpoints become safe under concurrency; CI stops being blind to the non-integration suite and the frontend gates.
 **Requirements**: SEC-01 (server-side role enforcement on every operator verb), SEC-02 (space deactivation revokes access), COST-01 (no duplicate paid work), TENANT-02 (no cross-tenant access — unchanged, must stay green)
 **Depends on:** Phase 23
-**Plans:** 16 plans
+**Plans:** 16 plans + 2 gap-closure (17, 18) — 17 of 18 complete; 15 blocked on operator
 
 **Authority:** `23.1-CONTEXT.md` — verified findings, the client stay-open list, and decisions D-23.1-01..10. Where the source audit and CONTEXT disagree, CONTEXT wins.
 
