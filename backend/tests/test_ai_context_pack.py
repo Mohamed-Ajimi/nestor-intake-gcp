@@ -74,10 +74,17 @@ def _seed_intake(engine, set_space, space_id, intake_id) -> None:
         )
     with engine.begin() as conn:
         set_space(conn, space_id)
+        # Seeded at 'validated_by_client' — the ONLY status the context-pack skill may
+        # advance from (D-23.1-05 / _CONTEXT_PACK_TRANSITIONS), and the only phase in
+        # which the UI renders its launch button (NextStepBanner.tsx:270 via
+        # intake-phase.ts:55). This seed was 'reviewed' until 23.1-04, back when the
+        # `decomposed` bump was unconditional; that value made this suite assert the
+        # defect — that a context pack could jump an intake straight past client
+        # validation. Every assertion below is unchanged.
         conn.execute(
             text(
                 f"INSERT INTO {SCHEMA}.intakes (id, space_id, status) "
-                "VALUES (:id, :space_id, 'reviewed')"
+                "VALUES (:id, :space_id, 'validated_by_client')"
             ),
             {"id": intake_id, "space_id": space_id},
         )

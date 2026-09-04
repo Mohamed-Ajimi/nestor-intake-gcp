@@ -13,7 +13,10 @@ Cloud Storage object is Phase 9 / D-08):
    ``storage_bucket`` / ``storage_path`` NULL — the pack is fully usable from
    ``text_content`` without any stored object;
 2. advance the intake to ``status='decomposed'`` (the in-scope flow ceiling) and point
-   ``context_pack_artifact_id`` at the new artifact;
+   ``context_pack_artifact_id`` at the new artifact — ONLY from an allow-listed source
+   status, as a compare-and-swap (D-23.1-05). This bump used to be unconditional, so a
+   run launched against a ``delivered`` or ``in_research`` intake dragged it backwards to
+   ``decomposed``, re-opening a closed intake and re-arming the paid research trigger;
 3. finalize the ``skill_runs`` row: ``status='succeeded'`` + ``applied_at`` (D-09 — marks
    the finalized output) + the model id / prompts / token+cost columns.
 
@@ -60,10 +63,43 @@ _CONTEXT_PACK_USER_PREFIX = (
     "toegevoegd.\n\n---\n\n"
 )
 
+# The allow-listed source -> target statuses for the `decomposed` bump (D-23.1-05).
+# Mirrors the shape of `_REVIEW_TRANSITIONS` in `api/intake_routes.py:1242`; that
+# module's maps are NOT touched from here.
+#
+# There is exactly ONE entry, and it is derived from the caller, not guessed. The
+# Generate-context-pack button renders in exactly one phase, `awaiting_context_pack`
+# (`frontend/src/components/intake/NextStepBanner.tsx:270`), and that phase is derived
+# from `status === "validated_by_client" && !intake.context_pack_artifact_id`
+# (`frontend/src/lib/intake-phase.ts:55-58`). So `validated_by_client` is the only
+# status from which a human can legitimately launch this skill.
+#
+# `decomposed` is DELIBERATELY absent: re-running the skill on an already-decomposed
+# intake is a no-op the UI never offers (that status maps to `awaiting_research_start`),
+# and silently re-linking a fresh artifact would swap the pack a research run was
+# briefed on. Do not widen this map without a caller to point at.
+_CONTEXT_PACK_TRANSITIONS: dict[str, str] = {"validated_by_client": "decomposed"}
+
 
 def _now() -> datetime:
     """A timezone-aware UTC ``now`` for ``applied_at`` / ``completed_at``."""
     return datetime.now(timezone.utc)
+
+
+def _refusal_message(observed_status: str | None, artifact_id: Any) -> str:
+    """The sentence an operator reads in ``SkillRunProgress`` when the bump is refused.
+
+    Plain language, not a code: it names what was attempted, the status the intake is
+    ACTUALLY in, and the fact that the (already paid for) context pack was kept. This is
+    a refusal, not a crash — there is deliberately no traceback in it.
+    """
+    allowed = ", ".join(sorted(_CONTEXT_PACK_TRANSITIONS))
+    observed = observed_status if observed_status else "unknown (the intake is gone)"
+    return (
+        f"The context pack was generated but not applied: this intake is in status "
+        f"'{observed}', and a context pack may only be applied from '{allowed}'. "
+        f"The generated pack was kept as research artifact {artifact_id}."
+    )
 
 
 def _format_intake_markdown(client_name: str | None, answers: list[dict[str, Any]]) -> str:
@@ -92,9 +128,14 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
     READ: load the intake (its space + client name) and answers into a plain DTO. CALL:
     Claude builds the briefing markdown holding NO connection. WRITE: insert the
     ``research_artifacts`` row (``text_content`` + ``embed_status='pending'``, no object),
-    bump the intake to ``decomposed`` with ``context_pack_artifact_id``, and finalize the
-    ``skill_runs`` row (``succeeded`` + ``applied_at`` + token/cost). No object-store API is
-    touched (Phase 9 deferral — Pitfall 7).
+    bump the intake to ``decomposed`` with ``context_pack_artifact_id`` **only from an
+    allow-listed source status** (D-23.1-05 — ``_CONTEXT_PACK_TRANSITIONS``, enforced as a
+    compare-and-swap so the database does the comparison), and finalize the ``skill_runs``
+    row (``succeeded`` + ``applied_at`` + token/cost). No object-store API is touched
+    (Phase 9 deferral — Pitfall 7).
+
+    A refused transition is NOT an exception: the artifact is kept unlinked and the run
+    finalizes ``failed`` with a readable ``error_message``. It is never left ``running``.
     """
     model = get_settings().model_context_pack
     intake_uuid = uuid.UUID(str(intake_id))
@@ -167,10 +208,65 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
         session.add(artifact)
         session.flush()  # populate artifact.id before linking it onto the intake
 
-        # 2. Bump the intake to the in-scope ceiling + link the artifact.
-        IntakeRepository(session, identity).patch(
-            intake_id, status="decomposed", context_pack_artifact_id=artifact.id
-        )
+        # 2. Bump the intake to the in-scope ceiling + link the artifact — but ONLY from
+        #    an allow-listed source status, as ONE conditional UPDATE per candidate
+        #    (D-23.1-05). The comparison belongs to the DATABASE: a get()-then-patch(),
+        #    even in this transaction, is still read-then-write under READ COMMITTED.
+        #    The loop stops at the first hit, so widening the map later is a one-line
+        #    dict change and not a code change.
+        intake_repo = IntakeRepository(session, identity)
+        applied = False
+        for source_status, target_status in _CONTEXT_PACK_TRANSITIONS.items():
+            if intake_repo.patch_if(
+                intake_id,
+                expected={"status": source_status},
+                status=target_status,
+                context_pack_artifact_id=artifact.id,
+            ):
+                applied = True
+                break
+
+        if not applied:
+            # REFUSED. Do NOT raise: `run_context_pack` executes in a BackgroundTasks job
+            # AFTER the 202 has been sent, so nobody is listening, and routing this
+            # through `on_error` would roll back the artifact insert above.
+            #
+            # The artifact STAYS. By the time we get here the Claude call has been made
+            # and paid for; `research_artifacts` is append-only history that
+            # `GET /intakes/{id}/context-pack` already serves as {latest, history}, so an
+            # unlinked row is a shape the API already handles. Discarding a paid
+            # generation to punish a status mismatch costs money and teaches nobody
+            # anything — do not "clean this up".
+            #
+            # This re-read exists ONLY to name the observed status in the message. It is
+            # NOT the precondition — the precondition was the WHERE clause above.
+            observed = intake_repo.get(intake_id)
+            observed_status = None if observed is None else str(observed.status)
+            message = _refusal_message(observed_status, artifact.id)
+            # Finalize in THIS control flow, in THIS transaction. A bare early return
+            # would leave the run `running` forever (T-23.1-14): the orphan sweep would
+            # only clear it 30 minutes later, and once 23.1-12's partial unique index on
+            # (intake_id, skill) WHERE status='running' lands, that orphan would block
+            # every future context-pack run for this intake. `applied_at` is deliberately
+            # NOT set — nothing was applied (D-09).
+            SkillRunRepository(session, identity).patch(
+                run_id,
+                status="failed",
+                error_message=message,
+                output=f"Context pack kept as research artifact {artifact.id}.\n\n{raw}",
+                llm_model=model,
+                prompt_system=CONTEXT_PACK_SKILL_PROMPT,
+                prompt_user=dto["user_message"],
+                input_tokens=result["input_tokens"],
+                output_tokens=result["output_tokens"],
+                cost_estimate_usd=cost,
+                completed_at=_now(),
+            )
+            return {
+                "status": "failed",
+                "error_message": message,
+                "artifact_id": str(artifact.id),
+            }
 
         # 3. Finalize the skill_runs row (D-09: succeeded + applied_at marks finalized).
         SkillRunRepository(session, identity).patch(
