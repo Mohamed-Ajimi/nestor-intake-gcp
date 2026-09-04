@@ -114,3 +114,71 @@ dependency, and removing all three together would be the complete cleanup. Plan 
 explicitly forbids removing `@react-pdf/renderer`, and deleting a third file was out of its
 scope, so this is left for a follow-up. Note that the dependency removal belongs to the
 dependency phase deferred by `23.1-CONTEXT.md` § 9.
+
+---
+
+## DEF-23.1-05 — `test_no_run_research_route.py`'s live-route assertion is VACUOUSLY GREEN
+
+**Recorded by:** plan 23.1-09, task 2. **Measured, not inferred. Not fixed — test code is
+outside this plan's file scope and this plan changes no code.**
+
+`backend/tests/test_no_run_research_route.py:44` sets
+`_FORBIDDEN_PATH_TOKENS = ("run-research", "run_research", "tribunal", "research")` — note the
+bare `research` — and `test_app_exposes_no_deep_research_route` asserts NO path in
+`main.app.routes` carries one. The live app mounts SEVEN `/research` route paths
+(`research_routes.py:191, 249, 384, 528, 733, 793, 877`). The assertion should therefore be RED.
+
+It is not, because of **D-23.1-14** (§ 11 of `23.1-CONTEXT.md`): under fastapi 0.141.1
+`app.routes` holds 8 entries including lazy `_IncludedRouter` placeholders, so a naive flat loop
+sees ZERO of the 65 real routes. Measured here: `grep -c "_flatten_routes"
+backend/tests/test_no_run_research_route.py` -> **0**, i.e. the test uses exactly the naive loop
+D-23.1-14 proved returns nothing.
+
+So this test passes for the wrong reason. Two consequences:
+
+1. It is not evidence of anything. The prohibition CLAUDE.md now names is really carried by
+   `backend/scripts/ci_no_run_research.sh` (measured green at HEAD: `bash
+   scripts/ci_no_run_research.sh` from `backend/` -> `exit=0`), by
+   `test_scope_guard_run_research.py` which exercises that script both ways, and by
+   `test_no_run_research_route.py`'s SECOND test, the `intake_routes.py` source scan — which
+   DOES bite (re-implemented as a proxy here: 22 route-decorator paths seen, 0 offending).
+2. If a future plan fixes route flattening (e.g. by reusing `_flatten_routes` from
+   `test_client_surface_open.py`, as D-23.1-14 requires of plans 10 and 11), this test will turn
+   RED against the intended, live research router. **The fix is to narrow
+   `_FORBIDDEN_PATH_TOKENS` — drop the bare `research` — not to unmount the router.** The
+   file's own comment "no in-scope route path contains it" is now false and should be corrected
+   at the same time.
+
+## DEF-23.1-06 — `DEPLOY.md` Step 6's "no auth required" health-probe curls are unverified
+
+**Recorded by:** plan 23.1-09, task 1. **Deliberately NOT edited.**
+
+Task 1 corrected `DEPLOY.md:88` against `deploy-api.sh:157`. Fifty lines later, Step 6
+(`:136-148`) still instructs an operator to run `curl -sf "$API_URL/health"` under the headings
+"Liveness (no auth required)" and "Readiness (no auth; ...)". With
+`--no-allow-unauthenticated` those anonymous external curls would be rejected by Cloud Run's
+front end before reaching FastAPI — UNLESS a separate `allUsers` IAM binding exists on the
+service, which `--no-allow-unauthenticated` does not remove.
+
+Which of those is true cannot be settled from this tree: it needs
+`gcloud run services get-iam-policy nestor-pulse-api`, and `gcloud` is not on the agent shell's
+PATH. Editing the text on inference would have replaced one unverified claim with another, so
+it was left alone. **Resolve by reading the live IAM policy, then either correct Step 6 or add
+`--header "Authorization: Bearer $(gcloud auth print-identity-token)"` to those two curls.**
+
+The Services table (`:18-21`) and Step 4 (`:111-121`) were also checked: the table's
+"JWT-gated; health probes exempt" is about the FastAPI gate and is correct, and Step 4 makes no
+authentication claim at all, so neither conflicts with `deploy-worker.sh:175`'s
+`--no-allow-unauthenticated`.
+
+## DEF-23.1-07 — `AGENTS.md:63` and `docs/handbook/` still carry the corrections made here
+
+**Recorded by:** plan 23.1-09. **Out of file scope — extends DEF-23.1-03, does not replace it.**
+
+This plan fixed `CLAUDE.md:63` (the deleted `NestorBriefingPDF.tsx`) because `CLAUDE.md` was
+already in its `files_modified`. `AGENTS.md:63` and the `docs/handbook/` lines named by
+DEF-23.1-03 were NOT touched and remain stale.
+
+Additionally, the D-23.1-10 ceiling correction was applied to `CLAUDE.md` only. Any other doc
+stating that the flow ends at `decomposed` still asserts the superseded v1.0 scope. A doc-sync
+pass should carry both corrections outward.
