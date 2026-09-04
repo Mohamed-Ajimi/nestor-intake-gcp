@@ -60,6 +60,12 @@ Tests
   4.  test_warm_cache_proposal_never_generates (LIVE)
   5.  test_distinct_runs_proposals_do_not_serialize (LIVE)
   6.  test_proposal_without_cached_bundle_is_409 (LIVE)
+  7.  test_answer_single_run_happy_path (LIVE)
+  8.  test_answer_single_run_not_needs_input_is_409 (LIVE)
+  9.  test_concurrent_answers_queue_exactly_one_run (LIVE)
+  10. test_answer_comparison_only_answered_engines_get_children (LIVE)
+  11. test_concurrent_comparison_answers_replace_each_sibling_once (LIVE)
+  12. test_answer_unknown_run_is_404 (LIVE)
 
 The LIVE tests use the session-scoped testcontainers Postgres from
 `conftest.py`, which SKIPS cleanly (never errors) when Docker is unreachable --
@@ -177,6 +183,10 @@ async def _make_sessionmaker(async_engine):
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from nestor_pulse_sdk.db.base import Base
+    # Importing the models is what REGISTERS them on Base.metadata. Without this
+    # line create_all silently creates NOTHING when this file's first executed
+    # test has not already imported them -- an order-dependent green.
+    import nestor_pulse_sdk.db.models  # noqa: F401
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -442,3 +452,264 @@ async def test_proposal_without_cached_bundle_is_409(
         )
     assert len(recorded2) == 1
     assert result["proposal"]["focus_areas"] == ["market", "risk"]
+
+
+# ---------------------------------------------------------------------------
+# LIVE: the D-23.1-08 answer compare-and-swap
+# ---------------------------------------------------------------------------
+
+async def _call_answer(Session, set_tenant, tenant_id, user, run_id, hold=0.0,
+                       **answer_kw):
+    """Model ONE POST /api/runs/{id}/answer request -- its own session, one
+    transaction opened before the handler and COMMITTED after it, exactly the
+    contract `auth/deps.py::get_db_session` gives a route.
+
+    `hold` keeps the transaction OPEN for that many seconds after the handler
+    returns and before the commit. That is what makes the concurrency proofs
+    below bite rather than pass by luck: without it the two coroutines finish
+    one after the other and the second simply reads the first's committed
+    result, so a broken read-then-write would never be caught (measured: the
+    two-caller test passed 1-success/1-409 against the UNFIXED code). With a
+    hold on one caller, the rival's read lands while the first transaction is
+    still open -- it sees the last COMMITTED row version, `needs_input`, which
+    is precisely the window the D-23.1-08 race lives in.
+    """
+    from nestor_pulse_sdk.runs.api import answer_run
+    from nestor_pulse_sdk.runs.schemas import AnswerRequest
+
+    async with Session() as session:
+        async with session.begin():
+            await set_tenant(session, tenant_id)
+            result = await answer_run(
+                run_id, AnswerRequest(**answer_kw), user=user, session=session,
+            )
+            if hold:
+                await asyncio.sleep(hold)
+            return result
+
+
+async def _runs_by_status(Session, set_tenant, tenant_id):
+    """Return {status: [run rows]} for the tenant -- the DB truth, which is what
+    the concurrency assertions count. Inferring from the responses alone would
+    miss a second child that was written but not returned."""
+    from sqlalchemy import select
+
+    from nestor_pulse_sdk.db.models import Run
+
+    out: dict[str, list] = {}
+    async with Session() as session:
+        async with session.begin():
+            await set_tenant(session, tenant_id)
+            rows = (await session.execute(
+                select(Run).where(Run.tenant_id == tenant_id)
+            )).scalars().all()
+    for r in rows:
+        out.setdefault(r.status, []).append(r)
+    return out
+
+
+_HOLD = 0.6  # seconds the first caller keeps its transaction open
+
+
+async def _gather_answers(n, Session, set_tenant, tenant_id, user, run_id, **kw):
+    """Fire `n` concurrent answer calls; return (successes, exceptions).
+
+    Only the FIRST caller holds its transaction open (`hold=_HOLD`); the rest
+    run at full speed, so their reads and their writes both land inside the
+    first caller's open window. That is the genuine race.
+    """
+    results = await asyncio.gather(
+        *[
+            _call_answer(
+                Session, set_tenant, tenant_id, user, run_id,
+                hold=(_HOLD if i == 0 else 0.0), **kw,
+            )
+            for i in range(n)
+        ],
+        return_exceptions=True,
+    )
+    ok = [r for r in results if not isinstance(r, BaseException)]
+    errs = [r for r in results if isinstance(r, BaseException)]
+    return ok, errs
+
+
+async def test_answer_single_run_happy_path(async_engine, set_tenant) -> None:
+    """The externally visible contract is unchanged by the CAS: mode 'run', the
+    paused run ends `cancelled` with `completed_at` set, and exactly ONE queued
+    child carries the folded brief."""
+    Session = await _make_sessionmaker(async_engine)
+    tenant_id, _p, run_id = await _seed_run(
+        Session, set_tenant, status="needs_input", brief="Base brief."
+    )
+    user = _claims(tenant_id)
+
+    result = await _call_answer(
+        Session, set_tenant, tenant_id, user, run_id, answers="the answer",
+    )
+    assert result["mode"] == "run"
+    assert result["run"]["status"] == "queued"
+
+    by_status = await _runs_by_status(Session, set_tenant, tenant_id)
+    assert len(by_status.get("cancelled", [])) == 1
+    retired = by_status["cancelled"][0]
+    assert retired.id == run_id
+    assert retired.completed_at is not None, (
+        "the CAS must set completed_at, not just the status"
+    )
+    queued = by_status.get("queued", [])
+    assert len(queued) == 1, f"expected exactly one queued child, got {len(queued)}"
+    assert queued[0].id == uuid.UUID(result["run_id"])
+    assert "[CLARIFICATION ANSWERS]" in queued[0].brief
+    assert queued[0].brief.startswith("Base brief.")
+    assert "the answer" in queued[0].brief
+
+
+async def test_answer_single_run_not_needs_input_is_409(
+    async_engine, set_tenant
+) -> None:
+    """A run that is not awaiting clarification still 409s with the existing
+    message, and NO child run is created (counted, not inferred)."""
+    from fastapi import HTTPException
+
+    Session = await _make_sessionmaker(async_engine)
+    tenant_id, _p, run_id = await _seed_run(Session, set_tenant, status="completed")
+    user = _claims(tenant_id)
+
+    before = await _runs_by_status(Session, set_tenant, tenant_id)
+    before_total = sum(len(v) for v in before.values())
+
+    with pytest.raises(HTTPException) as ei:
+        await _call_answer(
+            Session, set_tenant, tenant_id, user, run_id, answers="a",
+        )
+    assert ei.value.status_code == 409
+    assert ei.value.detail == "run is not awaiting clarification"
+
+    after = await _runs_by_status(Session, set_tenant, tenant_id)
+    after_total = sum(len(v) for v in after.values())
+    assert after_total == before_total, (
+        f"a 409 must create no run: {before_total} -> {after_total}"
+    )
+
+
+async def test_concurrent_answers_queue_exactly_one_run(
+    async_engine, set_tenant
+) -> None:
+    """TWO concurrent answers on the SAME needs_input run: exactly ONE 201 and
+    one 409, and exactly ONE new queued run in the DATABASE.
+
+    Without the CAS both callers pass the read-then-check and both queue a
+    replacement -- a double spend AND a forked Art.12 audit chain (D-23.1-08).
+    """
+    from fastapi import HTTPException
+
+    Session = await _make_sessionmaker(async_engine)
+    tenant_id, _p, run_id = await _seed_run(
+        Session, set_tenant, status="needs_input", brief="Base brief."
+    )
+    user = _claims(tenant_id)
+
+    ok, errs = await _gather_answers(
+        2, Session, set_tenant, tenant_id, user, run_id, answers="the answer",
+    )
+
+    by_status = await _runs_by_status(Session, set_tenant, tenant_id)
+    queued = by_status.get("queued", [])
+    assert len(queued) == 1, (
+        f"expected EXACTLY ONE queued replacement run, got {len(queued)} -- "
+        "the conditional UPDATE is the admission ticket (D-23.1-08)"
+    )
+    assert len(ok) == 1, f"expected exactly one success, got {len(ok)}"
+    assert len(errs) == 1, f"expected exactly one refusal, got {len(errs)}"
+    assert isinstance(errs[0], HTTPException) and errs[0].status_code == 409
+    assert len(by_status.get("cancelled", [])) == 1
+    assert by_status["cancelled"][0].id == run_id
+
+
+async def test_answer_comparison_only_answered_engines_get_children(
+    async_engine, set_tenant
+) -> None:
+    """Comparison branch contract, unchanged: only the answered engines get
+    children, the unanswered sibling stays needs_input, and every child shares
+    the parent's comparison_id (answering one arm never restarts the others)."""
+    Session = await _make_sessionmaker(async_engine)
+    comparison_id = uuid.uuid4()
+    tenant_id, project_id, run_a = await _seed_run(
+        Session, set_tenant, status="needs_input", engine="tribunal",
+        comparison_id=comparison_id, brief="Arm A.",
+    )
+    _t, _p, run_b = await _seed_run(
+        Session, set_tenant, status="needs_input", engine="adk",
+        comparison_id=comparison_id, brief="Arm B.",
+        tenant_id=tenant_id, project_id=project_id,
+    )
+    user = _claims(tenant_id)
+
+    result = await _call_answer(
+        Session, set_tenant, tenant_id, user, run_a,
+        answers_by_engine={"tribunal": "only A answered"},
+    )
+    assert result["mode"] == "comparison"
+    assert result["comparison_id"] == str(comparison_id)
+    assert len(result["runs"]) == 1
+
+    by_status = await _runs_by_status(Session, set_tenant, tenant_id)
+    assert [r.id for r in by_status.get("cancelled", [])] == [run_a]
+    assert [r.id for r in by_status.get("needs_input", [])] == [run_b], (
+        "the unanswered arm must stay paused"
+    )
+    queued = by_status.get("queued", [])
+    assert len(queued) == 1
+    assert queued[0].engine == "tribunal"
+    assert queued[0].comparison_id == comparison_id
+    assert "only A answered" in queued[0].brief
+
+
+async def test_concurrent_comparison_answers_replace_each_sibling_once(
+    async_engine, set_tenant
+) -> None:
+    """Two concurrent callers answering BOTH arms: each paused sibling is
+    replaced AT MOST ONCE. Counted per engine on the DB, not on the responses.
+    """
+    Session = await _make_sessionmaker(async_engine)
+    comparison_id = uuid.uuid4()
+    tenant_id, project_id, run_a = await _seed_run(
+        Session, set_tenant, status="needs_input", engine="tribunal",
+        comparison_id=comparison_id, brief="Arm A.",
+    )
+    _t, _p, run_b = await _seed_run(
+        Session, set_tenant, status="needs_input", engine="adk",
+        comparison_id=comparison_id, brief="Arm B.",
+        tenant_id=tenant_id, project_id=project_id,
+    )
+    user = _claims(tenant_id)
+
+    await _gather_answers(
+        2, Session, set_tenant, tenant_id, user, run_a, answers="shared answer",
+    )
+
+    by_status = await _runs_by_status(Session, set_tenant, tenant_id)
+    queued = by_status.get("queued", [])
+    per_engine: dict[str, int] = {}
+    for r in queued:
+        per_engine[r.engine] = per_engine.get(r.engine, 0) + 1
+    assert per_engine == {"tribunal": 1, "adk": 1}, (
+        f"each paused arm must be replaced exactly once, got {per_engine}"
+    )
+    assert {r.id for r in by_status.get("cancelled", [])} == {run_a, run_b}
+    assert by_status.get("needs_input", []) == []
+
+
+async def test_answer_unknown_run_is_404(async_engine, set_tenant) -> None:
+    """An unknown run id is still a 404, ahead of any CAS."""
+    from fastapi import HTTPException
+
+    Session = await _make_sessionmaker(async_engine)
+    tenant_id, _p, _run_id = await _seed_run(Session, set_tenant)
+    user = _claims(tenant_id)
+
+    with pytest.raises(HTTPException) as ei:
+        await _call_answer(
+            Session, set_tenant, tenant_id, user, uuid.uuid4(), answers="a",
+        )
+    assert ei.value.status_code == 404
