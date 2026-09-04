@@ -85,9 +85,12 @@ bash infrastructure/cloud-run/build-and-push.sh
 bash infrastructure/cloud-run/deploy-api.sh
 ```
 
-- Deploys `nestor-pulse-api` with `--allow-unauthenticated` at the Cloud Run
-  level (JWT protection is in FastAPI; health probes need to reach the container
-  without authentication).
+- Deploys `nestor-pulse-api` with `--no-allow-unauthenticated` at the Cloud Run
+  level (`deploy-api.sh:157`) — Cloud Run itself rejects anonymous invocations, and
+  FastAPI adds its own JWT gate on top. Cloud Run's built-in startup/liveness
+  probes are internal to the service and unaffected by that IAM check; `/healthz`
+  and `/readyz` are exempt from the FastAPI JWT gate but still sit behind Cloud
+  Run's IAM check.
 - Cloud SQL socket: `/cloudsql/project-cb01b861-cb4a-438d-b9a:europe-west1:nestor-prod-pg`
 - Secrets mounted: `DATABASE_URL`, `ANTHROPIC_API_KEY` (from `Nestor_Claude`),
   `GOOGLE_API_KEY` (from `Nestor_Gemini`), `OPENAI_API_KEY` (from `Nestor_OpenAI`),

@@ -30,3 +30,12 @@ Thumbs.db
 
 # GSD planning docs (local-only)
 .planning/
+
+# terraform state (NEVER commit - carries resource ids and can carry secrets)
+# State is intended to live in the GCS backend described in infra/providers.tf (the
+# commented-out `backend "gcs"` block); creating that bucket and running
+# `terraform init -migrate-state` is an operator step, not an agent one. Until that
+# happens state is LOCAL, and this ignore is the guard for that window.
+*.tfstate
+*.tfstate.*
+.terraform/
