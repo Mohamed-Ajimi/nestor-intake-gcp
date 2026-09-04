@@ -54,7 +54,11 @@ from app.auth.dependencies import get_current_identity
 from app.auth.gates import superadmin_gate
 from app.auth.identity import Identity
 from app.core.config import get_settings
-from app.db.ai_session import IntakeNotInScopeError, create_running_skill_run
+from app.db.ai_session import (
+    ActiveSkillRunExistsError,
+    IntakeNotInScopeError,
+    create_running_skill_run,
+)
 
 # The AI feature router. It inherits Depends(get_current_identity) from protected_router
 # (mounted UNDER it in app/main.py) and carries ONE router-level Depends(superadmin_gate) of
@@ -88,6 +92,20 @@ def _dispatch_skill_run(identity: Identity, intake_id: str, skill: str, llm_mode
     scope (cross-tenant/missing -> ``IntakeNotInScopeError`` -> 404, D-07), inserts the
     ``running`` row (D-09), and releases the connection. A null-space user surfaces as 403
     (the default-deny ``PermissionError`` from ``tenant_session``).
+
+    THREE outcomes, and all six dispatching routes inherit every one of them because they
+    all come through here:
+
+    * ``404`` — cross-tenant / missing intake (existence hidden, D-07).
+    * ``403`` — null-space user default-deny (D-04).
+    * ``409`` — a run of this skill is already in flight for this intake (COST-01 /
+      D-23.1-04). The arbiter is migration 0014's partial unique index, NOT an app-level
+      pre-check, which D-23.1-04 rejects by name because it races: two concurrent
+      dispatches both read "nothing is running" and both insert, and the operator pays
+      for two Claude generations without the UI ever saying so.
+
+    The three ``except`` arms are disjoint types (``LookupError`` / ``OSError`` /
+    ``RuntimeError``), so none can shadow another whatever their order.
     """
     try:
         run_id = create_running_skill_run(
@@ -99,6 +117,18 @@ def _dispatch_skill_run(identity: Identity, intake_id: str, skill: str, llm_mode
     except PermissionError:
         # Null-space user default-deny (D-04) — the only 403 on this path.
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No space — not authorized")
+    except ActiveSkillRunExistsError as exc:
+        # A readable sentence, never the driver's message: that one names the index and
+        # the SQLSTATE, which is information disclosure and reads to the operator like a
+        # crash rather than like "that run is already going" (T-23.1-51). Plain
+        # HTTPException with a string detail, like the two arms above — app/api/errors.py
+        # reserves CodedError for the CURATED user-facing set, and this router is
+        # operator-only.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"A '{exc.skill}' run is already in progress for this intake. "
+            "Wait for it to finish before starting another.",
+        )
     return str(run_id)
 
 

@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.identity import Identity
@@ -57,6 +58,57 @@ class IntakeNotInScopeError(LookupError):
     to a 404 (403 is reserved for the null-space default-deny, which surfaces as
     ``PermissionError`` from :func:`tenant_session`).
     """
+
+
+#: The partial unique index migration 0014 creates:
+#: ``UNIQUE (intake_id, skill) WHERE status = 'running'``. Named here so the ``except``
+#: below can tell OUR violation from any other integrity problem. The literal is repeated
+#: in ``app/db/models/skill_run.py``'s ``__table_args__`` and in the migration; ``alembic
+#: check`` is what keeps those two in step, and ``tests/test_ai_dedup.py`` pins all three.
+_ONE_RUNNING_INDEX = "uq_skill_runs_one_running_per_intake_skill"
+
+
+class ActiveSkillRunExistsError(RuntimeError):
+    """A run of this skill is already in flight for this intake (route → 409, D-23.1-04).
+
+    Raised by :func:`create_running_skill_run` when the INSERT trips migration 0014's
+    partial unique index. Carries the ``skill`` so ``ai_routes._dispatch_skill_run`` can
+    build a readable sentence without re-deriving it — and so the DRIVER's message, which
+    names the index and the SQLSTATE, never has to be shown to anyone (T-23.1-51).
+
+    Deliberately NOT a pre-check. D-23.1-04 rejects "is one already running?" by name: two
+    concurrent dispatches both read "no" and both insert, and the operator pays for two
+    Claude generations. The database serializes the inserts; this exception is only the
+    translation of its refusal.
+    """
+
+    def __init__(self, skill: str) -> None:
+        super().__init__(f"a run of {skill!r} is already in progress for this intake")
+        self.skill = skill
+
+
+def _is_one_running_violation(exc: IntegrityError) -> bool:
+    """True only for a 0014 unique violation — never for any OTHER integrity error.
+
+    Scoped on purpose: a genuine FK violation (an intake deleted between the scope check
+    and the insert, say) or a NOT NULL violation must surface as itself, not be reported
+    to the operator as "already running" (T-23.1-53). The discriminator is the CONSTRAINT
+    NAME, which is exact.
+
+    pg8000 — the driver in both the test container and Cloud Run — hands the server's
+    error fields back as a dict in ``exc.orig.args[0]``, where ``"n"`` is the constraint
+    name and ``"C"`` the SQLSTATE. A driver that reports no structured fields falls
+    through to a substring check on the rendered message, which is weaker but never
+    broader: it still requires the index name to appear.
+    """
+    orig = getattr(exc, "orig", None)
+    for arg in getattr(orig, "args", ()) or ():
+        if isinstance(arg, dict):
+            if arg.get("n") == _ONE_RUNNING_INDEX:
+                return True
+            if arg.get("C") == "23505" and _ONE_RUNNING_INDEX in str(arg.get("M", "")):
+                return True
+    return _ONE_RUNNING_INDEX in str(orig)
 
 
 def _engine_and_space(identity: Identity) -> tuple[Any, Any]:
@@ -168,6 +220,14 @@ def create_running_skill_run(
     ``space_id`` is identity-derived via the repo (TENANT-02): the user path uses
     :meth:`TenantRepository.create` (space from the verified Identity); the superadmin path
     (no own space) uses :meth:`create_in_space` against the intake's OWN space.
+
+    THIRD outcome (COST-01 / D-23.1-04): if a run of this skill is ALREADY ``running`` for
+    this intake, migration 0014's partial unique index refuses the insert and this raises
+    :class:`ActiveSkillRunExistsError` -> the route returns ``409``. The check is the
+    DATABASE's, never this function's: an app-level "is one already running?" query races,
+    and the two racing inserts are two paid Claude generations. The refused transaction
+    rolls back on the ``with`` block's exit, so no half-written row and no poisoned session
+    survive (the session is never reused after the failed flush).
     """
     with tenant_session(identity) as session:
         intake = IntakeRepository(session, identity).get(intake_id)
@@ -183,12 +243,22 @@ def create_running_skill_run(
             prompt_system=prompt_system,
             prompt_user=prompt_user,
         )
-        if identity.role == "superadmin":
-            # No own space — write into the intake's space (audited superadmin path).
-            run = run_repo.create_in_space(intake.space_id, **values)
-        else:
-            run = run_repo.create(**values)  # space_id injected from Identity
-        # create() already flushes to populate the server-side id.
+        # create()/create_in_space() FLUSH to populate the server-side id — which is
+        # exactly where migration 0014's partial unique index fires. The try wraps ONLY
+        # the insert+flush: everything above it (the scope check) has its own error, and
+        # nothing below it can raise an IntegrityError.
+        try:
+            if identity.role == "superadmin":
+                # No own space — write into the intake's space (audited superadmin path).
+                run = run_repo.create_in_space(intake.space_id, **values)
+            else:
+                run = run_repo.create(**values)  # space_id injected from Identity
+        except IntegrityError as exc:
+            if not _is_one_running_violation(exc):
+                # Some OTHER integrity problem (FK, NOT NULL, ...). Do NOT dress it up as
+                # "already running" — that would hide a real defect behind a 409.
+                raise
+            raise ActiveSkillRunExistsError(skill) from exc
         return run.id
 
 
