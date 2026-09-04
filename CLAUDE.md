@@ -72,7 +72,7 @@ isolated to its own space, and with the legacy Supabase system fully retired.
 - Rules: react-hooks recommended, react-refresh warnings; `@typescript-eslint/no-unused-vars` disabled
 - `@react-pdf/renderer` 4.5 — PDF generation from React components (`frontend/src/components/intake/ContextPackPDF.tsx`; `NestorBriefingPDF.tsx` was deleted in phase 23.1)
 - jsPDF 4.2 — programmatic PDF export (`frontend/src/components/intake/ContextPackBlock.tsx`)
-- react-markdown 10.1 + remark-gfm + rehype-raw — markdown rendering in admin panels
+- react-markdown 10.1 + remark-gfm — markdown rendering in admin panels (`rehype-raw` was REMOVED in phase 23.1: it rendered unsanitised AI/DB-controlled HTML; see DEF-23.1-01 before reinstating anything like it)
 - recharts 2.15 — data visualisation
 - date-fns 4.1 (with `nl` locale) — Dutch locale date formatting throughout
 - embla-carousel-react 8.6
