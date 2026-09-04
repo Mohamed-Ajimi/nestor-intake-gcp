@@ -500,8 +500,8 @@ def test_the_cursor_column_exists_live_and_is_a_nullable_bigint(engine):
     )
 
 
-def test_the_intake_alembic_head_is_0014(engine):
-    """The INTAKE line's version table is at 0014 after ``alembic upgrade head``.
+def test_the_intake_alembic_head_is_0015(engine):
+    """The INTAKE line's version table is at 0015 after ``alembic upgrade head``.
 
     This is the direct statement the build log does not print. It also pins the line:
     the tribunal line's own head lives in a DIFFERENT version table
@@ -509,10 +509,11 @@ def test_the_intake_alembic_head_is_0014(engine):
     untouched by the intake line's migrations.
 
     Was ``0013`` until plan 23.1-12 added 0014 (the single-running-skill-run partial
-    unique index). The literal is a DELIBERATE hardcode, not an oversight: it is what
-    turns "a migration landed" into a red test, so an unintended or half-applied head
-    cannot pass silently. Every revision on this line therefore updates this one literal
-    and this function's name — plan 23.1-13 does it again for 0015.
+    unique index), then ``0014`` until plan 23.1-13 added 0015 (dropping the dead
+    ``skill_runs.started_at``). The literal is a DELIBERATE hardcode, not an oversight:
+    it is what turns "a migration landed" into a red test, so an unintended or
+    half-applied head cannot pass silently. Every revision on this line therefore
+    updates this one literal and this function's name — the next one does it again.
     """
     from sqlalchemy import text
 
@@ -524,6 +525,6 @@ def test_the_intake_alembic_head_is_0014(engine):
             ).all()
         }
 
-    assert heads == {"0014"}, (
-        f"the intake alembic line must be at exactly 0014, found {heads}"
+    assert heads == {"0015"}, (
+        f"the intake alembic line must be at exactly 0015, found {heads}"
     )

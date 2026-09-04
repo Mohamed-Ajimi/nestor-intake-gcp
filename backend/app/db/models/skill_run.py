@@ -67,9 +67,11 @@ class SkillRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    # NOTE there is deliberately no ``started_at`` here. It existed from 0001 and was
+    # never written by anything; migration 0015 (plan 23.1-13) dropped it. ``created_at``
+    # above IS the run's start timestamp — Postgres now() at INSERT, NOT NULL — and is
+    # what the intake page's elapsed clock reads. Only ``research_runs.started_at`` is a
+    # real, written column; it is a different column on a different table.
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

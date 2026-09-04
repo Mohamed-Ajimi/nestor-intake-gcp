@@ -175,9 +175,10 @@ class SkillRunView(BaseModel):
     projected NO start timestamp at all, so the frontend synthesised one with
     ``new Date()`` for any run still in flight (both ``applied_at`` and ``completed_at``
     are null while running). That made the intake page's AI skill-run elapsed clock restart
-    from 00:00 on every mount AND on every SSE event. NOTE ``skill_runs.started_at`` is a
-    DEAD column — nothing in this codebase ever writes it (only ``research_runs.started_at``
-    is written), so it is deliberately NOT the field projected here.
+    from 00:00 on every mount AND on every SSE event. There is no rival candidate to pick
+    by mistake: ``skill_runs`` once carried a ``started_at`` that nothing ever wrote, and
+    migration 0015 (phase 23.1) DROPPED it. Only ``research_runs.started_at`` — a different
+    column on a different table — is a real, written start timestamp.
     """
 
     id: str
