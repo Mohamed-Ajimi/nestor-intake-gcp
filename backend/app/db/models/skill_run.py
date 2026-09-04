@@ -11,7 +11,17 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,4 +81,19 @@ class SkillRun(Base):
         Index("ix_skill_runs_space_id", "space_id"),
         Index("idx_skill_runs_space_intake", "space_id", "intake_id"),
         Index("idx_skill_runs_space_status", "space_id", "status"),
+        # COST-01 / D-23.1-04 — at most ONE running run per (intake, skill). The
+        # arbiter is the DATABASE, not an app-level "is one already running?" check,
+        # which races: two concurrent dispatches both read "no" and both insert, and
+        # the operator pays for two Claude generations. PARTIAL on status='running'
+        # so terminal rows stay unconstrained and a re-run after completion is legal.
+        # The name is byte-identical to migration 0014's — a mismatch here is
+        # invisible until a downgrade or a later autogenerate, and `alembic check`
+        # is what pins it.
+        Index(
+            "uq_skill_runs_one_running_per_intake_skill",
+            "intake_id",
+            "skill",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
     )
