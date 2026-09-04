@@ -515,7 +515,16 @@ async def test_heartbeat_loop_writes_then_stops_on_cancel(worker_db, monkeypatch
         status="running",
         started_min_ago=10,
         hb_min_ago=60,
-        worker_id="worker-under-test",
+        # THE SEED MUST BE THIS PROCESS (23.1-05, D-23.1-06). `_HEARTBEAT_SQL`
+        # now also gates on `worker_id = :wid`, bound to the module WORKER_ID, so
+        # a literal placeholder id here would seed the DISPLACED-worker shape --
+        # a run this process does not own -- and the loop would correctly refuse
+        # to write, failing this test for the right reason. In production the
+        # owner's id is exactly what CLAIM_SQL stamps, so this is also the only
+        # shape a live heartbeat ever sees. The two properties under test (the
+        # loop advances heartbeat_at; a cancel stops it) are unchanged.
+        # The displaced case is proven in test_run_ownership_fence.py.
+        worker_id=worker.WORKER_ID,
     )
     seeded = (await _read_run(sessionmaker, run_id))["heartbeat_at"]
 

@@ -195,8 +195,23 @@ async def claim_one(session: AsyncSession) -> Optional[dict]:
 # instant a cancel or a terminal write moves the row off 'running', this UPDATE
 # matches zero rows and the run's liveness stops being asserted -- so a heartbeat
 # task that somehow outlives its run cannot keep a finished run looking alive.
+#
+# The `AND worker_id = :wid` guard is the D-23.1-06 OWNERSHIP FENCE, and it is a
+# SECOND predicate, never a replacement: without the status clause a cancel would
+# stop winning, and without the ownership clause a displaced-but-alive worker
+# keeps asserting liveness on a run it has already LOST to a stale reclaim --
+# which suppresses the very reclaim that exists to rescue that run, the mitigation
+# defeating itself.
+#
+# :wid IS BOUND TO THE MODULE `WORKER_ID` -- THIS PROCESS -- AND NEVER TO
+# `claimed["worker_id"]`. At claim time the two are equal, so no happy-path test
+# can tell them apart. They diverge exactly where it matters: after a reclaim the
+# ROW carries the new owner's id while `claimed["worker_id"]` is a stale copy this
+# process is still holding in memory, so fencing against that copy fences against
+# nothing at all.
 _HEARTBEAT_SQL = text(
-    "UPDATE run SET heartbeat_at = NOW() WHERE id = :id AND status = 'running'"
+    "UPDATE run SET heartbeat_at = NOW() "
+    "WHERE id = :id AND status = 'running' AND worker_id = :wid"
 )
 
 
@@ -219,6 +234,11 @@ async def _heartbeat_loop(run_id) -> None:
 
     The interval is read from the module global on every iteration so it can be
     driven sub-second by a test (the env var is parsed once at import).
+
+    `wid` binds the module `WORKER_ID` (this process), which is what makes the
+    D-23.1-06 fence above bite: once a stale reclaim has handed the row to another
+    worker, this loop's UPDATE matches zero rows and quietly stops asserting a
+    liveness it is no longer entitled to assert.
     """
     sessionmaker = get_sessionmaker()
     while True:
@@ -226,7 +246,10 @@ async def _heartbeat_loop(run_id) -> None:
         try:
             async with sessionmaker() as session:
                 async with session.begin():
-                    await session.execute(_HEARTBEAT_SQL, {"id": str(run_id)})
+                    await session.execute(
+                        _HEARTBEAT_SQL,
+                        {"id": str(run_id), "wid": WORKER_ID},
+                    )
         except Exception:  # noqa: BLE001
             log.warning("run_heartbeat_failed", run_id=str(run_id), exc_info=True)
 
