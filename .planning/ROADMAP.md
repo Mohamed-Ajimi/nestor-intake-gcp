@@ -691,37 +691,37 @@ Plans:
 Plans:
 **Wave 1** *(ten file-disjoint plans; no dependencies)*
 
-- [ ] 23.1-01-PLAN.md — wave 1 — D-23.1-01: promote `_superadmin_gate` into `app/auth/gates.py`; `research_routes.py` imports it; its denial suite stays green untouched
-- [ ] 23.1-02-PLAN.md — wave 1 — the client stay-open pin suite for all ten client routes, PROVED non-vacuous by applying the gate to `GET /skill-runs` and observing RED
-- [ ] 23.1-03-PLAN.md — wave 1 — D-23.1-03: space deactivation cascades to its members (IdP disable + revoke); reactivate restores only what the cascade took down
-- [ ] 23.1-04-PLAN.md — wave 1 — D-23.1-05: `patch_if` compare-and-swap; context-pack can only reach `decomposed` from `validated_by_client`, else the run finalizes `failed`
-- [ ] 23.1-05-PLAN.md — wave 1 — D-23.1-06: `worker_id` fence on the tribunal heartbeat and both terminal writes
-- [ ] 23.1-06-PLAN.md — wave 1 — D-23.1-07 + D-23.1-08: advisory-locked report-proposal generation, compare-and-swap on `POST /answer`, and a `brief` max_length
-- [ ] 23.1-07-PLAN.md — wave 1 — CONTEXT § 6: thread identity explicitly through the finalize writers, delete `_ACTIVE_IDENTITY`, and move the pool-check accessor into the db seam (turns the red D-03 guard green)
-- [ ] 23.1-08-PLAN.md — wave 1 — frontend hygiene: uninstall `rehype-raw`, delete two dead components, one `StatusPill`
-- [ ] 23.1-09-PLAN.md — wave 1 — D-23.1-10: gitignore tfstate, correct DEPLOY.md against `deploy-api.sh`, reconcile CLAUDE.md's `decomposed` ceiling with the live research router
-- [ ] 23.1-16-PLAN.md — wave 1 — D-23.1-13: `_find_membership` filters on NO status in either arm, so login-sync mints claims for a `deactivated`/`space_deactivated` member; add the active allow-list to both arms so a partial cascade cannot leave a member authenticating
+- [x] 23.1-01-PLAN.md — wave 1 — D-23.1-01: promote `_superadmin_gate` into `app/auth/gates.py`; `research_routes.py` imports it; its denial suite stays green untouched
+- [x] 23.1-02-PLAN.md — wave 1 — the client stay-open pin suite for all ten client routes, PROVED non-vacuous by applying the gate to `GET /skill-runs` and observing RED
+- [x] 23.1-03-PLAN.md — wave 1 — D-23.1-03: space deactivation cascades to its members (IdP disable + revoke); reactivate restores only what the cascade took down
+- [x] 23.1-04-PLAN.md — wave 1 — D-23.1-05: `patch_if` compare-and-swap; context-pack can only reach `decomposed` from `validated_by_client`, else the run finalizes `failed`
+- [x] 23.1-05-PLAN.md — wave 1 — D-23.1-06: `worker_id` fence on the tribunal heartbeat and both terminal writes
+- [x] 23.1-06-PLAN.md — wave 1 — D-23.1-07 + D-23.1-08: advisory-locked report-proposal generation, compare-and-swap on `POST /answer`, and a `brief` max_length
+- [x] 23.1-07-PLAN.md — wave 1 — CONTEXT § 6: thread identity explicitly through the finalize writers, delete `_ACTIVE_IDENTITY`, and move the pool-check accessor into the db seam (turns the red D-03 guard green)
+- [x] 23.1-08-PLAN.md — wave 1 — frontend hygiene: uninstall `rehype-raw`, delete two dead components, one `StatusPill`
+- [x] 23.1-09-PLAN.md — wave 1 — D-23.1-10: gitignore tfstate, correct DEPLOY.md against `deploy-api.sh`, reconcile CLAUDE.md's `decomposed` ceiling with the live research router
+- [x] 23.1-16-PLAN.md — wave 1 — D-23.1-13: `_find_membership` filters on NO status in either arm, so login-sync mints claims for a `deactivated`/`space_deactivated` member; add the active allow-list to both arms so a partial cascade cannot leave a member authenticating
 
 **Wave 2** *(blocked on 23.1-01 + 23.1-02)*
 
-- [ ] 23.1-10-PLAN.md — wave 2 — D-23.1-02: gate the eight intake operator verbs, with denial, no-side-effect and superadmin-still-works arms
-- [ ] 23.1-11-PLAN.md — wave 2 — D-23.1-02: ONE router-level gate on `ai_router`, with zero-provider-call and zero-new-skill_runs assertions
+- [x] 23.1-10-PLAN.md — wave 2 — D-23.1-02: gate the eight intake operator verbs, with denial, no-side-effect and superadmin-still-works arms
+- [x] 23.1-11-PLAN.md — wave 2 — D-23.1-02: ONE router-level gate on `ai_router`, with zero-provider-call and zero-new-skill_runs assertions
 
 **Wave 3** *(blocked on 23.1-11 — shares `ai_routes.py`)*
 
-- [ ] 23.1-12-PLAN.md — wave 3 — D-23.1-04: alembic 0014 partial unique index on `skill_runs (intake_id, skill) WHERE status='running'`, duplicate pre-flight, and the 409 translation
+- [x] 23.1-12-PLAN.md — wave 3 — D-23.1-04: alembic 0014 partial unique index on `skill_runs (intake_id, skill) WHERE status='running'`, duplicate pre-flight, and the 409 translation
 
 **Wave 4** *(blocked on 23.1-12 — alembic linearity)*
 
-- [ ] 23.1-13-PLAN.md — wave 4 — alembic 0015: drop the dead `skill_runs.started_at` column
+- [x] 23.1-13-PLAN.md — wave 4 — alembic 0015: drop the dead `skill_runs.started_at` column
 
 **Wave 5** *(blocked on 23.1-07 + 23.1-13 — D-23.1-09 lands CI LAST)*
 
-- [ ] 23.1-14-PLAN.md — wave 5 — fix the three remaining red non-integration tests, widen `cloudbuild.test.yaml` with a collection assertion, add tsc+vitest to `frontend/cloudbuild.yaml`; lint deliberately deferred (DEF-23.1-02)
+- [x] 23.1-14-PLAN.md — wave 5 — fix the three remaining red non-integration tests, widen `cloudbuild.test.yaml` with a collection assertion, add tsc+vitest to `frontend/cloudbuild.yaml`; lint deliberately deferred (DEF-23.1-02)
 
 **Wave 6** *(blocked on 23.1-14)*
 
-- [ ] 23.1-15-PLAN.md — wave 6 — `23.1-UAT.md` operator hand-off, the tribunal Cloud Build gate, the deploy, and LIVE observation of the 404/200 boundary
+- [~] 23.1-15-PLAN.md (doc written; tasks 2-4 BLOCKED on operator) — wave 6 — `23.1-UAT.md` operator hand-off, the tribunal Cloud Build gate, the deploy, and LIVE observation of the 404/200 boundary
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 

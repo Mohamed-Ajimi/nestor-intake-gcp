@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-03T16:04:49.589Z"
-last_activity: "2026-09-03 -- Phase 23.1 INSERTED and PLANNED (15 plans, 6 waves, committed 2ca7336) after an external audit was re-verified against 047dcfe: 6 of 9 findings held, 3 were miscalibrated, 1 was unsupported, and the authorization hole proved WIDER than reported (9 ungated operator verbs, not 2). Measured backend baseline: 4 failed / 450 passed / 1 skipped. ZERO code changed, ZERO spend, no deploy. Tree still FULLY DEPLOYED and the 2026-09-01 engine models have STILL never executed a run."
+last_updated: "2026-09-04T13:06:04.134Z"
+last_activity: "2026-09-04 -- Phase 23.1 EXECUTED: all 15 plans landed, backend suite 599 passed / 2 skipped / ZERO failed (was 4 failed / 450 passed at 047dcfe). SEC-01 measured closed: 8 operator verbs and 7 AI routes went 200/202 -> 404 for a role=user caller, while the 10 client routes stay 200 and test_client_surface_open.py is byte-unchanged. Migrations 0014 + 0015 written and both directions exercised locally, NOT YET APPLIED to prod. ZERO provider spend, NO deploy, NO run. Every one of the 15 plans carried at least one false acceptance criterion; 7 CONTEXT corrections landed during execution. Blocking on the operator: deploy, both migrations, 2 Cloud Build runs, the tribunal CI gap (37 of 37 tests gate nothing), tfstate bucket, app_superadmin rotation decision."
 progress:
   total_phases: 21
   completed_phases: 15
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 23.1 (platform-hardening-authorization-boundary-space-deactivation) — PLANNING
-Plan: 0 of 0 (not planned yet)
+Phase: 23.1 (platform-hardening-authorization-boundary-space-deactivation) — EXECUTED, awaiting operator
+Plan: 15 of 15 complete (plan 15 at a blocking human-verify checkpoint)
 Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
 **NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.
 **No run has been triggered and no measurement exists.** What is done is the credential-free
