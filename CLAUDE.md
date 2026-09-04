@@ -9,11 +9,13 @@ validated set of research questions and a context pack (the flow that runs *befo
 engine). This project re-platforms the entire pre-research flow off its original third-party
 **Supabase** build and onto **Google Cloud Platform** (FastAPI on Cloud Run, Cloud SQL, Identity
 Platform, GCS), while introducing real per-tenant isolation ("spaces"), proper authentication, and a
-multi-language UI. The deep-research stage (Tribunal) is explicitly a separate track and out of scope
-here — this flow stops at status `decomposed`.
+multi-language UI. The deep-research stage (Tribunal) was a separate track, out of scope for
+milestone v1.0 — that flow stopped at status `decomposed`. Milestone v1.1 (Tribunal Integration)
+has since built, deployed and wired it in; see the Scope ceiling constraint below.
 
 **Core Value:** A logged-in superadmin or client user can run an intake end-to-end on GCP — from form submission
-through AI skill application to a validated, decomposed context pack — with each client's data fully
+through AI skill application to a validated, decomposed context pack (milestone v1.0's end point;
+v1.1 continues from there into Tribunal research and delivery) — with each client's data fully
 isolated to its own space, and with the legacy Supabase system fully retired.
 
 ### Constraints
@@ -22,9 +24,17 @@ isolated to its own space, and with the legacy Supabase system fully retired.
 - **Backend language**: Python / FastAPI — per project direction.
 - **Frontend**: Existing React 19 + TanStack Router/Query + shadcn app retained; only data + auth layers swapped. `frontend/src/components/ui/` (shadcn) not modified directly.
 - **Security**: No cross-tenant access. Tenant isolation enforced server-side at the API layer; the broken-RLS class of bug must not recur. All writes mediated by the backend.
-- **Scope ceiling**: Flow ends at `decomposed`. `run-research` must never be invoked from the new frontend/backend credentials.
+- **Scope ceiling (milestone v1.0 — SUPERSEDED by v1.1)**: the v1.0 re-platform flow
+  ended at `decomposed`. Milestone v1.1 (Tribunal Integration) deliberately extends it
+  through `in_research` -> `delivered` via the GCP-native Tribunal engine, mounted at
+  `backend/app/main.py:152`.
+- **Still binding**: the LEGACY Supabase `run-research` edge function must never be
+  invoked from the new frontend/backend credentials. This is a different thing from the
+  GCP Tribunal path and the prohibition is unchanged.
+- **Do not unmount the research router**: `research_router` is mounted at `backend/app/main.py:152` and must not be removed or unmounted (D-23.1-10). The still-binding prohibition above is enforced by `backend/tests/test_no_run_research_route.py` and `backend/tests/test_scope_guard_run_research.py` — keep it when editing the ceiling around it.
 - **Cutover model**: Big-bang — Supabase is retired once the GCP path is validated end-to-end (no long-lived dual-run).
 - **No test coverage today**: The existing codebase has zero automated tests — a safety net must be built alongside the migration.
+- *Corrected 2026-09-04 (phase 23.1, D-23.1-10 — operator ruling 2026-09-03): the `decomposed` ceiling above described milestone v1.0 only. Tribunal is built, deployed and live — `tribunal-api-00023-bc6` / `tribunal-worker-00009-fkm` at tag `20260901-134253`, per `.planning/STATE.md`.*
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->
@@ -60,7 +70,7 @@ isolated to its own space, and with the legacy Supabase system fully retired.
 - ESLint 9.32 + typescript-eslint 8.56 — configured in `frontend/eslint.config.js`
 - Prettier 3.7 via `eslint-plugin-prettier`
 - Rules: react-hooks recommended, react-refresh warnings; `@typescript-eslint/no-unused-vars` disabled
-- `@react-pdf/renderer` 4.5 — PDF generation from React components (`frontend/src/components/intake/ContextPackPDF.tsx`, `NestorBriefingPDF.tsx`)
+- `@react-pdf/renderer` 4.5 — PDF generation from React components (`frontend/src/components/intake/ContextPackPDF.tsx`; `NestorBriefingPDF.tsx` was deleted in phase 23.1)
 - jsPDF 4.2 — programmatic PDF export (`frontend/src/components/intake/ContextPackBlock.tsx`)
 - react-markdown 10.1 + remark-gfm + rehype-raw — markdown rendering in admin panels
 - recharts 2.15 — data visualisation
@@ -278,7 +288,7 @@ isolated to its own space, and with the legacy Supabase system fully retired.
 ```
 - Transitions triggered by: RPCs (`submit_intake`), admin direct status updates (PostgREST PATCH), Postgres triggers (`tg_bump_to_in_research`, `tg_bump_to_delivered`)
 - Documented fully in `docs/BACKEND-MAP.md`
-- The re-platform scope ends at `decomposed`; `in_research` onward involves run-research (Tribunal, out of scope)
+- The v1.0 re-platform scope ended at `decomposed`; milestone v1.1 extends the flow through `in_research` -> `delivered`. The research surface is `backend/app/api/research_routes.py`, mounted at `backend/app/main.py:152`, and the engine lives under `tribunal/nestor_pulse_sdk/`. (The legacy Supabase `run-research` edge function is a different thing and remains prohibited — see the Scope ceiling constraint.)
 ## Entry Points
 - Location: `frontend/src/routes/intake.$token.tsx`
 - Triggers: Client opens emailed link `/intake/{client_intake_token}`
