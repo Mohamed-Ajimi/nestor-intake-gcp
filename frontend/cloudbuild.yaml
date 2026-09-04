@@ -1,4 +1,5 @@
-# cloudbuild.yaml — build + push the Nestor frontend SSR image (INFRA-05).
+# cloudbuild.yaml — typecheck + unit-test + build/push the Nestor frontend SSR image
+# (INFRA-05; the test steps added in phase 23.1, plan 14).
 #
 # WHY a config (Pitfall 2): `gcloud builds submit --tag IMAGE` cannot pass
 # `--build-arg`, and the frontend REQUIRES build-time public config (Vite inlines
@@ -11,6 +12,42 @@
 # DELIBERATELY NO Supabase substitution/build-arg anywhere here (D-08/D-09) — the
 # Dockerfile's D-11 bundle guard fails the build if a Supabase signature leaks.
 #
+# ---------------------------------------------------------------------------
+# WHY THERE IS NO LINT STEP — DEF-23.1-02. Do not "just add one".
+# ---------------------------------------------------------------------------
+# The package.json `lint` script (`eslint .`) is RED at HEAD, and by far the largest
+# part of it is pre-existing formatting drift, not CRLF. MEASURED 2026-09-04 at 6f7da8b:
+#
+#   * On a TRUE LF tree (`git -c core.autocrlf=false archive HEAD`, linted inside
+#     node:22-slim — i.e. what Cloud Build would actually see):
+#         6540 errors + 36 warnings = 6576 problems, across 91 files
+#       of which  6480  prettier/prettier   (99.1% of all errors)
+#                   54  @typescript-eslint/no-explicit-any
+#                    4  no-empty
+#                    2  prefer-const
+#       warnings:  32  react-refresh/only-export-components
+#                   2  react-hooks/exhaustive-deps
+#                   2  (no rule id)
+#     So only 60 of the 6540 errors are non-formatting. The repository has simply
+#     never been prettier-formatted; the worst single file
+#     (src/routes/admin.pulse.intakes.$id.tsx) carries 1148 errors on its own.
+#
+#   * On THIS project's Windows working tree the same command reports
+#         28924 errors + 36 warnings = 28960 problems
+#     because `git config core.autocrlf` is `true` and `git ls-files --eol` reports
+#     `i/lf w/crlf`: the committed blobs are LF, the checkout is CRLF, and
+#     prettier/prettier flags every single line ending. CRLF therefore inflates the
+#     prettier count from 6480 to 28864 (+22384) — a Windows-checkout artifact that
+#     says nothing about the code. It also means `gcloud builds submit` from a
+#     Windows box uploads CRLF sources; tsc and vitest do not care about line
+#     endings, which is why the two steps below are safe to gate on and lint is not.
+#
+# Adding lint as a blocking gate would land it red and block every merge, which is
+# the same self-inflicted denial-of-service that put the backend widening (D-23.1-09)
+# last in this phase. It needs its own cleanup pass — a `prettier --write` sweep is a
+# ~91-file diff that must not ride along inside a CI change. Tracked as DEF-23.1-02.
+# Do NOT run `eslint --fix` here to make a gate go green.
+#
 # INVOCATION (run from repo root; deploy happens separately in Plan 12-05):
 #   gcloud builds submit frontend \
 #     --config=frontend/cloudbuild.yaml \
@@ -22,6 +59,51 @@
 # _FB_PROJECT_ID=<project>
 
 steps:
+  # 1. Install from the COMMITTED lockfile and typecheck. `npm ci`, never
+  #    `npm install`: package-lock.json IS committed in this repo and `npm install`
+  #    would silently drift it inside CI.
+  #
+  #    node:22-slim matches the Dockerfile's build stage (and the local toolchain is
+  #    Node v22.14.0), so the typecheck runs on the same major the image builds on.
+  #    There is no `typecheck` npm script, hence `npx tsc --noEmit` directly.
+  #
+  #    Cloud Build submits `frontend/` as the source root, so /workspace IS the
+  #    frontend directory and node_modules lands at /workspace/node_modules.
+  - id: install-and-typecheck
+    name: "node:22-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        npm ci
+        npx tsc --noEmit
+        echo "typecheck OK"
+
+  # 2. Unit tests (vitest, `environment: node`, `include: src/**/*.test.ts`).
+  #
+  #    /workspace persists between Cloud Build steps, so this normally reuses the
+  #    node_modules installed above. The guard is deliberate: if it is NOT there
+  #    this step reinstalls rather than skipping. A step that silently reinstalls
+  #    costs a minute; a step that silently skips is a green tick that tested
+  #    nothing, which is the exact failure mode the backend gate's collection
+  #    assertion exists to prevent.
+  - id: vitest
+    name: "node:22-slim"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ ! -d node_modules ]; then
+          echo "node_modules absent — /workspace did not carry it over; reinstalling."
+          npm ci
+        fi
+        npm test
+
+  # 3. Build + push the image. Cloud Build steps run sequentially by default and
+  #    there is no `waitFor` anywhere in this config, so this runs only after the
+  #    typecheck and the unit tests have both passed.
   - id: build
     name: "gcr.io/cloud-builders/docker"
     args:
@@ -40,4 +122,6 @@ images:
 options:
   logging: CLOUD_LOGGING_ONLY
 
+# 1200s unchanged. Measured inside node:22-slim on 2026-09-04: npm ci + tsc + the
+# 154-test vitest run add roughly two minutes ahead of the image build.
 timeout: "1200s"

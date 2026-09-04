@@ -210,3 +210,120 @@ who trusts the runbook's inventory of columns.
 Note for whoever picks this up: `backend/app/db/alembic/versions/0001_baseline_schema.py:300`
 still creates the column and MUST stay that way. It is an applied historical revision; editing it
 desynchronises every database already past 0001.
+
+---
+
+## DEF-23.1-02 (ADDENDUM, plan 23.1-14) — the measured lint figures, and why they are ~100x the number recorded above
+
+**Recorded by:** plan 23.1-14, task 3. **Plan 08's entry above is left INTACT** — this
+corrects its numbers rather than rewriting its record.
+
+Plan 23.1-14 added `tsc` and `vitest` steps to `frontend/cloudbuild.yaml` and deliberately
+added NO lint step. Before writing that decision into the config header it re-measured the
+lint state, and the figure carried since plan 08 turns out to be wrong by two orders of
+magnitude.
+
+### What was recorded (plan 08, from `23.1-CONTEXT.md`)
+
+> 61 errors + 38 warnings on an LF checkout (54 `no-explicit-any`, 4 `no-empty`,
+> 2 `prefer-const`, 1 prettier), plus ~29,300 `prettier/prettier` "Delete ␍" artifacts
+
+That reads as: strip the CRLF noise and about 61 real problems remain.
+
+### What is actually true — MEASURED 2026-09-04 at `6f7da8b`
+
+The LF figure was never measured on an LF tree. It was derived by counting the
+NON-`prettier/prettier` messages and assuming every `prettier/prettier` message was a CRLF
+artifact. Most of them are not.
+
+Method: `git -c core.autocrlf=false -c core.eol=lf archive HEAD frontend` (a genuine LF
+tree — plain `git archive` still applies `core.autocrlf` and yields CRLF), extracted and
+linted inside `node:22-slim` with `npm ci && npx eslint .` — i.e. exactly what Cloud Build
+would see.
+
+| Tree | errors | warnings | total |
+|---|---|---|---|
+| **True LF** (node:22-slim) | **6540** | **36** | **6576** |
+| This machine's Windows working tree (`core.autocrlf=true`) | 28924 | 36 | 28960 |
+
+LF errors by rule, across **91 files**:
+
+| rule | count |
+|---|---|
+| `prettier/prettier` | **6480** (99.1% of all errors) |
+| `@typescript-eslint/no-explicit-any` | 54 |
+| `no-empty` | 4 |
+| `prefer-const` | 2 |
+
+LF warnings: 32 `react-refresh/only-export-components`, 2 `react-hooks/exhaustive-deps`,
+2 with no rule id.
+
+Worst single file: `src/routes/admin.pulse.intakes.$id.tsx`, **1148 errors on its own**;
+then `FieldRenderer.tsx` 722, `AIReviewPanel.tsx` 667, `ui/sidebar.tsx` 583.
+
+### The two DISTINCT problems
+
+1. **~6480 genuine `prettier/prettier` violations, independent of line endings.** The
+   repository has simply never been prettier-formatted. This is the large one, and it is
+   the part plan 08's number missed entirely. Only **60** of the 6540 errors are
+   non-formatting (the 54 + 4 + 2 above).
+2. **The CRLF divergence.** `git config core.autocrlf` is `true` and `git ls-files --eol`
+   reports `i/lf w/crlf`: committed blobs are LF, the checkout is CRLF. That inflates the
+   prettier count from 6480 to 28864 (**+22384**) on this machine, and it also means
+   `gcloud builds submit` from this box uploads CRLF sources. `tsc` and `vitest` are
+   line-ending agnostic (both verified green in `node:22-slim` on both trees), which is
+   precisely why those two are safe to gate on and lint is not.
+
+### Disposition — unchanged, but now for a much stronger reason
+
+No lint step was added. A blocking lint gate would land red and block every merge — the
+same self-inflicted denial-of-service (T-23.1-63) that made D-23.1-09 put the backend
+widening last in this phase.
+
+The cleanup is also much bigger than "61 errors": a `prettier --write` sweep is a ~91-file,
+~6500-line-touching diff. It must not ride along inside a CI change, and it must be done on
+a tree where the line-ending question is settled FIRST (add a `.gitattributes` with
+`* text=auto eol=lf`, or set `core.autocrlf=input`), or the sweep will itself rewrite every
+line ending and bury the real changes.
+
+**Do NOT run `eslint --fix` to make a gate go green.** The reason is recorded in two places
+as the plan requires: here, and in the header of `frontend/cloudbuild.yaml`.
+
+## DEF-23.1-14-01 — more source-text assertions in `test_research_runs_migration.py` share the shape that was just fixed
+
+**Recorded by:** plan 23.1-14, task 1. **Deliberately NOT fixed** — the plan scopes task 1
+to the three red tests and says to note the fragile ones rather than fix them all.
+
+Plan 14 deleted two whole-file source greps and replaced them with `information_schema`
+assertions. Two survivors in the same file are green today only by luck and would go red
+on a single new docstring sentence:
+
+| test | assertion | why it is fragile |
+|---|---|---|
+| `test_status_default_queued_not_remapped` | `assert "succeeded" not in src` over all of `0011_research_runs.py` | any comment or docstring explaining the D-05 boundary — i.e. explaining why `succeeded` must NOT appear — makes the word appear |
+| `test_0012_no_rls_policy_grant_or_index` | `assert "GRANT" not in src` over all of `0012_research_run_chain_bundle.py` | 0012's docstring already says it "touches NO RLS policy, grant, or index"; it survives only because that sentence is lower-case `grant` |
+
+The second is the closer call: it is one capitalisation away from the exact failure mode
+that killed `test_0012_no_server_default_on_new_columns`.
+
+Both should become behavioural in the same style — `pg_policies` / `pg_indexes` /
+`information_schema.role_table_grants` diffs taken before and after the 0012 step — rather
+than getting a cleverer regex. A comment-stripping grep is not a fix; it is the same trap
+with more code.
+
+## DEF-23.1-14-02 — `testcontainers[postgresql]` extra does not exist in the pinned version
+
+**Recorded by:** plan 23.1-14, task 2. **Out of scope — not fixed.**
+
+Observed while running the widened gate's install step inside `python:3.12-slim`:
+
+    warning: The package `testcontainers==4.15.0` does not have an extra named `postgresql`
+
+`backend/pyproject.toml`'s dev group asks for an extra the pinned version no longer ships.
+It is only a warning today — `testcontainers` 4.x bundles the postgres module in the base
+package, and the container path is bypassed in CI anyway because `DATABASE_URL` is set — so
+the suite is unaffected (599 passed in that same run). But a request for a non-existent
+extra is silently ignored by uv, which means the day it DOES matter it will fail as a
+missing import rather than as a dependency error. Belongs with the dependency work
+`23.1-CONTEXT.md` § 9 defers to its own phase.
+
