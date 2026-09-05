@@ -733,7 +733,7 @@ Plans:
 
 Plans:
 - [ ] 23.2-01-PLAN.md — wave 1: `admin_only_field_keys()` / `canonical_field_keys()` / `client_visible_schema()` derived from the canonical schema (D-23.2-02)
-- [ ] 23.2-02-PLAN.md — wave 1: storage deletion authorized by CATEGORY, so a client cannot delete the report whose path the API hands them (D-23.2-08)
+- [ ] 23.2-02-PLAN.md — wave 1: storage upload AND deletion authorized by CATEGORY from one shared constant, so a client can neither write into nor delete the operator's report prefix (D-23.2-08, D-23.2-17)
 - [ ] 23.2-03-PLAN.md — wave 1: deactivate/reactivate call the IdP BEFORE committing the DB; invite + individual reactivate reject a deactivated space (D-23.2-09, D-23.2-10, records D-23.2-11)
 - [ ] 23.2-04-PLAN.md — wave 1: the research completion mail leaves the write transaction, so a mail outage can no longer relabel a paid run `failed` (D-23.2-14, records D-23.2-15)
 - [ ] 23.2-05-PLAN.md — wave 1: compare-and-swap on Tribunal `submit_report_spec` + `resume_run`, and the false "cannot both succeed" docstring corrected (D-23.2-13)
