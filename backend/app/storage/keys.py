@@ -34,6 +34,18 @@ import uuid
 # is a caller bug -> ValueError (the route layer maps it to 400/422).
 CATEGORIES = frozenset({"attachments", "audio", "artifacts", "reports"})
 
+# The categories a NON-superadmin caller may write to and delete from
+# (D-23.2-08 + D-23.2-17). These are exactly the two the client form uploads
+# (FieldRenderer.tsx:470 sends ``audio`` or ``attachments``); ``artifacts`` and
+# ``reports`` are operator-produced deliverables.
+#
+# THIS IS THE ONE CONSTANT BOTH STORAGE ROUTES IMPORT. ``upload_file`` and
+# ``delete_objects`` (app/api/storage_routes.py) each read this name — neither
+# defines its own copy — so the write rule and the delete rule cannot drift
+# apart into a category that is uploadable-but-undeletable (or the reverse).
+# Do NOT restate this set as a literal anywhere else.
+CLIENT_WRITABLE_CATEGORIES = frozenset({"attachments", "audio"})
+
 # The 16 allowed upload extensions (D-04 allowlist). Anything else -> 415 at
 # the route layer. Documents, images, and the Whisper-supported audio formats.
 ALLOWED_EXT = frozenset(
@@ -102,3 +114,40 @@ def build_object_key(space_id: str, intake_id: str, category: str, filename: str
             f"unknown storage category {category!r} — must be one of {sorted(CATEGORIES)}"
         )
     return f"{space_id}/{intake_id}/{category}/{uuid.uuid4()}-{sanitize_filename(filename)}"
+
+
+def category_of(key: str | None) -> str | None:
+    """Return the category encoded in a server-authored object key, or ``None``.
+
+    The inverse of :func:`build_object_key`: ``key`` has the shape
+    ``{space_id}/{intake_id}/{category}/{uuid4}-{name}``, so the category is the
+    THIRD ``/``-separated segment. Returns ``None`` — never raises — when the key
+    has fewer than four segments or when that third segment is not one of
+    :data:`CATEGORIES`; such a key cannot have been authored here, so it is either
+    forged or from a shape the server no longer produces, and the route layer
+    answers 404 (existence hidden, D-07).
+
+    ⚠ PARSE, NEVER SUBSTRING-MATCH (D-23.2-08). ``sanitize_filename`` keeps
+    ``[A-Za-z0-9._-]``, so a client-chosen FILENAME may legally contain a category
+    word. The counter-example that must keep working::
+
+        category_of("{space}/{intake}/attachments/{uuid}-quarterly_reports.pdf")
+        # -> "attachments", NOT "reports"
+
+    A rule written as ``"reports" in key`` answers ``"reports"`` there and silently
+    breaks the live client file-remove flow (FieldRenderer.tsx:488); a rule looking
+    for ``"/reports/"`` happens to work today but breaks the moment a category is
+    renamed. Do not "simplify" this into an ``in`` check.
+
+    Used with :data:`CLIENT_WRITABLE_CATEGORIES` by ``delete_objects``
+    (app/api/storage_routes.py) to authorize a delete by CATEGORY rather than by
+    key prefix — reports live INSIDE ``{space}/{intake}/`` and the API hands the
+    client that exact path for the download flow (F-03).
+    """
+    if not isinstance(key, str):
+        return None
+    parts = key.split("/")
+    if len(parts) < 4:
+        return None
+    category = parts[2]
+    return category if category in CATEGORIES else None

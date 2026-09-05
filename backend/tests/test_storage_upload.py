@@ -416,6 +416,11 @@ def test_superadmin_audio_upload_creates_source_in_space(
 # could no longer delete. Fixing one direction and deferring the other would have
 # MANUFACTURED that asymmetry.
 #
+# This route is the ONLY producer of a `reports/` key: `_assert_report_key` in
+# app/api/intake_routes.py accepts any staged path under `{space}/{intake}/reports/`
+# and the delivery verb then LINKS it. So this role check is what stands between a
+# `role=user` and a path the report-delivery guard would accept.
+#
 # The code is 422, NOT the delete side's 404, and the difference is deliberate:
 # on delete the caller supplies an object KEY whose existence must stay hidden
 # (D-07); on upload `category` is a form VALUE from a fixed four-item vocabulary

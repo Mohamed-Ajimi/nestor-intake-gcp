@@ -195,10 +195,14 @@ def test_delete_cleans_ref(engine, set_space, fake_gcs, monkeypatch):
 # D-23.2-08 — deletion is authorized by CATEGORY, not by prefix (F-03)
 #
 # `delete_objects` used to validate only `key.startswith(f"{space}/{intake}/")`.
-# Reports are written to `{space}/{intake}/reports/{uuid}-{name}.pdf`
-# (intake_routes.py:1468) — INSIDE that prefix — and `GET /intakes/{id}/report`
-# deliberately hands the client that exact `storage_path` for the download flow.
-# Possession of a path was therefore authorization to destroy the object behind it.
+# A report lives at `{space}/{intake}/reports/{uuid}-{name}.pdf` — INSIDE that
+# prefix. (The key is authored by `upload_file` in this very module via
+# `build_object_key(..., "reports", ...)`, driven by FinalReportBlock.tsx; the
+# delivery verb then only LINKS that staged path — see `_assert_report_key` in
+# app/api/intake_routes.py, which asserts exactly this prefix.) And
+# `GET /intakes/{id}/report` deliberately hands the client that exact
+# `storage_path` for the download flow, so possession of a path was authorization
+# to destroy the object behind it.
 #
 # The rule: a non-superadmin may delete ONLY `attachments` and `audio` (the two a
 # client can upload — CLIENT_WRITABLE_CATEGORIES). `artifacts` and `reports` are
