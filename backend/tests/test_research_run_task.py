@@ -1367,3 +1367,281 @@ def test_the_5xx_budget_is_unchanged_by_the_auth_arm(
     assert run_task._MAX_METRICS_5XX_RETRIES == 3, (
         "the 5xx budget must stay 3; the long budget belongs to the auth arm only"
     )
+
+
+# ===========================================================================
+# Plan 23.2-04 (F-06 / D-23.2-14) — a mail outage must not erase a paid run
+#
+# `write_fn` used to call `resend.send` INSIDE the write transaction. Any
+# exception from `write_fn` is routed by `run_with_session_release` to
+# `on_error`, which finalizes the row to EXACTLY `failed`. So a Resend outage
+# rolled back a completed run's finalize and relabelled it `failed` — the
+# operator sees a failure on a ~$45 run that produced a report, a verified
+# chain and an uploaded bundle, and reruns it.
+#
+# The fix is the house rule already used by `submit_intake`
+# (`intake_routes.py:1333-1346`, "a mail failure must NEVER fail the validate"):
+# `write_fn` BUILDS the mail and returns it; `run_poll_driver` SENDS it after
+# `run_with_session_release` returns — i.e. after the write tx committed.
+#
+# WHAT THE DOUBLE CAN AND CANNOT PROVE. `_patch_release` drives read -> call ->
+# write against a `_StubSession`; there is no transaction and therefore no
+# rollback. So these tests cannot observe "the completion survived the
+# rollback". What they CAN observe is the thing that CAUSES the rollback in
+# production: that the send's exception escaped `write_fn` and reached
+# `on_error`, which then ran `finalize_failed`. With the real
+# `run_with_session_release` that same escape is what rolls the tx back.
+# ===========================================================================
+
+
+def _exploding_resend(monkeypatch) -> list:
+    """Patch ``app.mail.resend.send`` with a fake that RECORDS then RAISES.
+
+    Deliberately NOT the ``fake_resend`` fixture: that one never raises, and a
+    mail OUTAGE is precisely a send that raises. Returns the attempt list so a
+    test can assert both "it was attempted" and "the run survived it".
+    """
+    resend_mod = pytest.importorskip("app.mail.resend")
+    mail_pkg = pytest.importorskip("app.mail")
+    attempts: list = []
+
+    def _boom_send(*, to, subject, html):
+        attempts.append({"to": to, "subject": subject, "html": html})
+        raise RuntimeError("Resend 503")
+
+    monkeypatch.setattr(resend_mod, "send", _boom_send)
+    monkeypatch.setattr(mail_pkg, "send", _boom_send, raising=False)
+    return attempts
+
+
+# The three terminal branches of write_fn, their driving metrics script and the
+# subject each one mails. Keyed so the outage test below iterates ALL THREE — a
+# fix applied to only the completion branch cannot pass (T-23.2-04-02).
+_OUTAGE_TERMINALS = {
+    "completed": (
+        [
+            {"status": "running", "current_stage": "delegation"},
+            {"status": "completed", "current_stage": "report"},
+        ],
+        "Je onderzoek is klaar",
+    ),
+    "parked": (None, "Je onderzoek staat op pauze"),  # None -> _park_script()
+    "failed": (
+        [{"status": "running"}, {"status": "failed"}],
+        "Je onderzoek is mislukt",
+    ),
+}
+
+
+def test_mail_outage_never_relabels_the_run_at_any_terminal(
+    monkeypatch, fake_tribunal_client, fake_gcs, warning_sink
+):
+    """A RAISING resend.send must not rewrite a run's terminal status (D-23.2-14).
+
+    Written as ONE body over an explicit loop rather than ``@parametrize`` for a
+    single reason: the anti-vacuity gate is ``checked == 3``, and a parametrized
+    test cannot assert its own cardinality (each param is a separate run, and a
+    module-level accumulator would go green under ``-k``). The loop makes "all
+    three branches were exercised" an assertion instead of a convention.
+
+    Per terminal:
+      * the send is attempted EXACTLY once — at HEAD the completed and parked
+        branches attempt twice (the escape reaches ``on_error``, which mails the
+        failure variant), and the failed branch also finalizes twice;
+      * ``finalize_failed`` is never reached from a mail error on the completed
+        and parked branches;
+      * on the failed branch ``finalize_failed`` runs exactly ONCE — a second
+        call would be the double-finalize this change must not introduce;
+      * the swallowed failure is LOGGED at WARNING naming the run and the
+        subject. This driver runs headless; a silent drop is unreadable in the
+        next incident (16-05).
+    """
+    checked = 0
+    for terminal, (script, subject) in _OUTAGE_TERMINALS.items():
+        _install_context(monkeypatch)
+        _capture_mirror(monkeypatch)
+        sink = _capture_finalize(monkeypatch)
+        written = _capture_patch_run(monkeypatch)
+        _patch_run_repo(monkeypatch, None)  # no prior park marker
+        _patch_release(monkeypatch, pool_observed=[], patches=[])
+        attempts = _exploding_resend(monkeypatch)
+
+        fake_tribunal_client["metrics_script"] = script or _park_script(seq=1)
+        fake_tribunal_client["get_metrics_calls"] = 0
+        warn_from = len(warning_sink)
+
+        run_task.run_poll_driver(
+            _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+        )
+
+        assert len(attempts) == 1, (
+            f"[{terminal}] the terminal mail must be attempted exactly once and "
+            f"its failure swallowed; got {len(attempts)} attempts "
+            f"({[a['subject'] for a in attempts]}). More than one means the "
+            f"exception escaped write_fn and reached on_error."
+        )
+        assert attempts[0]["subject"] == subject, (
+            f"[{terminal}] subject must be unchanged: {attempts[0]['subject']!r}"
+        )
+
+        failed_finalizes = [f for f in sink["final"] if f[0] == "failed"]
+        if terminal == "completed":
+            assert ("completed", "fake report") in sink["final"], (
+                f"[{terminal}] the completion must still be finalized: {sink['final']}"
+            )
+            assert not failed_finalizes, (
+                "a mail outage must NEVER relabel a completed, paid run as failed "
+                f"(F-06) — finalize_failed ran: {failed_finalizes}"
+            )
+        elif terminal == "parked":
+            assert written and written[-1][1]["status"] == "parked", (
+                f"[{terminal}] the park must still be finalized: {written}"
+            )
+            assert not failed_finalizes, (
+                "a mail outage must NEVER relabel a PARKED run as failed — that "
+                "destroys the resume affordance for work already paid for; "
+                f"finalize_failed ran: {failed_finalizes}"
+            )
+        else:
+            assert len(failed_finalizes) == 1, (
+                f"[{terminal}] finalize_failed must run exactly once (a second "
+                f"call is the double-finalize): {sink['final']}"
+            )
+
+        emitted = warning_sink[warn_from:]
+        assert any("mail FAILED" in line and subject in line for line in emitted), (
+            f"[{terminal}] a swallowed mail failure must be logged at WARNING "
+            f"naming the subject — never silent. WARNINGs seen: {emitted}"
+        )
+        checked += 1
+
+    assert checked == 3, (
+        f"all three terminal branches must be exercised; checked {checked}. "
+        "Fixing one third of write_fn and leaving the same inversion in the "
+        "other two thirds would be an arbitrary cut."
+    )
+
+
+def test_pending_mail_ordering_nothing_is_sent_before_write_fn_returns(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """write_fn RETURNS the mail; the send happens after it returns (D-23.2-14).
+
+    The load-bearing observation is made at the instant ``write_fn`` returns —
+    with the real ``run_with_session_release`` that is immediately before the
+    ``with tenant_session(...)`` block exits and COMMITS, so "not yet sent here"
+    is exactly "not sent inside the write transaction".
+
+    Two assertions, both FALSE at HEAD:
+      * ``write_fn`` returns a NON-EMPTY pending list (at HEAD it returns None);
+      * ZERO sends have happened at that moment (at HEAD there is already one).
+
+    An earlier draft of this test asserted "``len(finalize_calls) >= 1`` when the
+    send fires". That is already TRUE at HEAD — ``finalize_completed`` runs
+    before ``resend.send`` in the same block — so it proved nothing about the
+    fix. Replaced with the pair above, which the pre-fix code cannot satisfy.
+    """
+    ctx = _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_finalize(monkeypatch)
+
+    observed: dict = {}
+
+    def _fake_release(identity, read_fn, call_fn, write_fn, *, on_error=None):
+        session = _StubSession([])
+        dto = read_fn(session)
+        result = call_fn(dto)
+        returned = write_fn(session, dto, result)
+        observed["returned"] = returned
+        observed["sent_at_return"] = len(fake_resend["calls"])
+        return returned
+
+    monkeypatch.setattr(run_task, "run_with_session_release", _fake_release)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert observed["sent_at_return"] == 0, (
+        "NO mail may be sent while the write transaction is still open — a "
+        "transport error there routes to on_error and rewrites a completed, paid "
+        f"run as failed (F-06). Sends already made: {observed['sent_at_return']}."
+    )
+    pending = observed["returned"]
+    assert isinstance(pending, list) and len(pending) == 1, (
+        "write_fn must RETURN the pending notification(s) so the driver can send "
+        f"them after the commit; got {pending!r}."
+    )
+    mail = pending[0]
+    assert mail["to"] == [ctx["acting_email"]], mail["to"]
+    assert mail["subject"] == "Je onderzoek is klaar", mail["subject"]
+    assert mail["html"], "the html must be rendered inside write_fn (pure, no I/O)"
+
+    assert len(fake_resend["calls"]) == 1, (
+        "the mail must still actually be SENT after the commit; got "
+        f"{len(fake_resend['calls'])} sends."
+    )
+    assert fake_resend["calls"][0]["subject"] == "Je onderzoek is klaar"
+
+
+def test_no_double_send_on_the_completed_path(
+    monkeypatch, fake_tribunal_client, fake_gcs, fake_resend
+):
+    """Exactly ONE completion mail leaves the driver.
+
+    HONEST LABEL: this is a REGRESSION GUARD, not a proof of the fix — it is
+    green at HEAD too. Its job is to fail a refactor that returns the pending
+    mail AND leaves the original in-transaction send in place, which every other
+    test in this block would happily pass.
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert len(fake_resend["calls"]) == 1, (
+        f"exactly one completion mail, got {len(fake_resend['calls'])}: "
+        f"{[c['subject'] for c in fake_resend['calls']]}"
+    )
+
+
+def test_on_error_path_logs_done_not_crashed(
+    monkeypatch, fake_tribunal_client, fake_resend, warning_sink
+):
+    """The error path must iterate NOTHING, not None (T-23.2-04-04).
+
+    ``on_error`` returns ``None``. The post-commit send loop reads
+    ``run_with_session_release(...) or []``; drop the ``or []`` and the error
+    path raises ``TypeError``, which the outer ``except BaseException`` logs as
+    ``CRASHED`` — poisoning the incident trail of a run that did not crash and
+    hiding the real error.
+
+    Green at HEAD by construction (there is no loop yet); it is a MUTATION gate
+    on the fix, red against the most likely wrong way to write it.
+    """
+    _install_context(monkeypatch)
+    _capture_mirror(monkeypatch)
+    sink = _capture_finalize(monkeypatch)
+    _patch_release(monkeypatch, pool_observed=[], patches=[])
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("tribunal exploded")
+
+    monkeypatch.setattr(run_task.tribunal_client, "create_run", _boom, raising=False)
+
+    run_task.run_poll_driver(
+        _superadmin(), uuid.uuid4(), uuid.uuid4(), "brief text", 1
+    )
+
+    assert sink["final"] and sink["final"][-1][0] == "failed"
+    assert not any("CRASHED" in line for line in warning_sink), (
+        "the on_error path must not report a crash on a run that did not crash "
+        f"— WARNINGs seen: {warning_sink}"
+    )
+    assert any("DONE" in line for line in warning_sink), (
+        f"the driver must still log its DONE line: {warning_sink}"
+    )

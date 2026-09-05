@@ -665,10 +665,14 @@ def run_poll_driver(
       connection-free window (T-17-07); it returns the report + chain verdict +
       ``bundle_key`` as the 3rd result element;
     * **WRITE** (a fresh ``tenant_session``): on ``completed`` persist
-      ``output_markdown`` (A4) + the chain/bundle state + finalize + mail the
-      completion variant to the acting superadmin (D-10, on BOTH verified and broken
-      — no broken-chain variant, D-07); else finalize failed + mail the failure
-      variant;
+      ``output_markdown`` (A4) + the chain/bundle state + finalize, and BUILD (not
+      send) the completion mail for the acting superadmin (D-10, on BOTH verified
+      and broken — no broken-chain variant, D-07); else finalize parked/failed and
+      build that variant. ``write_fn`` RETURNS the pending mail(s);
+    * **MAIL (post-commit)** — the driver sends the returned mails only after
+      ``run_with_session_release`` has returned, i.e. after the write tx committed,
+      each send in its own ``try``. A transport failure is logged and swallowed: it
+      must never re-label a run that already finished (F-06 / D-23.2-14);
     * **on_error** finalizes the row to EXACTLY ``failed`` on ANY exception (D-04).
 
     Never returns a value (a BackgroundTask); never raises out of the task (``on_error``
@@ -806,7 +810,33 @@ def run_poll_driver(
 
     def write_fn(
         session: Any, ctx: dict[str, Any], result: tuple[str, dict, dict | None]
-    ) -> None:
+    ) -> list[dict[str, Any]]:
+        """Persist the terminal state; RETURN the mail(s), never send them here.
+
+        DB WRITES IN, NOTIFICATIONS OUT — and the "out" is load-bearing (F-06 /
+        D-23.2-14). ``run_with_session_release`` routes ANY exception raised by
+        this function to ``on_error``, which finalizes the row to EXACTLY
+        ``failed``. So a Resend transport error inside this block used to roll
+        back the completion and rewrite a paid, completed run as ``failed`` —
+        the operator saw a failure on a ~$45 run that had produced a report, a
+        verified chain and an uploaded bundle, and reran it. On the parked
+        branch the same escape destroyed the resume affordance.
+
+        Building the html here is safe: ``render_research_*`` are pure template
+        renders with no I/O, and keeping them here keeps ``ctx``/``metrics``
+        close to where they are derived. Only the SEND moves out, to
+        ``run_poll_driver``'s post-commit loop.
+
+        This is not a new design: ``submit_intake``
+        (``app/api/intake_routes.py:1333-1346``) already sends its admin mail
+        AFTER the status flip and audit, wrapped in ``try/except``, with the
+        comment *"a mail failure must NEVER fail the validate"*. This function
+        was the one place in the codebase that broke that house rule.
+
+        Returns a list of ``{"to", "subject", "html"}`` dicts — empty when a
+        branch has no recipient or deliberately skips the mail (park
+        idempotency).
+        """
         # Phase 17: the CALL phase now returns a THIRD element — the completion dict
         # (report + chain verdict + bundle_key) computed in the connection-free
         # window — or None for a non-completed terminal. The report is NO LONGER
@@ -814,6 +844,7 @@ def run_poll_driver(
         rid, metrics, completion = result
         to = [ctx["acting_email"]] if ctx.get("acting_email") else []
         cta_url = _admin_cta(ctx)
+        pending: list[dict[str, Any]] = []
 
         # D-09: completed AND completed_degraded both finalize + mail. There is no
         # degraded mail variant in this plan (park/degrade copy is 15.2-16's
@@ -844,10 +875,12 @@ def run_poll_driver(
                     cta_url=cta_url,
                     app_base_url=ctx.get("app_base_url"),
                 )
-                resend.send(
-                    to=to,
-                    subject="Je onderzoek is klaar",
-                    html=html,
+                pending.append(
+                    {
+                        "to": to,
+                        "subject": "Je onderzoek is klaar",
+                        "html": html,
+                    }
                 )
         elif is_research_parked(metrics.get("status")):
             # D-17 / F-03 park. NOT a failure and NOT a degradation: the run hit a
@@ -910,10 +943,12 @@ def run_poll_driver(
                     cta_url=cta_url,
                     app_base_url=ctx.get("app_base_url"),
                 )
-                resend.send(
-                    to=to,
-                    subject="Je onderzoek staat op pauze",
-                    html=html,
+                pending.append(
+                    {
+                        "to": to,
+                        "subject": "Je onderzoek staat op pauze",
+                        "html": html,
+                    }
                 )
             elif already_notified:
                 # A skipped mail must be VISIBLE. Silence here would look identical
@@ -935,11 +970,17 @@ def run_poll_driver(
                     cta_url=cta_url,
                     app_base_url=ctx.get("app_base_url"),
                 )
-                resend.send(
-                    to=to,
-                    subject="Je onderzoek is mislukt",
-                    html=html,
+                pending.append(
+                    {
+                        "to": to,
+                        "subject": "Je onderzoek is mislukt",
+                        "html": html,
+                    }
                 )
+
+        # Every branch falls through to here. An empty list is a legitimate
+        # outcome (no recipient, or the park idempotency skip above).
+        return pending
 
     def on_error(session: Any, ctx: dict[str, Any] | None, exc: Exception) -> None:
         # Finalize the row to EXACTLY failed on ANY exception (D-04). The mail is
@@ -964,9 +1005,38 @@ def run_poll_driver(
                 pass
 
     try:
-        run_with_session_release(
+        # `run_with_session_release` returns write_fn's value, and its Phase-3
+        # `with tenant_session(...)` block COMMITS on exit — so everything below
+        # this line runs AFTER the terminal state is durably committed. That is
+        # the whole point (F-06 / D-23.2-14): the run's real status is on disk
+        # before any mail transport is touched.
+        #
+        # `or []`: on_error returns None. Iterating None here would raise
+        # TypeError into the `except BaseException` below and log CRASHED on a
+        # run that did not crash — poisoning the incident trail.
+        pending = run_with_session_release(
             identity, read_fn, call_fn, write_fn, on_error=on_error
-        )
+        ) or []
+        for mail in pending:
+            # Its OWN try per mail: a failure on the first must not silence the
+            # rest. Today only one mail is ever pending; this makes that a
+            # property of the branches rather than of the loop.
+            try:
+                resend.send(
+                    to=mail["to"], subject=mail["subject"], html=mail["html"]
+                )
+            except Exception:  # noqa: BLE001 - the run is committed; the send is best-effort
+                # LOUD on purpose. The run is correctly labelled and the mail is
+                # gone; the operator's only notification of a ~$45 terminal is
+                # missing and nothing retries it (DEF-23.2-02 / D-23.2-15).
+                log.warning(
+                    "terminal mail FAILED (run already finalized, not retried): "
+                    "research_run_id=%s subject=%s",
+                    research_run_id, mail["subject"],
+                    exc_info=True,
+                )
+        # Stays BELOW the loop: a DONE line printed before the mail attempt makes
+        # "scheduled but no mail arrived" unreadable in the next incident.
         log.warning("run_poll_driver DONE: research_run_id=%s", research_run_id)
     except BaseException:
         # Belt-and-braces: on_error already finalizes, but if IT fails (or the read
