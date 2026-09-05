@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update as sa_update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -526,6 +526,23 @@ async def submit_report_spec(
     Stores the spec as Output('report_spec') and flips the SAME run back to
     'queued'; the worker re-claims it and the pipeline resumes from the cached
     research bundle (no re-research).
+
+    D-23.2-13 -- READ FOR THE REFUSAL, CAS FOR THE ADMISSION. The allow-list is
+    enforced TWICE and the two enforcements do different jobs. The `select`
+    below classifies the refusal so a caller gets a readable 404 or 409; the
+    conditional UPDATE's `WHERE status = 'needs_report_spec'` is what actually
+    makes two concurrent submissions safe, because only the DATABASE serializes
+    the two writes. Under READ COMMITTED the loser's UPDATE re-evaluates its
+    WHERE against the winner's newly committed row version, matches zero rows,
+    and is refused with the read-check's OWN message -- byte for byte, so that a
+    caller cannot tell "you lost the race" from "it was never in that state".
+
+    THE ORDER IS LOAD-BEARING: the CAS comes FIRST and the Output row is what it
+    buys. Inserting first and relying on the caller's transaction rolling back
+    would leave correctness resting on the internals of `get_db_session`; done in
+    this order the loser has written nothing at all, and the pipeline's resume
+    branch can never find two conflicting `report_spec` rows to choose between.
+    Pinned by tests/test_run_state_cas.py.
     """
     import json as _json
 
@@ -535,15 +552,31 @@ async def submit_report_spec(
     if run.status != "needs_report_spec":
         raise HTTPException(409, "run is not awaiting a report spec")
 
+    # Re-queue the SAME run; the resume branch in the pipeline reads report_spec.
+    # `synchronize_session="fetch"` (and the re-select below) exist because a bulk
+    # UPDATE does not refresh the instance the read above already loaded -- a stale
+    # one would report the PRE-flip status on a SUCCESSFUL submission.
+    flipped = await session.execute(
+        sa_update(Run)
+        .where(Run.id == run_id, Run.status == "needs_report_spec")
+        .values(status="queued", worker_id=None)
+        .execution_options(synchronize_session="fetch")
+    )
+    if flipped.rowcount == 0:
+        # Indistinguishable by design: the precondition no longer holds, the row
+        # is gone, or it belongs to another tenant. Do NOT re-read to tell them
+        # apart -- that re-read would become a new read-then-write race.
+        raise HTTPException(409, "run is not awaiting a report spec")
+
     session.add(Output(
         tenant_id=uuid.UUID(user.tenant_id), run_id=run_id,
         format="report_spec", body=_json.dumps(payload.model_dump(), ensure_ascii=False),
     ))
-    # Re-queue the SAME run; the resume branch in the pipeline reads report_spec.
-    run.status = "queued"
-    run.worker_id = None
     await session.flush()
-    return RunResponse.model_validate(run, from_attributes=True).model_dump(mode="json")
+    fresh = (await session.execute(
+        select(Run).where(Run.id == run_id).execution_options(populate_existing=True)
+    )).scalar_one()
+    return RunResponse.model_validate(fresh, from_attributes=True).model_dump(mode="json")
 
 
 @router.post("/{run_id}/resume", response_model=RunResponse)
@@ -571,10 +604,25 @@ async def resume_run(
     NOWHERE in this handler's source, and a docstring quoting the number would
     defeat its own gate.)
 
-    The status allow-list is EXACTLY `parked`. Anything else is a 409, so this
-    verb cannot re-queue a completed, running, queued or cancelled run, and two
-    concurrent clicks cannot both succeed: the first commits `queued` and the
-    second sees it and 409s.
+    The status allow-list is EXACTLY `parked`, and it is enforced TWICE (D-23.2-13).
+    The read below classifies the refusal, so a caller gets a readable 404 or 409
+    and this verb cannot re-queue a completed, running, queued or cancelled run.
+    The conditional UPDATE's `WHERE status = 'parked'` is what makes two
+    concurrent clicks safe, because only the DATABASE serializes the two writes:
+    under READ COMMITTED the loser's UPDATE re-evaluates its WHERE against the
+    winner's newly committed row version, matches zero rows, and is refused with
+    the read-check's OWN message.
+
+    UNTIL D-23.2-13 THIS DOCSTRING CLAIMED THE READ-CHECK ALONE PROVIDED THAT --
+    that the first click would commit `queued` and the second would see it and
+    be refused. THAT WAS WRONG. The handler did a plain read-then-write in two
+    statements, so under READ COMMITTED both callers read `parked` and both
+    re-queued the SAME run -- measured, two successes -- and the worker
+    re-claimed and re-drove a paid pipeline on the uncapped path. A comment
+    asserting a guarantee the code does not provide is worse than no comment: it
+    is what stops the next reader from looking. The exact sentence is now gated
+    out of this docstring by tests/test_run_state_cas.py, which also pins the
+    behaviour it wrongly promised.
 
     `completed_at` is left alone -- it is NULL on a parked run, because a parked
     run has not completed.
@@ -591,11 +639,28 @@ async def resume_run(
     if run.status != "parked":
         raise HTTPException(409, "run is not parked")
 
-    run.status = "queued"
-    run.worker_id = None
-    run.error_message = None
+    # THE ADMISSION TICKET. `synchronize_session="fetch"` (and the re-select
+    # below) exist because a bulk UPDATE does not refresh the instance the read
+    # above already loaded -- returning a stale one would tell the operator the
+    # run is still parked right after a SUCCESSFUL resume, and they would click
+    # again.
+    flipped = await session.execute(
+        sa_update(Run)
+        .where(Run.id == run_id, Run.status == "parked")
+        .values(status="queued", worker_id=None, error_message=None)
+        .execution_options(synchronize_session="fetch")
+    )
+    if flipped.rowcount == 0:
+        # Indistinguishable by design: the precondition no longer holds, the row
+        # is gone, or it belongs to another tenant. Do NOT re-read to tell them
+        # apart -- that re-read would become a new read-then-write race.
+        raise HTTPException(409, "run is not parked")
+
     await session.flush()
-    return RunResponse.model_validate(run, from_attributes=True)
+    fresh = (await session.execute(
+        select(Run).where(Run.id == run_id).execution_options(populate_existing=True)
+    )).scalar_one()
+    return RunResponse.model_validate(fresh, from_attributes=True)
 
 
 @router.post("/{run_id}/rewrite", status_code=status.HTTP_201_CREATED)

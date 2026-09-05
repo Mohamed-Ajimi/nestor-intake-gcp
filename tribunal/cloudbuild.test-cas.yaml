@@ -1,0 +1,149 @@
+# tribunal/cloudbuild.test-cas.yaml — Phase 23.2 D-23.2-13 compare-and-swap gate (23.2-05).
+#
+# WHAT IT COVERS: `nestor_pulse_sdk/tests/test_run_state_cas.py` — the proof that
+# `resume_run` and `submit_report_spec` flip a run's status with a CONDITIONAL UPDATE rather
+# than a read-then-write. Two of its twelve tests are genuine concurrency proofs: they hold a
+# row lock so both callers complete their READ before either WRITES, then assert that exactly
+# one wins and exactly one is refused 409, and that a lost report-spec race leaves exactly ONE
+# `report_spec` Output row. Measured before the fix, both callers succeeded — the same parked
+# run was re-queued twice and the worker re-drove a paid pipeline on the path that runs with
+# NESTOR_TRIBUNAL_UNCAPPED=1.
+#
+# WHY A NEW CONFIG RATHER THAN AN EDIT TO AN EXISTING ONE:
+#   Every gate config in this directory carries an anti-false-green count keyed to its OWN
+#   file list, so adding a file to one silently breaks its count and turns the gate green-on-
+#   nothing or red-on-nothing. `cloudbuild.test-rls.yaml`'s header records the same precedent
+#   ("Hence a NEW config rather than an edit to any existing one") and this config follows it.
+#   Specifically NOT edited: cloudbuild.test-critical.yaml, cloudbuild.test-rls.yaml,
+#   cloudbuild.seam-gate.yaml (greps for exactly "8 passed"), cloudbuild.test-engine.yaml
+#   (deliberately DB-less and keyless — a concurrency test needs a real Postgres) and
+#   cloudbuild.test-gates.yaml.
+#
+# ⛔ WHAT THIS DOES **NOT** DO — do not read it as closing the tribunal CI gap.
+#   23.2-CONTEXT.md § 10 records that gap as OPEN operator work: `cloudbuild.test-critical.yaml`
+#   line 32 runs four test files, and NONE of the 37 ownership/idempotency tests is among them.
+#   This config adds a standing gate for THIS phase's own new file and nothing else. The
+#   inherited gap is untouched and still owned by whoever picks up that item.
+#
+# ⛔ FILE-BATCHING IS A POSITIVE DESIGN CONSTRAINT HERE, NOT AN OMISSION.
+#   `test_run_ownership_fence.py` and `test_stale_reclaim.py` must NEVER share a pytest
+#   invocation with `test_checkpoint_resume.py`. Both worker-facing files leave stdlib logging
+#   in a state where `caplog` stops capturing the WARNINGs from pipeline/tribunal/
+#   checkpoints.py, and two checkpoint tests then fail spuriously. Measured under the app_user
+#   DSN: ownership_fence + checkpoint_resume = 2 failed; stale_reclaim + checkpoint_resume =
+#   2 failed; each file ALONE is green. It is a reproducible ordering defect in the test
+#   suite, not a product defect, and it is DSN-dependent — with no DATABASE_URL the worker
+#   tests skip, a skipped test configures nothing, and the combination is clean. So it bites
+#   only in the configuration this gate mandates. This config therefore runs ONE file.
+#   Measured clean pairing for a future editor: test_run_state_cas.py + test_checkpoint_resume.py
+#   = 43 passed, 0 skipped.
+#
+# WHY IT IS FAITHFUL:
+#   * `DATABASE_URL` IS set, which is what stops `_require_database_url()` skipping the DB
+#     layer of the file outright. Its four source gates would still pass without a database,
+#     and passing them alone proves only that the CAS is present in the text — never that two
+#     concurrent callers actually contend. A skip here is a SETUP FAILURE, not a pass.
+#   * migrations run as `app_user`, the TABLE OWNER (mirroring the tribunal-migrate job's
+#     app_user DSN, runbook Step 13.f), and pytest connects as that same NON-superuser role.
+#     The concurrency tests themselves are faithful under any role — row locks and READ
+#     COMMITTED do not care — but the file also restates the cross-tenant 404, and FORCE ROW
+#     LEVEL SECURITY is bypassed unconditionally for a superuser. Running as app_user costs
+#     nothing and keeps that assertion honest.
+#   * the tests read `pg_stat_activity` to confirm BOTH callers are blocked before releasing
+#     the barrier. A non-superuser sees the `query` column only for its own role's backends —
+#     which is all of them here — so this works as app_user. If the interleaving cannot be
+#     established the test calls pytest.fail rather than passing on a degenerate ordering.
+#
+# ⚠ THE EXPECTED COUNT IS 12 AND IT IS KEYED TO THIS FILE'S TEST COUNT.
+#   Verify with: python -m pytest nestor_pulse_sdk/tests/test_run_state_cas.py --collect-only -q
+#   If you ADD a test to test_run_state_cas.py you MUST update BOTH the grep and the success
+#   echo below, or this gate goes red on a correct change and someone deletes it.
+#
+# A SKIP IS A FAILURE HERE. pytest exits 0 on a skip; the grep block below does not.
+#
+# INVOCATION (repo root):
+#   gcloud builds submit tribunal \
+#     --config=tribunal/cloudbuild.test-cas.yaml \
+#     --project="$GOOGLE_PROJECT"
+#
+# NOT WIRED TO ANY TRIGGER. Running this is operator work, exactly like cloudbuild.test-rls.yaml.
+
+steps:
+  # One step, host networking (same daemon-host pattern proven by cloudbuild.test-rls.yaml):
+  # postgres:15 publishes 5432 on the daemon host; the python container reaches it at
+  # localhost:5432 via --network=host. No docker.sock mount needed (no testcontainers here).
+  - id: cas-gate-nonsuperuser
+    name: "gcr.io/cloud-builders/docker"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+
+        docker pull -q postgres:15
+
+        # 1. Real Postgres. The superuser is used ONLY for bootstrap role creation,
+        #    exactly as the Cloud SQL admin does out-of-band; never for the tests.
+        docker run -d --name cas-pg --network=host \
+          -e POSTGRES_PASSWORD=ci-bootstrap-pw \
+          postgres:15
+
+        for i in $$(seq 1 30); do
+          docker exec cas-pg pg_isready -U postgres && break
+          sleep 1
+        done
+
+        # 2. Out-of-band role creation — mirrors `gcloud sql users create app_user/worker_user`
+        #    (runbook Step 13.d). Both NON-superuser LOGIN roles; worker_user must exist
+        #    before migration 0008 GRANTs to it. app_user OWNS the database so that
+        #    FORCE ROW LEVEL SECURITY is exercised against the owner.
+        docker exec cas-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "CREATE ROLE app_user LOGIN PASSWORD 'ci-app-pw' NOSUPERUSER" \
+          -c "CREATE ROLE worker_user LOGIN PASSWORD 'ci-worker-pw' NOSUPERUSER" \
+          -c "CREATE DATABASE tribunal OWNER app_user"
+
+        # 3. Role-level search_path so the tests' plain create_async_engine (no
+        #    server_settings) resolves the `tribunal` schema the migrations create —
+        #    mirrors db/base.py's runtime search_path=tribunal,public.
+        docker exec cas-pg psql -U postgres -v ON_ERROR_STOP=1 \
+          -c "ALTER ROLE app_user SET search_path = tribunal, public"
+
+        # 4. Migrations AS app_user, then the CAS suite AS app_user. ONE file, deliberately:
+        #    see the batching constraint in this config's header before adding another.
+        #    `-m "not live"` is carried for consistency with Pitfall 9: no test in this file
+        #    is live-marked today, and the filter keeps a future one out of this gate.
+        docker run --rm --network=host \
+          -v /workspace:/workspace -w /workspace \
+          -e DATABASE_URL="postgresql+asyncpg://app_user:ci-app-pw@localhost:5432/tribunal" \
+          python:3.11-slim bash -c '
+            set -euo pipefail
+            pip install --no-cache-dir -q -r requirements.txt
+            (cd nestor_pulse_sdk && python -m alembic upgrade head)
+            python -m pytest \
+              nestor_pulse_sdk/tests/test_run_state_cas.py \
+              -q -rs -m "not live" | tee /tmp/cas-gate.out
+            # ANTI-FALSE-GREEN: all twelve must PASS. A skip exits pytest 0 but fails the gate
+            # here — and a skip in THIS file means the four source gates ran while the two
+            # concurrency proofs did not, which is exactly the false assurance this config
+            # exists to eliminate (threat T-23.2-05-06).
+            # NOTE FOR FUTURE EDITS: this count tracks the number of tests in
+            # test_run_state_cas.py. It is 12 as of plan 23.2-05 (4 source gates + 8
+            # DB-backed). If you add a test to that file, update BOTH the grep and the
+            # success echo below.
+            SUMMARY_LINE=$$(grep -E "[0-9]+ (passed|failed|skipped|error)" /tmp/cas-gate.out | tail -n 1)
+            echo "pytest summary: $$SUMMARY_LINE"
+            echo "$$SUMMARY_LINE" | grep -E "(^| )12 passed"
+            if echo "$$SUMMARY_LINE" | grep -E "skipped|failed|error"; then
+              echo "CAS GATE RED: skips/failures in the pytest summary" >&2
+              exit 1
+            fi
+            echo "CAS GATE GREEN: 12/12 executed and passed as non-superuser"
+          '
+
+        docker rm -f cas-pg
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: "1200s"
