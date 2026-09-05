@@ -320,6 +320,25 @@ def test_list_templates_open_to_user(engine, set_space, monkeypatch):
         assert isinstance(body, list) and len(body) >= 1, (
             f"the canonical template list must be non-empty, got {body!r}."
         )
+        # ⚠ ADDED IN PHASE 23.2 (plan 06, D-23.2-04). This route now returns a FILTERED
+        # BODY to a role=user: the admin_only section is withheld. The status code above no
+        # longer describes the whole contract, and the `len(body) >= 1` assertion below it
+        # stayed green straight through that change — a regression pin that survives the
+        # change it was supposed to notice is not a pin. So the reachability assertion is
+        # left byte-identical (this route must still be EXACTLY 200) and the confidentiality
+        # half is asserted here, on the body.
+        leaked = [
+            section.get("id")
+            for template in body
+            for section in (template.get("schema") or {}).get("sections", [])
+            if section.get("admin_only")
+        ]
+        assert leaked == [], (
+            f"admin_only section(s) {leaked} reached a role=user caller. The canonical form "
+            f"marks them 'Visible only to admin, not to the client'; serving their labels "
+            f"and help text tells a client which private field keys exist (F-01 hop 4a, "
+            f"23.2-CONTEXT.md § 2)."
+        )
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)

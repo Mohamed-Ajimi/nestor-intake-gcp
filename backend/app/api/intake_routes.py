@@ -58,6 +58,8 @@ from app.intake_canonical import (
     CANONICAL_TEMPLATE_ID,
     CANONICAL_TEMPLATE_NAME,
     CANONICAL_TEMPLATE_SCHEMA,
+    admin_only_field_keys,
+    client_visible_schema,
 )
 from app.db import audit
 from app.db.ai_session import tenant_session
@@ -372,6 +374,85 @@ def _answer_view(answer) -> AnswerView:
     )
 
 
+# ---------------------------------------------------------------------------
+# Field-level confidentiality projections (F-01 / D-23.2-03)
+#
+# THE POLARITY IS ``!= "superadmin"``, NOT ``== "user"``. Deny by default: any role value
+# that is not exactly the superadmin literal gets the filtered projection, so a role added
+# later is withheld-from until someone decides otherwise. An ``== "user"`` test would leak
+# to every future role by omission.
+#
+# NO FIELD KEY IS WRITTEN OUT HERE. Both helpers derive their key set from
+# ``app.intake_canonical.admin_only_field_keys()``, which reads the section-level
+# ``admin_only`` flag out of the canonical schema (D-23.2-02). A fifth admin-only field
+# added to ``app/data/pulse_intake_v1.json`` therefore closes in both helpers with no code
+# change. Do not "simplify" either of these to a literal set.
+# ---------------------------------------------------------------------------
+
+
+def _visible_answer_rows(rows, *, role):
+    """Drop admin-only answer rows for a non-superadmin caller (D-23.2-03).
+
+    The canonical form marks the ``strategic_perspective`` SECTION ``admin_only``, and that
+    section's own description reads *"Visible only to admin, not to the client and not in
+    the handoff PDF."* Until phase 23.2 that flag was honoured only in the browser
+    (``IntakeForm.tsx:164``), so ``GET /intakes/{id}/answers`` handed the operator's private
+    bias analysis of a client straight to that client (F-01 hop 1, 23.2-CONTEXT.md § 2).
+
+    NAMED rather than inlined, deliberately: ``upsert_answers`` returns the SAME
+    ``list_for_intake`` row list, so a successful client WRITE would otherwise hand straight
+    back the rows the READ just withheld. One rule, two call sites, never two copies — an
+    inline comprehension here is how that seam reopens.
+
+    A superadmin gets the list back unchanged (the AI review panel consumes these rows).
+    """
+    if role == "superadmin":
+        return rows
+    admin_keys = admin_only_field_keys()
+    return [row for row in rows if row.field_key not in admin_keys]
+
+
+def _visible_output_parsed(parsed, *, role):
+    """Withhold the admin-only members of a skill run's ``output_parsed`` (D-23.2-03).
+
+    The AI's output shape is NOT the schema's shape (``ai/skills/apply.py:17-21``): it
+    carries ``decision_or_goal``, ``research_questions_refined``, ``additional_questions``,
+    ``dropped_questions``, ``gaps_flagged`` plus two admin-only members. One of those is an
+    admin field key verbatim; the OTHER — THE REASON THIS HELPER EXISTS — is a NESTED
+    object: its parent key is NOT itself a field key, but its three members
+    (``{upstream, downstream, perspectief}``) map one-for-one onto three admin field keys
+    that share that parent as their prefix. See ``app/ai/prompts.py:139-145`` for the two
+    keys by name and ``AIReviewPanel.tsx:127-129`` for the mapping. A plain membership test
+    misses the nested one entirely and leaks the whole object.
+
+    Deliberately NOT naming those two keys here: this module must contain no admin field-key
+    literal at all (D-23.2-02), so that a grep of THIS file proves no key drives policy.
+
+    So the rule is DERIVED, never hand-written:
+
+        drop top-level key K if K is an admin key, OR some admin key A starts with K + "_"
+
+    Against today's four admin keys that drops exactly two of the seven and keeps five. It
+    closes automatically for a fifth admin-only field, and it errs toward OVER-dropping for a
+    non-superadmin, which is the safe direction for a confidentiality filter.
+
+    ``None`` stays ``None``. A non-dict value (a legacy/odd row) is returned UNCHANGED rather
+    than raising — a projection must never be the thing that 500s on odd data. Note that the
+    ``SkillRunFullView.output_parsed`` field is declared ``dict | None``, so a non-dict value
+    is still rejected downstream by response validation; that is a pre-existing contract, not
+    this helper's business, and widening it is not in scope for D-23.2-03.
+    """
+    if role == "superadmin" or not isinstance(parsed, dict):
+        return parsed
+    admin_keys = admin_only_field_keys()
+    return {
+        key: value
+        for key, value in parsed.items()
+        if key not in admin_keys
+        and not any(admin_key.startswith(key + "_") for admin_key in admin_keys)
+    }
+
+
 def _skill_run_view(run) -> SkillRunView:
     """Project a ``SkillRun`` ORM row — ``status`` mapped verbatim, no remap (Pitfall 1)."""
     return SkillRunView(
@@ -479,23 +560,49 @@ def create_intake(
 
 
 @intake_router.get("/templates")
-def list_templates() -> list[TemplateView]:
-    """Return the single CANONICAL intake template (D-CANON).
+def list_templates(
+    identity: Identity = Depends(get_current_identity),
+) -> list[TemplateView]:
+    """Return the single CANONICAL intake template, projected by role (D-CANON / D-23.2-04).
 
     The Pulse intake form is shared product config, identical for every space, so it is
     served from the in-repo canonical asset (``app.intake_canonical``) rather than per-space
     ``intake_templates`` rows — no per-space copies, no operator-edited JSON. EVERY
     authenticated caller (user or superadmin, any space) receives the same template; there
-    is no longer a per-space template read here, so the handler needs no repo/scope.
+    is no longer a per-space template read here, so the handler stays DB-free (no repo, no
+    scope — ``identity`` is read for the projection only).
+
+    WHAT IS WITHHELD, AND FROM WHOM (D-23.2-04). A non-superadmin receives
+    ``client_visible_schema()`` — the canonical schema minus every section flagged
+    ``admin_only`` (today: 13 of 14 sections). This is SCHEMA disclosure rather than answer
+    disclosure and so a lower severity than F-01's other hops, but serving it tells a client
+    exactly which private field keys exist and what they are for: the withheld section's
+    labels and help text are the operator's own bias/blind-spot analysis prompts. Both
+    frontend consumers already discard the section (``IntakeForm.tsx:164``,
+    ``intake.$id.results.tsx:163``), so filtering server-side makes them redundant, not
+    wrong. A superadmin still receives the full schema verbatim.
+
+    ⚠ ``client_visible_schema()`` returns ONE SHARED import-time object. It is serialised
+    here and never mutated; a handler that popped sections off it would corrupt every later
+    response in the process, for every role.
+
+    The route stays OPEN to ``role=user`` — EXACTLY 200 (pinned client route row 2). This is
+    a body projection, never a gate; without the template the client form has no schema to
+    render at all.
 
     Declared BEFORE ``/{intake_id}`` so the literal ``templates`` segment is not captured
     as a path parameter.
     """
+    schema = (
+        CANONICAL_TEMPLATE_SCHEMA
+        if identity.role == "superadmin"
+        else client_visible_schema()
+    )
     return [
         TemplateView(
             id=str(CANONICAL_TEMPLATE_ID),
             name=CANONICAL_TEMPLATE_NAME,
-            schema=CANONICAL_TEMPLATE_SCHEMA,
+            schema=schema,
         )
     ]
 
@@ -559,9 +666,30 @@ def patch_intake(
 def list_answers(
     intake_id: str,
     repo: IntakeAnswerRepository = Depends(get_intake_answer_repo),
+    identity: Identity = Depends(get_current_identity),
 ) -> list[AnswerView]:
-    """Read this intake's answers within scope (own-space only for a user)."""
-    return [_answer_view(row) for row in repo.list_for_intake(intake_id)]
+    """Read this intake's answers within scope, projected by role (D-23.2-03).
+
+    Tenant scope is unchanged: the repo already restricts a user to their OWN space. What is
+    new is FIELD-level confidentiality WITHIN that space.
+
+    WHAT IS WITHHELD, AND FROM WHOM. A non-superadmin does not receive answers whose
+    ``field_key`` belongs to an ``admin_only`` SECTION of the canonical form (today the four
+    ``strategic_perspective`` keys — the operator's private bias-radar and blind-spot
+    analysis OF this client). The source of truth is the section-level ``admin_only`` flag in
+    ``app/data/pulse_intake_v1.json``, read once by ``app.intake_canonical``; no key is
+    written out here (D-23.2-02). A superadmin sees every row — the AI review panel depends
+    on it.
+
+    The rule lives in :func:`_visible_answer_rows` because the WRITE path shares it:
+    ``upsert_answers`` returns this same row list, so an inline filter here would let a
+    client read back through a PATCH what a GET withheld.
+
+    The route stays OPEN to ``role=user`` — EXACTLY 200 (pinned client route row 4). This is
+    a body projection, never a gate.
+    """
+    rows = _visible_answer_rows(repo.list_for_intake(intake_id), role=identity.role)
+    return [_answer_view(row) for row in rows]
 
 
 @intake_router.patch("/{intake_id}/answers")
@@ -1236,6 +1364,7 @@ def get_skill_run_full(
     intake_id: str,
     run_id: str,
     repo: SkillRunRepository = Depends(get_skill_run_repo),
+    identity: Identity = Depends(get_current_identity),
 ) -> SkillRunFullView:
     """Read ONE skill run's full projection within scope, or 404 (D-08 / D-04).
 
@@ -1244,13 +1373,24 @@ def get_skill_run_full(
     run whose ``intake_id`` does not match the path ``intake_id`` is ALSO a 404 (the BOLA
     guard — never leak that the run exists under a different intake). Projects
     ``output_parsed`` + ``cost_estimate_usd`` (Numeric → float) for the AIReviewPanel.
+
+    WHAT IS WITHHELD, AND FROM WHOM (D-23.2-03). ``output_parsed`` is the model's raw
+    output, and two of its seven top-level members are the admin-only bias-radar and
+    blind-spots analysis (F-01 hop 2). A non-superadmin receives the remaining five;
+    a superadmin receives all seven, which is what ``AIReviewPanel.tsx:114-129`` renders.
+    The drop rule is DERIVED from the canonical schema's ``admin_only`` sections — see
+    :func:`_visible_output_parsed` for why a plain membership test is not enough.
+
+    The route stays OPEN to ``role=user`` — EXACTLY 200 (pinned client route row 8; the
+    client form's proposal tick reads it). This is a body projection, never a gate, and the
+    404 arms above are untouched.
     """
     run = repo.get(run_id)
     if run is None or str(run.intake_id) != intake_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Skill run not found")
     return SkillRunFullView(
         id=str(run.id),
-        output_parsed=run.output_parsed,
+        output_parsed=_visible_output_parsed(run.output_parsed, role=identity.role),
         cost_estimate_usd=(
             float(run.cost_estimate_usd) if run.cost_estimate_usd is not None else None
         ),
