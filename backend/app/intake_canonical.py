@@ -61,9 +61,10 @@ CANONICAL_TEMPLATE_SCHEMA: dict = json.loads(_SCHEMA_PATH.read_text(encoding="ut
 # for the client-visible copy, a deep copy) on the request hot path for a value that
 # cannot change while the process lives — the JSON is read once at import.
 #
-# The walk mirrors the defensive shape of
-# ``app/ai/skills/structure_answers.py::_flatten_template_keys``: it tolerates a section
-# that is not a dict, a field that is not a dict, and a field with no ``key``.
+# The walk is defensive: it tolerates a section that is not a dict, a field that is not a
+# dict, and a field with no ``key``. (It mirrored
+# ``structure_answers.py::_flatten_template_keys``, which plan 23.2-08 deleted when that
+# module switched to canonical_field_keys() — D-23.2-16.)
 #
 # ⚠ Sections carry ``id``, NOT ``key`` — ``section["key"]`` is None for all 14 sections.
 # A walker keyed on ``key`` returns an empty set and silently turns every downstream
