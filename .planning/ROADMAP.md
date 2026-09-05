@@ -729,10 +729,20 @@ Plans:
 **Requirements**: SEC-03 (field-level confidentiality within a tenant), SEC-04 (server-enforced write lifecycle + input validation), SEC-05 (operator artifacts are not client-deletable), SEC-02 (space deactivation revokes access — extended to fail-closed + retryable), COST-01 (no duplicate paid work — extended to research dispatch), TENANT-02 (no cross-tenant access — unchanged, must stay green)
 **Depends on:** Phase 23.1
 **Authority:** `23.2-CONTEXT.md` — the measured six-router surface enumeration, findings F-01..F-08 with file:line, and decisions D-23.2-01..16. Where the source audit and CONTEXT disagree, CONTEXT wins.
-**Plans:** 0 plans
+**Plans:** 11 plans in 5 waves
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 23.2 to break down)
+- [ ] 23.2-01-PLAN.md — wave 1: `admin_only_field_keys()` / `canonical_field_keys()` / `client_visible_schema()` derived from the canonical schema (D-23.2-02)
+- [ ] 23.2-02-PLAN.md — wave 1: storage deletion authorized by CATEGORY, so a client cannot delete the report whose path the API hands them (D-23.2-08)
+- [ ] 23.2-03-PLAN.md — wave 1: deactivate/reactivate call the IdP BEFORE committing the DB; invite + individual reactivate reject a deactivated space (D-23.2-09, D-23.2-10, records D-23.2-11)
+- [ ] 23.2-04-PLAN.md — wave 1: the research completion mail leaves the write transaction, so a mail outage can no longer relabel a paid run `failed` (D-23.2-14, records D-23.2-15)
+- [ ] 23.2-05-PLAN.md — wave 1: compare-and-swap on Tribunal `submit_report_spec` + `resume_run`, and the false "cannot both succeed" docstring corrected (D-23.2-13)
+- [ ] 23.2-06-PLAN.md — wave 2: role-based projection on `list_answers`, `get_skill_run_full`, `list_templates` (D-23.2-03, D-23.2-04)
+- [ ] 23.2-07-PLAN.md — wave 2: admin-only answers dropped from the context-pack LLM INPUT — the hop the audit missed (D-23.2-01)
+- [ ] 23.2-08-PLAN.md — wave 2: `structure_answers` sources `valid_keys` from the canonical schema; an empty set now denies (D-23.2-16)
+- [ ] 23.2-09-PLAN.md — wave 3: the server-side answer-write policy, including the `proposal_list` exception that keeps the client's validation tick alive (D-23.2-05, D-23.2-06, D-23.2-07)
+- [ ] 23.2-10-PLAN.md — wave 4: alembic 0016 partial unique index + `patch_if` CAS + in-tx `attempt`, so a concurrent trigger cannot buy a second ~$45 run (D-23.2-12)
+- [ ] 23.2-11-PLAN.md — wave 5: the merged-head seam check, the 43-route gate walk, and the deferral register
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
