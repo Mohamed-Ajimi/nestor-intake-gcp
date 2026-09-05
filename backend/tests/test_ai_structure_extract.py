@@ -234,6 +234,128 @@ def test_structure_answers_writes_llm_scoped_answers(
         _cleanup(engine, space)
 
 
+def test_structure_answers_filters_to_canonical_keys(
+    engine, set_space, monkeypatch, fake_anthropic, superadmin_engine
+):
+    """D-23.2-16 (F-08) — an invented ``field_key`` is DROPPED; canonical keys are written.
+
+    Drives the skill on an intake whose ``template_id`` IS NULL — the normal creation path
+    (``frontend/src/lib/api/intakes.ts`` posts only ``client_name``), and precisely the
+    condition under which the pre-fix guard ``if valid_keys and field_key not in valid_keys``
+    was disabled: no template row -> empty key list -> an empty set PERMITTED everything.
+
+    Admin-only keys stay IN scope here. This skill runs on the superadmin-gated ``ai_router``
+    and structuring an operator interview into ``bias_radar`` is exactly its job, so the
+    filter is schema MEMBERSHIP (``canonical_field_keys()``), never the client-visible
+    subset. ``bias_radar`` is the assertion that fails if someone swaps in the confidentiality
+    set — plan 23.2-07 filters admin-only keys OUT of the context-pack prompt, which is the
+    deliberate OPPOSITE of this call site.
+    """
+    from sqlalchemy import text
+    from fastapi.testclient import TestClient
+
+    from app.ai.prompts import STRUCTURE_ANSWERS_SYSTEM_PROMPT
+    from app.intake_canonical import admin_only_field_keys, canonical_field_keys
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+
+    # Anchor the fixture's own claims against the schema rather than hard-coding them: if a
+    # future edit moves bias_radar out of the admin-only section, this says so here instead
+    # of silently weakening the case below.
+    assert "bias_radar" in admin_only_field_keys(), (
+        "this case exists to prove an ADMIN-ONLY canonical key is still written."
+    )
+    assert {"decision_or_goal", "audience_description"} <= canonical_field_keys()
+    assert "totally_invented_key" not in canonical_field_keys()
+
+    answers = [
+        {"field_key": "decision_or_goal", "value": "Prijsperceptie verbeteren", "confidence": 0.82},
+        {"field_key": "audience_description", "value": "MKB-inkopers", "confidence": 0.71},
+        # Admin-only, and LEGITIMATE for this operator-run skill (D-23.2-16).
+        {"field_key": "bias_radar", "value": "Overschat prijsgevoeligheid", "confidence": 0.55},
+        # Pure model invention — no such field exists in the canonical form.
+        {"field_key": "totally_invented_key", "value": "Verzonnen waarde", "confidence": 0.40},
+    ]
+    fake = fake_anthropic("```json\n" + json.dumps(answers) + "\n```")
+    monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
+
+    app = _build_app()
+    try:
+        _seed_intake_with_transcript(engine, set_space, space, intake_id)
+        with engine.begin() as conn:
+            set_space(conn, space)
+            template_id = conn.execute(
+                text(f"SELECT template_id FROM {SCHEMA}.intakes WHERE id = :iid"),
+                {"iid": intake_id},
+            ).scalar_one()
+        assert template_id is None, (
+            "the precondition of F-08 is an intake with NO template_id (the normal creation "
+            f"path); the seed produced {template_id!r}."
+        )
+
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/skills/structure-answers",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code in (200, 202), (
+            f"structure-answers should accept + schedule, got {resp.status_code}."
+        )
+        assert fake.calls, "Claude was never called for structure-answers."
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            rows = conn.execute(
+                text(
+                    f"SELECT field_key, value FROM {SCHEMA}.intake_answers "
+                    "WHERE intake_id = :iid AND extracted_by = 'llm'"
+                ),
+                {"iid": intake_id},
+            ).all()
+        written = {field_key: value for field_key, value in rows}
+
+        # The invented key must never reach intake_answers: such a row renders in no form
+        # field, survives every later read, and is interpolated into the context-pack prompt.
+        assert "totally_invented_key" not in written, (
+            "F-08: the model's invented field_key was written to intake_answers "
+            f"(row: {written.get('totally_invented_key')!r})."
+        )
+        # Anti-vacuity: a fix that dropped EVERYTHING would satisfy the line above.
+        assert set(written) == {"decision_or_goal", "audience_description", "bias_radar"}, (
+            f"expected exactly the three canonical keys to be written, got {sorted(written)}."
+        )
+        assert len(rows) == 3, f"expected exactly 3 extracted_by='llm' rows, got {len(rows)}."
+        # Admin-only key written with its real value (not blanked, not dropped).
+        assert written["bias_radar"] == "Overschat prijsgevoeligheid"
+
+        # The prompt must still TELL the model which keys exist, or extraction quality drops
+        # and the model invents. Pre-fix this block was the literal "[]".
+        prompt = fake.calls[0]["messages"][0]["content"]
+        assert "# Template velden" in prompt
+        keys_block = prompt.split("# Transcript")[0].split("# Template velden", 1)[1]
+        assert json.loads(keys_block.strip()) == sorted(canonical_field_keys()), (
+            "the prompt's key list must be the canonical schema, SORTED — a frozenset's "
+            "iteration order is not stable across processes and a non-reproducible prompt "
+            "makes a paid call's audit record worthless."
+        )
+        assert "decision_or_goal" in prompt and "bias_radar" in prompt
+        found = sum(1 for key in canonical_field_keys() if key in prompt)
+        assert found == len(canonical_field_keys()) == 29, (
+            f"expected all 29 canonical keys in the prompt, found {found}."
+        )
+
+        # The system prompt and model are untouched by this change.
+        assert fake.calls[0]["system"] == STRUCTURE_ANSWERS_SYSTEM_PROMPT
+        assert fake.calls[0]["model"] == STRUCTURE_MODEL
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
 # ===========================================================================
 # extract-insights — JSON array -> extracted_insights (space-scoped)
 # ===========================================================================
