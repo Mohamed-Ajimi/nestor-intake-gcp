@@ -548,12 +548,21 @@ def test_transition_audited(engine, monkeypatch):
 # ===========================================================================
 
 
-def test_templates_returns_canonical_form():
+def test_templates_returns_canonical_form_for_superadmin():
     """GET /intakes/templates returns the single canonical Pulse template (D-CANON).
 
     The form is shared product config served from ``app.intake_canonical`` — NOT per-space
     ``intake_templates`` rows — so the endpoint touches NO database (no engine patch, no
     seeded space) and returns the same 14-section template to any authenticated caller.
+
+    ⚠ SPLIT IN PHASE 23.2 (plan 06, D-23.2-04). This test used to drive the route as a
+    ``_user`` and assert 14 sections. That assertion is now FALSE for a user by design: the
+    admin-only section is withheld from a client, so a user sees 13. Rather than weaken the
+    number — which would have quietly stopped pinning that the FULL form is served to
+    anyone at all — the case was split. This half keeps every original assertion verbatim
+    (one template, canonical id, canonical name, all 14 sections) and drives the SUPERADMIN,
+    for whom the response is unchanged from before 23.2. The user's 13-section view is
+    pinned by :func:`test_templates_hides_the_admin_only_section_from_a_user` below.
     """
     from fastapi.testclient import TestClient
 
@@ -566,7 +575,7 @@ def test_templates_returns_canonical_form():
     app = _build_app()
     try:
         # Auth override only — the handler is pure (no repo / no space scope).
-        app.dependency_overrides[get_current_identity] = _as(_user(uuid.uuid4()))
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
         client = TestClient(app)
 
         resp = client.get(
@@ -586,6 +595,51 @@ def test_templates_returns_canonical_form():
         sections = tpl["schema"]["sections"]
         assert len(sections) == len(CANONICAL_TEMPLATE_SCHEMA["sections"]) == 14, (
             "the full recovered Pulse form (14 sections) must be served verbatim"
+        )
+        admin_sections = [s.get("id") for s in sections if s.get("admin_only")]
+        assert len(admin_sections) == 1, (
+            f"the superadmin view must still carry the ONE admin_only section; got "
+            f"{admin_sections}. If this is empty the filter leaked onto the operator."
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_templates_hides_the_admin_only_section_from_a_user():
+    """A role=user receives 13 of the 14 canonical sections — none ``admin_only`` (D-23.2-04).
+
+    The other half of the 23.2 split described above. The route is still EXACTLY 200 for a
+    user (pinned client route row 2 — gating it would leave the client form schema-less);
+    only the BODY changed. The withheld section's labels and help text are the operator's
+    own bias/blind-spot analysis prompts, and serving them told a client exactly which
+    private field keys to ask for.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.intake_canonical import CANONICAL_TEMPLATE_SCHEMA
+
+    app = _build_app()
+    try:
+        app.dependency_overrides[get_current_identity] = _as(_user(uuid.uuid4()))
+        client = TestClient(app)
+
+        resp = client.get(
+            "/intakes/templates",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code == 200, (
+            f"templates must stay OPEN to role=user (EXACTLY 200), got {resp.status_code} "
+            f"({resp.text!r})"
+        )
+        sections = resp.json()[0]["schema"]["sections"]
+        assert len(sections) == 13, (
+            f"a role=user must receive 13 sections, got {len(sections)} (D-23.2-04)"
+        )
+        assert len(CANONICAL_TEMPLATE_SCHEMA["sections"]) - len(sections) == 1, (
+            "EXACTLY one section (the admin_only one) may be withheld"
+        )
+        assert [s.get("id") for s in sections if s.get("admin_only")] == [], (
+            "no admin_only section may reach a role=user caller"
         )
     finally:
         app.dependency_overrides.clear()
