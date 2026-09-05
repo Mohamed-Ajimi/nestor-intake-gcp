@@ -159,11 +159,28 @@ def invite_user(
     request tx -> generate the one-time action link -> write the ``user.invited`` audit
     row on the SAME session (QA-04 / T-5-16). The response carries ONLY the action link —
     never a password/token (D-03 / T-5-14).
+
+    D-23.2-10: the target space must also be ACTIVE. A space cascade only ever visits the
+    members that existed when it ran, so an invite accepted afterwards mints an ACTIVE
+    member inside a deactivated space — a hole in SEC-02 that no cascade will ever close,
+    and one the operator cannot see because their console reads "deactivated".
     """
     # The target space must exist (a cross-space superadmin reaches any org).
     space = repo.get_space(body.space_id)
     if space is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Space not found")
+
+    # D-23.2-10 — refuse BEFORE the duplicate check and BEFORE any IdP call, so a refusal
+    # never leaves an enabled Identity Platform account with no membership row pointing at
+    # it. 409 rather than 404: the caller is a superadmin who legitimately lists this
+    # space, so hiding it would be a lie about a resource they can already see. The
+    # message must stay distinct from the duplicate 409 below — both are 409, so the text
+    # is the only thing telling the operator which problem they actually have.
+    if space.status != _STATUS_ACTIVE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot invite a user into a deactivated space",
+        )
 
     # Pitfall 5: an already-active membership for this email in the target space is an
     # intentional duplicate -> 409 BEFORE any IdP/DB mutation (never a second row/500).
@@ -279,10 +296,28 @@ def reactivate_user(
     ``admin_users.reactivate_user`` (``update_user(disabled=False)``) ->
     ``set_membership_status(..., "active")`` -> ``user.reactivated`` audit row. Claims are
     NOT re-issued here (login-sync is idempotent — A3).
+
+    D-23.2-10: refuses (409) when the member's SPACE is deactivated. Without that guard
+    this verb hands access back inside a dead space one member at a time — an undocumented
+    way to walk a space cascade backwards while the operator's console still reads
+    "deactivated". Its sibling :func:`deactivate_user` deliberately carries NO such guard:
+    deactivating a member of a deactivated space only ever NARROWS access, so it stays
+    allowed. Do not symmetrise the two.
     """
     membership = repo.get_membership(membership_id)
     if membership is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    # D-23.2-10 — evaluated before the IdP call, the flip and the audit row, so a refusal
+    # has NO side effect at all. A missing space is a data-integrity impossibility here
+    # (organization_id is a NOT NULL FK), so it is folded into the same 409 rather than
+    # given its own arm — an unreachable branch would be untestable and would rot.
+    space = repo.get_space(membership.organization_id)
+    if space is None or space.status != _STATUS_ACTIVE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot reactivate a user in a deactivated space",
+        )
 
     if membership.provider_user_id:
         admin_users.reactivate_user(membership.provider_user_id)
