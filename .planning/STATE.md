@@ -25,23 +25,35 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 23.2
-Plan: 15 of 15 complete (plan 15 at a blocking human-verify checkpoint)
-Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
-**NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.
-**No run has been triggered and no measurement exists.** What is done is the credential-free
-preparatory half — the five-point STOP PROCEDURE, the Q-PRE-0…Q-PRE-4 pre-flight command set with
-15.8-14's digest baseline quoted for character-by-character comparison, the cost-floor reading
-discipline, the run-identity skeleton and the eleven-query measurement set — all written into
-`15.8-UAT.md` with `«OPERATOR: …»` fill markers and **zero fabricated values**.
+Phase: 23.2 (authorization depth — field-level confidentiality, answer lifecycle, operator-artifact
+deletion, fail-closed membership, research dispatch idempotency, notification decoupling)
+Plan: 1 of 11 complete — wave 1 executing (plans 01–05), plan 01 merged.
 
-⛔ **The plan is blocked on the operator, in this order (all four are ABORT gates and none costs
-money): Q-PRE-0 account+project → Q-PRE-1 revisions/digests → Q-PRE-2 empty queue → Q-PRE-3 worker
-env → Q-PRE-4 the `logging.logWriter` grant, which is STILL UNPAID.**
+Authority is `23.2-CONTEXT.md`. Eleven plans in five waves. All 5 checker blockers and 10 warnings
+are closed. ZERO provider spend, no deploy, no Tribunal run — the phase ends at built + tested +
+committed.
+
+⛔ **DO NOT RUN `gsd-sdk query state.advance-plan` IN THIS REPO UNTIL THIS BLOCK IS TRUSTED.**
+Measured 2026-09-05 by the plan-01 executor: with the stale phase-15.8 text that used to sit here
+(`Plan: 15 of 15 complete`), the verb returned `{"reason":"last_plan","current_plan":15,
+"total_plans":15}` for a phase that has ELEVEN plans, flipped `Status` to
+`Phase complete — ready for verification` on plan 1 of 11, **and erased the `last_activity` deploy
+record for `20260901-134253` / `tribunal-api-00023-bc6`**, replacing a substantive sentence with a
+bare date. The executor reverted it and reported rather than committing the corruption. The stale
+text is now gone, but re-verify the verb's output before trusting it — a state handler that reads a
+hand-curated block as machine state can silently destroy deploy provenance.
 
 <!-- NOTE 2026-08-05: the GSD state tooling rewrote this line to a bare "Plan: 1 of 15" at
      execute-phase start, which is a regression of a curated position. Restored with the real
-     position rather than committed as-is. -->
+     position rather than committed as-is.
+     NOTE 2026-09-05: the same class of bug, worse — see the warning above. The root cause is that
+     this block mixes machine-readable counters with hand-written prose, so any handler that
+     parses it can mistake curated narrative for state. -->
+
+**Inherited operator work, still open** (not this phase's, do not let it be lost): tribunal
+services not deployed; the live `role=user` 404/200 observation never made; the tribunal CI gap
+(`cloudbuild.test-critical.yaml:32` gates none of the 37 ownership/idempotency tests — and see
+CONTEXT § 13, the obvious fix produces a red build); the tfstate bucket; `app_superadmin` rotation.
 
 ⚠️ **Recorded defect in `15.8-15`'s own Task-1 `<automated>` gate:** it greps the WHOLE of
 `15.8-UAT.md` for `TBD` and requires zero, but 15.8-12 deliberately seeded every observed/verdict
