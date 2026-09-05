@@ -1,10 +1,23 @@
 """``structure-answers`` ported to a space-scoped background task (AI-03).
 
 Ports ``docs/supabase-functions/structure-answers.ts`` onto the AI-06 release contract:
-read the intake's transcript chunks (+ the template field keys, when a template is
-attached) into a plain DTO, call Claude (``claude-sonnet-4-6``) holding NO DB connection,
-then in a FRESH tenant session (GUC re-issued — T-7-02) UPSERT the parsed answers into
-``intake_answers`` carrying ``extracted_by='llm'``.
+read the intake's transcript chunks into a plain DTO, call Claude (``claude-sonnet-4-6``)
+holding NO DB connection, then in a FRESH tenant session (GUC re-issued — T-7-02) UPSERT
+the parsed answers into ``intake_answers`` carrying ``extracted_by='llm'``.
+
+Legal field keys (D-23.2-16): the allow-list is the CANONICAL in-repo schema
+(:func:`app.intake_canonical.canonical_field_keys` — today 29 keys), NOT the intake's
+per-space ``intake_templates`` row. Admin-only keys are INCLUDED: this skill runs on the
+superadmin-gated ``ai_router`` and structuring an operator interview into ``bias_radar`` is
+exactly its job, so the filter is schema MEMBERSHIP, never the client-visible subset. A
+``field_key`` the canonical form does not define is DROPPED, never written.
+
+Until phase 23.2 the keys came from ``intake.template_id`` -> ``IntakeTemplateRepository``,
+and the write phase read ``if valid_keys and field_key not in valid_keys`` — so an EMPTY key
+list PERMITTED every key the model invented. The normal creation path never sets
+``template_id`` (``frontend/src/lib/api/intakes.ts`` posts only ``client_name``), so that
+list was always empty and the guard had never once run in production (F-08). The ``and`` is
+gone: an empty set now DENIES, and the set is never empty anyway.
 
 Collision handling (Open Q3 / A6 — the marquee parity decision): the legacy edge function
 did a plain ``INSERT`` into ``intake_answers``, which would raise ``23505`` against the
@@ -46,10 +59,10 @@ from app.db.ai_session import run_with_session_release
 from app.db.repository import (
     IntakeAnswerRepository,
     IntakeRepository,
-    IntakeTemplateRepository,
     SkillRunRepository,
     TranscriptRepository,
 )
+from app.intake_canonical import canonical_field_keys
 
 # max_tokens for the structure-answers call — legacy parity (structure-answers.ts:47).
 _STRUCTURE_MAX_TOKENS = 8192
@@ -92,33 +105,16 @@ def _split_value(raw: Any) -> tuple[str | None, Any]:
     return str(raw), None
 
 
-def _flatten_template_keys(schema: Any) -> list[str]:
-    """Flatten ``schema.sections[].fields[].key`` into a list of valid field keys.
-
-    Mirrors ``flattenFields`` (structure-answers.ts:33-35). Returns ``[]`` when the intake
-    has no template / schema — in which case the write phase accepts the LLM's field_keys
-    as-is (an interview intake without a strict template still structures its transcript).
-    """
-    keys: list[str] = []
-    if not isinstance(schema, dict):
-        return keys
-    for section in schema.get("sections", []) or []:
-        if not isinstance(section, dict):
-            continue
-        for field in section.get("fields", []) or []:
-            if isinstance(field, dict) and field.get("key"):
-                keys.append(field["key"])
-    return keys
-
-
 def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> dict[str, Any]:
     """Map a transcript into LLM-extracted ``intake_answers`` (AI-03, scoped upsert).
 
-    READ: load the intake's transcript chunks + the template field keys (when a template is
-    attached) into a plain DTO — no live ORM rows cross the session boundary. CALL: invoke
-    Claude (``claude-sonnet-4-6``, ``max_tokens=8192``, verbatim system prompt) holding NO
-    DB connection. WRITE: parse the JSON array and UPSERT each answer per ``field_key`` via
-    :meth:`IntakeAnswerRepository.upsert_extracted` (``extracted_by='llm'``, respecting
+    READ: load the intake's transcript chunks into a plain DTO — no live ORM rows cross the
+    session boundary — alongside the canonical field keys (D-23.2-16), which are product
+    config read from the repo, not tenant data. CALL: invoke Claude (``claude-sonnet-4-6``,
+    ``max_tokens=8192``, verbatim system prompt) holding NO DB connection. WRITE: DROP every
+    ``field_key`` the canonical form does not define (admin-only keys ARE defined and ARE
+    written — this runs as an operator), then UPSERT each surviving answer per ``field_key``
+    via :meth:`IntakeAnswerRepository.upsert_extracted` (``extracted_by='llm'``, respecting
     the ``(intake_id, field_key)`` unique constraint) — ``succeeded`` on a parseable array, ``failed`` +
     ``error_message`` on a parse error (D-09).
     """
@@ -134,11 +130,13 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         # Capture the intake's OWN space for the superadmin write path (a superadmin
         # identity has no space_id of its own — CR-01).
         space_id = str(intake.space_id)
-        template_keys: list[str] = []
-        if intake.template_id is not None:
-            tpl = IntakeTemplateRepository(session, identity).get(intake.template_id)
-            if tpl is not None:
-                template_keys = _flatten_template_keys(tpl.schema)
+        # D-23.2-16: the legal key set is the CANONICAL schema (D-CANON), which is what the
+        # fill flow actually uses — ``GET /intakes/templates`` serves it to every caller and
+        # per-space ``intake_templates`` rows are no longer read on the client path at all.
+        # SORTED, so the prompt is byte-identical across processes: a frozenset's iteration
+        # order is not stable, and a non-reproducible prompt makes the audit record of a paid
+        # call worthless.
+        valid_keys = sorted(canonical_field_keys())
 
         chunks = [
             {"id": str(row.id), "speaker": row.speaker, "text": row.text}
@@ -152,7 +150,7 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         user_message = "\n".join(
             [
                 "# Template velden",
-                json.dumps(template_keys, ensure_ascii=False, indent=2),
+                json.dumps(valid_keys, ensure_ascii=False, indent=2),
                 "",
                 "# Transcript",
                 transcript_text,
@@ -160,7 +158,7 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
         )
         return {
             "user_message": user_message,
-            "valid_keys": template_keys,
+            "valid_keys": valid_keys,
             "space_id": space_id,
         }
 
@@ -222,9 +220,12 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
             field_key = entry.get("field_key")
             if not field_key:
                 continue
-            # When a template is attached, drop keys outside it (legacy validKeys filter);
-            # with no template (no keys) accept the LLM's field_keys as-is.
-            if valid_keys and field_key not in valid_keys:
+            # D-23.2-16: drop any key the canonical form does not define. This read
+            # ``if valid_keys and field_key not in valid_keys`` — the ``and`` made an EMPTY
+            # set PERMIT everything, and the normal creation path always produced an empty
+            # set (no template_id), so the filter had never once run. An empty set must
+            # DENY. Admin-only keys are canonical and stay legal here (operator skill).
+            if field_key not in valid_keys:
                 continue
             value, value_json = _split_value(entry.get("value"))
             items.append(
