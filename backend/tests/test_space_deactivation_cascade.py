@@ -241,6 +241,24 @@ def _count_audit(engine, *, actor_uid: str, event_type: str) -> int:
         ).scalar_one()
 
 
+def _audit_metadata(engine, *, actor_uid: str, event_type: str) -> dict:
+    """Read the single ``audit_log`` row's ``event_metadata`` for an actor/event_type.
+
+    The sibling of :func:`_count_audit`. The cascade's counts (``members_cascaded`` /
+    ``members_restored``) live in that JSONB payload, and reading them straight from PG is
+    the only way to prove the audit trail does not inherit the over-claim D-23.2-09
+    removes from the membership rows. Per-test actor uids keep ``scalar_one`` honest.
+    """
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        return conn.execute(
+            select(AuditLog.event_metadata).where(
+                AuditLog.actor_uid == actor_uid, AuditLog.event_type == event_type
+            )
+        ).scalar_one()
+
+
 def _build_app():
     """Mount the REAL ``admin_router`` under the default-deny ``protected_router``."""
     from fastapi import FastAPI
@@ -919,3 +937,279 @@ def test_reactivate_space_unknown_space_returns_404(
         assert react.call_args_list == [], "a 404 must not touch the IdP"
     finally:
         app.dependency_overrides.clear()
+
+
+# ===========================================================================
+# D-23.2-09 — IdP FIRST, DB second, on BOTH verbs (23.2-CONTEXT § 5, F-04 + F-07)
+# ===========================================================================
+
+
+def test_reactivate_partial_idp_failure_flips_only_the_members_the_idp_enabled(
+    engine, monkeypatch, superadmin_engine
+):
+    """F-07's first half: a re-enable the IdP REFUSED must not read as restored.
+
+    The mirror of the deactivate partial-failure test, on the verb that carried no
+    partial-failure coverage at all before D-23.2-09. The fake raises on the SECOND member,
+    proving at once that the loop does not stop early, that the two members the IdP DID
+    enable are ``active``, and that the member it refused is STILL ``space_deactivated``.
+
+    That last row is the whole fix. ``reactivate_space``'s target filter selects exactly
+    ``space_deactivated`` rows, so flipping the refused member anyway (the pre-D-23.2-09
+    ordering) makes the verb one-shot: the account stays disabled in the IdP forever while
+    the database says it is back.
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    mids = [uuid.uuid4() for _ in range(3)]
+    uids = ["uid-one", "uid-two", "uid-three"]
+    emails = [f"member{i}@x.com" for i in range(3)]
+    try:
+        with engine.begin() as conn:
+            _create_space(
+                conn, space_id, "Reactivate Partial Failure", status="deactivated"
+            )
+            for mid, uid, email in zip(mids, uids, emails, strict=True):
+                _create_membership(
+                    conn, mid, space_id, uid=uid, email=email, status=SPACE_DEACTIVATED
+                )
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        actor = f"super-cascade-{uuid.uuid4()}"
+        app.dependency_overrides[get_current_identity] = _as(_superadmin(actor))
+
+        def _raise_on_second(uid):
+            if uid == "uid-two":
+                raise RuntimeError("IdP unavailable")
+
+        react = MagicMock(side_effect=_raise_on_second)
+        with _fake_admin_sdk(reactivate=react):
+            client = TestClient(app)
+            resp = client.post(
+                f"/admin/spaces/{space_id}/reactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+
+        assert resp.status_code == 502, (
+            f"a partial IdP failure must be 502, got {resp.status_code} ({resp.text!r})"
+        )
+
+        attempted = sorted(call.args[0] for call in react.call_args_list)
+        assert attempted == sorted(uids), (
+            f"the loop stopped early — only {attempted} were attempted"
+        )
+
+        body = resp.text
+        assert "@" not in body, f"the 502 body leaked an email: {body!r}"
+        for uid in uids:
+            assert uid not in body, f"the 502 body leaked a uid ({uid}): {body!r}"
+        assert "1" in body, "the 502 detail must state HOW MANY members are still disabled"
+
+        # organizations.status is bookkeeping and grants no access, so the space flip is
+        # kept as the operator's record of intent even on the partial-failure path.
+        assert _space_status(engine, space_id) == "active", (
+            "the 502 rolled back the space flip — the record of intent is lost"
+        )
+
+        checked = 0
+        for mid, uid in zip(mids, uids, strict=True):
+            got = _status_of(engine, mid)
+            if uid == "uid-two":
+                assert got == SPACE_DEACTIVATED, (
+                    "the member whose IdP re-enable FAILED was flipped to active anyway — "
+                    "the DB now claims restored access the IdP never granted, and the "
+                    f"retry will never select the row again. Status: {got!r}"
+                )
+            else:
+                assert got == "active", (
+                    f"a member the IdP DID enable was left at {got!r}"
+                )
+            checked += 1
+        assert checked == 3, f"the status split checked {checked} rows, expected 3"
+
+        meta = _audit_metadata(engine, actor_uid=actor, event_type="space.reactivated")
+        assert meta["members_restored"] == 2, (
+            "members_restored must count the rows this call ACTUALLY flipped, not "
+            f"len(targets) — otherwise the audit trail inherits the over-claim. Got {meta}"
+        )
+        assert meta["idp_failed_uids"] == ["uid-two"], (
+            f"the failed uid belongs in the audit row, not the response body. Got {meta}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_re_issuing_reactivate_retries_the_member_whose_idp_call_failed(
+    engine, monkeypatch, superadmin_engine
+):
+    """F-07 proper: pressing reactivate twice must RETRY the member the IdP refused.
+
+    Deactivate has always been retryable — its target list deliberately includes rows that
+    are already ``space_deactivated``. Reactivate could not be given the same treatment
+    (widening its filter to ``!= active`` would sweep up the individually deactivated
+    members and undo T-23.1-08), so the ORDERING is the entire fix: flip after the IdP
+    call, and the refused member keeps the status the retry selects on.
+
+    Before D-23.2-09 the second press returned 200 having attempted NOTHING, because the
+    first press had already marked every row active — the failure message's "Re-issue this
+    request to retry" was a no-op on this verb.
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    mids = [uuid.uuid4() for _ in range(3)]
+    uids = ["uid-one", "uid-two", "uid-three"]
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Reactivate Retry Space", status="deactivated")
+            for mid, uid in zip(mids, uids, strict=True):
+                _create_membership(
+                    conn, mid, space_id, uid=uid, status=SPACE_DEACTIVATED
+                )
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        actor_first = f"super-cascade-{uuid.uuid4()}"
+        app.dependency_overrides[get_current_identity] = _as(_superadmin(actor_first))
+
+        first = MagicMock(
+            side_effect=lambda uid: (_ for _ in ()).throw(RuntimeError("IdP down"))
+            if uid == "uid-two"
+            else None
+        )
+        with _fake_admin_sdk(reactivate=first):
+            client = TestClient(app)
+            resp1 = client.post(
+                f"/admin/spaces/{space_id}/reactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+        assert resp1.status_code == 502, (
+            f"first press should report the partial failure, got {resp1.status_code}"
+        )
+
+        actor_second = f"super-cascade-{uuid.uuid4()}"
+        app.dependency_overrides[get_current_identity] = _as(_superadmin(actor_second))
+        second = MagicMock(return_value=None)
+        with _fake_admin_sdk(reactivate=second):
+            client = TestClient(app)
+            resp2 = client.post(
+                f"/admin/spaces/{space_id}/reactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+
+        assert resp2.status_code == 200, (
+            f"the retry should succeed, got {resp2.status_code} ({resp2.text!r})"
+        )
+        retried = [call.args[0] for call in second.call_args_list]
+        assert retried == ["uid-two"], (
+            "F-07: the retry did not re-attempt exactly the member whose re-enable "
+            "failed. With the DB flipped BEFORE the IdP call the first press marks every "
+            "row active, so the second press selects nothing and returns 200 having done "
+            f"NOTHING while the account stays disabled. Observed call_args_list: {retried}"
+        )
+        assert _status_of(engine, mids[1]) == "active", (
+            "the retry must finally restore the member the first press could not"
+        )
+
+        # PER-CALL semantics: an audit row records what ITS OWN event did. A reader
+        # reconstructs total state by summing the sequence (2 + 1), so a clean retry
+        # legitimately reports ONE even though all three members are now active.
+        meta = _audit_metadata(
+            engine, actor_uid=actor_second, event_type="space.reactivated"
+        )
+        assert meta["members_restored"] == 1, (
+            "the retry's audit row must count the rows THIS call flipped, not the total "
+            f"now active. Got {meta}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_re_issuing_deactivate_after_partial_failure_audits_only_this_calls_flips(
+    engine, monkeypatch, superadmin_engine
+):
+    """The deactivate retry under the NEW ordering, and the PER-CALL count it audits.
+
+    A mirror of :func:`test_re_issuing_deactivate_retries_the_member_whose_idp_call_failed`
+    (which is left untouched) with a third member and an audit assertion. It pins the
+    semantics an operator reading the trail depends on: ``members_cascaded`` is the number
+    of rows THIS call flipped, never the number of members currently down. The first press
+    flips two and the retry flips one — ``1`` on the retry is CORRECT, not a second
+    partial failure.
+    """
+    from fastapi.testclient import TestClient
+
+    space_id = uuid.uuid4()
+    mids = [uuid.uuid4() for _ in range(3)]
+    uids = ["uid-one", "uid-two", "uid-three"]
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Deactivate Retry Count Space")
+            for mid, uid in zip(mids, uids, strict=True):
+                _create_membership(conn, mid, space_id, uid=uid)
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        actor_first = f"super-cascade-{uuid.uuid4()}"
+        app.dependency_overrides[get_current_identity] = _as(_superadmin(actor_first))
+
+        first = MagicMock(
+            side_effect=lambda uid: (_ for _ in ()).throw(RuntimeError("IdP down"))
+            if uid == "uid-two"
+            else None
+        )
+        with _fake_admin_sdk(deactivate=first):
+            client = TestClient(app)
+            resp1 = client.post(
+                f"/admin/spaces/{space_id}/deactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+        assert resp1.status_code == 502, (
+            f"first press should report the partial failure, got {resp1.status_code}"
+        )
+        meta_first = _audit_metadata(
+            engine, actor_uid=actor_first, event_type="space.deactivated"
+        )
+        assert meta_first["members_cascaded"] == 2, (
+            f"the first press flipped exactly two rows. Got {meta_first}"
+        )
+
+        actor_second = f"super-cascade-{uuid.uuid4()}"
+        app.dependency_overrides[get_current_identity] = _as(_superadmin(actor_second))
+        second = MagicMock(return_value=None)
+        with _fake_admin_sdk(deactivate=second):
+            client = TestClient(app)
+            resp2 = client.post(
+                f"/admin/spaces/{space_id}/deactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+
+        assert resp2.status_code == 200, (
+            f"the retry should succeed, got {resp2.status_code} ({resp2.text!r})"
+        )
+        retried = sorted(call.args[0] for call in second.call_args_list)
+        assert retried == sorted(uids), (
+            "the retry must re-attempt EVERY member — the already-space_deactivated rows "
+            f"stay in the target list precisely so this works. Attempted: {retried}"
+        )
+        for mid in mids:
+            assert _status_of(engine, mid) == SPACE_DEACTIVATED
+
+        meta_second = _audit_metadata(
+            engine, actor_uid=actor_second, event_type="space.deactivated"
+        )
+        assert meta_second["members_cascaded"] == 1, (
+            "PER-CALL semantics: the retry flipped ONE row (the other two were already "
+            "space_deactivated), so it audits 1 even though three members are now down. "
+            f"Got {meta_second}"
+        )
+        assert meta_second["idp_failed_uids"] == [], (
+            f"the retry had a healthy IdP. Got {meta_second}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
