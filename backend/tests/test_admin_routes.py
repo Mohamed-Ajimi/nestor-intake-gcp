@@ -920,3 +920,285 @@ def test_duplicate_invite_returns_409(engine, monkeypatch, superadmin_engine):
     finally:
         app.dependency_overrides.clear()
         _cleanup_space(engine, space_id)
+
+
+# ===========================================================================
+# D-23.2-10 — a deactivated space accepts no NEW access (23.2-CONTEXT § 5)
+#
+# The space cascade only ever visits the members that existed when it ran. Anything that
+# mints or restores access afterwards therefore opens a hole no cascade will ever close:
+# the space reads "deactivated" on the operator's console while a live member sits in it.
+# 409 (not 404) is deliberate — the caller is a superadmin who legitimately lists this
+# space, so hiding it would be a lie about a resource they can already see.
+# ===========================================================================
+
+
+def _deactivate_space_row(engine, space_id: uuid.UUID) -> None:
+    """Flip a seeded organization to ``status='deactivated'`` directly.
+
+    ``_create_space`` takes no status (the admin suite's spaces are all active), and going
+    through ``POST /admin/spaces/{id}/deactivate`` would drag the whole cascade — and its
+    Admin-SDK doubles — into tests that are about a LATER call. A direct UPDATE seeds the
+    one precondition under test and nothing else.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"UPDATE {SCHEMA}.organizations SET status = 'deactivated' WHERE id = :id"),
+            {"id": space_id},
+        )
+
+
+def test_invite_into_a_deactivated_space_returns_409_and_mints_no_idp_account(
+    engine, monkeypatch, superadmin_engine
+):
+    """D-23.2-10: inviting into a deactivated space is refused BEFORE any side effect.
+
+    Four negatives, because a 409 that had already minted the IdP account is the failure
+    that actually matters — it leaves an enabled Identity Platform user with no membership
+    row to ever find it by, and no cascade can reach it.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    email = f"newcomer-{uuid.uuid4()}@x.com"
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Deactivated Invite Space")
+        _deactivate_space_row(engine, space_id)
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        # Audit rows for actor "super" outlive individual tests, so assert on the DELTA
+        # rather than an absolute count.
+        before = _count_audit(engine, actor_uid="super", event_type="user.invited")
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.post(
+                "/admin/users",
+                json={"email": email, "space_id": str(space_id)},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            # Inside the patch context the module attribute IS the MagicMock.
+            minted = list(admin_users.create_invited_user.call_args_list)
+
+        assert resp.status_code == 409, (
+            "inviting into a deactivated space must be 409 — the space grants no access, "
+            f"so a new ACTIVE member in it is a hole no cascade closes. Got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+        assert minted == [], (
+            f"the refusal came AFTER the IdP account was minted: {minted}"
+        )
+        assert "action_link" not in resp.text, (
+            f"a refused invite must not return an action link: {resp.text!r}"
+        )
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.organization_memberships "
+                    "WHERE organization_id = :org"
+                ),
+                {"org": space_id},
+            ).scalar_one()
+        assert rows == 0, f"a refused invite landed {rows} membership row(s)"
+
+        after = _count_audit(engine, actor_uid="super", event_type="user.invited")
+        assert after == before, (
+            f"a refused invite wrote {after - before} user.invited audit row(s)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_invite_into_a_deactivated_space_refuses_before_the_duplicate_check(
+    engine, monkeypatch, superadmin_engine
+):
+    """The space guard fires BEFORE the duplicate-membership 409, and says so.
+
+    Both refusals are 409, so ordering is only observable through the message. An operator
+    told "User already invited to this space" would go looking for a member to remove; the
+    real problem is the space itself. The two must stay distinguishable.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    email = f"dup-{uuid.uuid4()}@x.com"
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Deactivated Duplicate Space")
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.organization_memberships "
+                    "(id, organization_id, provider_user_id, email, role, status) "
+                    "VALUES (:id, :org, 'existing-uid', :email, 'user', 'active')"
+                ),
+                {"id": uuid.uuid4(), "org": space_id, "email": email},
+            )
+        _deactivate_space_row(engine, space_id)
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.post(
+                "/admin/users",
+                json={"email": email, "space_id": str(space_id)},
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            minted = list(admin_users.create_invited_user.call_args_list)
+
+        assert resp.status_code == 409, (
+            f"expected 409, got {resp.status_code} ({resp.text!r})"
+        )
+        assert "already invited" not in resp.text, (
+            "the DUPLICATE message won the race — the space guard must be evaluated "
+            f"first, or the operator is sent after the wrong problem: {resp.text!r}"
+        )
+        assert "deactivated" in resp.text, (
+            f"the 409 must name the deactivated space as the reason: {resp.text!r}"
+        )
+        assert minted == [], f"a refused invite touched the IdP: {minted}"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_reactivate_user_in_a_deactivated_space_returns_409_and_changes_nothing(
+    engine, monkeypatch, superadmin_engine
+):
+    """D-23.2-10: the INDIVIDUAL reactivate must not hand access back inside a dead space.
+
+    Without this guard, ``POST /admin/users/{id}/reactivate`` restores a member the space
+    cascade just took down — an undocumented way to re-enter a deactivated space one
+    member at a time, with the space still reading "deactivated" to the operator.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    membership_id = uuid.uuid4()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Deactivated Reactivate Space")
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.organization_memberships "
+                    "(id, organization_id, provider_user_id, email, role, status) "
+                    "VALUES (:id, :org, 'cascaded-uid', 'cascaded@x.com', 'user', "
+                    "'space_deactivated')"
+                ),
+                {"id": membership_id, "org": space_id},
+            )
+        _deactivate_space_row(engine, space_id)
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        before = _count_audit(engine, actor_uid="super", event_type="user.reactivated")
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.post(
+                f"/admin/users/{membership_id}/reactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            enabled = list(admin_users.reactivate_user.call_args_list)
+
+        assert resp.status_code == 409, (
+            "reactivating a member of a deactivated space must be 409, got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+        assert enabled == [], (
+            f"the refusal came AFTER the IdP account was re-enabled: {enabled}"
+        )
+
+        with engine.connect() as conn:
+            status = conn.execute(
+                text(
+                    f"SELECT status FROM {SCHEMA}.organization_memberships WHERE id = :id"
+                ),
+                {"id": membership_id},
+            ).scalar_one()
+        assert status == "space_deactivated", (
+            f"a refused reactivate flipped the membership row anyway: {status!r}"
+        )
+
+        after = _count_audit(engine, actor_uid="super", event_type="user.reactivated")
+        assert after == before, (
+            f"a refused reactivate wrote {after - before} user.reactivated audit row(s)"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
+
+
+def test_deactivate_user_in_a_deactivated_space_still_succeeds(
+    engine, monkeypatch, superadmin_engine
+):
+    """The individual DEACTIVATE deliberately carries NO space guard — do not symmetrise.
+
+    D-23.2-10 guards the two verbs that GRANT access. Deactivating a member of an already
+    deactivated space is a safe, idempotent narrowing: it can only remove access, and it is
+    how an operator fires someone whose space is down. A future reader tempted to
+    "harmonise" the three verbs breaks this test, which is the point of it existing.
+    """
+    from fastapi.testclient import TestClient
+    from sqlalchemy import text
+
+    space_id = uuid.uuid4()
+    membership_id = uuid.uuid4()
+    try:
+        with engine.begin() as conn:
+            _create_space(conn, space_id, "Deactivated Narrowing Space")
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.organization_memberships "
+                    "(id, organization_id, provider_user_id, email, role, status) "
+                    "VALUES (:id, :org, 'still-live-uid', 'live@x.com', 'user', 'active')"
+                ),
+                {"id": membership_id, "org": space_id},
+            )
+        _deactivate_space_row(engine, space_id)
+
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app = _build_app()
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+
+        with _fake_admin_sdk():
+            client = TestClient(app)
+            resp = client.post(
+                f"/admin/users/{membership_id}/deactivate",
+                headers={"Authorization": "Bearer ignored-overridden"},
+            )
+            disabled = list(admin_users.deactivate_user.call_args_list)
+
+        assert resp.status_code == 200, (
+            "deactivating a member of a deactivated space must still succeed — it only "
+            f"ever narrows access. Got {resp.status_code} ({resp.text!r})"
+        )
+        assert [c.args[0] for c in disabled] == ["still-live-uid"], (
+            f"the IdP disable must still happen: {disabled}"
+        )
+        with engine.connect() as conn:
+            status = conn.execute(
+                text(
+                    f"SELECT status FROM {SCHEMA}.organization_memberships WHERE id = :id"
+                ),
+                {"id": membership_id},
+            ).scalar_one()
+        assert status == "deactivated", f"expected 'deactivated', got {status!r}"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_space(engine, space_id)
