@@ -742,7 +742,7 @@ Plans:
 - [ ] 23.2-08-PLAN.md — wave 2: `structure_answers` sources `valid_keys` from the canonical schema; an empty set now denies (D-23.2-16)
 - [ ] 23.2-09-PLAN.md — wave 3: the server-side answer-write policy, including the `proposal_list` exception that keeps the client's validation tick alive (D-23.2-05, D-23.2-06, D-23.2-07)
 - [ ] 23.2-10-PLAN.md — wave 4: alembic 0016 partial unique index + `patch_if` CAS + in-tx `attempt`, so a concurrent trigger cannot buy a second ~$45 run (D-23.2-12)
-- [ ] 23.2-11-PLAN.md — wave 5: the merged-head seam check, the 43-route gate walk, and the deferral register
+- [ ] 23.2-11-PLAN.md — wave 5: the merged-head seam check, the 65-route gate walk (26 gated), widening the client pin from 10 routes to 17, and the deferral register
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
