@@ -55,7 +55,13 @@ from app.auth.dependencies import get_current_identity
 from app.auth.identity import Identity
 from app.db.session import get_intake_and_source_repos
 from app.storage import gcs
-from app.storage.keys import ALLOWED_EXT, CATEGORIES, build_object_key
+from app.storage.keys import (
+    ALLOWED_EXT,
+    CATEGORIES,
+    CLIENT_WRITABLE_CATEGORIES,
+    build_object_key,
+    category_of,
+)
 
 # The storage feature router. NO auth dependency of its own — mounted UNDER protected_router
 # in app/main.py (inherits Depends(get_current_identity)). prefix mirrors intake_router so the
@@ -146,11 +152,19 @@ def upload_file(
 
     Gate order (fail before the seam): (1) SIZE — authoritative ``read(_MAX_BYTES + 1)``,
     over-cap -> 413 (D-02/D-03); (2) TYPE — declared-MIME extension outside the D-04
-    allowlist -> 415, an unknown ``category`` -> 422; (3) OWNERSHIP — a cross-tenant /
-    missing intake -> 404 (existence hidden, D-08). Only then is the key built from the
-    verified tenant's ``space_id`` (D-05) and uploaded. An ``audio`` upload additionally
-    creates a space-scoped ``intake_sources`` row (``storage_path == key``) in the SAME
-    tx (D-07) so the Phase-7 transcribe flow can find the object with no client bookkeeping.
+    allowlist -> 415, an unknown ``category`` -> 422; (2c) ROLE — a ``category`` outside
+    :data:`CLIENT_WRITABLE_CATEGORIES` for a non-superadmin -> 422 (D-23.2-17), placed in
+    the type-check band so the refusal PRECEDES the body read; (3) OWNERSHIP — a
+    cross-tenant / missing intake -> 404 (existence hidden, D-08). Only then is the key
+    built from the verified tenant's ``space_id`` (D-05) and uploaded. An ``audio`` upload
+    additionally creates a space-scoped ``intake_sources`` row (``storage_path == key``) in
+    the SAME tx (D-07) so the Phase-7 transcribe flow can find the object with no client
+    bookkeeping.
+
+    The (2c) rule is the UPLOAD half of a pair: :func:`delete_objects` below applies the
+    SAME :data:`CLIENT_WRITABLE_CATEGORIES` to the delete direction, so a category can
+    never become uploadable-but-undeletable. Both read the one constant defined in
+    ``app/storage/keys.py``; neither route defines its own copy.
     """
     intake_repo, source_repo = repos
 
@@ -163,6 +177,36 @@ def upload_file(
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Unknown storage category {category!r}",
+        )
+
+    # (2c) ROLE — a client may write ONLY the categories a client uploads (D-23.2-17).
+    # `artifacts` and `reports` are operator-produced; without this check a role=user
+    # could write objects into the operator's deliverable prefix on a tenant-billed
+    # bucket — and this route is the only producer of a `reports/` key, the shape
+    # `_assert_report_key` (app/api/intake_routes.py) accepts at delivery time.
+    #
+    # 422, NOT the delete side's 404, and the asymmetry is deliberate — do NOT
+    # "harmonise" the two codes:
+    #   * `category` is a form VALUE from a fixed four-item vocabulary that the (2a)
+    #     error message directly above already spells out, so there is nothing to hide.
+    #     On delete the caller supplies an object KEY whose existence must stay hidden
+    #     (D-07), which is why that direction answers 404.
+    #   * 422 also matches the neighbouring (2a) refusal, so one route speaks one
+    #     language about the same form field.
+    #
+    # PLACEMENT IS LOAD-BEARING: this sits in the type-check band, BEFORE
+    # `file.file.read(_MAX_BYTES + 1)` further down. Moved below that read, an
+    # unauthorized caller still makes the server ingest 25 MB per request; the
+    # observable signature of that mistake is an oversized forbidden upload answering
+    # 413 instead of 422 (pinned by
+    # tests/test_storage_upload.py::test_upload_forbidden_category_refused_before_the_body_read).
+    #
+    # Polarity is deny-by-default: `!= "superadmin"`, never `== "user"`, so any role
+    # value that is not exactly the superadmin literal gets the restricted set.
+    if identity.role != "superadmin" and category not in CLIENT_WRITABLE_CATEGORIES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Storage category {category!r} is not writable by this caller",
         )
 
     # (2b) TYPE — reject an extension outside the D-04 allowlist (before reading bytes).
@@ -279,11 +323,37 @@ def delete_objects(
 ) -> DeleteResult:
     """Delete object(s) AND clean the matching ``intake_sources`` ref(s) in ONE tx (D-09).
 
-    Ownership 404; then a per-key PREFIX assert (any mismatch -> 404, D-08) BEFORE any
-    seam call — so a forged key never reaches GCS or the DB. For each validated key:
-    ``gcs.delete_object`` (idempotent on an already-gone object) then the scoped
-    ``intake_sources`` ref cleanup on the SAME session (T-09-09 — no dangling ref, no
-    orphaned object). Returns the count of objects removed.
+    Ownership 404; then a per-key PREFIX assert (any mismatch -> 404, D-08) and a per-key
+    CATEGORY assert (D-23.2-08), both BEFORE any seam call — so a forged or forbidden key
+    never reaches GCS or the DB. For each validated key: ``gcs.delete_object`` (idempotent
+    on an already-gone object) then the scoped ``intake_sources`` ref cleanup on the SAME
+    session (T-09-09 — no dangling ref, no orphaned object). Returns the count removed.
+
+    CATEGORY RULE (D-23.2-08 — F-03). The prefix assert alone is not authorization: a
+    report lives at ``{space}/{intake}/reports/{uuid}-{name}.pdf``, INSIDE the caller's own
+    prefix, and ``GET /intakes/{id}/report`` deliberately hands the client that exact
+    ``storage_path`` for the download flow. Possession of a path was therefore permission to
+    destroy the object behind it. So a non-superadmin may delete ONLY the categories in
+    :data:`CLIENT_WRITABLE_CATEGORIES` (``attachments`` and ``audio`` — the two a client can
+    upload); ``artifacts`` and ``reports`` are operator-produced. A superadmin may delete
+    any category.
+
+    A denial is EXISTENCE-HIDDEN: it reuses the prefix branch's ``HTTPException(404,
+    "Object not found")`` byte-for-byte. Not 403, and not a distinct message — a caller who
+    could tell "wrong prefix" from "wrong category" apart would learn that the object exists
+    and is an operator artifact, the disclosure the 404 exists to prevent (D-07). This is
+    the deliberate counterpart to :func:`upload_file`'s 422, where ``category`` is a form
+    value from a vocabulary that route's own error already prints.
+
+    THE CATEGORY IS PARSED, NEVER SUBSTRING-MATCHED. ``category_of`` takes the third path
+    segment, so ``{space}/{intake}/attachments/{uuid}-quarterly_reports.pdf`` — an ordinary
+    client attachment whose filename merely contains the word — stays deletable. A key that
+    does not parse (third segment outside ``CATEGORIES``) is 404 for EVERY role: it cannot
+    have been authored by ``build_object_key``.
+
+    THE CHECK IS IN THE PRE-VALIDATION LOOP, not the deletion loop — all-or-nothing. In the
+    deletion loop it would destroy the first N objects of a mixed batch and only then
+    refuse, exactly the partial destruction the pre-loop exists to prevent.
     """
     intake_repo, source_repo = repos
 
@@ -295,10 +365,20 @@ def delete_objects(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     prefix = f"{intake.space_id}/{intake_id}/"
-    # Validate EVERY key BEFORE deleting anything — an all-or-nothing prefix gate so a
-    # forged key in the batch can never reach the seam (D-08).
+    # Validate EVERY key BEFORE deleting anything — an all-or-nothing gate so a forged or
+    # forbidden key in the batch can never reach the seam (D-08 / D-23.2-08).
     for key in body.paths:
         if not key.startswith(prefix):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
+        # A key that cannot have been authored by build_object_key — forged, or a shape
+        # the server no longer produces. "Not found" for every role (D-23.2-08).
+        category = category_of(key)
+        if category is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
+        # Deny-by-default polarity: `!= "superadmin"`, never `== "user"`. Same 404, same
+        # message as the prefix branch above — a distinct code or wording here would be a
+        # discriminator telling the caller the object exists and is operator-owned (D-07).
+        if identity.role != "superadmin" and category not in CLIENT_WRITABLE_CATEGORIES:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
 
     removed = 0
