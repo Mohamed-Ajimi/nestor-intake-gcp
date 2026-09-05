@@ -237,3 +237,188 @@ def test_context_pack_writes_artifact_and_decomposes(
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
+
+
+# ---------------------------------------------------------------------------
+# D-23.2-01 — hop 3 of F-01: admin-only answers must never enter the LLM prompt.
+# ---------------------------------------------------------------------------
+
+#: Two ORDINARY (non-admin-only) canonical field keys used as the anti-vacuity
+#: control. They must SURVIVE the filter, otherwise "no admin sentinel in the
+#: prompt" is satisfied by an empty prompt just as well as by a correct filter.
+_ORDINARY_SEED = {
+    "decision_or_goal": "ORDINARYSENTINEL-decision-or-goal",
+    "audience_description": "ORDINARYSENTINEL-audience-description",
+}
+
+
+def _admin_seed() -> dict:
+    """One DISTINCT, NON-EMPTY sentinel per admin-only key — derived, never hand-listed.
+
+    Derived from ``admin_only_field_keys()`` (D-23.2-02) so a fifth admin-only field
+    added to ``pulse_intake_v1.json`` later is seeded and asserted automatically.
+
+    NON-EMPTY is mandatory: ``_format_intake_markdown`` skips ``value in (None, "")``,
+    so an empty admin answer is absent from the prompt even with NO filter in place, and
+    the test would be green before the fix — decoration, not a gate.
+    """
+    from app.intake_canonical import admin_only_field_keys
+
+    return {key: f"ADMINSENTINEL-{key}-VALUE" for key in sorted(admin_only_field_keys())}
+
+
+def _seed_answers(engine, set_space, space_id, intake_id, answers: dict) -> None:
+    """Insert ``intake_answers`` rows under the space GUC (the 0002 WITH CHECK)."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        for field_key, value in answers.items():
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.intake_answers "
+                    "(space_id, intake_id, field_key, value) "
+                    "VALUES (:space_id, :intake_id, :field_key, :value)"
+                ),
+                {
+                    "space_id": space_id,
+                    "intake_id": intake_id,
+                    "field_key": field_key,
+                    "value": value,
+                },
+            )
+
+
+def test_context_pack_prompt_excludes_admin_only_answers(
+    engine, set_space, monkeypatch, fake_anthropic, superadmin_engine
+):
+    """D-23.2-01 / F-01 hop 3 — admin-only answers never reach the context-pack prompt.
+
+    The generated pack lands as ``research_artifacts.text_content``, which
+    ``GET /intakes/{id}/context-pack`` (``intake_routes.py:629``) serves to ``role=user``
+    by design. So anything in the PROMPT can come back out as prose the client reads.
+    This case therefore asserts on the CAPTURED PROMPT, not on the response body — the
+    filter must be on the INPUT, because no output filter removes a paraphrase.
+
+    The filter is UNCONDITIONAL, and this case is driven as a SUPERADMIN on purpose:
+    ``ai_router`` is superadmin-gated (D-23.1-02), so a superadmin is the ONLY reachable
+    caller. A filter keyed on ``identity.role`` would never fire, and would fail here.
+    """
+    from sqlalchemy import text
+    from fastapi.testclient import TestClient
+
+    from app.ai.prompts import CONTEXT_PACK_SKILL_PROMPT
+    from app.intake_canonical import admin_only_field_keys
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    admin_seed = _admin_seed()
+    fake = fake_anthropic("# Context Pack\n\nDe gedecomponeerde briefing.")
+    monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
+
+    app = _build_app()
+    try:
+        _seed_intake(engine, set_space, space, intake_id)
+        _seed_answers(engine, set_space, space, intake_id, admin_seed)
+        _seed_answers(engine, set_space, space, intake_id, _ORDINARY_SEED)
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/skills/context-pack",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code in (200, 202), (
+            f"context-pack should accept + schedule, got {resp.status_code} "
+            f"(body={resp.text!r})."
+        )
+        assert fake.calls, "Claude was never called for the context pack."
+
+        prompt = fake.calls[0]["messages"][0]["content"]
+
+        # --- THE SEED LANDED. "The filter worked" and "the seed never landed" produce the
+        #     same absence; this separates them.
+        with engine.begin() as conn:
+            set_space(conn, space)
+            seeded_admin = conn.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.intake_answers "
+                    "WHERE intake_id = :iid AND field_key = ANY(:keys)"
+                ),
+                {"iid": intake_id, "keys": sorted(admin_only_field_keys())},
+            ).scalar_one()
+        assert seeded_admin == len(admin_seed) == 4, (
+            f"the admin-only answers must EXIST in the database — seeded "
+            f"{len(admin_seed)}, found {seeded_admin}. Without this, the absence "
+            f"assertions below would pass on a seed that never landed."
+        )
+
+        # --- NEITHER the admin VALUE nor the admin KEY may appear. The key matters on its
+        #     own: `_format_intake_markdown` emits `**{field_key}**: {value}`, so the key
+        #     is disclosed even when the value is short.
+        checked = 0
+        for field_key, sentinel in admin_seed.items():
+            assert sentinel not in prompt, (
+                f"admin-only answer value for {field_key!r} reached the LLM prompt: "
+                f"{sentinel!r} is present. The pack generated from this prompt is served "
+                f"to role=user by GET /intakes/{{id}}/context-pack (D-23.2-01)."
+            )
+            assert field_key not in prompt, (
+                f"admin-only field KEY {field_key!r} reached the LLM prompt "
+                f"(_format_intake_markdown emits '**{{field_key}}**: ...')."
+            )
+            checked += 1
+        assert checked == len(admin_only_field_keys()) == 4, (
+            f"anti-vacuity: the absence loop must run once per admin-only key — checked "
+            f"{checked}, admin_only_field_keys() has {len(admin_only_field_keys())}."
+        )
+
+        # --- ANTI-VACUITY: an empty prompt, a vanished intake, or an over-wide filter
+        #     that dropped everything would satisfy the four assertions above.
+        for field_key, sentinel in _ORDINARY_SEED.items():
+            assert sentinel in prompt, (
+                f"ordinary answer {field_key!r} is MISSING from the prompt — the filter "
+                f"is over-wide and the operator is paying for a pack built from nothing."
+            )
+
+        # --- NO PROMPT-INSTRUCTION WORKAROUND. Telling the model to omit the strategic
+        #     analysis is not a control: the content would still be in the prompt, and the
+        #     model's compliance is not a boundary.
+        assert fake.calls[0]["system"] == CONTEXT_PACK_SKILL_PROMPT, (
+            "the context-pack system prompt must be byte-identical to "
+            "CONTEXT_PACK_SKILL_PROMPT — a 'please omit ...' instruction is not a "
+            "confidentiality control (D-23.2-01)."
+        )
+
+        # --- THE PACK STILL LANDS. A filter that emptied `answers` would break the flow.
+        with engine.begin() as conn:
+            set_space(conn, space)
+            artifact = conn.execute(
+                text(
+                    f"SELECT id, text_content FROM {SCHEMA}.research_artifacts "
+                    "WHERE intake_id = :iid ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"iid": intake_id},
+            ).first()
+            intake_row = conn.execute(
+                text(
+                    f"SELECT status, context_pack_artifact_id "
+                    f"FROM {SCHEMA}.intakes WHERE id = :iid"
+                ),
+                {"iid": intake_id},
+            ).first()
+
+        assert artifact is not None, "a research_artifacts row must still be written."
+        artifact_id, text_content = artifact
+        assert text_content, "the artifact must still persist text_content."
+        assert intake_row is not None
+        assert intake_row[0] == "decomposed", (
+            f"the intake must still advance to 'decomposed', got {intake_row[0]!r}."
+        )
+        assert str(intake_row[1]) == str(artifact_id), (
+            "intakes.context_pack_artifact_id must still point at the new artifact."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)

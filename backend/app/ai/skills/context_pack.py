@@ -50,6 +50,7 @@ from app.db.repository import (
     IntakeRepository,
     SkillRunRepository,
 )
+from app.intake_canonical import admin_only_field_keys
 
 # max_tokens for the context-pack call — legacy parity (generate-context-pack.ts:363).
 _CONTEXT_PACK_MAX_TOKENS = 8192
@@ -136,6 +137,28 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
 
     A refused transition is NOT an exception: the artifact is kept unlinked and the run
     finalizes ``failed`` with a readable ``error_message``. It is never left ``running``.
+
+    **WITHHELD FROM THE READ (D-23.2-01).** Every answer whose ``field_key`` is in
+    ``admin_only_field_keys()`` is dropped before ``user_message`` is built — today the
+    four ``strategic_perspective`` fields, whose own schema description reads *"Visible
+    only to admin, not to the client and not in the handoff PDF"*. The set is DERIVED from
+    the canonical schema (D-23.2-02), so a fifth admin-only field added to
+    ``pulse_intake_v1.json`` closes automatically; do not hand-write a key here.
+
+    The filter is **UNCONDITIONAL** and is deliberately NOT keyed on ``identity.role``.
+    This skill runs on the superadmin-gated ``ai_router`` (D-23.1-02), so the generator is
+    ALWAYS a superadmin and a role-conditional filter would never fire — an inert fix
+    behind a green test. The role that matters is the ARTIFACT READER's: the pack lands as
+    ``research_artifacts.text_content``, which ``GET /intakes/{id}/context-pack``
+    (``api/intake_routes.py:629``) serves to ``role=user`` by design.
+
+    **Output-side scrubbing was considered and REJECTED by D-23.2-01 — do not add one.**
+    Not a regex over ``raw``, not a redact pass on the artifact, and not an instruction in
+    the system prompt telling the model to omit the strategic analysis. A prompt
+    instruction is not a control: the content would still be in the prompt, and the
+    model's compliance is not a boundary. Once admin-only prose has been through the
+    model it comes back paraphrased, translated and re-framed, and no filter removes that
+    reliably. The INPUT is the only place this can be enforced.
     """
     model = get_settings().model_context_pack
     intake_uuid = uuid.UUID(str(intake_id))
@@ -148,9 +171,18 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
             # sentinel through call_fn/write_fn to a failed finalize (mirrors apply.py).
             return {"missing": True}
         answer_rows = IntakeAnswerRepository(session, identity).list_for_intake(intake_id)
+        # D-23.2-01 — drop admin-only answers BEFORE the prompt is built. UNCONDITIONAL, and
+        # deliberately NOT keyed on identity.role: this skill runs on the superadmin-gated
+        # ai_router (D-23.1-02), so a role check would never fire. The role that matters is
+        # the ARTIFACT READER's — the pack's text_content is served to role=user by
+        # GET /intakes/{id}/context-pack (intake_routes.py:629). Filtering the INPUT is the
+        # only reliable control: once admin-only prose is laundered through the model, no
+        # output filter can remove the paraphrase (23.2-CONTEXT § 2, hop 3).
+        hidden = admin_only_field_keys()
         answers = [
             {"field_key": row.field_key, "value": row.value, "value_json": row.value_json}
             for row in answer_rows
+            if row.field_key not in hidden
         ]
         client_name = intake.client_name
         # The artifact's space comes from the intake's OWN space (the superadmin path has
