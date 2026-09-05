@@ -4,8 +4,8 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-04T13:06:04.134Z"
-last_activity: "2026-09-04 -- Phase 23.1 EXECUTED + VERIFIED: 16 plans plus 2 gap-closure plans (17, 18). Backend 608 passed / 2 skipped / ZERO failed (was 4 failed / 450 passed at 047dcfe); frontend tsc 0, vitest 154, i18n PASS. The VERIFIER found the phase scope was ONE FILE TOO NARROW: POST /intakes/{id}/research — the ~$45 UNCAPPED trigger — was ungated and a role=user could dispatch run_poll_driver (measured 202 + row + driver). Closed, plus the SSE stream; research_router now 11 of 11 gated by live-dependency-graph walk. Migrations 0014+0015 written, both directions exercised, NOT applied. ZERO spend, NO deploy, NO run. NOTHING OBSERVED IN PRODUCTION — deploy, both migrations, 2 Cloud Build runs, tribunal CI gap (37 of 37 gate nothing), tfstate bucket and app_superadmin rotation all remain OPERATOR work."
+last_updated: "2026-09-05T14:19:14.434Z"
+last_activity: "2026-09-01 -- DEPLOYED tag `20260901-134253`: claude-sonnet-5 + gemini-3.7-flash live on tribunal-api-00023-bc6 / tribunal-worker-00009-fkm, both digests proven, NO run triggered. Tree is FULLY DEPLOYED — nothing committed-but-unbuilt."
 progress:
   total_phases: 21
   completed_phases: 15
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 23.1 (platform-hardening-authorization-boundary-space-deactivation) — EXECUTED, awaiting operator
+Phase: 23.2
 Plan: 15 of 15 complete (plan 15 at a blocking human-verify checkpoint)
 Plans 1–14 are COMPLETE. `15.8-15` (the ONE ~$45 measuring run) is the only one left, and it is
 **NOT complete**: its three tasks are all `checkpoint:human-verify gate="blocking"` operator actions.

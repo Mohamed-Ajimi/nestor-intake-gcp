@@ -723,6 +723,17 @@ Plans:
 
 - [~] 23.1-15-PLAN.md (doc written; tasks 2-4 BLOCKED on operator) — wave 6 — `23.1-UAT.md` operator hand-off, the tribunal Cloud Build gate, the deploy, and LIVE observation of the 404/200 boundary
 
+### Phase 23.2: authorization depth: field-level confidentiality, answer lifecycle and validation, operator-artifact deletion, fail-closed membership, research dispatch idempotency, and notification decoupling (INSERTED)
+
+**Goal:** Close the second authorization axis. Phase 23.1 settled *who may call which verb*; this phase settles *what a legitimate caller may see and change inside that verb*. Admin-only intake content stops reaching clients on all four propagation paths (answers, raw skill output, the canonical template, and — the one the audit missed — the context-pack generator's LLM input); client answer writes are bound server-side to the canonical schema, to field permission and to the real lifecycle policy (including the `proposal_list` exception that keeps the client's validation-phase tick alive); operator-produced storage objects can no longer be deleted by the client who is legitimately handed their path; space deactivation and reactivation become fail-closed and genuinely retryable by calling the IdP before committing the DB; a concurrent research trigger can no longer dispatch a second ~$45 uncapped run; and a mail outage can no longer rewrite a completed, paid research run as `failed`.
+**Requirements**: SEC-03 (field-level confidentiality within a tenant), SEC-04 (server-enforced write lifecycle + input validation), SEC-05 (operator artifacts are not client-deletable), SEC-02 (space deactivation revokes access — extended to fail-closed + retryable), COST-01 (no duplicate paid work — extended to research dispatch), TENANT-02 (no cross-tenant access — unchanged, must stay green)
+**Depends on:** Phase 23.1
+**Authority:** `23.2-CONTEXT.md` — the measured six-router surface enumeration, findings F-01..F-08 with file:line, and decisions D-23.2-01..16. Where the source audit and CONTEXT disagree, CONTEXT wins.
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23.2 to break down)
+
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
 **Goal:** A superadmin can deliberately re-run deep research on an intake that already succeeded, steer that re-run with a note asking for something different from previous runs, see every version of an intake's research, and read the actual cited passage grouped under its link instead of a bare URL.
