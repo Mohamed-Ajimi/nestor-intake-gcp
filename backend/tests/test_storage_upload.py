@@ -404,3 +404,219 @@ def test_superadmin_audio_upload_creates_source_in_space(
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
+
+
+# ===========================================================================
+# D-23.2-17 — the UPLOAD side of F-03, fixed here and NOT deferred
+#
+# `upload_file` used to take `category` straight from the form and validate it
+# only against CATEGORIES, with no role check. A `role=user` could therefore
+# upload into `reports/` — writing objects into the operator's deliverable prefix
+# on a tenant-billed bucket and, once D-23.2-08 landed, creating objects they
+# could no longer delete. Fixing one direction and deferring the other would have
+# MANUFACTURED that asymmetry.
+#
+# This route is the ONLY producer of a `reports/` key: `_assert_report_key` in
+# app/api/intake_routes.py accepts any staged path under `{space}/{intake}/reports/`
+# and the delivery verb then LINKS it. So this role check is what stands between a
+# `role=user` and a path the report-delivery guard would accept.
+#
+# The code is 422, NOT the delete side's 404, and the difference is deliberate:
+# on delete the caller supplies an object KEY whose existence must stay hidden
+# (D-07); on upload `category` is a form VALUE from a fixed four-item vocabulary
+# that this route's own neighbouring error message already spells out, so there
+# is nothing to hide. Do not "harmonise" the two codes.
+# ===========================================================================
+
+
+def _no_seam_calls(fake_gcs) -> bool:
+    """True when NOTHING reached the ``app.storage.gcs`` seam.
+
+    Byte-identical to ``test_storage_cross_tenant.py:151-152``.
+    """
+    return all(fake_gcs[k] == [] for k in ("uploads", "signed_urls", "deletes", "downloads"))
+
+
+def _source_count(engine, set_space, space_id, intake_id) -> int:
+    """Count the ``intake_sources`` rows for one intake, re-read as the owner."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        return conn.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.intake_sources WHERE intake_id = :id"),
+            {"id": intake_id},
+        ).scalar_one()
+
+
+def test_upload_operator_categories_denied_for_user(engine, set_space, fake_gcs, monkeypatch):
+    """A ``role=user`` uploading into ``reports`` / ``artifacts`` -> EXACTLY 422.
+
+    Nothing reaches the storage seam and no ``intake_sources`` row is written.
+    ANTI-VACUITY: ``checked == 2`` — the denial set must not be empty.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.storage.keys import CATEGORIES, CLIENT_WRITABLE_CATEGORIES
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+        client = TestClient(app)
+
+        checked = 0
+        for category in sorted(CATEGORIES - CLIENT_WRITABLE_CATEGORIES):
+            resp = client.post(
+                f"/intakes/{intake_id}/storage/uploads",
+                files={"file": ("eindrapport.pdf", b"%PDF-1.4 fake", "application/pdf")},
+                data={"category": category},
+                headers=AUTH,
+            )
+            assert resp.status_code == 422, (
+                f"D-23.2-17: a client uploading into the operator-only {category!r} prefix "
+                f"must be EXACTLY 422, got {resp.status_code} (body={resp.text!r})."
+            )
+            assert _no_seam_calls(fake_gcs), (
+                f"a denied {category!r} upload must NEVER reach the storage seam, "
+                f"got {fake_gcs['uploads']!r}."
+            )
+            checked += 1
+
+        assert checked == 2, f"exactly two operator-only categories must be denied, saw {checked}."
+        assert _source_count(engine, set_space, space, intake_id) == 0, (
+            "a denied upload must write NO intake_sources row."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_upload_forbidden_category_refused_before_the_body_read(
+    engine, set_space, fake_gcs, monkeypatch
+):
+    """An OVERSIZED forbidden upload answers 422, NOT 413 — the ordering proof.
+
+    ``read(_MAX_BYTES + 1)`` pulls up to 25 MB off the wire. A role check placed
+    after it answers 413 here, which is the observable signature of a server that
+    ingested 25 MB from an unauthorized caller before refusing. The check must sit
+    in the type-check band, immediately after the existing unknown-category 422 and
+    BEFORE any body read.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    oversize = b"x" * (MAX_BYTES + 1)
+
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/storage/uploads",
+            files={"file": ("groot-eindrapport.pdf", oversize, "application/pdf")},
+            data={"category": "reports"},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 422, (
+            "an oversized FORBIDDEN upload must be refused on the ROLE (422) before the "
+            f"body is ever read — 413 here means the 25 MB was ingested first. Got "
+            f"{resp.status_code} (body={resp.text[:200]!r})."
+        )
+        assert _no_seam_calls(fake_gcs), "the refused body must never reach the storage seam."
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_upload_unknown_category_still_422_for_both_roles(
+    engine, set_space, fake_gcs, monkeypatch, superadmin_engine
+):
+    """The pre-existing unknown-category 422 survives — the new check must not shadow it.
+
+    ``"nonsense"`` is not in CATEGORIES at all, so BOTH roles get 422 and the
+    superadmin's answer still carries the ORIGINAL message (a superadmin bypasses
+    the role check but not the vocabulary check).
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        client = TestClient(app)
+
+        for label, identity in (("user", _user(space)), ("superadmin", _superadmin())):
+            app.dependency_overrides[get_current_identity] = _as(identity)
+            resp = client.post(
+                f"/intakes/{intake_id}/storage/uploads",
+                files={"file": ("verslag.pdf", b"%PDF-1.4 fake", "application/pdf")},
+                data={"category": "nonsense"},
+                headers=AUTH,
+            )
+            assert resp.status_code == 422, (
+                f"an unknown category must stay EXACTLY 422 for {label}, got "
+                f"{resp.status_code} (body={resp.text!r})."
+            )
+            assert _no_seam_calls(fake_gcs), (
+                f"an unknown-category upload must never reach the seam ({label})."
+            )
+
+        assert "Unknown storage category" in resp.text, (
+            "the superadmin's unknown-category refusal must keep the PRE-EXISTING message — "
+            f"the new role check must not shadow it. Got {resp.text!r}."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_superadmin_can_upload_reports(
+    engine, set_space, fake_gcs, monkeypatch, superadmin_engine
+):
+    """A superadmin may still upload every category, including ``reports``.
+
+    This is the live ``FinalReportBlock.tsx:111`` path — D-23.2-17 restricts the
+    CLIENT, never the operator.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/storage/uploads",
+            files={"file": ("eindrapport.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            data={"category": "reports"},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 201, (
+            f"a superadmin report upload must stay 201, got {resp.status_code} "
+            f"(body={resp.text!r})."
+        )
+        assert len(fake_gcs["uploads"]) == 1, "the report bytes must reach the seam once."
+        key = fake_gcs["uploads"][0]["key"]
+        assert key.startswith(f"{space}/{intake_id}/reports/"), (
+            f"the report must land under the reports prefix, got {key!r}."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
