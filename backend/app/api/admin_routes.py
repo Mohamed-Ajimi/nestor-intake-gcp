@@ -547,24 +547,35 @@ def deactivate_space(
     ``revoke_refresh_tokens``, which the AUTH-04 ``check_revoked=True`` boundary
     (``dependencies.py:78``) turns into a rejection on the member's NEXT request.
 
-    Order (PLANNING RULING #2 — the IdP cannot join the DB transaction):
+    Order — **IdP FIRST, DB second** (D-23.2-09; the IdP cannot join the DB transaction):
       1. 404 if the space does not exist; read its memberships ONCE.
       2. Both T-5-15 guards, evaluated against that list BEFORE any write: never disable
          the ACTING superadmin, and never take the last active superadmin(s) down.
-      3. DB: flip every affected membership to ``space_deactivated`` (a THIRD status, so
-         :func:`reactivate_space` can restore exactly what this took and never un-fire an
-         individually deactivated member) and the space to ``deactivated``.
-      4. IdP: one ``deactivate_user`` per member with a non-null ``provider_user_id``,
+      3. IdP: one ``deactivate_user`` per member with a non-null ``provider_user_id``,
          collecting failures instead of stopping at the first.
-      5. All-clear -> 200. Any failure -> commit the DB flip and the audit row FIRST
+      4. DB: flip to ``space_deactivated`` (a THIRD status, so :func:`reactivate_space`
+         can restore exactly what this took and never un-fire an individually deactivated
+         member) ONLY the members the IdP did not refuse, and the space to ``deactivated``.
+      5. All-clear -> 200. Any failure -> commit the partial flip and the audit row FIRST
          (so the record of intent survives), then 502 whose detail carries a COUNT only —
          the uids go to the audit ``metadata`` and the log, never to the browser.
 
-    SAFE TO PRESS TWICE. Step 3 is idempotent and step 4 is idempotent, and the member
-    list deliberately includes rows that are ALREADY ``space_deactivated``, so re-issuing
-    this verb on an already-deactivated space re-attempts the IdP call for every member —
-    which is the only way a member whose disable failed in an earlier attempt ever gets
-    disabled. A status-filtered member list would make the retry a silent no-op.
+    WHY THAT ORDER (23.2-CONTEXT § 5, F-04). ``get_current_identity`` reads role/space
+    purely from token claims with zero DB reads (D-06), so the membership row is not what
+    denies a member — the IdP flag is. Flipping the row for a member the IdP REFUSED to
+    disable would make the database claim access is revoked when it is not, and the
+    operator's console would repeat that claim. Under this ordering the DB can never
+    over-claim.
+
+    A crash between steps 3 and 5 leaves members DENIED at the IdP while their rows still
+    read ``active``: they are locked out and the console under-claims. That is fail-CLOSED,
+    and it is the direction to fail in.
+
+    SAFE TO PRESS TWICE. Both steps are idempotent, and the member list deliberately
+    includes rows that are ALREADY ``space_deactivated``, so re-issuing this verb on an
+    already-deactivated space re-attempts the IdP call for every member — which is the only
+    way a member whose disable failed in an earlier attempt ever gets disabled. A
+    status-filtered member list would make the retry a silent no-op.
     """
     space = repo.get_space(space_id)
     if space is None:
@@ -601,15 +612,32 @@ def deactivate_space(
         if m.status in (_STATUS_ACTIVE, _STATUS_SPACE_DEACTIVATED)
     ]
 
-    for membership in targets:
-        if membership.status != _STATUS_SPACE_DEACTIVATED:
-            repo.set_membership_status(membership.id, _STATUS_SPACE_DEACTIVATED)
-    repo.set_space_status(space_id, _STATUS_DEACTIVATED)
-
-    # A membership whose provider_user_id is NULL (created before the IdP account exists)
-    # has nothing to disable — it is still flipped above, just skipped here.
+    # STEP 3 — the IdP goes FIRST (D-23.2-09). A membership whose provider_user_id is NULL
+    # (created before the IdP account exists) has nothing to disable and is skipped here.
     uids = [m.provider_user_id for m in targets if m.provider_user_id]
     failed = _apply_to_idp(uids, admin_users.deactivate_user, verb="deactivate_user")
+    failed_uids = set(failed)
+
+    # STEP 4 — flip ONLY what the IdP actually disabled. Two DIFFERENT things both test
+    # False here and the distinction matters: a member the IdP disabled (succeeded), and a
+    # member with no provider_user_id who was never in ``uids`` at all (nothing to
+    # disable). Both are correctly flipped; only a REFUSED member keeps its old status, so
+    # the DB never claims a revocation the IdP did not perform.
+    members_cascaded = 0
+    for membership in targets:
+        if membership.provider_user_id in failed_uids:
+            continue
+        # Re-writing an already-correct status is a pointless UPDATE; this guard is what
+        # makes the retry cheap. It is also why the count below is PER-CALL (see the
+        # audit metadata comment).
+        if membership.status != _STATUS_SPACE_DEACTIVATED:
+            repo.set_membership_status(membership.id, _STATUS_SPACE_DEACTIVATED)
+            members_cascaded += 1
+    # The space row is flipped even on partial failure. ``organizations.status`` is
+    # bookkeeping and grants no access (nothing in any auth path reads it), so recording
+    # the operator's full intent here over-claims nothing — it is the one place the DB
+    # deliberately still records the whole intent.
+    repo.set_space_status(space_id, _STATUS_DEACTIVATED)
 
     audit.log(
         repo.session,
@@ -618,7 +646,13 @@ def deactivate_space(
         target=space_id,
         space_id=space.id,
         metadata={
-            "members_cascaded": len(targets),
+            # PER-CALL, never a running total: an audit row records what ITS OWN event
+            # did, and a reader reconstructs total state by summing the sequence. A clean
+            # retry after a partial failure therefore reports 1 while three members are
+            # down — that is CORRECT, not a second partial failure. It is deliberately not
+            # ``len(targets)``, which would make the trail inherit the very over-claim
+            # D-23.2-09 removes from the membership rows.
+            "members_cascaded": members_cascaded,
             "idp_disabled": len(uids) - len(failed),
             # Identifiers belong in the audit trail (T-23.1-10 repudiation), NOT in the
             # response body (T-23.1-11 / T-06-09).
@@ -655,15 +689,31 @@ def reactivate_space(
     third status value, deactivate-then-reactivate a space would be an undocumented way to
     restore revoked access (T-23.1-08).
 
-    Same order and the same honesty as deactivate — DB flip first, then one
-    ``admin_users.reactivate_user`` (``update_user(disabled=False)``) per restored member,
-    then 200, or a committed flip plus a 502 carrying a COUNT only. Claims are NOT
-    re-issued (A3 — login-sync is idempotent). Safe to press twice: the flip is idempotent
-    and un-disabling an already-enabled account is a no-op, so a retry re-attempts any
-    member the IdP call failed for.
+    Same order and the same honesty as deactivate — **IdP FIRST** (one
+    ``admin_users.reactivate_user`` = ``update_user(disabled=False)`` per member), THEN
+    the DB flip, applied only to the members the IdP actually re-enabled, then 200; or a
+    committed partial flip plus a 502 carrying a COUNT only. Claims are NOT re-issued
+    (A3 — login-sync is idempotent).
+
+    WHY THAT ORDER (23.2-CONTEXT § 5, F-07 — this verb's version of the bug is worse than
+    deactivate's). The target filter selects EXACTLY ``space_deactivated`` rows, and it
+    cannot be widened to ``!= active`` without sweeping up the individually deactivated
+    members and undoing T-23.1-08. So under the old DB-first ordering the first press
+    marked every row ``active`` and the retry found nothing to do: it returned 200 having
+    attempted NOTHING while the account stayed disabled, making the 502's "Re-issue this
+    request to retry" a no-op. Flipping AFTER the IdP call leaves a refused member at
+    ``space_deactivated`` — the exact status the retry selects on. The ordering is the
+    whole fix; the filter is unchanged.
+
+    A crash between the IdP call and the commit leaves members ENABLED at the IdP with
+    ``space_deactivated`` rows. Nothing reads that column for authorization, so this is the
+    one asymmetry with deactivate: the re-enable simply stands and the next press
+    reconciles the row. Safe to press twice — un-disabling an already-enabled account is a
+    no-op.
 
     As on deactivate, ``organizations.status`` is bookkeeping — the IdP flag is what lets
-    the member back in.
+    the member back in, so the space row is flipped even on the partial-failure path as the
+    operator's record of intent.
     """
     space = repo.get_space(space_id)
     if space is None:
@@ -674,12 +724,25 @@ def reactivate_space(
     # the individually deactivated.
     targets = [m for m in memberships if m.status == _STATUS_SPACE_DEACTIVATED]
 
-    for membership in targets:
-        repo.set_membership_status(membership.id, _STATUS_ACTIVE)
-    repo.set_space_status(space_id, _STATUS_ACTIVE)
-
+    # The IdP goes FIRST (D-23.2-09). A membership with no provider_user_id has nothing to
+    # re-enable and is skipped here.
     uids = [m.provider_user_id for m in targets if m.provider_user_id]
     failed = _apply_to_idp(uids, admin_users.reactivate_user, verb="reactivate_user")
+    failed_uids = set(failed)
+
+    # Flip ONLY what the IdP actually re-enabled. As on deactivate, two different cases
+    # both test False here — the IdP succeeded, or there was no uid to call for — and both
+    # are correctly flipped. A REFUSED member keeps ``space_deactivated``, which is exactly
+    # what keeps them in ``targets`` on the next press (F-07).
+    members_restored = 0
+    for membership in targets:
+        if membership.provider_user_id in failed_uids:
+            continue
+        repo.set_membership_status(membership.id, _STATUS_ACTIVE)
+        members_restored += 1
+    # Bookkeeping only, kept as the record of intent even on partial failure — see the
+    # docstring and the matching comment in :func:`deactivate_space`.
+    repo.set_space_status(space_id, _STATUS_ACTIVE)
 
     audit.log(
         repo.session,
@@ -688,7 +751,10 @@ def reactivate_space(
         target=space_id,
         space_id=space.id,
         metadata={
-            "members_restored": len(targets),
+            # PER-CALL, never a running total — see the matching comment in
+            # :func:`deactivate_space`. A clean retry reports 1 while three members are
+            # back up, and that is CORRECT.
+            "members_restored": members_restored,
             "idp_enabled": len(uids) - len(failed),
             "idp_failed_uids": failed,
         },

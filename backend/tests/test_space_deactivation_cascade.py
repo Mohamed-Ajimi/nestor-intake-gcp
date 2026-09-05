@@ -676,16 +676,25 @@ def test_deactivate_space_survives_a_member_with_no_provider_user_id(
         _cleanup_space(engine, space_id)
 
 
-def test_partial_idp_failure_returns_502_with_a_count_only_and_keeps_the_db_flip(
+def test_partial_idp_failure_returns_502_and_flips_only_the_members_the_idp_disabled(
     engine, monkeypatch, superadmin_engine
 ):
     """The IdP cannot join the DB transaction, so a partial cascade is a real state.
 
-    The fake raises on the SECOND member specifically, which proves three things at once:
-    the loop does NOT stop early (the third member is still attempted), the DB flip is
-    COMMITTED despite the error response, and the 502 body carries a COUNT with no email
-    and no uid (T-23.1-11 / T-06-09 — identifiers belong in the audit row, not the
-    browser).
+    The fake raises on the SECOND member specifically, which proves four things at once:
+    the loop does NOT stop early (the third member is still attempted), the flips that DID
+    happen are COMMITTED despite the error response, the member the IdP REFUSED keeps
+    ``active`` (D-23.2-09 — the DB must never claim a revocation the IdP did not perform),
+    and the 502 body carries a COUNT with no email and no uid (T-23.1-11 / T-06-09 —
+    identifiers belong in the audit row, not the browser).
+
+    INVERTED in phase 23.2 (was
+    ``test_partial_idp_failure_returns_502_with_a_count_only_and_keeps_the_db_flip``). Its
+    closing loop asserted ``_status_of(mid) == SPACE_DEACTIVATED`` for ALL THREE members,
+    which pinned F-04 — the over-claim — as expected behaviour. Everything else about the
+    test is unchanged; only the status expectation for the refused member moved, and the
+    space-row assertion stays because ``organizations.status`` is bookkeeping that grants
+    no access.
     """
     from fastapi.testclient import TestClient
 
@@ -735,10 +744,23 @@ def test_partial_idp_failure_returns_502_with_a_count_only_and_keeps_the_db_flip
             "the 502 rolled back the space flip — the operator would see the space as "
             "active while two of its members are already disabled in the IdP"
         )
-        for mid in mids:
-            assert _status_of(engine, mid) == SPACE_DEACTIVATED, (
-                "the 502 rolled back a membership flip"
-            )
+        # D-23.2-09: the split. Flipped for the two the IdP disabled; NOT flipped for the
+        # one it refused, whose access is still live.
+        checked = 0
+        for mid, uid in zip(mids, uids, strict=True):
+            got = _status_of(engine, mid)
+            if uid == "uid-two":
+                assert got == "active", (
+                    "the member whose IdP disable FAILED was flipped anyway — the DB now "
+                    "claims access is revoked while a valid token keeps working, and the "
+                    f"operator's console repeats that claim. Status: {got!r}"
+                )
+            else:
+                assert got == SPACE_DEACTIVATED, (
+                    f"the 502 rolled back a membership flip that succeeded: {got!r}"
+                )
+            checked += 1
+        assert checked == 3, f"the status split checked {checked} rows, expected 3"
     finally:
         app.dependency_overrides.clear()
         _cleanup_space(engine, space_id)
@@ -749,9 +771,16 @@ def test_re_issuing_deactivate_retries_the_member_whose_idp_call_failed(
 ):
     """PLANNING RULING #2's whole reason for existing: pressing the verb twice must RETRY.
 
-    First press: the IdP rejects one member -> 502, everyone is ``space_deactivated`` in
-    the DB. Second press: the member list is status-BLIND, so that member is attempted
-    again — and this time it lands, and the response is 200.
+    First press: the IdP rejects one member -> 502; the member it ACCEPTED is
+    ``space_deactivated`` and the rejected one is still ``active`` (D-23.2-09 — the DB does
+    not claim a revocation the IdP refused). Second press: the member list is status-BLIND,
+    so BOTH are attempted again — and this time the rejected one lands, and the response is
+    200.
+
+    INVERTED in phase 23.2 alongside the partial-failure test above. The mid-test line
+    ``assert _status_of(engine, mid_flaky) == SPACE_DEACTIVATED`` encoded the same F-04
+    over-claim; the retry behaviour this test exists to prove is untouched, and the
+    second-press assertion below is unchanged.
     """
     from fastapi.testclient import TestClient
 
@@ -781,7 +810,13 @@ def test_re_issuing_deactivate_retries_the_member_whose_idp_call_failed(
         assert resp1.status_code == 502, (
             f"first press should report the partial failure, got {resp1.status_code}"
         )
-        assert _status_of(engine, mid_flaky) == SPACE_DEACTIVATED
+        assert _status_of(engine, mid_flaky) == "active", (
+            "the member the IdP refused must NOT be flipped — this row is the retry's own "
+            "record that the disable never happened"
+        )
+        assert _status_of(engine, mid_ok) == SPACE_DEACTIVATED, (
+            "the member the IdP DID disable must be flipped and committed"
+        )
 
         second = MagicMock(return_value=None)
         with _fake_admin_sdk(deactivate=second):
