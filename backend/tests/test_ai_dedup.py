@@ -1150,7 +1150,7 @@ def test_the_skill_run_list_projection_still_carries_created_at(
 
 
 def test_0015_downgrade_restores_a_nullable_defaultless_started_at(engine):
-    """``downgrade -1`` re-adds ``started_at`` NULLABLE, with NO default and NO index.
+    """Downgrading PAST 0015 re-adds ``started_at`` NULLABLE, with NO default and NO index.
 
     A reversal that lands the column NOT NULL, or with a ``server_default``, is not a
     reversal — it is a different column wearing the same name, and on a table with rows a
@@ -1159,21 +1159,29 @@ def test_0015_downgrade_restores_a_nullable_defaultless_started_at(engine):
 
     The re-upgrade must then remove it again, which is also what leaves the session-scoped
     engine at head for every following test.
+
+    ⚠ 23.2-10: this case used to assert ``_current_revision(engine) == "0015"`` as a
+    PRECONDITION and then step ``downgrade -1``. Both encoded "0015 is the tip", which is a
+    property of the calendar, not of 0015 — so the case went red the moment 0016 landed,
+    with nothing wrong on either side. It now downgrades to the EXPLICIT target 0014 (which
+    exercises every revision above it on the way down, 0016 included) and returns to
+    whatever head is. Not one assertion about the column or the indexes was touched; only
+    the coupling to 0015 being last was removed.
     """
     from alembic import command
 
     cfg = _alembic_cfg(engine)
 
-    assert _current_revision(engine) == REVISION_0015, (
-        "the engine fixture should have run 'alembic upgrade head', and head must be "
-        f"{REVISION_0015} — found {_current_revision(engine)!r}"
+    head_before = _current_revision(engine)
+    assert head_before is not None, (
+        "the engine fixture should have run 'alembic upgrade head' already."
     )
     indexes_before = _skill_run_index_names(engine)
 
     try:
-        command.downgrade(cfg, "-1")
+        command.downgrade(cfg, REVISION_0014)
         assert _current_revision(engine) == REVISION_0014, (
-            f"downgrade -1 from {REVISION_0015} must land on {REVISION_0014} — a "
+            f"an explicit downgrade to {REVISION_0014} must land on {REVISION_0014} — a "
             "different landing point means the chain is not linear."
         )
 
@@ -1197,7 +1205,10 @@ def test_0015_downgrade_restores_a_nullable_defaultless_started_at(engine):
     finally:
         command.upgrade(cfg, "head")
 
-    assert _current_revision(engine) == REVISION_0015
+    assert _current_revision(engine) == head_before, (
+        "the re-upgrade must return the session-scoped engine to the head it started at, "
+        f"{head_before!r} — found {_current_revision(engine)!r}"
+    )
     assert _DROPPED_COLUMN not in _skill_run_columns(engine), (
         "the re-upgrade must drop the column again — both directions are exercised here, "
         "so neither is a one-way door."
