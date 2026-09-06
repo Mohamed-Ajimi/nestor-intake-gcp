@@ -235,6 +235,13 @@ def test_answers_batch_upsert(engine, monkeypatch):
 
     The second call must NOT raise a unique violation and must NOT create a duplicate — it
     upserts on the EXISTING ``(intake_id, field_key)`` constraint.
+
+    The probe key is ``geo_scope`` — a CANONICAL ``text`` field. It used to be ``q1``, which
+    the canonical form has never defined: since D-23.2-05 the server binds a client write to
+    the canonical schema and an undefined key is 422. Only the SEED changed; the upsert claim
+    this test exists to make is untouched. ``geo_scope`` specifically because it is not
+    ``required``, and (unlike ``client_name``) it is not seeded by migration 0008's
+    ``seed_intake_client_name_answer`` trigger, which would pre-create the row.
     """
     from fastapi.testclient import TestClient
     from sqlalchemy import text
@@ -257,7 +264,7 @@ def test_answers_batch_upsert(engine, monkeypatch):
 
         first = client.patch(
             f"/intakes/{intake_id}/answers",
-            json={"answers": [{"field_key": "q1", "value": "first"}]},
+            json={"answers": [{"field_key": "geo_scope", "value": "first"}]},
             headers={"Authorization": "Bearer ignored-overridden"},
         )
         assert first.status_code == 200, (
@@ -266,7 +273,7 @@ def test_answers_batch_upsert(engine, monkeypatch):
 
         second = client.patch(
             f"/intakes/{intake_id}/answers",
-            json={"answers": [{"field_key": "q1", "value": "second"}]},
+            json={"answers": [{"field_key": "geo_scope", "value": "second"}]},
             headers={"Authorization": "Bearer ignored-overridden"},
         )
         assert second.status_code == 200, (
@@ -285,12 +292,12 @@ def test_answers_batch_upsert(engine, monkeypatch):
             rows = conn.execute(
                 text(
                     f"SELECT value FROM {SCHEMA}.intake_answers "
-                    "WHERE intake_id = :id AND field_key = 'q1'"
+                    "WHERE intake_id = :id AND field_key = 'geo_scope'"
                 ),
                 {"id": intake_id},
             ).all()
         assert len(rows) == 1, (
-            f"section re-save must UPDATE in place — found {len(rows)} rows for q1 "
+            f"section re-save must UPDATE in place — found {len(rows)} rows for geo_scope "
             "(duplicate => the upsert conflict target is wrong, Pitfall 6)"
         )
         assert rows[0][0] == "second", "the second save must overwrite the first value"
@@ -299,13 +306,25 @@ def test_answers_batch_upsert(engine, monkeypatch):
         _cleanup_space(engine, space_id)
 
 
-def test_answers_value_json_accepts_any_json_value(engine, monkeypatch):
+def test_answers_value_json_accepts_any_json_value(engine, monkeypatch, superadmin_engine):
     """value_json accepts arrays/booleans/numbers, not only objects (live-UAT regression).
 
     The frontend routes EVERY non-string form value into ``value_json`` (arrays from
     list/files fields, booleans, numbers) and the column is JSONB. A ``dict``-only
     Pydantic annotation 422'd real section saves ('Opslaan mislukt', 2026-07-13 UAT).
     The GET projection must round-trip the same shapes (AnswerView mirrors AnswerItem).
+
+    This is a STORAGE-LAYER claim (the JSONB column round-trips non-dict shapes), not a
+    client-policy claim, so it is driven as a SUPERADMIN: since D-23.2-05 a ``role=user``
+    cannot write a boolean to a ``longtext`` field, and re-pointing the probe keys at
+    canonical fields would change what the test asserts. Superadmin writes are unconstrained,
+    which preserves the original claim exactly — including the invented probe keys.
+
+    ⚠ The intake is still CREATED by the space's OWN user (the two-step shape of
+    ``test_superadmin_answers_upsert_lands_in_intake_space``): a superadmin ``POST /intakes``
+    WITHOUT a ``?space_id=`` query param is a deliberate 422 ("Select a client (space) before
+    creating an intake", ``intake_routes.py:467-473``), so flipping the override before the
+    create kills ``.json()["id"]`` with a ``KeyError`` at the seed.
     """
     from fastapi.testclient import TestClient
 
@@ -316,6 +335,7 @@ def test_answers_value_json_accepts_any_json_value(engine, monkeypatch):
             _create_space(conn, space_id, "Answers JSON Shapes Space")
 
         _patch_engine_factories(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space_id))
         client = TestClient(app)
 
@@ -324,6 +344,9 @@ def test_answers_value_json_accepts_any_json_value(engine, monkeypatch):
             json={"client_name": "JSON Shapes Co"},
             headers={"Authorization": "Bearer ignored-overridden"},
         ).json()["id"]
+
+        # ... and only the answer write + read-back run as superadmin.
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
 
         payload = {
             "answers": [
