@@ -27,7 +27,19 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 23.2 (authorization depth — field-level confidentiality, answer lifecycle, operator-artifact
 deletion, fail-closed membership, research dispatch idempotency, notification decoupling)
-Plan: 1 of 11 complete — wave 1 executing (plans 01–05), plan 01 merged.
+Plan: **8 of 11 complete** — waves 1 and 2 merged and pushed at `433fb60`.
+Backend **661 passed / 2 skipped / 0 failed** (608 baseline + 53). Frontend tsc 0, 10 vitest files.
+Wave 3 (plan 09, the write policy) executing. Then wave 4 (plan 10, migration 0016 + trigger CAS)
+and wave 5 (plan 11, integration + deferral register).
+
+Closed so far, each defect REPRODUCED before it was fixed: **F-01** on all four propagation paths
+(`/answers` 4 of 4 admin keys → 0; `/skill-runs/{id}` 7 keys → 5; `/templates` 14 sections → 13 for
+a user; and the context-pack LLM prompt, which carried all four keys AND their values); **F-03**
+(client `DELETE .../reports/` returned `200 {"removed":1}`); **F-06** (a completed run's
+`error_message` became `Resend 503`); **F-07** (reactivate retry returned 200 with ZERO IdP calls
+while the account stayed disabled); **F-08** (the model was handed `# Template velden\n[]` and its
+invented keys were written); and tribunal's half of **F-05** (both concurrent resumes returned the
+same run id).
 
 Authority is `23.2-CONTEXT.md`. Eleven plans in five waves. All 5 checker blockers and 10 warnings
 are closed. ZERO provider spend, no deploy, no Tribunal run — the phase ends at built + tested +
