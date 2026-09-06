@@ -424,6 +424,12 @@ def test_upsert_answers_open_to_user(engine, set_space, monkeypatch):
     Feeds ``IntakeForm.tsx:14`` (``saveAnswers``) — save-as-you-go. The written value is
     re-read through the route in a second request, because a 200 alone does not prove the
     write reached the database: an over-wide gate is not the only way this route can break.
+
+    The probe key is ``geo_scope`` — a CANONICAL ``text`` field. It used to be
+    ``stay_open_probe``, an invented key: since D-23.2-05 the server binds a client write to
+    the canonical schema and an undefined key is 422. The intake is seeded ``draft``, which is
+    the status the client form actually saves in. Only the SEED changed; the EXACTLY-200 claim
+    is untouched.
     """
     from fastapi.testclient import TestClient
 
@@ -438,7 +444,7 @@ def test_upsert_answers_open_to_user(engine, set_space, monkeypatch):
 
         resp = client.patch(
             f"/intakes/{intake_id}/answers",
-            json={"answers": [{"field_key": "stay_open_probe", "value": "kept"}]},
+            json={"answers": [{"field_key": "geo_scope", "value": "kept"}]},
             headers=AUTH,
         )
 
@@ -451,7 +457,7 @@ def test_upsert_answers_open_to_user(engine, set_space, monkeypatch):
         reread = client.get(f"/intakes/{intake_id}/answers", headers=AUTH)
         assert reread.status_code == 200
         written = {row["field_key"]: row["value"] for row in reread.json()}
-        assert written.get("stay_open_probe") == "kept", (
+        assert written.get("geo_scope") == "kept", (
             f"the upsert returned 200 but the value did not land: {written!r}."
         )
     finally:

@@ -61,6 +61,7 @@ from app.intake_canonical import (
     admin_only_field_keys,
     client_visible_schema,
 )
+from app.intake_write_policy import AnswerWriteViolation, check_answer_batch
 from app.db import audit
 from app.db.ai_session import tenant_session
 from app.db.models.membership import OrganizationMembership
@@ -707,6 +708,42 @@ def upsert_answers(
     403, never 200-with-data). Each item carries only ``field_key`` / ``value`` /
     ``value_json``; the repo injects ``space_id`` (Identity) + ``intake_id`` (path), never
     from the item dict (T-06-03), targeting the ``(intake_id, field_key)`` constraint.
+
+    WRITE POLICY (D-23.2-05/06/07, 23.2-CONTEXT.md § 3). Until phase 23.2 this handler checked
+    ownership and NOTHING else — a client could write an undefined field key onto a
+    ``delivered`` intake, i.e. mutate the research inputs after the pack was built, after a
+    ~$45 research run consumed them, and after delivery. ``check_answer_batch`` now enforces,
+    for a ``role=user``:
+
+    ================================  ==============================================
+    Intake status                     may write
+    ================================  ==============================================
+    ``draft``                         any canonical field that is not admin-only
+    ``reviewed`` /                    ONLY fields whose canonical ``type`` is
+    ``validated_by_client``           ``proposal_list``
+    anything else                     nothing (409)
+    ================================  ==============================================
+
+    ⛔ The middle row is NOT decoration and the policy is NOT "only ``draft`` is writable":
+    ``IntakeForm.tsx:501`` keeps ``proposal_list`` fields enabled through the validation phase
+    — the client's "keep Nestor's proposal" tick, shipped 2026-08-31. A draft-only rule kills
+    it silently.
+
+    CODE PRECEDENCE: ownership 404 -> lifecycle 409 -> schema membership 422 -> admin-only 404
+    -> status/field 409 -> value 422. **The ownership check stays FIRST**, above the policy
+    call: a cross-tenant caller writing a non-canonical key must get the existence-hidden 404,
+    not the policy's 422, or the response code becomes an oracle for field validity across a
+    tenant boundary (``tests/test_intake_cross_tenant.py::
+    test_upsert_answers_cross_tenant_returns_404_answers_unchanged``). All-or-nothing: the
+    policy is evaluated for the WHOLE batch before the repo sees anything.
+
+    SUPERADMIN IS EXEMPT — ``check_answer_batch`` returns immediately for it, so the AI-review
+    apply path and the admin edit-mode save (``admin.pulse.intakes.$id.tsx:951``, which writes
+    the admin-only fields) are unaffected.
+
+    The 200 body is projected through :func:`_visible_answer_rows`, EXACTLY like
+    ``list_answers`` — this handler returns the same ``list_for_intake`` rows, so an unfiltered
+    return here would hand a client back through a PATCH what the GET withholds (F-01).
     """
     intake_repo, answers_repo = repos
     # Ownership pre-check (D-07): a cross-tenant/missing id is hidden as 404 BEFORE any write.
@@ -715,6 +752,13 @@ def upsert_answers(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     items = [item.model_dump() for item in body.answers]
+    try:
+        check_answer_batch(items, intake_status=intake.status, role=identity.role)
+    except AnswerWriteViolation as exc:
+        # ``from None``: a policy refusal is an expected outcome, not an internal fault — it
+        # must never carry an internal traceback into the response chain.
+        raise HTTPException(exc.code, exc.detail) from None
+
     if identity.role == "superadmin":
         # Superadmin has NO own space (null-space repo) — target the intake's OWN space,
         # mirroring the storage CR-02 / intake-create fix. A plain upsert_batch() would
@@ -723,7 +767,9 @@ def upsert_answers(
         answers_repo.upsert_batch_in_space(intake.space_id, intake_id, items)
     else:
         answers_repo.upsert_batch(intake_id, items)
-    return [_answer_view(row) for row in answers_repo.list_for_intake(intake_id)]
+    # Same projection as ``list_answers`` — ONE helper, two call sites, never two copies.
+    rows = _visible_answer_rows(answers_repo.list_for_intake(intake_id), role=identity.role)
+    return [_answer_view(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
