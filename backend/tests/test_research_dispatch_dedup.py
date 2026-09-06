@@ -811,3 +811,470 @@ def test_downgrade_removes_the_index_and_re_allows_duplicates(engine, set_space)
     finally:
         _cleanup(engine, space)
         command.upgrade(cfg, "head")
+
+
+# ===========================================================================
+# Route half — the two refusals, translated into readable 409s
+# ===========================================================================
+
+#: Substrings that must NEVER reach a client. A leaked constraint or driver name is
+#: information disclosure (T-23.2-10-07) and reads to the operator like a crash rather than
+#: like "that research is already going".
+_FORBIDDEN_IN_DETAIL = (
+    "IntegrityError",
+    "UniqueViolation",
+    "psycopg",
+    "pg8000",
+    "sqlalchemy",
+    "SQL:",
+    "23505",
+    "duplicate key",
+    INDEX_NAME,
+)
+
+#: Same literal the other research suites use, so the app_superadmin role's password stays
+#: stable no matter which suite touches it first.
+_SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral test only
+
+
+def _superadmin() -> "Identity":
+    """``trigger_research`` is superadmin-gated (D-23.1-16) — a user gets 404."""
+    return Identity(uid="super", email="s@x", role="superadmin", space_id=None)
+
+
+def _as(identity: "Identity"):
+    def _override():
+        return identity
+
+    return _override
+
+
+def _patch_engines(monkeypatch, user_engine) -> None:
+    monkeypatch.setattr(session_mod, "get_engine", lambda *a, **k: user_engine)
+    monkeypatch.setattr(ai_session_mod, "get_engine", lambda *a, **k: user_engine)
+
+
+def _patch_superadmin_engine(monkeypatch, sa_engine) -> None:
+    monkeypatch.setattr(session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine)
+    monkeypatch.setattr(
+        ai_session_mod, "get_superadmin_engine", lambda *a, **k: sa_engine
+    )
+
+
+@pytest.fixture
+def superadmin_engine(engine):
+    """A second engine connecting AS ``app_superadmin`` (the D-05 two-engine routing).
+
+    Shape copied verbatim from ``test_research_routes.superadmin_engine``: a connect-as
+    engine, not ``SET ROLE``, so the 0003/0011 bypass policies match the way they do in
+    production.
+    """
+    from sqlalchemy import create_engine, text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER ROLE app_superadmin WITH LOGIN PASSWORD "
+                f"'{_SUPERADMIN_TEST_PASSWORD}'"
+            )
+        )
+    sa_url = engine.url.set(
+        username="app_superadmin", password=_SUPERADMIN_TEST_PASSWORD
+    )
+    sa_engine = create_engine(sa_url, future=True, pool_pre_ping=True)
+    try:
+        yield sa_engine
+    finally:
+        sa_engine.dispose()
+
+
+def _build_app():
+    """Mount ``research_router`` under ``protected_router`` (mirrors app/main.py wiring)."""
+    from fastapi import FastAPI
+
+    from app.api.auth_routes import protected_router
+
+    protected_router.include_router(research_mod.research_router)
+    app = FastAPI()
+    app.include_router(protected_router)
+    return app
+
+
+def _seed_decomposition_and_questions(engine, set_space, space_id, intake_id) -> None:
+    """One decomposition + two prioritized questions, so the brief is never empty.
+
+    Without these the handler short-circuits on the empty-brief 422 and never reaches the
+    write transaction this half exists to test.
+    """
+    from sqlalchemy import text
+
+    decomp_id = uuid.uuid4()
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.decompositions (id, space_id, intake_id, summary) "
+                "VALUES (:id, :space_id, :intake_id, :summary)"
+            ),
+            {
+                "id": decomp_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "summary": "Marktverkenning voor Acme.",
+            },
+        )
+        for prio, qtext in ((2, "Wat is de marktomvang?"), (1, "Wie zijn de concurrenten?")):
+            conn.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.research_questions "
+                    "(id, space_id, intake_id, decomposition_id, question_text, priority) "
+                    "VALUES (:id, :space_id, :intake_id, :decomp_id, :qtext, :prio)"
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "space_id": space_id,
+                    "intake_id": intake_id,
+                    "decomp_id": decomp_id,
+                    "qtext": qtext,
+                    "prio": prio,
+                },
+            )
+
+
+def _read_intake_status(engine, set_space, space_id, intake_id) -> str:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        return conn.execute(
+            text(f"SELECT status FROM {SCHEMA}.intakes WHERE id = :id"),
+            {"id": intake_id},
+        ).scalar_one()
+
+
+def _set_intake_status(engine, set_space, space_id, intake_id, status) -> None:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"UPDATE {SCHEMA}.intakes "
+                "SET status = CAST(:st AS nestor.intake_status) WHERE id = :id"
+            ),
+            {"st": status, "id": intake_id},
+        )
+
+
+def _count_audit_rows(engine, intake_id) -> int:
+    """``audit_log`` is deliberately NOT RLS-scoped (0006, D-07) — a plain count is safe."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        return conn.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.audit_log WHERE target = :t"),
+            {"t": str(intake_id)},
+        ).scalar_one()
+
+
+def _interleave_before_the_write(monkeypatch, hook) -> None:
+    """Run ``hook()`` between the handler's READ and its write transaction.
+
+    ``trigger_research`` reads the intake and its prior runs on ``repo.session``, then calls
+    ``read_brief_inputs`` to compose the brief, and only THEN opens the ``tenant_session``
+    that flips the status and inserts the run row. Wrapping ``read_brief_inputs`` therefore
+    lands the hook squarely inside the read-then-write window that F-05 lives in — which
+    makes the race DETERMINISTIC instead of a sleep-and-hope.
+
+    The wrapper delegates to the real function afterwards, so the brief the handler
+    composes is the real one and no behaviour is stubbed out.
+    """
+    real = research_mod.read_brief_inputs
+
+    def _wrapped(identity, intake_id, *args, **kwargs):
+        hook()
+        return real(identity, intake_id, *args, **kwargs)
+
+    monkeypatch.setattr(research_mod, "read_brief_inputs", _wrapped)
+
+
+def _assert_detail_is_readable(response) -> str:
+    """The 409 body is an operator-readable sentence that leaks no database internals."""
+    body = response.json()
+    detail = body.get("detail")
+    assert isinstance(detail, str) and detail, (
+        "the 409 must carry a plain-string detail (the frontend transport reads it "
+        f"verbatim), got {body!r}"
+    )
+    raw = response.text
+    for needle in _FORBIDDEN_IN_DETAIL:
+        assert needle.lower() not in raw.lower(), (
+            f"the 409 body leaks {needle!r} — a driver/constraint string is information "
+            f"disclosure and reads like a crash. body={raw!r}"
+        )
+    return detail
+
+
+def test_cas_refuses_a_stale_flip_and_writes_nothing(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """The status changed between the read and the write -> 409, and NOTHING was written.
+
+    This is the CAS half of D-23.2-12. Before it, the handler patched the status
+    UNCONDITIONALLY, so the loser of the race flipped an intake that the winner had already
+    flipped, wrote an audit row claiming a transition that had already happened, inserted a
+    second run row and scheduled a second ~$45 driver.
+
+    THREE negatives are asserted, not one. A 409 that still dispatched the poll driver is
+    the failure that costs the money — the status code alone would not have caught it.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id, status="decomposed")
+        _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+        _patch_engines(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        # The concurrent winner: it flips the intake after this request read 'decomposed'
+        # and before this request writes.
+        _interleave_before_the_write(
+            monkeypatch,
+            lambda: _set_intake_status(
+                engine, set_space, space, intake_id, "in_research"
+            ),
+        )
+
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+
+        assert resp.status_code == 409, (
+            "a flip whose precondition no longer holds must be refused — got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+        _assert_detail_is_readable(resp)
+
+        assert _runs_for(engine, set_space, space, intake_id) == [], (
+            "the refused request must insert NO research_runs row."
+        )
+        assert _count_audit_rows(engine, intake_id) == 0, (
+            "the refused request must write NO audit row — an audit row for a transition "
+            "that did not happen is a false trail."
+        )
+        assert not fake_tribunal_client["create_run"], (
+            "the refused request must schedule NO poll driver. This is the assertion that "
+            "is worth ~$45; a 409 that still dispatched would satisfy the status code and "
+            "spend the money anyway."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_duplicate_run_through_the_retry_path_returns_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """THE case that proves the index is not redundant with the CAS (T-23.2-10-02).
+
+    The real retry race: an ``in_research`` intake whose latest run is ``failed`` is legally
+    retriggerable, and TWO concurrent triggers both pass that app rule. Both then CAS
+    ``in_research -> in_research``, which MATCHES for both — ``rowcount == 1`` twice. The
+    compare-and-swap cannot arbitrate here, by construction. Only the unique index can.
+
+    The interleave inserts the winner's ``queued`` row inside the loser's read-then-write
+    window, so the loser's own insert is the one the index refuses. The refusal must surface
+    as a 409 (a 500 would mean the ``IntegrityError`` escaped untranslated) and must leave
+    the intake exactly as it was.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id, status="in_research")
+        _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+        # The dead run that makes the retrigger legal at the app level.
+        with engine.begin() as conn:
+            _insert_run(conn, set_space, space, intake_id, status="failed", attempt=1)
+        _patch_engines(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        def _concurrent_winner():
+            with engine.begin() as conn:
+                _insert_run(
+                    conn, set_space, space, intake_id, status="queued", attempt=2
+                )
+
+        _interleave_before_the_write(monkeypatch, _concurrent_winner)
+
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+
+        assert resp.status_code == 409, (
+            "the second concurrent retrigger must be a 409 — a 500 means the "
+            "IntegrityError escaped untranslated, a 202 means it dispatched a duplicate "
+            f"~$45 run. got {resp.status_code} ({resp.text!r})"
+        )
+        _assert_detail_is_readable(resp)
+
+        rows = _runs_for(engine, set_space, space, intake_id)
+        assert len(rows) == 2, (
+            "exactly the failed row and the winner's queued row must remain — the loser's "
+            f"insert must have been rolled back. got {rows!r}"
+        )
+        assert len([r for r in rows if r[1] in INFLIGHT]) == 1
+        assert _read_intake_status(engine, set_space, space, intake_id) == "in_research", (
+            "the refused request must leave the intake status untouched."
+        )
+        assert not fake_tribunal_client["create_run"], (
+            "the refused request must schedule NO poll driver."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_attempt_is_computed_inside_the_write_transaction(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """``attempt`` counts the runs that exist AT WRITE TIME, not at read time.
+
+    A PROOF, not a reading: the handler reads ``prior == []`` (so the old code computed
+    ``attempt = 1``), and the interleave then inserts one terminal run inside the
+    read-then-write window. The inserted row must carry ``attempt = 2``.
+
+    Without the in-tx recount two concurrent triggers both stamp ``attempt = 1`` and the
+    audit trail claims one attempt where two were paid for.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id, status="decomposed")
+        _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+        _patch_engines(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        def _concurrent_run_appears():
+            # TERMINAL, so the index still admits this request's own insert — the point
+            # under test is the COUNT, not the refusal.
+            with engine.begin() as conn:
+                _insert_run(
+                    conn, set_space, space, intake_id, status="failed", attempt=1
+                )
+
+        _interleave_before_the_write(monkeypatch, _concurrent_run_appears)
+
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+
+        assert resp.status_code == 202, (
+            f"expected 202, got {resp.status_code} ({resp.text!r})"
+        )
+        new_run_id = uuid.UUID(resp.json()["research_run_id"])
+        rows = {r[0]: r for r in _runs_for(engine, set_space, space, intake_id)}
+        assert len(rows) == 2
+        assert rows[new_run_id][3] == 2, (
+            "attempt must be recomputed INSIDE the write transaction. The handler read "
+            "zero prior runs, so a read-time computation yields 1; one run existed by the "
+            f"time the row was written, so the answer is 2. got {rows[new_run_id][3]}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_ordinary_retrigger_after_a_dead_run_still_stamps_attempt_2(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """The uncontended retry path is unchanged: one prior run -> ``attempt = 2``, 202.
+
+    The counterweight to the refusal cases. Moving ``attempt`` into the write transaction
+    must not shift the ordinary numbering by one in either direction, and the legitimate
+    retrigger after a dead run must still be ACCEPTED — the index is partial precisely so
+    that it is.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space_and_intake(engine, set_space, space, intake_id, status="in_research")
+        _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+        with engine.begin() as conn:
+            _insert_run(conn, set_space, space, intake_id, status="failed", attempt=1)
+        _patch_engines(monkeypatch, engine)
+        _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+
+        assert resp.status_code == 202, (
+            f"expected 202, got {resp.status_code} ({resp.text!r})"
+        )
+        new_run_id = uuid.UUID(resp.json()["research_run_id"])
+        rows = {r[0]: r for r in _runs_for(engine, set_space, space, intake_id)}
+        assert len(rows) == 2, f"the retrigger must insert a second row, got {rows!r}"
+        assert rows[new_run_id][3] == 2, (
+            f"the second attempt must be numbered 2, got {rows[new_run_id][3]}"
+        )
+        assert fake_tribunal_client["create_run"], (
+            "the accepted retrigger must reach create_run — the index must not have "
+            "swallowed a legitimate retry."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_the_gate_still_precedes_the_repo_in_the_signature():
+    """CONTEXT § 11 trap 3, as a machine-checked residue.
+
+    In ``trigger_research`` the superadmin gate MUST be declared ABOVE ``get_tenant_repo``:
+    FastAPI resolves the signature in order, so with the gate below, a null-space caller
+    gets ``get_tenant_repo``'s 403 ("No space — not authorized") instead of the
+    existence-hidden 404 — an existence ORACLE on the one verb whose existence is worth the
+    most to learn.
+
+    Green at HEAD by construction (this plan adds no dependency and does not touch the
+    signature) — it is a regression tripwire, not a gate. The behavioural denial proof lives
+    in ``test_research_trigger_gate.py``, including its ordering-mutation case, which is
+    what actually demonstrates the oracle.
+    """
+    import inspect
+
+    from app.auth.gates import superadmin_gate
+
+    params = list(inspect.signature(research_mod.trigger_research).parameters)
+    assert "identity" in params and "repo" in params, (
+        f"the signature lost a parameter this test relies on: {params!r}"
+    )
+    assert params.index("identity") < params.index("repo"), (
+        "the superadmin gate must stay ABOVE get_tenant_repo — any new Depends goes "
+        f"AFTER the gate. got {params!r}"
+    )
+
+    gate_param = inspect.signature(research_mod.trigger_research).parameters["identity"]
+    assert getattr(gate_param.default, "dependency", None) is superadmin_gate, (
+        "the first-resolved dependency must be the shared superadmin gate itself, not a "
+        f"look-alike. got {gate_param.default!r}"
+    )
