@@ -27,10 +27,15 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 23.2 (authorization depth — field-level confidentiality, answer lifecycle, operator-artifact
 deletion, fail-closed membership, research dispatch idempotency, notification decoupling)
-Plan: **8 of 11 complete** — waves 1 and 2 merged and pushed at `433fb60`.
-Backend **661 passed / 2 skipped / 0 failed** (608 baseline + 53). Frontend tsc 0, 10 vitest files.
-Wave 3 (plan 09, the write policy) executing. Then wave 4 (plan 10, migration 0016 + trigger CAS)
-and wave 5 (plan 11, integration + deferral register).
+Plan: **11 of 11 COMPLETE.** All five waves merged.
+Backend **736 passed / 2 skipped / 0 failed** (608 baseline + 128, arithmetic reconciled exactly).
+Frontend tsc 0, 154 vitest, i18n PASS, `frontend/` diff EMPTY. Tribunal CAS+checkpoint 43/0 under
+the `app_user` DSN. Route inventory **unchanged**: 65 routes, 26 gated — this phase changed what
+routes RETURN and ACCEPT, never who may call them. All eight cross-plan seams verified at the
+merged head. Client pin widened from ten routes to **seventeen**, no exclusions.
+
+**ZERO provider spend, NO deploy, NO Tribunal run. Nothing has been observed in production.**
+Deploy is operator work, and it is NOT done — see `deferred-items.md` in the phase directory.
 
 Closed so far, each defect REPRODUCED before it was fixed: **F-01** on all four propagation paths
 (`/answers` 4 of 4 admin keys → 0; `/skill-runs/{id}` 7 keys → 5; `/templates` 14 sections → 13 for
