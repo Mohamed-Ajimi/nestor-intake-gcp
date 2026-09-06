@@ -8,7 +8,12 @@ is invisible to every type, lint, locale and i18n-audit gate in this project. Th
 the tripwire. It asserts, per route, that a role=``user`` caller scoped to the intake's OWN
 space still receives an EXACT 2xx.
 
-THE TEN CLIENT ROUTES THAT MUST STAY OPEN (23.1-CONTEXT.md § 1, "THE TRAP"):
+THE SEVENTEEN CLIENT ROUTES THAT MUST STAY OPEN. Rows 1-10 are the 23.1 set
+(23.1-CONTEXT.md § 1, "THE TRAP"); rows 11-17 were added in phase 23.2 plan 11 and are
+DERIVED, not copied — ``_flatten_routes`` finds 43 ``/intakes`` routes of which 26 carry
+``superadmin_gate`` and 17 do not, and rows 11-17 are that 17 minus the 10 already here.
+They were open by the same design decision all along and were asserted NOWHERE, so a future
+gate could have closed one of them with every gate in this repo still green.
 
 | # | Route                                     | Handler                                | Frontend caller            |
 |---|-------------------------------------------|----------------------------------------|----------------------------|
@@ -22,6 +27,25 @@ THE TEN CLIENT ROUTES THAT MUST STAY OPEN (23.1-CONTEXT.md § 1, "THE TRAP"):
 | 8 | ``GET /intakes/{id}/skill-runs/{run_id}`` | ``intake_routes.get_skill_run_full``   | **``IntakeForm.tsx:16``**  |
 | 9 | ``GET /intakes/{id}/report``              | ``intake_routes.get_report``           | ``intake.$id.report.tsx:10`` |
 |10 | ``GET /intakes/{id}/storage/signed-url``  | ``storage_routes.create_signed_url``   | ``intake.$id.report.tsx:11`` |
+|11 | ``POST /intakes`` -> **201**              | ``intake_routes.create_intake``        | ``lib/api/intakes.ts``     |
+|12 | ``PATCH /intakes/{id}``                   | ``intake_routes.patch_intake``         | ``lib/api/intakes.ts``     |
+|13 | ``GET /intakes/{id}/context-pack``        | ``intake_routes.get_context_pack``     | ``intake.$id.tsx``         |
+|14 | ``GET /intakes/{id}/skill-runs/stream``   | ``intake_routes.stream_skill_runs``    | ``SkillRunProgress`` (SSE) |
+|15 | ``GET /intakes/{id}/sources``             | ``intake_routes.list_sources``         | ``FieldRenderer.tsx``      |
+|16 | ``POST /intakes/{id}/storage/uploads`` -> **201** | ``storage_routes.upload_file`` | ``FieldRenderer.tsx:470``  |
+|17 | ``DELETE /intakes/{id}/storage/objects``  | ``storage_routes.delete_objects``      | ``FieldRenderer.tsx:488``  |
+
+⛔ ROWS 16 AND 17 NAME THEIR CATEGORY, AND THAT IS LOAD-BEARING. Phase 23.2 plan 02
+(D-23.2-17 / D-23.2-08) made ``reports`` and ``artifacts`` CORRECTLY answer 422 on upload and
+404 on delete for a non-superadmin. A pin written with a ``reports/`` key would therefore go
+red *because plan 02 worked* — a false regression alarm pointing at the plan that did its job.
+Both rows are pinned with ``attachments`` / ``audio``, the two categories in
+``CLIENT_WRITABLE_CATEGORIES`` (``app/storage/keys.py:47``) that the client form actually
+uploads. Do not "generalize" either pin to another category.
+
+⚠ ROW 14 IS SSE. ``TestClient.get`` on a streaming response can block, so it is driven with
+``TestClient(app).stream("GET", ...)`` and a TERMINAL skill run (the at-connect snapshot
+closes the stream immediately — the shape ``tests/test_sse_stream.py:174`` established).
 
 ROWS 7 AND 8 ARE THE DANGEROUS PAIR. ``IntakeForm.tsx`` is the CLIENT form, and its line 16
 imports ``listSkillRuns`` + ``getSkillRunFull``; they render the client's proposal tick
@@ -30,8 +54,11 @@ repo stays green. Row 10 lives on ``storage_router``, which phase 23.1 does not 
 — it is pinned anyway, because "this phase does not touch it" is a claim that expires the
 moment someone gates ``storage_router``.
 
-``GET /intakes/{id}/skill-runs/stream`` is deliberately ABSENT: it is out of scope for phase
-23.1 in BOTH directions (not pinned here, not gated there).
+``GET /intakes/{id}/skill-runs/stream`` was deliberately ABSENT for phase 23.1 — out of scope
+in BOTH directions (not pinned, not gated). Phase 23.2 plan 11 pins it as row 14. Do NOT
+confuse it with ``GET /intakes/{id}/research/stream``, which lives on ``research_router`` and
+IS gated: the string ``"research"`` CONTAINS ``"search"`` and both paths end in ``/stream``,
+so any substring reasoning about this pair is unsound. The walk resolves routes, not strings.
 
 THESE ASSERTIONS ARE GREEN AT HEAD BY DESIGN — that is what a regression pin is, and it is
 also why a regression pin proves nothing on its own. Plan 23.1-02 Task 2 closed that hole by
@@ -900,3 +927,358 @@ def test_mutation_proof_is_recorded():
             "the RECURSIVE arm of the walker found nothing — the handler's own "
             "get_skill_run_repo dependency is missing from the resolved tree."
         )
+
+
+# ===========================================================================
+# Rows 11-17 — the seven that were OPEN but asserted NOWHERE (phase 23.2 plan 11)
+# ===========================================================================
+#
+# DERIVED, NOT COPIED. ``_flatten_routes`` resolves 43 ``/intakes`` routes; 26 carry
+# ``superadmin_gate`` in their resolved+inherited dependency tree and 17 do not. Rows 11-17
+# are that 17 minus the 10 above. Every one is open by the same design decision phase 23.1
+# made for rows 1-10 — they were simply never asserted, so a gate applied one router too
+# wide would have closed one of them with every gate in this repo still green.
+#
+# EXACT STATUS CODES, same discipline as rows 1-10: never ``!= 404``, never ``< 400``,
+# never tuple membership. Rows 11 and 16 are 201 (``intake_routes.py:525`` and
+# ``storage_routes.py:141-142`` both declare ``status_code=HTTP_201_CREATED``); the other
+# five are 200.
+
+
+def test_create_intake_open_to_user(engine, set_space, monkeypatch):
+    """Row 11: a role=user creates an intake in their OWN space -> EXACTLY 201.
+
+    Feeds ``frontend/src/lib/api/intakes.ts`` (the create call posts ``client_name`` only).
+    The user path goes through ``repo.create(**values)``, which FORCES the caller's own
+    space onto the row (TENANT-02) — the ``?space_id=`` query param is inert for a user and
+    the body never carries a space. Gating this route means a client can never start.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).post(
+            "/intakes", json={"client_name": "Stay-open probe"}, headers=AUTH
+        )
+
+        assert resp.status_code == 201, (
+            f"POST /intakes must stay OPEN to role=user (EXACTLY 201 — "
+            f"intake_routes.py:525 declares HTTP_201_CREATED), got {resp.status_code} "
+            f"(body={resp.text!r}). Gating it means a client can never create an intake."
+        )
+        # Anti-vacuity: a 201 that wrote into the WRONG space would still be a 201.
+        assert resp.json()["space_id"] == str(space), (
+            f"the created intake landed outside the caller's own space: {resp.text!r}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_patch_intake_open_to_user(engine, set_space, monkeypatch):
+    """Row 12: a role=user renames their OWN intake -> EXACTLY 200.
+
+    Feeds ``frontend/src/lib/api/intakes.ts``. ``IntakePatch`` admits ``client_name`` and
+    nothing else — no status, no space_id — so this route is benign by construction and its
+    openness is a deliberate decision rather than an oversight.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).patch(
+            f"/intakes/{intake_id}", json={"client_name": "Renamed"}, headers=AUTH
+        )
+
+        assert resp.status_code == 200, (
+            f"PATCH /intakes/{{id}} must stay OPEN to role=user for their OWN intake "
+            f"(EXACTLY 200), got {resp.status_code} (body={resp.text!r})."
+        )
+        # Anti-vacuity: a 200 whose write did not land is not a working route.
+        assert resp.json()["client_name"] == "Renamed", (
+            f"the patch returned 200 but the value did not land: {resp.text!r}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_context_pack_open_to_user(engine, set_space, monkeypatch):
+    """Row 13: a role=user reads their OWN intake's context pack -> EXACTLY 200.
+
+    The SCOPED-EMPTY case, deliberately: with no pack generated the handler returns
+    ``{"latest": None, "history": []}`` at 200, NEVER a 404 (``intake_routes.py:803``). That
+    non-distinguishability IS the security property — a stranger cannot tell "no pack" from
+    "not your intake" — and it is exactly the case an over-wide gate breaks just as surely
+    as the populated one. It also needs no seed beyond the intake.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).get(f"/intakes/{intake_id}/context-pack", headers=AUTH)
+
+        assert resp.status_code == 200, (
+            f"GET /intakes/{{id}}/context-pack must stay OPEN to role=user (EXACTLY 200, "
+            f"scoped-empty by design), got {resp.status_code} (body={resp.text!r})."
+        )
+        assert resp.json() == {"latest": None, "history": []}, (
+            f"the scoped-empty shape changed: {resp.text!r}. A 404 here would leak intake "
+            f"existence (D-07)."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_skill_runs_stream_open_to_user(engine, set_space, monkeypatch):
+    """Row 14: a role=user opens the SSE skill-run stream on their OWN intake -> EXACTLY 200.
+
+    Feeds ``SkillRunProgress`` — the live progress bar the CLIENT form renders while a run
+    is in flight. Gating it leaves the client staring at a frozen bar.
+
+    ⚠ SSE. ``TestClient.get`` on a streaming response can block, so this uses
+    ``TestClient(app).stream("GET", ...)`` — the shape ``tests/test_sse_stream.py:174``
+    established — and the seeded run is TERMINAL (``_seed_skill_run`` writes
+    ``status='succeeded'``), so the at-connect snapshot closes the stream immediately and
+    there is no timeout hazard. The status code is asserted off the response object.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id, run_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _seed_skill_run(engine, set_space, space, intake_id, run_id)  # TERMINAL: succeeded
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        with TestClient(app).stream(
+            "GET", f"/intakes/{intake_id}/skill-runs/stream", headers=AUTH
+        ) as resp:
+            assert resp.status_code == 200, (
+                f"GET /intakes/{{id}}/skill-runs/stream must stay OPEN to role=user "
+                f"(EXACTLY 200), got {resp.status_code}. It is the CLIENT form's live "
+                f"progress feed."
+            )
+            assert resp.headers["content-type"].startswith("text/event-stream"), (
+                f"the stream stopped being SSE: {resp.headers.get('content-type')!r}"
+            )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_sources_open_to_user(engine, set_space, monkeypatch):
+    """Row 15: a role=user lists their OWN intake's uploaded sources -> EXACTLY 200.
+
+    Feeds ``FieldRenderer.tsx`` — the client's own file list. Like row 13 this is a
+    SCOPED-EMPTY 200 by design (``intake_routes.py:837``): no sources reads
+    ``{"sources": []}``, never a 404, so absence of uploads cannot be told from absence of
+    the intake.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).get(f"/intakes/{intake_id}/sources", headers=AUTH)
+
+        assert resp.status_code == 200, (
+            f"GET /intakes/{{id}}/sources must stay OPEN to role=user (EXACTLY 200, "
+            f"scoped-empty by design), got {resp.status_code} (body={resp.text!r})."
+        )
+        assert resp.json() == {"sources": []}, (
+            f"the scoped-empty shape changed: {resp.text!r}."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_storage_upload_open_to_user(engine, set_space, monkeypatch, fake_gcs):
+    """Row 16: a role=user uploads an ``attachments`` file to their OWN intake -> EXACTLY 201.
+
+    Feeds ``FieldRenderer.tsx:470``, which sends ``category`` = ``audio`` or
+    ``attachments``.
+
+    ⛔ THE CATEGORY IS NAMED ON PURPOSE. Phase 23.2 plan 02 (D-23.2-17) made a non-superadmin
+    uploading ``reports``/``artifacts`` CORRECTLY answer 422 — those are operator-produced
+    deliverables. Pinning this row with ``category="reports"`` would go red *because plan 02
+    worked*, manufacturing a false regression alarm against the plan that did its job. The
+    pin uses ``attachments``, one of the two in ``CLIENT_WRITABLE_CATEGORIES``
+    (``app/storage/keys.py:47``). ``fake_gcs`` intercepts the seam — no bucket, no creds.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/storage/uploads",
+            files={"file": ("brief.pdf", b"%PDF-1.4 probe", "application/pdf")},
+            data={"category": "attachments"},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 201, (
+            f"POST /intakes/{{id}}/storage/uploads must stay OPEN to role=user for a "
+            f"CLIENT-WRITABLE category (EXACTLY 201 — storage_routes.py:141-142 declares "
+            f"HTTP_201_CREATED), got {resp.status_code} (body={resp.text!r}). Note the "
+            f"category is 'attachments', not 'reports': 422 on 'reports' is CORRECT "
+            f"post-D-23.2-17 and is not a regression."
+        )
+        # Anti-vacuity: a 201 that never reached the seam is not an upload.
+        assert fake_gcs["uploads"], "the upload returned 201 but never reached the GCS seam."
+        assert fake_gcs["uploads"][-1]["key"].startswith(
+            f"{space}/{intake_id}/attachments/"
+        ), f"the server-authored key is wrong: {fake_gcs['uploads'][-1]['key']!r}"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_storage_delete_open_to_user(engine, set_space, monkeypatch, fake_gcs):
+    """Row 17: a role=user deletes an ``attachments`` object of their OWN intake -> EXACTLY 200.
+
+    Feeds ``FieldRenderer.tsx:488`` (the client's file-remove button).
+
+    ⛔ THE CATEGORY IS NAMED ON PURPOSE — the same trap as row 16, from the delete side.
+    Phase 23.2 plan 02 (D-23.2-08 / F-03) made a non-superadmin deleting a ``reports/`` key
+    CORRECTLY answer an existence-hidden 404, because ``GET /intakes/{id}/report`` hands the
+    client that exact ``storage_path`` and possession of a path was permission to destroy the
+    object behind it. A pin written with a ``reports/`` key would therefore go red *because
+    plan 02 worked*. This pin uses an ``attachments/`` key — client-writable, and the exact
+    shape ``build_object_key`` authors, so ``category_of`` parses the third segment.
+    """
+    from fastapi.testclient import TestClient
+
+    space, intake_id = uuid.uuid4(), uuid.uuid4()
+    key = f"{space}/{intake_id}/attachments/{uuid.uuid4()}-brief.pdf"
+    app = _build_app()
+    try:
+        _seed_space(engine, space)
+        _seed_intake(engine, set_space, space, intake_id)
+        _patch_engine_factories(monkeypatch, engine)
+        app.dependency_overrides[get_current_identity] = _as(_user(space))
+
+        resp = TestClient(app).request(
+            "DELETE",
+            f"/intakes/{intake_id}/storage/objects",
+            json={"paths": [key]},
+            headers=AUTH,
+        )
+
+        assert resp.status_code == 200, (
+            f"DELETE /intakes/{{id}}/storage/objects must stay OPEN to role=user for a "
+            f"CLIENT-WRITABLE category (EXACTLY 200), got {resp.status_code} "
+            f"(body={resp.text!r}). Note the key is an 'attachments/' key, not 'reports/': "
+            f"404 on a reports key is CORRECT post-D-23.2-08 and is not a regression."
+        )
+        assert resp.json()["removed"] == 1, (
+            f"the delete returned 200 but removed nothing: {resp.text!r}"
+        )
+        assert fake_gcs["deletes"][-1]["key"] == key
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# Anti-vacuity on the pin itself — the COUNT of reachability tests
+# ===========================================================================
+
+
+def test_every_open_client_route_is_pinned():
+    """Exactly SEVENTEEN ``*_open_to_user`` tests exist — one per open ``/intakes`` route.
+
+    ANTI-VACUITY BY INTROSPECTION, not by prose. The header table claims seventeen rows; a
+    table is a comment and a comment cannot fail. This derives the count from the module's
+    own callables and cross-checks it against the number of ``/intakes`` routes the REAL app
+    exposes WITHOUT ``superadmin_gate`` — so deleting a pin, or opening an eighteenth route
+    and not pinning it, both go red here.
+
+    The two numbers are computed independently: one from this module's namespace, one from
+    ``_flatten_routes`` over ``app.main.app``. They are asserted equal, and then asserted to
+    be 17. A single hard-coded number could be satisfied by editing the number.
+    """
+    import sys
+
+    from fastapi.dependencies.utils import get_dependant
+
+    gates = pytest.importorskip("app.auth.gates")
+    main = pytest.importorskip("app.main")
+    superadmin_gate = gates.superadmin_gate
+
+    module = sys.modules[__name__]
+    pins = sorted(
+        name
+        for name in dir(module)
+        if name.startswith("test_") and name.endswith("_open_to_user")
+    )
+    checked = len(pins)
+
+    def _walk(dependant):
+        found = []
+        for sub in dependant.dependencies:
+            found.append(sub.call)
+            found.extend(_walk(sub))
+        return found
+
+    open_routes = set()
+    for path, route, inherited in _flatten_routes(main.app.routes):
+        if not path.startswith("/intakes") or not hasattr(route, "dependant"):
+            continue
+        calls = _walk(route.dependant)
+        for dep in inherited:
+            call = getattr(dep, "dependency", None)
+            if call is None:
+                continue
+            calls.append(call)
+            calls.extend(_walk(get_dependant(path="/", call=call)))
+        if any(c is superadmin_gate for c in calls):
+            continue
+        for method in getattr(route, "methods", None) or set():
+            if method in ("HEAD", "OPTIONS"):
+                continue
+            open_routes.add((method, path))
+
+    assert checked == len(open_routes), (
+        f"the pin and the app disagree: {checked} *_open_to_user tests but "
+        f"{len(open_routes)} ungated /intakes routes. Pins={pins}. "
+        f"Open routes={sorted(open_routes)}. Either a client route was added and not "
+        f"pinned (pin it), or a pin was deleted (restore it), or a route acquired/lost a "
+        f"gate (that is the finding — do not adjust this number to match)."
+    )
+    assert checked == 17, (
+        f"expected 17 pinned client routes, got {checked}: {pins}. This number changing is "
+        f"a DECISION about the client surface, never a bookkeeping edit."
+    )
