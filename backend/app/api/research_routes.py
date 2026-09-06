@@ -86,6 +86,12 @@ from fastapi.responses import StreamingResponse
 # from a Python clock that may be skewed against it.
 from sqlalchemy import func
 
+# Also not a raw DB symbol: an exception CLASS, not an engine/session factory, so
+# ci_no_raw_db_access.sh (D-03) stays green. Imported for exactly one purpose — turning
+# the 0016 partial-unique-index refusal into a readable 409 in trigger_research
+# (D-23.2-12). Mirrors ai_session.create_running_skill_run's 23.1-12 precedent.
+from sqlalchemy.exc import IntegrityError
+
 # NOTE: this module no longer imports ``get_current_identity``. Every one of its ELEVEN
 # routes resolves ``superadmin_gate`` instead (23.1-18 closed the last one,
 # ``stream_research_run``), and the gate itself depends on ``get_current_identity`` — so
@@ -298,6 +304,31 @@ def trigger_research(
     with the status change (one-tx, Pitfall 2). ``metadata`` is structured ``{"from","to"}``
     only — never a link or token (T-16-11). The driver is scheduled AFTER the 202 via
     ``BackgroundTasks`` so the long (~19-min) Tribunal drive holds no request connection.
+
+    IDEMPOTENCY IS THREE PARTS, AND NONE OF THEM IS REDUNDANT (D-23.2-12 / F-05)
+    ---------------------------------------------------------------------------
+    This handler reads the intake's status and its prior runs on ``repo.session`` and then
+    writes in a SEPARATE ``tenant_session``. That read-then-write window is real: two
+    concurrent authorized requests used to both read the same ``prior``, both compute
+    ``attempt = 1``, and both insert and dispatch — roughly $45 spent twice, with nothing
+    in the UI to say so. Three mechanisms close it, each covering what the others cannot:
+
+    1. **The ``patch_if`` compare-and-swap** on the flip covers the ``decomposed ->
+       in_research`` path: the second caller's precondition no longer holds, ``rowcount``
+       is 0, and it gets a 409 having written nothing.
+    2. **The 0016 partial unique index** covers the RETRY path, which the CAS CANNOT. When
+       ``old_status == "in_research"`` this handler sets ``new_status = "in_research"``, so
+       a CAS of ``expected={"status": "in_research"}`` setting ``status="in_research"``
+       MATCHES for both concurrent callers — ``rowcount == 1`` twice. There the database is
+       the only arbiter, and the ``except IntegrityError`` below is purely a translator.
+       **This is the paragraph to read before deleting that index as "redundant".**
+    3. **``attempt`` computed inside the write transaction** so two triggers cannot both
+       stamp the same number. It is not a dedup mechanism on its own — it makes the audit
+       trail true once the other two have decided who wins.
+
+    The ``_MAX_ATTEMPTS`` cap deliberately stays on the pre-block read: it must
+    short-circuit before the brief is assembled, and moving it into the write tx would
+    change the ``needs_investigation`` response shape.
     """
     intake = repo.get(intake_id)
     if intake is None:
@@ -333,7 +364,12 @@ def trigger_research(
         new_status = "in_research"
     else:
         new_status = _next_research_status(old_status)  # 409 otherwise
-    attempt = len(prior) + 1
+
+    # NOTE: ``attempt`` is deliberately NOT computed here. It is recomputed inside the
+    # write transaction below, so there is exactly ONE place that computes it and it
+    # counts the runs that exist at WRITE time (D-23.2-12, part 3). ``prior`` above is
+    # still read here because the ``_MAX_ATTEMPTS`` cap must short-circuit BEFORE the
+    # brief is assembled — see the cap's own comment.
 
     # Compose the brief BEFORE the flip so a brief-input read failure never leaves a
     # half-transitioned intake. Read the decomposition + questions in scope (plain dicts).
@@ -383,9 +419,32 @@ def trigger_research(
     # in-body role re-checks for: deleting it would make relaxing the gate silently
     # write a run row into the CALLER's space instead of the intake's.
     intake_space_id = intake.space_id
-    values = dict(intake_id=intake_id, status="queued", attempt=attempt)
     with tenant_session(identity) as txs:
-        IntakeRepository(txs, identity).patch(intake_id, status=new_status)
+        # (1) COMPARE-AND-SWAP, not a plain patch (D-23.2-12, part 2). The precondition
+        # rides in the same UPDATE's WHERE, so there is no window between the read above
+        # and this write for a concurrent trigger to slip through. rowcount == 0 is
+        # INDISTINGUISHABLE between "the status changed under us", "the row is gone" and
+        # "the row belongs to another space" — all three are 0 by design (patch_if's own
+        # docstring). Do NOT re-read to tell them apart; all three mean "do not start a
+        # ~$45 run", which is the only decision this line makes.
+        #
+        # Raised BEFORE the audit call and BEFORE the run insert so a refusal writes
+        # NOTHING. The HTTPException also aborts the `with` block, and tenant_session
+        # wraps maker.begin(), so the transaction rolls back on the way out — belt and
+        # braces, asserted by test_cas_refuses_a_stale_flip_and_writes_nothing.
+        if IntakeRepository(txs, identity).patch_if(
+            intake_id, {"status": old_status}, status=new_status
+        ) == 0:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "The intake changed while this request was being prepared — "
+                "research was not started",
+            )
+        # (2) attempt counted INSIDE the write tx (D-23.2-12, part 3), so two concurrent
+        # triggers cannot both stamp the same number. The read above is used ONLY for the
+        # _MAX_ATTEMPTS cap, which stays where it is.
+        tx_runs = ResearchRunRepository(txs, identity)
+        attempt = len(tx_runs.list_for_intake(intake_id)) + 1
         audit.log(
             txs,
             actor_uid=identity.uid,
@@ -394,11 +453,26 @@ def trigger_research(
             space_id=intake_space_id,
             metadata={"from": old_status, "to": new_status},
         )
-        tx_runs = ResearchRunRepository(txs, identity)
-        if identity.role == "superadmin":
-            run = tx_runs.create_in_space(intake_space_id, **values)
-        else:
-            run = tx_runs.create(**values)
+        values = dict(intake_id=intake_id, status="queued", attempt=attempt)
+        # (3) The DB's own refusal, translated (D-23.2-12, part 1). create/create_in_space
+        # FLUSH to populate the server-side id, so the IntegrityError surfaces HERE, inside
+        # the block. Caught around the create ONLY — a genuine FK violation elsewhere in
+        # this handler must still surface rather than be relabelled "already running".
+        # The session is not reused afterwards: the raise exits the block and rolls back.
+        try:
+            if identity.role == "superadmin":
+                run = tx_runs.create_in_space(intake_space_id, **values)
+            else:
+                run = tx_runs.create(**values)
+        except IntegrityError:
+            # A readable sentence, never the constraint name / driver class / SQLSTATE:
+            # a leaked "duplicate key value violates unique constraint
+            # uq_research_runs_one_inflight_per_intake" is information disclosure and
+            # reads to the operator like a crash rather than like "that one is going".
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Research is already running for this intake",
+            )
         # Captured INSIDE the tx: expire_on_commit detaches `run` at block exit.
         research_run_id = str(run.id)
 
