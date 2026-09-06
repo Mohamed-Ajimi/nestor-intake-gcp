@@ -53,6 +53,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -144,4 +145,36 @@ class ResearchRun(Base):
         Index("ix_research_runs_space_id", "space_id"),
         Index("idx_research_runs_space_intake", "space_id", "intake_id"),
         Index("idx_research_runs_space_status", "space_id", "status"),
+        # COST-01 / D-23.2-12 (F-05) — at most ONE IN-FLIGHT research run per intake.
+        # The arbiter is the DATABASE, not an app-level "is one already running?"
+        # check, which races: two concurrent triggers both read "nothing is running"
+        # and both insert, and the operator pays ~$45 twice on a path that runs with
+        # NESTOR_TRIBUNAL_UNCAPPED=1.
+        #
+        # THREE literals, not two. mirror_tick writes the engine's status VERBATIM and
+        # there is no CHECK constraint, so the predicate is the COMPLEMENT of
+        # _RETRYABLE_RUN_STATUSES (research_routes.py) union RESEARCH_TERMINAL
+        # (research/run_status.py) over the nine measured statuses.
+        # ``needs_report_spec`` is NOT retryable — a run sitting there is alive and
+        # awaiting an operator's report spec — so it holds the in-flight slot too. It
+        # is documented as UNREACHABLE on the seam path today (research/brief.py never
+        # opts into the interactive-report gate); it is here as defence-in-depth
+        # against a design change, not as a fix for a live hole.
+        #
+        # POSITIVE IN (...), never NOT IN (terminal): an unknown FUTURE engine status
+        # must fail OPEN rather than block that intake's triggers permanently.
+        #
+        # PARTIAL, so terminal rows stay unconstrained and the retry path and the
+        # Resume verb keep working. The name is byte-identical to migration 0016's —
+        # a mismatch is invisible until a downgrade or a later autogenerate, and
+        # ``alembic check`` does NOT catch a drifted predicate (its postgresql
+        # compare_indexes looks at the unique flag and the expressions only), so
+        # tests/test_research_dispatch_dedup.py pins name AND predicate against the
+        # deployed pg_indexes.indexdef.
+        Index(
+            "uq_research_runs_one_inflight_per_intake",
+            "intake_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running', 'needs_report_spec')"),
+        ),
     )
