@@ -82,3 +82,57 @@ attributable line by line and nobody reads it as a regression from this plan.
   new client: identical `182 failed / 39 errors` both ways.
 - **Action:** whoever sets up the tribunal CI harness should either install `structlog` in the dev
   extra or provide a DSN, so the DSN-less signal is usable as a gate. Today it is not.
+
+---
+
+## DEF-23.3-05 — the reconciler's NON-terminal mirror is not compare-and-swapped
+
+- **Found during:** 23.3-05, Task 2 (design), while wiring the terminal CAS.
+- **What:** `reconcile_one` finalizes a terminal run behind a `patch_if` compare-and-swap on the
+  claim-time status, but the NON-terminal branch reuses `run_task.mirror_tick` verbatim (as
+  23.3-CONTEXT § 8 requires — *reuse, do not duplicate*), and `mirror_tick` has no conditional
+  form. So in the window `[claim -> mirror write]` a live driver that finalized could have its
+  terminal status overwritten by a progress mirror.
+- **Why it is not fixed here:** the window is closed by `ORPHAN_CUTOFF_MINUTES = 15`, not by luck.
+  For a live driver to land a terminal write inside it, that driver must have been silent for
+  longer than 15 minutes and then wake up and write; the only silent path this codebase has is the
+  401/403 retry budget, hard-capped at 600 s (10 min). Adding a conditional mirror would mean
+  either duplicating `mirror_tick` or editing `run_task.py`, which this plan's verification step 5
+  forbids (`git diff -- run_task.py` must be 0 lines).
+- **Blast radius if it ever did happen:** self-healing and free. The row goes back to non-terminal,
+  the next sweep reads the same terminal metrics and finalizes it properly. The one residual cost
+  is a second completion mail on that next pass.
+- **Action:** whoever next touches `run_task.mirror_tick` should give it an optional
+  `expected_status` and have the reconciler pass the claim-time value.
+
+## DEF-23.3-06 — the sweep replays a SUPERADMIN identity, not a space-scoped one
+
+- **Found during:** 23.3-05, Task 2 (threat register T-23.3-23, disposition *accept, documented*).
+- **What:** `reconcile._replay_identity` builds `Identity(role="superadmin", space_id=None)` from
+  the row's stored `acting_user_id` / `acting_email`. That REPLAYS the identity the run's own
+  driver already used (`run_task._patch_run`'s docstring records that the research write path runs
+  as superadmin because the triggering actor has no own space) and the values are never request
+  input — but it is wider than strictly necessary.
+- **The tighter alternative:** a space-scoped `user` identity relying on the 0011
+  `research_runs_space_isolation` policy to wall the write. Not taken because the `app_user` WRITE
+  path on `research_runs` has never been exercised anywhere in this repository, and a background
+  sweep over paid, in-flight runs is the wrong place to find out whether that policy's `WITH CHECK`
+  admits it.
+- **Action:** exercise the `app_user` write path on `research_runs` under test first; only then
+  narrow the sweep's identity.
+
+## DEF-23.3-07 — a claimed run with a NULL `tribunal_run_id` is skipped, never finalized
+
+- **Found during:** 23.3-05, Task 2.
+- **What:** a `queued` row whose `tribunal_run_id` is still NULL never reached the engine — the
+  trigger created the row but `create_run` never returned (or the instance died between the two).
+  `reconcile_one` returns `skipped_no_engine_run` with a WARNING and leaves the row alone.
+- **Why not decided here:** finalizing it means asserting something about a run that may or may not
+  have started spending. `failed` is probably right and would free the intake's in-flight slot, but
+  "probably" is not a basis for writing a terminal state on a ~$45 path, and the plan scoped this
+  out explicitly.
+- **⚠ Consequence while it stands:** such a row holds that intake's single in-flight slot
+  (`uq_research_runs_one_inflight_per_intake`) indefinitely, so no new research can be triggered
+  for that intake until a human clears the row.
+- **Action:** plan 06 (or a follow-up) should decide the terminal, ideally after asking the engine
+  whether an idempotency-keyed run exists for it.
