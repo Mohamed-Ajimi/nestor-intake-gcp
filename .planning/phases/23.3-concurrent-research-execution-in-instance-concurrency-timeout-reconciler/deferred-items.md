@@ -82,3 +82,36 @@ attributable line by line and nobody reads it as a regression from this plan.
   new client: identical `182 failed / 39 errors` both ways.
 - **Action:** whoever sets up the tribunal CI harness should either install `structlog` in the dev
   extra or provide a DSN, so the DSN-less signal is usable as a gate. Today it is not.
+- **23.3-03 addendum (different environment, same conclusion):** in the venv used by 23.3-03
+  `structlog` IS installed, so that collection error does not occur; instead
+  `test_report_planner.py` fails collection with `ModuleNotFoundError: No module named 'google'`
+  (`pipeline/tribunal/report_planner.py:25` imports `google.genai`), and the DSN-less baseline at
+  `fe43c62` is `204 failed, 2260 passed, 31 skipped, 3 xfailed, 28 errors`. **The absolute numbers
+  are environment-specific and are not comparable across sessions** — only the before/after DELTA
+  inside ONE environment means anything. Nobody should quote "182/39" or "204/28" as the number.
+
+## DEF-23.3-05 — `test_advisory_lock_exactly_once.py` LEAKS `DATABASE_URL` into the whole process
+
+- **Found during:** 23.3-03, DSN-less regression baselining.
+- **What:** `test_advisory_lock_exactly_once.py:162` does a bare
+  `os.environ["DATABASE_URL"] = url` after starting a `testcontainers` `postgres:15` and running
+  migrations against it, and **never removes it**. It is not a `monkeypatch.setenv`, so nothing
+  undoes it. `test_schema_isolation.py:159` does the same.
+- **Consequence, measured:** run `nestor_pulse_sdk/tests` with NO `DATABASE_URL` in the
+  environment and `test_worker_in_instance_concurrency.py` does **not** skip its six DB-backed
+  tests — it finds the leaked DSN (alphabetically `test_advisory_lock_*` collects and runs first)
+  and executes them against the throwaway container. Targeted run: `1 passed, 6 skipped`.
+  Full-suite run, same environment: all 7 passed. Same code, same environment, different outcome
+  purely from module ordering.
+- **Why it matters beyond tidiness:** the leaked DSN's role is the container's `test` SUPERUSER,
+  which bypasses RLS. Any test meaning to prove something about a *role* — the `run_worker_all`
+  policy of migration 0008, tenant isolation, an RLS fence — is silently handed a role that can
+  see everything. A file can therefore report green on an assertion its own preflight was written
+  to skip. Same family as DEF-23.2-14 (process-wide state leaking between test modules), but the
+  mechanism is an env var rather than `caplog`.
+- **Not fixed here:** the file is untouched by 23.3-03, whose scope is the poll loop and the
+  deploy script. Changing a fixture in an advisory-lock test file under a concurrency plan is the
+  scope creep the phase fences forbid.
+- **Action:** convert both assignments to `monkeypatch.setenv` (or restore the previous value in
+  the fixture teardown). Until then, **DB-role claims must be measured with a targeted run**, not
+  read off a full-suite line.
