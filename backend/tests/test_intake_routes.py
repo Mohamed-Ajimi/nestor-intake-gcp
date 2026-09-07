@@ -451,11 +451,20 @@ def test_superadmin_answers_upsert_lands_in_intake_space(engine, monkeypatch, su
 # ===========================================================================
 
 
-def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch, superadmin_engine):
+def test_transitions_advance_and_reject_out_of_scope(
+    engine, monkeypatch, superadmin_engine, complete_answer_batch
+):
     """draft->submitted->reviewed->validated_by_client all 200; a forbidden submit -> 409.
 
     The forbidden case (submit from ``validated_by_client``) has NO allow-list entry, so it
     409s — STRUCTURALLY blocking any progression past the in-scope ceiling (T-06-06).
+
+    FIXTURE-ONLY (DEF-23.2-13): the form is now FILLED before the first submit.
+    ``draft -> submitted`` enforces ``required`` / ``min_length`` / ``min_items``
+    (``check_submit_completeness``), so a bare intake answers 422. The subject of this test is
+    the transition ALLOW-LIST, not completeness — filling the form is what a real client does,
+    and it keeps the four assertions below testing what they say they test. The transition
+    sequence, the statuses and every assertion are untouched.
     """
     from fastapi.testclient import TestClient
 
@@ -476,6 +485,14 @@ def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch, supera
         intake_id = client.post(
             "/intakes", json={"client_name": "Flow Co"}, headers=hdr
         ).json()["id"]
+
+        # DEF-23.2-13: fill the form before submitting (see the docstring).
+        filled = client.patch(
+            f"/intakes/{intake_id}/answers",
+            json={"answers": complete_answer_batch()},
+            headers=hdr,
+        )
+        assert filled.status_code == 200, f"seeding answers failed: {filled.text!r}"
 
         submit = client.post(f"/intakes/{intake_id}/submit", headers=hdr)
         assert submit.status_code == 200, f"draft->submitted should be 200, got {submit.status_code}"
@@ -513,9 +530,15 @@ def test_transitions_advance_and_reject_out_of_scope(engine, monkeypatch, supera
 # ===========================================================================
 
 
-def test_transition_audited(engine, monkeypatch):
+def test_transition_audited(engine, monkeypatch, complete_answer_batch):
     """One transition writes EXACTLY one ``intake.status_changed`` audit row in the same tx,
-    with ``metadata={"from","to"}`` and no token/link/password key (T-06-08 / T-06-09)."""
+    with ``metadata={"from","to"}`` and no token/link/password key (T-06-08 / T-06-09).
+
+    FIXTURE-ONLY (DEF-23.2-13): the form is filled before the submit, which now enforces
+    completeness on ``draft -> submitted``. The "EXACTLY one row" assertion is why this
+    matters — the answer PATCH must not write an ``intake.status_changed`` row, and this test
+    still proves it does not.
+    """
     from fastapi.testclient import TestClient
     from sqlalchemy import text
 
@@ -534,6 +557,14 @@ def test_transition_audited(engine, monkeypatch):
         intake_id = client.post(
             "/intakes", json={"client_name": "Audited Co"}, headers=hdr
         ).json()["id"]
+
+        # DEF-23.2-13: fill the form before submitting (see the docstring).
+        filled = client.patch(
+            f"/intakes/{intake_id}/answers",
+            json={"answers": complete_answer_batch()},
+            headers=hdr,
+        )
+        assert filled.status_code == 200, f"seeding answers failed: {filled.text!r}"
 
         submit = client.post(f"/intakes/{intake_id}/submit", headers=hdr)
         assert submit.status_code == 200, f"submit should be 200, got {submit.status_code}"

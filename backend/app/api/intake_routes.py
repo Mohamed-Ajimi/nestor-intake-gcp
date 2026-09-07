@@ -61,7 +61,11 @@ from app.intake_canonical import (
     admin_only_field_keys,
     client_visible_schema,
 )
-from app.intake_write_policy import AnswerWriteViolation, check_answer_batch
+from app.intake_write_policy import (
+    AnswerWriteViolation,
+    check_answer_batch,
+    check_submit_completeness,
+)
 from app.db import audit
 from app.db.ai_session import tenant_session
 from app.db.models.membership import OrganizationMembership
@@ -1492,7 +1496,9 @@ def _next_review_status(current: str) -> str:
 @intake_router.post("/{intake_id}/submit")
 def submit_intake(
     intake_id: str,
-    repo: IntakeRepository = Depends(get_tenant_repo),
+    repos: tuple[IntakeRepository, IntakeAnswerRepository] = Depends(
+        get_intake_and_answer_repos
+    ),
     identity: Identity = Depends(get_current_identity),
 ) -> IntakeView:
     """Advance an intake along the submit transition (``draft`` -> ``submitted`` or
@@ -1503,13 +1509,46 @@ def submit_intake(
     written on ``repo.session`` so it commits/rolls back together with the status change
     (one-tx, QA-04 / Pitfall 2). ``metadata`` is structured ``{"from","to"}`` only — never a
     link or token (T-06-09).
+
+    COMPLETENESS (D-23.2-13). ``required`` / ``min_length`` / ``min_items`` were enforced in
+    the BROWSER only (``validateField``, ``IntakeForm.tsx:33-40``); a direct API call could
+    submit an empty intake, and those answers are the research inputs. They are checked here
+    because this is the transition the browser already gates — deliberately NOT on the answer
+    write path, which legitimately saves a partial section and clears fields (the ⛔ block in
+    ``intake_write_policy``).
+
+    ⚠ ONLY on ``draft -> submitted``. Running it on ``reviewed -> validated_by_client`` locks
+    the client out: in the validation phase every field except the ``proposal_list`` is
+    disabled and its write refused, so a failing client has no control with which to comply.
+    The reviewed answer set is the admin's work by then.
+
+    PRECEDENCE: ownership 404 -> lifecycle 409 -> completeness 422, and the check runs BEFORE
+    ``repo.patch`` so a refused submit leaves the status untouched. Reading the answers needs
+    the combined dependency (both repos on ONE session, D-02), the same one ``upsert_answers``
+    uses.
     """
+    repo, answers_repo = repos
     intake = repo.get(intake_id)
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
     old_status = intake.status
     new_status = _next_submit_status(old_status)
+
+    if old_status == "draft":
+        # ``value_json`` wins when present: that is how the row stores lists/objects, and
+        # exactly what the client reads back (_answer_view). A row with both null is an
+        # explicitly CLEARED field and reads as empty, which is what it means.
+        answers = {
+            row.field_key: (row.value_json if row.value_json is not None else row.value)
+            for row in answers_repo.list_for_intake(intake_id)
+        }
+        try:
+            check_submit_completeness(answers, role=identity.role)
+        except AnswerWriteViolation as exc:
+            # ``from None`` — a policy refusal is an expected outcome, not an internal fault.
+            raise HTTPException(exc.code, exc.detail) from None
+
     repo.patch(intake_id, status=new_status)
     audit.log(repo.session, actor_uid=identity.uid,
               event_type="intake.status_changed", target=str(intake_id),

@@ -109,6 +109,11 @@ happens on every intake. Enforcing a minimum here 422s the form mid-typing. **An
 ALWAYS accepted for a writable field.** If minimum-constraint enforcement is wanted, its home is
 ``POST /intakes/{id}/submit``, which is the transition the browser already gates.
 
+That home is now occupied — by :func:`check_submit_completeness` in this same module
+(DEF-23.2-13). The prohibition above is UNCHANGED and still binding: it is about
+:func:`check_answer_batch`, the per-save path. The two are deliberately different rules at
+different verbs, which is why they are separate functions rather than a flag on one.
+
 ⛔ A ``radio`` ANSWER IS NOT ALWAYS A STRING. Two of the three canonical radios carry an
 "Anders / Other" option flagged ``allow_text: true``, and ``FieldRenderer.tsx:302-306`` emits
 ``onChange({choice: opt.value, text: ...})`` for those — an OBJECT, which ``toAnswerInput``
@@ -130,7 +135,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.intake_canonical import admin_only_field_keys, canonical_field
+from app.intake_canonical import (
+    admin_only_field_keys,
+    canonical_field,
+    canonical_field_keys,
+)
 
 # --- DoS bounds (see the module docstring — NOT business rules) -------------------------
 
@@ -239,6 +248,101 @@ def check_answer_batch(items: list[dict], *, intake_status: str, role: str) -> N
     # (5) Value -> 422.
     for item, field in fields:
         _check_value(item, field)
+
+
+# ---------------------------------------------------------------------------
+# Submit completeness (D-23.2-13) — a DIFFERENT rule at a DIFFERENT verb
+# ---------------------------------------------------------------------------
+
+
+def check_submit_completeness(answers: dict[str, Any], *, role: str) -> None:
+    """Enforce ``required`` / ``min_length`` / ``min_items``, or raise 422. Returns ``None``.
+
+    ⚠ CALL THIS ONLY ON ``draft -> submitted``, never on ``reviewed ->
+    validated_by_client``. ``POST /intakes/{id}/submit`` serves BOTH transitions
+    (``_SUBMIT_TRANSITIONS``), and applying this to the second one is a LOCKOUT: in the
+    validation phase every field except the ``proposal_list`` is disabled in the browser
+    (``IntakeForm.tsx``) and refused by :func:`check_answer_batch` here, so a client who
+    fails this check has no control with which to fix it and no way forward. The reviewed
+    answer set is also the ADMIN's work by then — refusing the client's approval because of
+    a gap an operator left is the wrong party to punish. ``draft -> submitted`` is the
+    transition the browser already gates with exactly these three rules, so enforcing there
+    is pure defence in depth against a direct API call, with no new failure mode.
+
+    ``answers`` maps ``field_key -> stored value`` (``value_json`` when present, else
+    ``value``) — i.e. what the client would read back, not the row.
+
+    THE EMPTINESS TEST MIRRORS THE BROWSER EXACTLY (``validateField``,
+    ``IntakeForm.tsx:33-40``): ``None``, ``""``, and an empty LIST. Deliberately NOT an empty
+    dict — the browser's ``Array.isArray`` check does not treat ``{}`` as empty, and a server
+    that is STRICTER than the form refuses a submit the form told the client was fine. The
+    failure mode of drifting apart is a client stuck on a valid form, so where the two could
+    disagree, this one yields.
+
+    Admin-only fields are SKIPPED: a client cannot fill them (they are hidden and their write
+    is refused with 404), so requiring one would make the form unsubmittable. Derived from
+    :func:`admin_only_field_keys`, so a future admin-only field is skipped with no edit here.
+
+    Messages stay generic and name no field key, matching the rest of this module. The browser
+    has the schema and shows the precise, translated message; this path exists for a caller
+    that bypassed it, and a per-field server message would be a second, untranslated copy of
+    the form's own validation text that could drift from it.
+    """
+    # Superadmin is exempt — same polarity and same reason as check_answer_batch.
+    if role == _SUPERADMIN_ROLE:
+        return
+
+    admin_keys = admin_only_field_keys()
+
+    # ``sorted`` for a DETERMINISTIC first violation: canonical_field_keys() is a frozenset,
+    # and iteration order would otherwise vary the message a client sees between processes.
+    for field_key in sorted(canonical_field_keys()):
+        if field_key in admin_keys:
+            continue
+        field = canonical_field(field_key)
+        if field is None:  # pragma: no cover - key came from the same schema
+            continue
+
+        value = answers.get(field_key)
+        empty = _is_empty_answer(value)
+
+        if field.get("required") and empty:
+            raise AnswerWriteViolation(422, "This form is not complete yet.")
+        if empty:
+            # Below here every rule is a MINIMUM on a value that exists. An optional field
+            # left blank must not trip them (the browser returns early the same way).
+            continue
+
+        field_type = field.get("type")
+
+        # min_length: longtext only, matching the browser. The canonical schema states it at
+        # FIELD level; a nested ``validation.min_length`` is honoured too, mirroring the
+        # forward-compat read the form does (WR-07).
+        if field_type == "longtext":
+            min_length = (field.get("validation") or {}).get("min_length")
+            if min_length is None:
+                min_length = field.get("min_length")
+            if isinstance(min_length, int) and isinstance(value, str):
+                if len(value) < min_length:
+                    raise AnswerWriteViolation(422, "One of your answers is too short.")
+
+        # min_items: list only, matching the browser.
+        if field_type == "list":
+            min_items = field.get("min_items")
+            if isinstance(min_items, int) and isinstance(value, list):
+                if len(value) < min_items:
+                    raise AnswerWriteViolation(422, "One of your answers needs more entries.")
+
+
+def _is_empty_answer(value: Any) -> bool:
+    """Emptiness as the BROWSER defines it: ``None``, ``""``, or an empty list. See above."""
+    if value is None:
+        return True
+    if isinstance(value, str) and value == "":
+        return True
+    if isinstance(value, list) and len(value) == 0:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

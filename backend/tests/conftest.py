@@ -972,3 +972,89 @@ def fake_tribunal_client(monkeypatch):
         monkeypatch.setattr(tc, name, fake, raising=False)
 
     return capture
+
+
+# ---------------------------------------------------------------------------
+# Submit completeness (DEF-23.2-13) — a fixture that fills the form honestly
+# ---------------------------------------------------------------------------
+
+
+def _sample_answer_for(field_key: str, field: dict) -> dict:
+    """One valid answer item for ``field``, shaped for ``PATCH /intakes/{id}/answers``.
+
+    Values are the SMALLEST thing that satisfies the field's own stated constraints, read
+    off the schema — a radio takes its first declared option (``check_answer_batch``
+    validates against ``options``), a longtext is padded to ``min_length``, a list is filled
+    to ``min_items``. Nothing here is a literal answer for a named field.
+    """
+    field_type = field.get("type")
+
+    if field_type == "longtext":
+        min_length = (field.get("validation") or {}).get("min_length")
+        if min_length is None:
+            min_length = field.get("min_length")
+        text = "x" * max(int(min_length or 1), 1)
+        return {"field_key": field_key, "value": text, "value_json": None}
+
+    if field_type == "radio":
+        options = field.get("options") or []
+        # The FIRST option, and deliberately the plain-string shape: an option carrying
+        # ``allow_text`` also accepts a bare value, so this is valid either way.
+        choice = next((o.get("value") for o in options if isinstance(o, dict)), "")
+        return {"field_key": field_key, "value": choice, "value_json": None}
+
+    if field_type in ("list", "proposal_list", "files"):
+        count = max(int(field.get("min_items") or 0), 1)
+        return {
+            "field_key": field_key,
+            "value": None,
+            "value_json": [f"entry {i + 1}" for i in range(count)],
+        }
+
+    if field_type == "email":
+        return {"field_key": field_key, "value": "client@example.test", "value_json": None}
+
+    if field_type == "date":
+        return {"field_key": field_key, "value": "2030-01-01", "value_json": None}
+
+    # text / tel / anything else that stores a plain string.
+    return {"field_key": field_key, "value": "filled", "value_json": None}
+
+
+@pytest.fixture
+def complete_answer_batch():
+    """Callable -> the minimal answer batch that satisfies ``POST /submit`` completeness.
+
+    ``submit_intake`` enforces ``required`` / ``min_length`` / ``min_items`` on
+    ``draft -> submitted`` (DEF-23.2-13), so a test that creates a bare intake and submits it
+    no longer gets a 200. Tests whose SUBJECT is something else (the transition allow-list,
+    the audit row, the client-route pin) fill the form with this first, exactly as a real
+    client does, rather than asserting around the rule.
+
+    DERIVED from the canonical schema, never a literal list: a new required field added to
+    ``pulse_intake_v1.json`` widens this batch automatically, instead of silently making
+    every fixture that uses it incomplete again.
+
+    Admin-only fields are excluded — a ``role=user`` cannot write them (404) and the
+    completeness rule skips them for the same reason.
+    """
+
+    def _build() -> list[dict]:
+        from app.intake_canonical import (
+            admin_only_field_keys,
+            canonical_field,
+            canonical_field_keys,
+        )
+
+        admin = admin_only_field_keys()
+        items: list[dict] = []
+        for key in sorted(canonical_field_keys()):
+            if key in admin:
+                continue
+            field = canonical_field(key) or {}
+            if not field.get("required"):
+                continue
+            items.append(_sample_answer_for(key, field))
+        return items
+
+    return _build

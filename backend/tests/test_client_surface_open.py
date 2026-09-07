@@ -497,7 +497,9 @@ def test_upsert_answers_open_to_user(engine, set_space, monkeypatch):
 # ===========================================================================
 
 
-def test_submit_intake_open_to_user(engine, set_space, monkeypatch):
+def test_submit_intake_open_to_user(
+    engine, set_space, monkeypatch, complete_answer_batch
+):
     """Row 6: a role=user caller submits their OWN ``draft`` intake -> EXACTLY 200.
 
     Feeds ``IntakeForm.tsx:15`` (``submitIntake``). Seeded at ``draft``, the first entry in
@@ -505,6 +507,11 @@ def test_submit_intake_open_to_user(engine, set_space, monkeypatch):
     asserted to have advanced to ``submitted``, proving the verb executed rather than merely
     answering. ``draft -> submitted`` does NOT reach the ``validated_by_client`` branch, so
     no mail seam is touched.
+
+    FIXTURE-ONLY (DEF-23.2-13): the form is FILLED first. ``draft -> submitted`` now enforces
+    ``required`` / ``min_length`` / ``min_items``, so a bare intake answers 422 — and a 422
+    here would be a FALSE signal for this row: the route is open, the payload was incomplete.
+    This row pins AUTHORIZATION, so the request must be one that only a gate could refuse.
     """
     from fastapi.testclient import TestClient
 
@@ -515,8 +522,16 @@ def test_submit_intake_open_to_user(engine, set_space, monkeypatch):
         _seed_intake(engine, set_space, space, intake_id, status="draft")
         _patch_engine_factories(monkeypatch, engine)
         app.dependency_overrides[get_current_identity] = _as(_user(space))
+        client = TestClient(app)
 
-        resp = TestClient(app).post(f"/intakes/{intake_id}/submit", headers=AUTH)
+        filled = client.patch(
+            f"/intakes/{intake_id}/answers",
+            json={"answers": complete_answer_batch()},
+            headers=AUTH,
+        )
+        assert filled.status_code == 200, f"seeding answers failed: {filled.text!r}"
+
+        resp = client.post(f"/intakes/{intake_id}/submit", headers=AUTH)
 
         assert resp.status_code == 200, (
             f"POST /intakes/{{id}}/submit must stay OPEN to role=user (EXACTLY 200), got "
