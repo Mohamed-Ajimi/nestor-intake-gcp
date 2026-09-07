@@ -148,6 +148,38 @@ def tenant_session(identity: Identity) -> Iterator[Session]:
         yield session
 
 
+@contextmanager
+def superadmin_session() -> Iterator[Session]:
+    """Open ONE ``app_superadmin`` transaction for a caller that has NO identity yet.
+
+    Plan 23.3-05. The orphaned-run reconciler's CLAIM cannot know which space a lost run
+    belongs to until it has read the row, so it cannot supply a tenant GUC — the same
+    reason :func:`sweep_orphaned_skill_runs` above reaches for the superadmin engine, and
+    the same shape.
+
+    **This adds no new capability.** ``tenant_session(Identity(role="superadmin", ...))``
+    already yields exactly this session today: the superadmin path takes the
+    ``app_superadmin`` engine and sets NO GUC (the 0003 bypass is ``current_user``-based).
+    All this function does is give that session a NAME, so a background sweep with no human
+    behind it does not have to fabricate an ``Identity`` in order to pick an engine —
+    which, in a module whose central rule is "never invent an actor", is a line nobody
+    should have to write and nobody should copy.
+
+    It lives HERE, in ``app/db/``, because that is the D-03 seam: engines and sessions are
+    constructed in exactly one directory, and ``scripts/ci_no_raw_db_access.sh`` fails the
+    build for any other module that reaches for ``get_superadmin_engine`` / ``sessionmaker``
+    itself. That guard is what keeps the per-space filter from becoming omittable
+    per-endpoint, so the reconciler comes to the seam rather than the seam being widened.
+
+    ⚠ Cross-tenant by construction, and therefore for BACKGROUND SWEEPS ONLY. A request
+    handler must never call this: a handler HAS an identity, and it must go through
+    :func:`tenant_session` so the tenant filter is structural rather than optional.
+    """
+    maker = get_sessionmaker(get_superadmin_engine())
+    with maker.begin() as session:  # ONE tx; commit + conn return on exit
+        yield session
+
+
 def run_with_session_release(
     identity: Identity,
     read_fn: Callable[[Session], Any],
