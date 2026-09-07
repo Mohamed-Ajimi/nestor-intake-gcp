@@ -25,13 +25,17 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-⛔ **NEXT ACTION: TURN ON CLOUD SQL BACKUPS.** `nestor-pg` has
-`backupConfiguration.enabled = False`, no PITR, **ZERO backups in existence** and ZONAL (no HA),
-measured 2026-09-07. ⚠ The backup WINDOW is set (22:00 / 7 retained) while backups are OFF, so
-reading those two fields alone makes it look configured. Losing the instance loses every client's
-intake, answers, runs and reports. Command + the PITR-restart caveat: `.planning/STAKEHOLDER-NOTES.md`,
-2026-09-07 (evening). **This is the only thing blocking production** — authorization is hardened
-across two audits and concurrency/durability shipped today.
+✅ **CLOUD SQL BACKUPS + PITR ARE ON (2026-09-07) — and now codified so an `apply` cannot revert
+them.** `nestor-pg`: `backupConfiguration.enabled = true`, PITR on, 7 retained backups, 7 days of
+transaction logs; one backup exists (`1788811361290`, `AUTOMATED`, `SUCCESSFUL`). The
+`backup_configuration` block was **ABSENT** from `infra/main.tf` — never declared — which is why
+the instance ran unbacked-up; it is now declared and matches the live read-back value-for-value.
+⚠ **CORRECTED:** the earlier PITR-restart caveat was wrong — enabling PITR on Cloud SQL for
+PostgreSQL needed **no restart** (measured: the instance stayed `RUNNABLE` throughout and `/readyz`
+was healthy after). Full record: `infra/DEPLOY-RUNBOOK.md`, 2026-09-07.
+⛔ **Do not read this as done:** no backup has ever been **RESTORED** — a restore rehearsal is
+still owed, and a backup never restored is a hope, not a guarantee — and the instance is still
+**ZONAL (no HA)**; backups bound the data loss, they do not remove the outage.
 
 **Phase 23.3 — concurrent research execution — COMPLETE (6/6 plans) and ✅ DEPLOYED 2026-09-07, tag `20260907-161728`.**
 Live: `nestor-api-00050-w2l` · `tribunal-api-00025-q4m` · `tribunal-worker-20260907-161728-162720`;

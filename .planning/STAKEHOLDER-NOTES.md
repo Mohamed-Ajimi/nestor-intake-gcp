@@ -285,9 +285,13 @@ Two deploys landed today (`20260907-113058` — phase 23.2 + its two follow-ups 
 `20260907-161728` — phase 23.3 concurrency + migration 0017). The question that followed was
 whether the product is ready for production. The short answer and the evidence are below.
 
-### ⛔ THE BLOCKER: the production database has NO BACKUPS
+### ✅ RESOLVED 2026-09-07 — THE BLOCKER WAS: the production database had NO BACKUPS
 
-Measured on `nestor-pg`, 2026-09-07:
+**Status: RESOLVED 2026-09-07.** Backups and PITR are ON, one backup exists, and the configuration
+is now declared in `infra/main.tf`. The original measured record is kept below unchanged — it is
+the origin record for why this was allowed to happen, and this file keeps origin records.
+
+#### Pre-fix state — the origin record, measured on `nestor-pg`, 2026-09-07
 
 | setting | value |
 |---|---|
@@ -299,29 +303,67 @@ Measured on `nestor-pg`, 2026-09-07:
 ⚠ **The trap:** a backup `startTime` of `22:00` and `retainedBackups` of `7` ARE set — but they are
 inert while `enabled = False`. Reading those two fields alone makes the instance look configured.
 
-**Blast radius if the instance is lost: every client's intake, answers, research runs, artifacts and
-reports.** This is one setting, not an architectural gap. Agreed action: fix it next session.
+**Blast radius if the instance had been lost: every client's intake, answers, research runs,
+artifacts and reports.** This was one setting, not an architectural gap.
 
-**The fix** (⚠ verify the restart behaviour first — enabling automated backups is online, but
-enabling PITR on Cloud SQL for PostgreSQL turns on WAL archiving and requires an INSTANCE RESTART;
-if so, split it — backups now, PITR in a window):
+#### The fix, as applied — and the caveat that measurement overturned
+
+The original caveat is preserved verbatim below as the origin record.
+⛔ **It is WRONG — see the correction immediately after it. Do not act on the quoted text.**
+
+> **The fix** (⚠ verify the restart behaviour first — enabling automated backups is online, but
+> enabling PITR on Cloud SQL for PostgreSQL turns on WAL archiving and requires an INSTANCE RESTART;
+> if so, split it — backups now, PITR in a window)
+
+⚠ **CORRECTED 2026-09-07 — that caveat was MEASURED WRONG for PostgreSQL.** There was no restart.
+The instance stayed `RUNNABLE` across the entire UPDATE operation
+(`a6db2b00-d00f-4680-b4e9-867a00000024`, 20:01:13 → 20:04:18Z) and `/readyz` returned
+`{"status":"ready","db":"ok"}` afterwards. Splitting the change into two windows was unnecessary;
+the command below ran in one shot (only the two PITR flags were sent — enabling PITR implicitly enabled automated backups, activating the `22:00` / `7` window already stored). ⚠ Scope this correction to Cloud SQL **for PostgreSQL** —
+MySQL and SQL Server were never measured here, so do not generalise it to them.
 
 ```
 gcloud sql instances patch nestor-pg \
   --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
-  --backup-start-time=22:00 --retained-backups-count=7 \
   --enable-point-in-time-recovery --retained-transaction-log-days=7
 ```
 
-Three things to decide separately rather than bundle: **ZONAL -> REGIONAL** (real HA; a restart and
-roughly double the instance cost), a **restore rehearsal** (a backup never restored is a hope, not a
-guarantee — clone to a new instance from a backup, check schema + row counts, delete), and whether
-`infra/main.tf` declares backup config at all, because if it does not then a `terraform apply` could
-revert a hand-set value — the same shape as DEF-23.3-14.
+#### Post-fix state — read back 2026-09-07
+
+| field | live value |
+|---|---|
+| `enabled` | `true` |
+| `startTime` | `"22:00"` |
+| `pointInTimeRecoveryEnabled` | `true` |
+| `transactionLogRetentionDays` | `7` |
+| `backupRetentionSettings.retainedBackups` | `7` |
+| `backupRetentionSettings.retentionUnit` | `"COUNT"` |
+
+One backup now exists: id `1788811361290`, `AUTOMATED`, `SUCCESSFUL`. `availabilityType` still
+`ZONAL`. Full evidenced record in `infra/DEPLOY-RUNBOOK.md`, 2026-09-07.
+
+#### ANSWERED: did `infra/main.tf` declare the backup config at all?
+
+That open question — *whether `infra/main.tf` declares backup config at all, because if it does not
+then a `terraform apply` could revert a hand-set value, the same shape as DEF-23.3-14* — is now
+**answered: it did NOT.** There was no `backup_configuration` block in
+`google_sql_database_instance.main` at all; never declared, not declared-then-disabled. That
+omission is why the instance ran unbacked-up in the first place, and it left the hand-fix one
+routine `apply` away from reversion. The block is now declared and matches the post-fix table
+value-for-value, so `plan` reports no diff on this resource. **DEF-23.3-14 itself remains OPEN**
+and was deliberately left untouched.
+
+#### Still open — do not read this as "done"
+
+* ⛔ **A restore rehearsal.** Still owed. A backup that has never been restored is a hope, not a
+  guarantee — clone to a new instance from a backup, check schema + row counts, delete the clone.
+  Nothing here has demonstrated that these backups can actually bring the database back.
+* **ZONAL -> REGIONAL** (real HA; a restart and roughly double the instance cost). Still open and
+  deliberately a separate decision. Backups bound the DATA LOSS; they do not remove the OUTAGE.
 
 ### The verdict
 
-**The product is good for production once backups are on.** Tenant isolation is hardened across two
+**The product is good for production. Backups are on as of 2026-09-07** — the one condition this verdict was originally gated on is now satisfied (see the section above); the two DR gaps that remain, a never-rehearsed restore and the still-ZONAL instance, are named there and are not blockers. Tenant isolation is hardened across two
 external audits; authorization has now been examined on both axes (23.1 — who may call which verb;
 23.2 — what a legitimate caller may see and change); concurrency, a hang backstop and an
 orphaned-run reconciler shipped today.
