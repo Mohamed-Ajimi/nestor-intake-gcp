@@ -750,7 +750,7 @@ Plans:
 **Requirements**: COST-01 (no paid work lost or duplicated — extended to orphaned runs), plus DEF-23.2-03 (durable dispatch) from `.planning/phases/23.2-*/deferred-items.md`
 **Depends on:** Phase 23.2 (deployed 2026-09-07, tag `20260907-113058`)
 **Authority:** `23.3-CONTEXT.md` — the measured run-duration table, the serial-execution mechanism with file:line, and decisions D-23.3-01..
-**Plans:** TBD
+**Plans:** 6 plans in 3 waves
 
 **Scope note — the spend cap is DEFERRED BY OPERATOR RULING (2026-09-07).** `NESTOR_TRIBUNAL_UNCAPPED=1`
 is live on `tribunal-worker`, so raising concurrency raises the maximum simultaneous spend. The
@@ -814,6 +814,19 @@ exposure, leave the decision open.
 - ⚠ **Changing `min-instances` creates a NEW REVISION, which BOOTS the container — and the worker
   loop CLAIMS FIRST, SLEEPS LAST.** Any worker config change must be applied with the queue EMPTY.
   This caused the 2026-07-28 incident.
+
+Plans:
+
+- [ ] 23.3-01-PLAN.md — wave 1 — run-level timeout backstop around `runner.run()` (120 min, derived from the measured 64.2-min maximum) + a worded terminal message
+- [ ] 23.3-02-PLAN.md — wave 1 — scale the process-wide LLM semaphore with worker concurrency so each run keeps its 8 in-flight slots; pin an explicit timeout on the bare `AsyncAnthropic()`
+- [ ] 23.3-03-PLAN.md — wave 2 — in-instance worker concurrency (semaphore K=4 + `create_task`), `MIN_INSTANCES=2`; barrier-proven interleaving and per-run session isolation
+- [ ] 23.3-04-PLAN.md — wave 1 — migration 0017: actor, driver heartbeat and reconcile lease on `research_runs`; start writing all three
+- [ ] 23.3-05-PLAN.md — wave 2 — the stateless orphaned-run reconciler: lease claim (SKIP LOCKED), mirror/finalize via CAS, no connection held across the seam
+- [ ] 23.3-06-PLAN.md — wave 3 — trigger the sweep from nestor-api's lifespan off the event loop; runbook corrections; deferral register (incl. the uncapped-spend exposure)
+
+**Wave structure:** wave 1 = {01, 02, 04} (disjoint files: worker loop / LLM client / backend) · wave 2 = {03, 05} (03 needs 01+02 on `worker.py` and `concurrency.py`; 05 needs 04's columns) · wave 3 = {06} (needs 05's `sweep_once`).
+
+⛔ **This phase deploys nothing and spends nothing.** Everything is provable by local tests; the deploy is a separate operator-run step, and it must start with the Tribunal queue verified EMPTY.
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
