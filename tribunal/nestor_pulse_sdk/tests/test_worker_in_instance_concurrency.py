@@ -60,10 +60,19 @@ Layer B -- REAL POSTGRES (skips LOUDLY without a DSN; A SKIP IS NOT A PASS):
   * no session carrying two tenants (the trap-3 gate),
   * a hung run not blocking the queue -- the second run's TERMINAL WRITE LANDS
     FIRST, which is the only form of that claim a serial worker cannot satisfy,
-  * and `test_at_k_one_the_loop_is_still_serial`, the ROLLBACK GUARANTEE:
+  * `test_at_k_one_the_loop_is_still_serial`, the ROLLBACK GUARANTEE:
     with `NESTOR_WORKER_RUN_CONCURRENCY` unset the barrier must NOT trip.
     ⚠ THIS ONE IS EXPECTED GREEN AT HEAD. It is a comparability guard, not a
     defect gate, and it must never be counted as evidence that the fix works.
+  * `test_a_crashing_dispatch_gives_its_slot_back`, the LEAKED-SLOT gate
+    (T-23.3-13). ⚠ ALSO EXPECTED GREEN AT HEAD, and for the same reason: a
+    serial loop has no slot to leak. It exists because a `sem.release()` that
+    only runs on the happy path is invisible to every other test here, and the
+    resulting K-1 worker is close to undiagnosable in production.
+
+TWO OF THE SEVEN TESTS ARE GREEN AT HEAD BY DESIGN. Neither is evidence for
+this change. The four that are RED at HEAD -- barrier, overlap, isolation,
+hang-ordering -- are the whole of the evidence.
 
 WHY THE WORKER ROLE IS REQUIRED
 -------------------------------
@@ -138,6 +147,47 @@ _TEST_CEILING_MINUTES = 0.06
 # ===========================================================================
 
 
+def _fn_ast(fn):
+    """The `ast.FunctionDef`/`AsyncFunctionDef` node for a live function object.
+
+    ⛔ WHY AST AND NOT A SUBSTRING SEARCH. The first version of this gate asked
+    `"finally" in inspect.getsource(_dispatch_one)` and `sem.release()` after it.
+    Both are satisfied BY THE DOCSTRING -- `_dispatch_one`'s docstring contains
+    the sentence "THE SLOT IS RELEASED IN THE `finally`". A counterfactual build
+    with the release moved OUT of the `finally` and onto the happy path only was
+    measured passing that gate. A grep-shaped gate over a file whose comments
+    describe the very construct being greppped for is decoration, and this
+    repository has been bitten by that exact shape before. The tree cannot be
+    fooled by prose.
+    """
+    import ast
+    import textwrap
+
+    module = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    node = module.body[0]
+    assert isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)), (
+        f"could not parse {fn!r} back to a function definition -- this gate would "
+        "be vacuous"
+    )
+    return node
+
+
+def _calls_named(node, name):
+    """Every `ast.Call` in `node` whose callee is `name` or `x.name`."""
+    import ast
+
+    out = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        func = sub.func
+        if isinstance(func, ast.Name) and func.id == name:
+            out.append(sub)
+        elif isinstance(func, ast.Attribute) and func.attr == name:
+            out.append(sub)
+    return out
+
+
 def test_worker_loop_dispatches_instead_of_awaiting_the_run():
     """SOURCE TRIPWIRE -- not the proof, and not to be read as one.
 
@@ -146,52 +196,69 @@ def test_worker_loop_dispatches_instead_of_awaiting_the_run():
     that quietly restores the serial await or drops the slot release, in a
     harness with no database where the real gates only skip.
 
-    ANTI-VACUITY: both function sources must be retrieved and non-empty, and the
-    slot release must appear AFTER the `finally` keyword rather than merely
-    somewhere in the same function.
+    Every assertion here is made against the PARSED SYNTAX TREE, never a
+    substring of the source, because both functions under test carry long
+    comments that name the very constructs being checked -- see `_fn_ast`.
     """
+    import ast
+
     from nestor_pulse_sdk.runs import worker
 
-    loop_src = inspect.getsource(worker.worker_loop)
-    assert loop_src.strip(), "worker_loop source came back empty -- this gate is vacuous"
+    loop = _fn_ast(worker.worker_loop)
+    assert loop.body, "worker_loop parsed to an empty body -- this gate is vacuous"
 
-    dispatch = getattr(worker, "_dispatch_one", None)
-    assert dispatch is not None, (
+    dispatch_fn = getattr(worker, "_dispatch_one", None)
+    assert dispatch_fn is not None, (
         "worker.py must define `_dispatch_one` -- the per-run dispatch coroutine "
         "that owns the semaphore slot. Without it there is nowhere for the slot to "
         "be released on the failure paths."
     )
-    dispatch_src = inspect.getsource(dispatch)
-    assert dispatch_src.strip(), "_dispatch_one source came back empty"
+    dispatch = _fn_ast(dispatch_fn)
+    assert dispatch.body, "_dispatch_one parsed to an empty body"
 
-    assert "asyncio.create_task(" in loop_src, (
+    assert _calls_named(loop, "create_task"), (
         "worker_loop must dispatch each claimed run with asyncio.create_task. "
         "Without it the loop cannot claim a second run until the first has "
         "finished, which is the whole defect (23.3-CONTEXT.md section 3)."
     )
-    assert "await execute_run_locked" not in loop_src, (
-        "worker_loop still contains the serial engine await. That single line IS "
-        "the one-run-per-instance defect: the entire run is awaited before the "
-        "next claim. It belongs in _dispatch_one now."
+    serial_awaits = [
+        n
+        for n in ast.walk(loop)
+        if isinstance(n, ast.Await)
+        and isinstance(n.value, ast.Call)
+        and isinstance(n.value.func, ast.Name)
+        and n.value.func.id == "execute_run_locked"
+    ]
+    assert not serial_awaits, (
+        "worker_loop still awaits execute_run_locked directly. That single "
+        "expression IS the one-run-per-instance defect: the entire run is awaited "
+        "before the next claim. It belongs in _dispatch_one now."
     )
-    assert "run_concurrency()" in loop_src, (
+    assert _calls_named(loop, "run_concurrency"), (
         "worker_loop must size its semaphore from concurrency.run_concurrency(), "
         "the ONE reader of NESTOR_WORKER_RUN_CONCURRENCY (plan 23.3-02). A second "
         "reader is how K and the process LLM budget silently disagree."
     )
 
-    assert "sem.release()" in dispatch_src, (
-        "_dispatch_one must release the semaphore slot it was given"
+    tries = [n for n in ast.walk(dispatch) if isinstance(n, ast.Try)]
+    assert tries, (
+        "_dispatch_one contains no try/finally at all, so there is no path on "
+        "which the slot is guaranteed to come back"
     )
-    finally_at = dispatch_src.find("finally")
-    release_at = dispatch_src.find("sem.release()")
-    assert finally_at != -1, "_dispatch_one has no `finally` block"
-    assert release_at > finally_at, (
-        "sem.release() must sit INSIDE the `finally`, so the slot comes back on "
-        "every path -- success, RunCancelled, exception, and the TimeoutError "
-        "branch added by plan 23.3-01. A slot leaked on a failure path shrinks the "
-        "worker to K-1 permanently, and the symptom (throughput quietly halves "
-        "after some unrelated failure) is close to undiagnosable."
+    released_in_finally = [
+        call
+        for t in tries
+        for stmt in t.finalbody
+        for call in _calls_named(stmt, "release")
+    ]
+    assert released_in_finally, (
+        "no `release()` call appears in any `finally` body of _dispatch_one. The "
+        "slot must come back on EVERY path -- success, RunCancelled, exception, "
+        "and plan 23.3-01's TimeoutError branch. A slot leaked on a failure path "
+        "shrinks the worker to K-1 for the life of the process, and the symptom "
+        "(throughput quietly halving some time after an unrelated failure) is "
+        "close to undiagnosable. NOTE: a docstring or comment saying the release "
+        "is in a finally does NOT satisfy this assertion, which is the point."
     )
 
 
@@ -585,7 +652,7 @@ async def _read_runs(engine, run_ids):
 _TERMINAL = {"completed", "completed_degraded", "failed", "cancelled", "parked"}
 
 
-async def _wait_for_both_terminal(engine, run_ids):
+async def _wait_for_all_terminal(engine, run_ids):
     while True:
         rows = await _read_runs(engine, run_ids)
         if len(rows) == len(run_ids) and all(v[0] in _TERMINAL for v in rows.values()):
@@ -651,7 +718,7 @@ async def test_two_runs_are_inside_the_engine_at_the_same_moment(
     _set_concurrency(monkeypatch, 2)
 
     outcome = await _drive_worker_loop(
-        lambda: _wait_for_both_terminal(worker_engine, [run_a, run_b]),
+        lambda: _wait_for_all_terminal(worker_engine, [run_a, run_b]),
         deadline=_OUTER_DEADLINE_SECONDS,
     )
 
@@ -700,7 +767,7 @@ async def test_the_two_runs_overlap_in_wall_clock_time(
     _set_concurrency(monkeypatch, 2)
 
     outcome = await _drive_worker_loop(
-        lambda: _wait_for_both_terminal(worker_engine, [run_a, run_b]),
+        lambda: _wait_for_all_terminal(worker_engine, [run_a, run_b]),
         deadline=_OUTER_DEADLINE_SECONDS,
     )
     assert not runner.foreign, f"foreign runs claimed: {runner.foreign}"
@@ -773,7 +840,7 @@ async def test_no_session_is_ever_used_with_two_different_tenants(
     monkeypatch.setattr(worker, "set_tenant_context", _spy)
 
     outcome = await _drive_worker_loop(
-        lambda: _wait_for_both_terminal(worker_engine, [run_a, run_b]),
+        lambda: _wait_for_all_terminal(worker_engine, [run_a, run_b]),
         deadline=_OUTER_DEADLINE_SECONDS,
     )
     assert not runner.foreign, f"foreign runs claimed: {runner.foreign}"
@@ -849,7 +916,7 @@ async def test_a_hung_run_does_not_block_the_second_run(
     _set_concurrency(monkeypatch, 2)
 
     outcome = await _drive_worker_loop(
-        lambda: _wait_for_both_terminal(worker_engine, [run_a, run_b]),
+        lambda: _wait_for_all_terminal(worker_engine, [run_a, run_b]),
         deadline=_OUTER_DEADLINE_SECONDS,
     )
     assert not runner.foreign, f"foreign runs claimed: {runner.foreign}"
@@ -909,7 +976,7 @@ async def test_at_k_one_the_loop_is_still_serial(
     _set_concurrency(monkeypatch, None)
 
     outcome = await _drive_worker_loop(
-        lambda: _wait_for_both_terminal(worker_engine, [run_a, run_b]),
+        lambda: _wait_for_all_terminal(worker_engine, [run_a, run_b]),
         deadline=_SERIAL_OBSERVATION_SECONDS,
     )
 
@@ -925,3 +992,84 @@ async def test_at_k_one_the_loop_is_still_serial(
         f"exactly one run may be in flight at K=1, but {len(runner.entered)} "
         f"entered the engine: {runner.entered}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7 -- THE LEAKED SLOT (T-23.3-13). ⚠ EXPECTED GREEN AT HEAD.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_crashing_dispatch_gives_its_slot_back(
+    worker_engine, two_queued_runs, monkeypatch
+):
+    """⚠ NOT a defect gate for the serial loop -- green at HEAD, by construction.
+
+    It exists because nothing else in this file can tell a `finally: sem.release()`
+    apart from a `sem.release()` that only runs on the happy path, and a slot
+    leaked on a failure path is the quietest failure in this plan's threat
+    register: the worker keeps working, just permanently at K-1, and the symptom
+    surfaces as "throughput halved some time last week" (T-23.3-13). The source
+    tripwire checks the TEXT of the `finally`; this checks the BEHAVIOUR.
+
+    Shape: K=2, three runs. The first two dispatches raise BEFORE any terminal
+    write -- `dispatch_runner` itself raises, and that call sits OUTSIDE
+    `execute_run`'s try, so the exception travels all the way out to
+    `_dispatch_one`'s own handler. That is the hardest path on which to get the
+    release right. With both slots consumed and never returned the third run can
+    never be claimed and this test times out; with the release in the `finally`
+    it completes at once.
+    """
+    run_a, _run_b, tenant_a, _tenant_b = two_queued_runs
+    assert run_a  # the two fixture runs are the two that must crash
+    run_c = await _seed_queued_run(
+        worker_engine,
+        tenant_a,
+        created_at=_now_utc() - timedelta(days=3650) + timedelta(seconds=2),
+        label="C",
+    )
+
+    async def _immediate():
+        return {"output_text": "a report body"}
+
+    survivor = _RoutingRunner({str(run_c): _immediate})
+    calls: list[str] = []
+
+    def _exploding_dispatch(engine):
+        calls.append(engine)
+        if len(calls) <= 2:
+            raise RuntimeError("dispatch_runner blew up before the run started")
+        return survivor
+
+    import nestor_pulse_sdk.runs.adapter as adapter
+
+    monkeypatch.setattr(adapter, "dispatch_runner", _exploding_dispatch)
+    _bind_worker(monkeypatch, worker_engine)
+    _set_concurrency(monkeypatch, 2)
+
+    outcome = await _drive_worker_loop(
+        lambda: _wait_for_all_terminal(worker_engine, [run_c]),
+        deadline=_OUTER_DEADLINE_SECONDS,
+    )
+    assert not survivor.foreign, f"foreign runs claimed: {survivor.foreign}"
+    assert len(calls) >= 3, (
+        f"only {len(calls)} runs were ever dispatched. The two crashing dispatches "
+        "consumed their concurrency slots and never gave them back, so the loop is "
+        "parked on an empty semaphore and the third run can never be claimed. The "
+        "slot must be released in a `finally`, on EVERY path -- success, "
+        "RunCancelled, exception, and plan 23.3-01's TimeoutError branch."
+    )
+    assert outcome == "done", (
+        f"the third run never reached a terminal status within "
+        f"{_OUTER_DEADLINE_SECONDS}s after two crashing dispatches; "
+        f"dispatch_runner was called {len(calls)} times."
+    )
+    rows = await _read_runs(worker_engine, [run_c])
+    assert rows[str(run_c)][0] == "completed", (
+        f"the run after two crashed dispatches came back {rows[str(run_c)][0]!r} "
+        "-- a crashed dispatch must not poison the runs that follow it"
+    )
+    # The two crashed runs are deliberately NOT asserted on. `dispatch_runner`
+    # raises before `execute_run` reaches any write, so they stay 'running' with
+    # this worker's id and are recovered later by the ordinary stale-reclaim path
+    # (23.3-CONTEXT.md section 7). Asserting a terminal status for them here would
+    # be asserting a behaviour this plan neither has nor claims.
