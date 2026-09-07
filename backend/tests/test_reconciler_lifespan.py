@@ -67,12 +67,18 @@ from app.main import app
 FAST_INTERVAL = 0.05
 
 # The blocking duration of test 2's stub. The /healthz answer must land well inside it.
-BLOCK_SECONDS = 0.5
+#
+# Widened from 0.5 s. ⚠ Widening alone did NOT fix the full-suite flake — see the "armed"
+# comment inside test 2 for what did. The width is kept because it makes the discriminator
+# blunter in the right direction: a correct implementation answers /healthz in single-digit
+# milliseconds, a loop-blocking one takes the full BLOCK_SECONDS, and 1.5 s vs a 0.5 s budget
+# leaves no overlap between the two populations.
+BLOCK_SECONDS = 1.5
 
 # Wall-clock ceiling for a /healthz answer while the sweep is blocking a WORKER THREAD.
-# Comfortably below BLOCK_SECONDS so a slow CI box cannot make this flaky, yet far enough
-# below it that a loop-blocking implementation (which would take ~BLOCK_SECONDS) cannot pass.
-HEALTHZ_BUDGET = 0.25
+# 3x margin under BLOCK_SECONDS: a loop-blocking implementation needs ~1.5 s and cannot pass,
+# while a correctly offloaded one has ~0.5 s of slack it does not need.
+HEALTHZ_BUDGET = 0.5
 
 
 class _ListHandler(logging.Handler):
@@ -88,17 +94,40 @@ class _ListHandler(logging.Handler):
 
 @contextlib.contextmanager
 def _capture(logger_name: str, level: int = logging.WARNING) -> Iterator[_ListHandler]:
-    """Attach a private handler to ``logger_name`` and always remove it again."""
+    """Attach a private handler to ``logger_name`` and always put the logger back as found.
+
+    ⚠ ``lg.disabled = False`` is NOT tidiness — without it the three log assertions in this
+    file fail whenever ANY DB-backed module has run first, and they pass when this file runs
+    alone. MEASURED, not guessed: ``backend/app/db/alembic/env.py:41`` calls
+    ``fileConfig(config.config_file_name)``, and ``logging.config.fileConfig`` defaults to
+    ``disable_existing_loggers=True`` — so the conftest's ``alembic upgrade head`` sets
+    ``logging.getLogger("nestor.health").disabled = True`` for the REST OF THE PYTEST PROCESS.
+    A disabled logger drops every record before it reaches any handler, including one attached
+    directly to it.
+
+    Reproduction: ``python -c`` in ``backend/`` — attach a handler, ``lg.warning(...)`` (1
+    record), ``fileConfig("alembic.ini")``, ``lg.warning(...)`` again (still 1 record,
+    ``lg.disabled`` now ``True``).
+
+    The subject of these tests is whether ``app/main.py`` EMITS the warning, not whether the
+    session's logging config survived alembic, so this restores the logger to a usable state
+    for the duration of the assertion and puts ``disabled`` back afterwards. The underlying
+    pollution is registered as **DEF-23.3-15** — and note its dangerous direction: an
+    assertion of the form "no ERROR was logged" goes VACUOUSLY GREEN under it.
+    """
     lg = logging.getLogger(logger_name)
     handler = _ListHandler()
     previous_level = lg.level
+    previously_disabled = lg.disabled
     lg.addHandler(handler)
     lg.setLevel(level)
+    lg.disabled = False
     try:
         yield handler
     finally:
         lg.removeHandler(handler)
         lg.setLevel(previous_level)
+        lg.disabled = previously_disabled
 
 
 @pytest.fixture(autouse=True)
@@ -161,10 +190,25 @@ def test_the_sweep_does_not_block_the_event_loop(monkeypatch: pytest.MonkeyPatch
     green if the request happened to land after the sweep had already finished, so the test
     also asserts the stub was still inside its sleep when the answer arrived.
     """
+    # The stub blocks ONLY once the test arms it. Until then every tick is a cheap no-op.
+    #
+    # WHY ARMED RATHER THAN TIMED, MEASURED: earlier versions of this test raced the timer —
+    # start the app, wait for the first (blocking) tick, then measure a request. Both failed
+    # inside the full 790-test suite while passing in isolation, because the FIRST request
+    # through TestClient's portal pays one-off costs (portal handoff, route match, anyio
+    # worker-thread spin-up) that on a loaded box exceeded a whole second. Widening the
+    # windows only moved the race. Arming removes it: the warm-up request takes as long as it
+    # takes, and the blocking sweep cannot begin until it is finished. The property under test
+    # is unchanged and the discriminating power is unchanged — a loop-blocking implementation
+    # still stalls the measured request for the full BLOCK_SECONDS.
+    arm = threading.Event()
     entered = threading.Event()
     exited = threading.Event()
 
     def _blocking_stub(*_a: Any, **_k: Any) -> dict[str, int]:
+        if not arm.is_set():
+            return {"claimed": 0}  # cheap tick; the test is not ready yet
+        arm.clear()  # exactly one blocking sweep, so nothing blocks during teardown
         entered.set()
         time.sleep(BLOCK_SECONDS)  # blocks whichever thread runs it
         exited.set()
@@ -174,7 +218,11 @@ def test_the_sweep_does_not_block_the_event_loop(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(main_module, "RECONCILE_INTERVAL_SECONDS", FAST_INTERVAL, raising=True)
 
     with TestClient(app) as client:
-        assert entered.wait(timeout=5.0), "the sweep never started"
+        # Warm-up: pay the portal's one-off costs BEFORE the clock starts.
+        assert client.get("/healthz").status_code == 200
+
+        arm.set()
+        assert entered.wait(timeout=10.0), "the armed blocking sweep never started"
         started = time.monotonic()
         response = client.get("/healthz")
         elapsed = time.monotonic() - started
@@ -182,8 +230,10 @@ def test_the_sweep_does_not_block_the_event_loop(monkeypatch: pytest.MonkeyPatch
 
     assert response.status_code == 200
     assert still_blocking, (
-        "the sweep had already finished when /healthz answered — the timing assertion below "
-        "would have been vacuous"
+        f"/healthz took {elapsed:.3f}s and the sweep's {BLOCK_SECONDS}s block had ALREADY "
+        "finished by the time it answered — either the answer was blocked behind the sweep "
+        "(the defect this test exists for) or the harness stalled; the timing assertion below "
+        "would have been vacuous either way"
     )
     assert elapsed < HEALTHZ_BUDGET, (
         f"/healthz took {elapsed:.3f}s while the sweep blocked for {BLOCK_SECONDS}s — the "

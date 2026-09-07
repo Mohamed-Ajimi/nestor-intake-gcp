@@ -123,13 +123,47 @@ cd infra && terraform apply -var "image_tag=${IMAGE##*:}"
 gcloud run services update nestor-api --region "$REGION" --image "$IMAGE" --project="$GOOGLE_PROJECT"
 ```
 
-## Step 4 — Set CPU always-allocated + min-instances=0, and inject the keys
+## Step 4 — Set CPU always-allocated + min-instances (see the 2026-09-07 correction), and inject the keys
 
-The `infra/main.tf` service template now sets:
+> ⛔ **CORRECTION — 2026-09-07 (phase 23.3). This step used to say `--min-instances=0` and
+> that is now WRONG in two ways: it disagrees with the live service, and following it would
+> delete the premise of the reconciler shipped in phase 23.3.**
+>
+> **MEASURED live**, `gcloud run services describe nestor-api --region europe-west1
+> --account=tools@dotto.be`, revision **`nestor-api-00049-wgk`**, 2026-09-07:
+>
+> | knob | live value | this step used to say |
+> |---|---|---|
+> | `autoscaling.knative.dev/minScale` | **`'1'`** | `--min-instances=0` ❌ |
+> | `autoscaling.knative.dev/maxScale` | `'4'` | `--max-instances=4` ✔ |
+> | `run.googleapis.com/cpu-throttling` | `'false'` | `--no-cpu-throttling` ✔ |
+> | `run.googleapis.com/startup-cpu-boost` | `'true'` | (not mentioned) |
+> | `timeoutSeconds` | `900` | (set in the Phase 8 step) |
+>
+> **WHY `min-instances=1` NOW MATTERS, not just "is what is live":** phase 23.3 added an
+> **in-process** reconcile timer to `nestor-api` (`app/main.py::_reconcile_loop`, every
+> `NESTOR_RECONCILE_INTERVAL_S` seconds, default 300) which is the ONLY thing that recovers a
+> `research_runs` row whose poll driver died. At `min-instances=0` there is no instance
+> between requests, so an orphaned **paid** run waits for the next inbound HTTP request before
+> anything sweeps it — and the runs this mechanism exists for are precisely the ones nobody is
+> polling. `--min-instances=1` is what guarantees a sweeper exists.
+>
+> The historical `--min-instances=0` posture (D-01a, cold starts accepted) is kept in the
+> record above rather than deleted: it was correct until this service acquired background work
+> that must run without traffic.
+>
+> ⚠ **IaC DRIFT, unresolved:** `infra/main.tf:381` still reads `min_instance_count = 0` for
+> `nestor-api`. **A `terraform apply` from that file would take the service back to zero and
+> silently disable the reconciler between requests.** Nothing in phase 23.3 changed `main.tf`
+> (no Terraform was run and none is in that phase's scope). Registered as **DEF-23.3-14** —
+> reconcile `main.tf` with live BEFORE the next `terraform apply`.
 
-- `template.scaling.min_instance_count = 0` — **scale to zero**, warm-pool knob OFF
-  (D-01a). `max_instance_count = 4` stays capped so worst-case pooled connections
-  stay under the Cloud SQL tier (D-04 / T-7-15).
+The `infra/main.tf` service template sets:
+
+- `template.scaling.min_instance_count = 0` — **historical**: scale to zero, warm-pool knob
+  OFF (D-01a). ⚠ **Live is `minScale: '1'` and must stay there** — see the correction above.
+  `max_instance_count = 4` stays capped so worst-case pooled connections stay under the Cloud
+  SQL tier (D-04 / T-7-15).
 - `template.containers.resources.cpu_idle = false` — **CPU always-allocated** (the
   v2-API equivalent of the `run.googleapis.com/cpu-throttling = "false"` annotation),
   so request-spawned background work (the 90–120s LLM/Whisper calls, AI-06) runs to
@@ -142,13 +176,23 @@ The `infra/main.tf` service template now sets:
 
 ```bash
 gcloud run services update nestor-api --region "$REGION" --project="$GOOGLE_PROJECT" \
-  --min-instances=0 --max-instances=4 \
+  --account=tools@dotto.be \
+  --min-instances=1 --max-instances=4 \
   --no-cpu-throttling \
   --update-secrets=ANTHROPIC_API_KEY=nestor-anthropic-api-key:latest,OPENAI_API_KEY=nestor-openai-api-key:latest
 ```
 
 (`--no-cpu-throttling` is the gcloud surface for `cpu_idle = false` /
 `run.googleapis.com/cpu-throttling = "false"`.)
+
+⛔ **`--no-cpu-throttling` ON `nestor-api` IS NOW LOAD-BEARING — DO NOT DROP IT.** With CPU
+throttling ON, Cloud Run cuts an idle instance's CPU **between requests**, and the phase-23.3
+reconcile timer (`asyncio.sleep` → `sweep_once`) simply stops ticking. **The failure is
+SILENT**: no error, no log line, no failed probe — `/healthz` and `/readyz` keep answering 200
+because they are request-driven, and the only symptom is that orphaned research runs are never
+recovered. That is the same class as the `cpu_idle = false` note on `tribunal-worker`
+(`main.tf:1018`: "the worker polls Postgres on its own schedule"), and it is why the
+annotation is asserted in the phase-23.3 post-deploy read-back below rather than assumed.
 
 ## Step 5 — Verify (without printing secrets)
 
@@ -871,8 +915,16 @@ IMAGE_TAG="$SHA" tribunal/infrastructure/cloud-run/deploy-api.sh
 
 The worker deploys always-on (`--min-instances=1 --max-instances=5 --no-cpu-throttling
 --timeout=3600 --no-allow-unauthenticated`, `NESTOR_TRIBUNAL_UNCAPPED=1`) with
-`DATABASE_URL=DATABASE_URL_WORKER:latest`; the api deploys `--min-instances=0
+`DATABASE_URL=DATABASE_URL_WORKER:latest`; **`tribunal-api`** deploys `--min-instances=0
 --max-instances=3 --timeout=300` with `DATABASE_URL=DATABASE_URL:latest`.
+
+> **Disambiguation added 2026-09-07 (phase 23.3).** "the api" above was `tribunal-api` — the
+> `--max-instances=3` gives it away, and it matches `main.tf:1161-1162`. Its
+> `--min-instances=0` is CORRECT and must stay: `tribunal-api` is a pure request-response tier
+> with no background timer. **This is NOT the `nestor-api` `--min-instances` value**, which is
+> live at `1` and must stay at `1` — see the 2026-09-07 correction in Step 4. Phase 23.3's plan
+> read this line as a second stale `nestor-api` reference; it is not one, and "correcting" it
+> would have taken the Tribunal request tier off scale-to-zero for no reason.
 
 ### Step 13.h — Proof run (Plan 04) — CHECKPOINT
 
@@ -6210,3 +6262,191 @@ frontend    /admin  -> 200   (SSR auth guard renders the shell, NOT a 307 to /au
   design property, not an observation from this deploy.
 - **`tribunal-worker` runs pre-CAS code.** It does not import `runs.api`, so this is correct rather
   than a gap — but the worker is still on the `20260901-134253` build.
+
+---
+
+## Phase 23.3 — Concurrent research execution (`tribunal-worker` + `nestor-api` REBUILD, **migration 0017 REQUIRED**, **NO new secret**, **NO run**)
+
+> ⛔ **THE ORDER BELOW IS THE POINT OF THIS SECTION. `tribunal-worker` IS LAST.**
+> A worker config change creates a revision, a revision **BOOTS THE CONTAINER**, and
+> `runs/worker.py`'s loop **CLAIMS FIRST AND SLEEPS LAST**. `--min-instances=0` is **NOT**
+> protection (proven 2026-07-28: the deploy claimed `d6bb3aae` within seconds and burned ~15
+> minutes of paid pipeline unattended). **AN EMPTY QUEUE IS THE ONLY PROTECTION** — and after
+> this phase a booting instance claims up to **K=4 runs at once**, not one, so the same
+> mistake now costs four times as much.
+>
+> ⛔ **UNCAPPED SPEND, ACKNOWLEDGED NOT SOLVED.** This phase takes simultaneous execution from
+> **1 run to M x K = 2 x 4 = 8** on a worker running `NESTOR_TRIBUNAL_UNCAPPED=1`. At the
+> $24.78 measured on run `fb9484dd` that is **~$200 of simultaneous uncapped spend**, and up
+> to **~$360** at the top of the measured $25-45 per-run range. **No cap, no per-tenant limit
+> and no queue-depth ceiling was added** — deferred by operator ruling of 2026-09-07, recorded
+> as **DEF-23.3-00**, decision left OPEN. Do not deploy this without having read that entry.
+
+**What is being shipped, and by which plan:**
+
+| Plan | Lands | In |
+|---|---|---|
+| 23.3-01 | run-level timeout backstop (`NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120`) | `tribunal-worker` |
+| 23.3-02 | `LLM_SLOTS_PER_RUN` / `run_concurrency()`, K-scaled `_SEMAPHORE`, `AsyncAnthropic(timeout=600.0)` | `tribunal-worker` |
+| 23.3-03 | bounded-concurrency `worker_loop` + `_dispatch_one`; `MIN_INSTANCES` default **2**, `NESTOR_WORKER_RUN_CONCURRENCY=4` | `tribunal-worker` (deploy script) |
+| 23.3-04 | migration **0017** — `research_runs` actor / heartbeat / lease columns | **`nestor-migrate` job** |
+| 23.3-05 | `app/research/reconcile.py` — the stateless, lease-serialised orphan sweep | `nestor-api` |
+| 23.3-06 | the in-process reconcile **timer** in `lifespan` + this section | `nestor-api` |
+
+**Two knobs and what each one means. Do not confuse them:**
+
+- **`NESTOR_WORKER_RUN_CONCURRENCY=4` (K)** — how many runs execute concurrently INSIDE one
+  worker instance. **It is a MEMORY bound derived from measured container utilization, NOT a
+  spend ceiling.** Do not read it as a cost control.
+- **`MIN_INSTANCES=2` (M)** — an AVAILABILITY choice (a second instance so a recycle does not
+  halt dispatch). ⚠ **`--max-instances=5` on this service is INERT**: the worker takes no real
+  HTTP traffic, so Cloud Run never autoscales it and the effective instance count IS
+  `minScale`. Throughput is exactly `M x K`. If you came here to buy throughput by raising
+  `--max-instances`, it does nothing.
+
+**Rollback, no code change required:** `NESTOR_WORKER_RUN_CONCURRENCY=1` restores today's
+serial behaviour, and `NESTOR_RECONCILE_INTERVAL_S=0` on `nestor-api` disables the sweep (it
+logs a WARNING saying it is disabled, so the off state is visible in Cloud Run logs rather
+than silent).
+
+### Step 23.3.a — Identity guard, FIRST
+
+Four accounts are authenticated on this box and **the gcloud config REVERTS MID-SESSION**.
+Pin both flags on **every** command in this section:
+
+```bash
+gcloud config list --format='value(core.account,core.project)'
+# expect: tools@dotto.be   project-cb01b861-cb4a-438d-b9a
+# If it disagrees, do NOT `gcloud config set` and trust it — pass
+#   --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a
+# explicitly on each command below instead.
+```
+
+### Step 23.3.b — ⛔ CONFIRM THE TRIBUNAL QUEUE IS EMPTY (blocking gate, before anything else)
+
+```sql
+-- Read as worker_user, NEVER as app_user: under app_user RLS returns a FALSELY EMPTY queue,
+-- which is the most expensive way this check can lie.
+SELECT id, status, created_at FROM tribunal.run WHERE status IN ('queued','running');
+```
+
+**Expected: ZERO rows. Any `queued` or `running` row is a STOP.** Resolve or cancel it before
+proceeding — not after. This gate must be *believed*, not assumed: it is the only thing
+standing between a worker deploy and up to 8 concurrent unattended paid runs.
+
+### Step 23.3.c — Build `backend` and the tribunal image at one tag
+
+`frontend/` has a **zero-line diff** across the whole of phase 23.3 — do NOT rebuild or
+redeploy `nestor-frontend`. `tribunal/nestor_pulse_sdk/pipeline/` is likewise 0 lines, but
+`tribunal/nestor_pulse_sdk/runs/` DID change (plans 01/02/03), so the **worker image is a real
+rebuild**.
+
+```bash
+export SHA="$(date +%Y%m%d-%H%M%S)"
+# backend (carries reconcile.py, the lifespan timer AND migration 0017)
+gcloud builds submit backend --tag "europe-west1-docker.pkg.dev/$GOOGLE_PROJECT/nestor/backend:$SHA" \
+  --project="$GOOGLE_PROJECT" --account=tools@dotto.be --async
+# tribunal worker/api image (use this file's existing Phase-13/15.8 build recipe for the
+# config + substitution names — do not invent new ones here)
+```
+
+⚠ **Never pipe `builds submit` through `| tail`** — it reports exit 0 on FAILURE that way.
+Poll by build id. The operator's terminal times out at ~2 min while the build continues;
+**poll, never resubmit.**
+
+### Step 23.3.d — Migration 0017 — REPIN THE JOB FIRST, then read the literal upgrade line
+
+`gcloud run services update --image` leaves the **JOB** on its OLD image. Skipping the repin
+re-applies 0016 and reports **SUCCESS while applying NOTHING**.
+
+```bash
+gcloud run jobs update nestor-migrate --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/$GOOGLE_PROJECT/nestor/backend:$SHA \
+  --account=tools@dotto.be --project="$GOOGLE_PROJECT"
+# READ THE IMAGE BACK BEFORE EXECUTING:
+gcloud run jobs describe nestor-migrate --region=europe-west1 --account=tools@dotto.be \
+  --project="$GOOGLE_PROJECT" --format='value(spec.template.template.containers[0].image)'
+gcloud run jobs execute nestor-migrate --region=europe-west1 --wait \
+  --account=tools@dotto.be --project="$GOOGLE_PROJECT"
+```
+
+**Proof is the literal line `Running upgrade 0016 -> 0017` in the execution log. `exit(0)` is
+NEVER proof.** Cross-check `SELECT version_num FROM public.alembic_version;` = `0017`.
+
+**0017 BEFORE the `nestor-api` image**, or the reconciler's claim query fails on the missing
+lease / heartbeat columns on its first tick.
+
+### Step 23.3.e — Deploy `nestor-api` (by `--image` ONLY)
+
+```bash
+gcloud run services update nestor-api --region=europe-west1 \
+  --image=europe-west1-docker.pkg.dev/$GOOGLE_PROJECT/nestor/backend:$SHA \
+  --account=tools@dotto.be --project="$GOOGLE_PROJECT"
+```
+
+No `--set-secrets`, no `--set-env-vars`, no `--service-account` — those replace whole blocks
+and have silently dropped wiring before. `NESTOR_RECONCILE_INTERVAL_S` is deliberately NOT
+set: the in-code default of 300 s is the intended value, and adding the env var only to
+restate the default creates a second source of truth.
+
+### Step 23.3.f — Deploy `tribunal-worker` **LAST**, at `MIN_INSTANCES=2`
+
+Re-confirm step 23.3.b (the queue) immediately before this command — minutes have passed.
+
+```bash
+MIN_INSTANCES=2 IMAGE_TAG="$SHA" TRIBUNAL_ANTHROPIC_SECRET=Nestor_Claude2 \
+  tribunal/infrastructure/cloud-run/deploy-worker.sh
+```
+
+⚠ The script's own default is now `MIN_INSTANCES=2`; it is passed explicitly above so the
+value lands in the operator's session record rather than being implied. **If you ever pause
+the worker with `--min-instances=0`, unpause with `--min-instances=2`, not `1`** — `1`
+restores only HALF the configured capacity and looks like a mysterious throughput loss.
+
+`tribunal-api` needs no deploy for this phase (no `runs/api.py` surface changed); redeploy it
+at `$SHA` only if you want image parity, and record that choice either way.
+
+### Step 23.3.g — Read the deployed values back. Do not assume any of them.
+
+```bash
+# nestor-api: minScale MUST be 1 and cpu-throttling MUST be false — BOTH are load-bearing
+# for the reconcile timer (see the 2026-09-07 correction in Step 4).
+gcloud run services describe nestor-api --region=europe-west1 --account=tools@dotto.be \
+  --project="$GOOGLE_PROJECT" \
+  --format='yaml(spec.template.metadata.annotations, status.latestReadyRevisionName)'
+# EXPECT: minScale '1' · maxScale '4' · cpu-throttling 'false' · startup-cpu-boost 'true'
+
+# tribunal-worker: the two knobs, plus the INERT maxScale for the record.
+gcloud run services describe tribunal-worker --region=europe-west1 --account=tools@dotto.be \
+  --project="$GOOGLE_PROJECT" \
+  --format='yaml(spec.template.metadata.annotations, spec.template.spec.containers[0].env)'
+# EXPECT: minScale '2' (M) · NESTOR_WORKER_RUN_CONCURRENCY=4 (K)
+#         NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 · NESTOR_WORKER_STALE_MINUTES=60
+#         NESTOR_TRIBUNAL_UNCAPPED=1  <- the uncapped posture, unchanged, DEF-23.3-00
+#         maxScale '5' — INERT on this service, recorded so nobody "fixes" throughput with it.
+
+# Pin the DIGEST, not the tag: containers[0].image is a MUTABLE TAG.
+gcloud run revisions describe REVISION_NAME_FROM_ABOVE \
+  --region=europe-west1 --account=tools@dotto.be --project="$GOOGLE_PROJECT" \
+  --format='value(status.imageDigest)'
+```
+
+Then confirm the worker claims NOTHING on its first poll cycle, and that `nestor-api` logs no
+`research reconcile sweep failed` WARNING on its first two ticks (about 10 minutes). A sweep
+that claimed nothing logs nothing — silence there is the expected, correct state.
+
+### Step 23.3.h — Deploy record (fill in, or the attribution is gone)
+
+| field | value |
+|---|---|
+| `$SHA` | |
+| queue confirmed empty at (UTC) | |
+| `nestor-migrate` job image read back | |
+| literal upgrade line observed | `Running upgrade 0016 -> 0017` ? |
+| `alembic_version` after | |
+| `nestor-api` revision + imageDigest | |
+| `nestor-api` minScale / cpu-throttling | |
+| `tribunal-worker` revision + imageDigest | |
+| `tribunal-worker` minScale (M) / K | |
+| worker claimed anything on boot? | |
+| DEF-23.3-00 acknowledged by | |
