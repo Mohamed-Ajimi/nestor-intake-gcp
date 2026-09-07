@@ -32,8 +32,10 @@ Authoritative references:
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+import os
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,12 +55,63 @@ from app.core.firebase import init_firebase
 from app.db import base
 from app.db.ai_session import sweep_orphaned_skill_runs
 from app.db.base import get_engine
+from app.research.reconcile import sweep_once
 
 # Server-side diagnostic logger. Cloud Run captures stderr, so logging here makes
 # a live readiness failure (e.g. "permission denied for schema nestor" from the
 # OQ1/A5 GRANT being wrong) diagnosable WITHOUT leaking any DSN/exception text to
 # the HTTP client (T-02-01 — the client still gets a generic 503).
 logger = logging.getLogger("nestor.health")
+
+
+#: How often the in-process orphaned-run reconcile sweep runs, in SECONDS.
+#: ``0`` or negative DISABLES the timer entirely (see ``_reconcile_loop`` / ``lifespan``).
+#:
+#: 300 s (5 minutes) is DERIVED, not taste. The sweep's whole job is to recover a run whose
+#: poll driver died, and such a run has already been silent for longer than
+#: ``reconcile.ORPHAN_CUTOFF_MINUTES`` (15) before it is even eligible — so shaving the
+#: detection delay from 5 minutes to seconds buys nothing a human is waiting on, while every
+#: tick costs a DB claim query and (when it claims) a 30 s-timeout engine seam call. The loss
+#: window an operator actually notices is minutes.
+#:
+#: The ``0`` kill switch is NOT decoration. This phase adds a background loop to a service
+#: that previously had none, and ``NESTOR_RECONCILE_INTERVAL_S=0`` is the ONLY way an operator
+#: can stop it without shipping code.
+RECONCILE_INTERVAL_SECONDS = float(os.environ.get("NESTOR_RECONCILE_INTERVAL_S", "300"))
+
+
+async def _reconcile_loop() -> None:
+    """Drive :func:`app.research.reconcile.sweep_once` on a timer, forever.
+
+    Four properties here are each a way this quietly stops working, so each is pinned by a
+    test in ``tests/test_reconciler_lifespan.py``:
+
+    1. **``asyncio.to_thread`` is MANDATORY, not stylistic.** ``sweep_once`` is blocking
+       pg8000 plus blocking httpx (``reconcile._TIMEOUT_S = 30.0``). Awaiting it directly on
+       the event loop would stall EVERY request on this instance for the duration of a 30 s
+       seam call — the same rule ``app/db/ai_session.py``'s module docstring already states
+       for the AI path ("pg8000 is blocking, so EVERYTHING here is sync ``def``").
+    2. **Sleep FIRST, then sweep.** A sweep on the very first tick would run before the
+       instance is serving and would delay readiness behind a seam call — for a run that has
+       by definition already been orphaned for 15+ minutes and can wait 5 more.
+    3. **``except Exception`` then ``continue``.** One bad sweep must never end the loop. A
+       dead timer is INVISIBLE: nothing polls it and nothing alerts on it, which makes it
+       worse than a noisy failure. WARNING level on purpose — uvicorn's default logging config
+       drops INFO from app loggers (the note already at the top of ``run_task.py`` and
+       ``reconcile.py``), so an INFO here would log nowhere.
+    4. **``counts.get("claimed")`` gates the log line**, so an idle service does not print a
+       line every 5 minutes forever. ``sweep_once`` already logs its own detailed WARNING when
+       it claims anything; this line is the caller-side breadcrumb that the TIMER fired.
+    """
+    while True:
+        await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
+        try:
+            counts = await asyncio.to_thread(sweep_once)
+        except Exception:  # noqa: BLE001 -- one bad sweep must never end the timer
+            logger.warning("research reconcile sweep failed", exc_info=True)
+            continue
+        if counts.get("claimed"):
+            logger.warning("research reconcile sweep: %s", counts)
 
 
 @asynccontextmanager
@@ -89,7 +142,52 @@ async def lifespan(app: FastAPI):
             logger.info("startup sweep marked %d orphaned skill_runs failed", swept)
     except Exception:  # noqa: BLE001 -- best-effort self-heal; never block startup
         logger.warning("startup sweep_orphaned_skill_runs failed", exc_info=True)
+    # Phase 23.3 (COST-01 / DEF-23.2-03): start the in-process orphaned-RESEARCH-run sweep.
+    #
+    # WHY IN-PROCESS AND NOT CLOUD SCHEDULER: the Scheduler API is not enabled on this
+    # project and enabling it is an operator/IAM action (23.3-CONTEXT.md § 8). ``sweep_once``
+    # is a plain callable precisely so a Scheduler HTTP trigger can drive the very same unit
+    # later without a redesign (DEF-23.3-10) — no route is added here for an API nobody can
+    # call yet.
+    #
+    # WHY THIS IS SELF-HEALING RATHER THAN JUST ANOTHER TIMER: the sweep is stateless, so ANY
+    # nestor-api instance can recover ANY orphaned run — which is exactly what the per-run
+    # BackgroundTask poll driver structurally cannot do. ``minScale=1`` guarantees an instance
+    # exists to run it (the runbook now pins ``--min-instances=1`` for this reason), and
+    # ``run.googleapis.com/cpu-throttling: 'false'`` — MEASURED live on 2026-09-07, revision
+    # nestor-api-00049-wgk — is what keeps the timer ticking between requests. With throttling
+    # ON, Cloud Run cuts an idle instance's CPU and this loop would silently stop; the runbook
+    # flags that annotation as load-bearing at its point of use.
+    #
+    # GUARDED exactly like the sweep above: startup must NEVER fail because the reconciler
+    # could not start. Liveness does not depend on this extra (T-02-04 / T-23.3-32).
+    app.state.reconcile_task = None
+    if RECONCILE_INTERVAL_SECONDS > 0:
+        try:
+            # Held in a local AND on app.state: a bare create_task() result can be
+            # garbage-collected mid-flight, so a strong reference is required (the app.state
+            # copy is also what the shutdown assertion in the test suite reads).
+            reconcile_task = asyncio.create_task(_reconcile_loop())
+            app.state.reconcile_task = reconcile_task
+        except Exception:  # noqa: BLE001 -- a broken reconciler must not block startup
+            logger.warning("could not start the research reconcile timer", exc_info=True)
+    else:
+        # Announce the kill switch. A silently disabled sweep is how an operator ends up
+        # believing runs are being recovered when nothing is recovering them.
+        logger.warning(
+            "research reconcile sweep DISABLED (NESTOR_RECONCILE_INTERVAL_S=%s); orphaned "
+            "research_runs will NOT be recovered on this instance",
+            RECONCILE_INTERVAL_SECONDS,
+        )
     yield
+    # Stop the sweep BEFORE the pool is disposed below: disposing while a sweep is mid-write
+    # would surface as a confusing shutdown error, and a task dropped without being awaited
+    # produces asyncio's "Task was destroyed but it is pending".
+    task = getattr(app.state, "reconcile_task", None)
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
     # WR-03: only dispose if the lru_cached engine was ACTUALLY built (e.g. a
     # /readyz was served). Building a brand-new engine purely to dispose it is
     # wasteful and, in URL mode, get_engine() reads os.environ["DATABASE_URL"]
