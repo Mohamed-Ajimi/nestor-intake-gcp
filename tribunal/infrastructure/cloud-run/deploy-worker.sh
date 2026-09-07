@@ -18,10 +18,16 @@
 #   `nestor` — isolation firewall, T-13-09). See
 #   nestor_pulse_sdk/alembic/versions/0008_worker_rls_role.py.
 #
-# Worker design (D-04 always-on + D-08 concurrency):
-#   - min-instances=1 (always-on poll loop; SKIP LOCKED)
-#   - max-instances=5 (D-08 — size for 5+ concurrent runs; the per-run advisory lock
-#     added in runs/execute.py makes multiple pollers safe)
+# Worker design (D-04 always-on + D-08 concurrency; REVISED by phase 23.3):
+#   - min-instances=2 (D-23.3-03 — always-on poll loop, SKIP LOCKED; the second instance
+#     is an AVAILABILITY choice: the queue keeps draining while one instance restarts)
+#   - NESTOR_WORKER_RUN_CONCURRENCY=4 (D-23.3-02 — K runs concurrently INSIDE each
+#     instance; a MEMORY bound sized against the 2Gi limit, never a spend cap)
+#   - max-instances=5 — ⚠ INERT. The worker takes no real HTTP traffic, and Cloud Run
+#     autoscales a SERVICE on request concurrency, so it never scales up and the effective
+#     instance count is minScale. Throughput is min-instances x K = 8, and raising
+#     --max-instances changes nothing at all (23.3-CONTEXT.md § 3). The per-run advisory
+#     lock in runs/execute.py is what makes multiple pollers safe, and it predates this.
 #   - --no-cpu-throttling: CPU allocated even with no inbound HTTP (worker polls Postgres
 #     on its own schedule and runs ~35-min pipelines off the request path)
 #   - No public HTTP; --no-allow-unauthenticated for defence-in-depth
@@ -57,8 +63,32 @@ INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
 #   MIN_INSTANCES=0 IMAGE_TAG="$SHA" TRIBUNAL_ANTHROPIC_SECRET=... ./deploy-worker.sh
 #   ... cancel the stuck run through the UI ...
 #   gcloud run services update tribunal-worker --min-instances=1 --region=... --project=...
-# The default stays 1 so an ordinary deploy is unchanged.
-MIN_INSTANCES="${MIN_INSTANCES:-1}"
+# The MIN_INSTANCES=0 escape hatch above is the 2026-07-28 incident control and stays
+# exactly as it is. What changed below is only the DEFAULT.
+#
+# ⚠ ONE CONSEQUENCE OF THAT: the unpause command quoted in the block above still reads
+# `--min-instances=1`, which after this change restores only HALF the configured capacity.
+# It is left verbatim because it is an incident-runbook line, not because it is right at
+# M=2 — when unpausing deliberately, use --min-instances=2 to match the default below.
+#
+# D-23.3-03: M = 2. WHY, and what it is NOT.
+#   * `--max-instances` IS INERT on this service. The worker takes no real HTTP traffic
+#     (its health server exists only to satisfy Cloud Run's $PORT contract) and Cloud Run
+#     autoscales a SERVICE on request concurrency. With no requests it never scales up, so
+#     the effective instance count IS `minScale`. Raising --max-instances buys nothing.
+#     See the footer echo and 23.3-CONTEXT.md § 3.
+#   * Throughput is therefore exactly `min-instances` x NESTOR_WORKER_RUN_CONCURRENCY.
+#     M=2 with K=4 gives 8 concurrent runs. Eight always-on instances would give the same
+#     8 at four times the idle cost (§ 5).
+#   * WHAT THE SECOND INSTANCE BUYS is the thing one instance cannot: the queue keeps
+#     draining while the other instance is restarting, redeploying, or dead. It costs one
+#     more always-on 1 vCPU / 2Gi container, ~$5-10/month by the figure in this file's
+#     header.
+#   * ⛔ M=2 IS AN AVAILABILITY CHOICE AND K=4 IS A MEMORY BOUND. NEITHER IS A SPEND
+#     CEILING. A concurrency/spend cap is DEFERRED BY OPERATOR RULING, 2026-09-07
+#     (23.3-CONTEXT.md § 9). Do not read either number as a cost decision and "relax" it,
+#     and do not add a cap here.
+MIN_INSTANCES="${MIN_INSTANCES:-2}"
 # Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal runtime SA — NOT the
 # intake nestor-run SA. A compromised worker reaches only the Tribunal secrets + audit
 # bucket (no identitytoolkit.admin, no intake superadmin secret, no intake uploads bucket).
@@ -162,6 +192,43 @@ echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 #
 # `--set-env-vars` REPLACES the service's ENTIRE plain env on every deploy (WR-01, the
 # same rule as `--set-secrets` above), so this variable must stay ON that one line.
+#
+# THE SAME RULE IS WHY THE 23.3 VARIABLES WERE APPENDED TO THAT LINE, not added on a
+# second --set-env-vars flag (a second flag would REPLACE the first). Seven variables must
+# now survive every deploy, by name:
+#     NESTOR_ENV, NESTOR_WORKER_POLL_INTERVAL, NESTOR_WORKER_STALE_MINUTES,
+#     NESTOR_TRIBUNAL_UNCAPPED, NESTOR_OPENAI_DR_MODEL,
+#     NESTOR_WORKER_RUN_CONCURRENCY, NESTOR_WORKER_RUN_TIMEOUT_MINUTES
+# Anything dropped from that line is silently dropped from the next revision (T-23.3-14).
+#
+# NESTOR_WORKER_RUN_CONCURRENCY=4 — D-23.3-02. K IS A MEMORY BOUND, NOT A SPEND CEILING.
+#   Sized from Cloud Monitoring container/memory/utilizations P99 (300 s alignment) for
+#   tribunal-worker against its 2Gi limit: idle ~123 MiB (0.0599), peak with ONE run in
+#   flight ~368 MiB (0.1795, the 2026-07-28 incident day) => ~245 MiB marginal per run.
+#   K=4 projects to 123 + 4x245 = 1103 MiB, 54% of 2Gi. K=8 projects to 2083 MiB, over the
+#   limit, i.e. an OOM kill. TWO HONEST CAVEATS: a 5-minute P99 UNDER-states the true peak,
+#   and NO SAMPLE WAS EVER TAKEN WITH MORE THAN ONE RUN IN FLIGHT, so the marginal is
+#   inferred from a single-run delta. 4 is a conservative reading of that, not a number
+#   proven under real concurrency — the first concurrent run is where it gets checked.
+#   Roll back with `--set-env-vars=...NESTOR_WORKER_RUN_CONCURRENCY=1...`; the loop is
+#   strictly serial at K=1 by design.
+#
+# NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 — D-23.3-04, plan 23.3-01. Pinned here as well as
+#   in code for the same reason NESTOR_OPENAI_DR_MODEL is: neither one alone can resurrect
+#   the failure. 120 = 1.87x the measured 64.2-minute longest run that legitimately
+#   COMPLETED (7dcf51d5). KEEP THE TWO IN STEP.
+#
+# ⛔ NESTOR_TRIBUNAL_UNCAPPED=1 IS UNCHANGED AND MUST NOT BE TOUCHED HERE. Raising K raises
+# maximum simultaneous spend (~$25-45 per run; $24.78 measured on fb9484dd), and the
+# operator has explicitly DEFERRED sizing a ceiling until there is data
+# (23.3-CONTEXT.md § 9, 2026-09-07). Do not add a budget cap, and do not quietly lower K
+# as a proxy for one.
+#
+# APPLY THESE VALUES WITH THE QUEUE VERIFIED EMPTY (23.3-CONTEXT.md trap 2). A config
+# change creates a NEW REVISION, which BOOTS the container, and the poll loop CLAIMS FIRST
+# and SLEEPS LAST. `--min-instances=0` is therefore NOT protection: a booting instance
+# claims before it ever reaches its first sleep. An empty queue is the only protection.
+# This is what caused the 2026-07-28 incident.
 # ---------------------------------------------------------------------------
 
 REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
@@ -180,7 +247,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=5 \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol,NESTOR_WORKER_RUN_CONCURRENCY=4,NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120" \
   --set-secrets="${TRIBUNAL_SECRETS}"
 
 echo
@@ -195,7 +262,12 @@ if [ "${MIN_INSTANCES}" = "0" ]; then
   echo "     gcloud run services update ${SERVICE_NAME} --min-instances=1 --region=${REGION} --project=${PROJECT}"
   echo "     Resolve any run still in status='running' BEFORE that command."
 fi
-echo "  max-instances=5 (D-08 concurrency — advisory lock makes >1 poller safe)"
+echo "  max-instances=5 — ⚠ INERT. This worker takes no HTTP traffic, so Cloud Run never"
+echo "     autoscales it and the effective instance count is min-instances. Concurrency is"
+echo "     min-instances x NESTOR_WORKER_RUN_CONCURRENCY = ${MIN_INSTANCES} x 4. If you came"
+echo "     here to buy throughput by raising --max-instances: it does nothing. Raise K or M."
+echo "  NESTOR_WORKER_RUN_CONCURRENCY=4 (D-23.3-02 — a MEMORY bound, not a spend cap)"
+echo "  NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 (D-23.3-04 — 1.87x the longest real run)"
 echo "  Revision suffix: ${REVISION_SUFFIX}"
 echo ""
 echo "To pause (cost discipline): "
