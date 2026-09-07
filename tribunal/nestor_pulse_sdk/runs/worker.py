@@ -7,6 +7,16 @@ References:
 - 01-CONTEXT.md D-09: single worker, poll, status transitions
 - 01-CONTEXT.md D-02: engine field routes to ADK or SDK pipeline
 
+IN-INSTANCE CONCURRENCY (23.3-03, D-23.3-02):
+  D-09's "one run at a time" simplification is RETIRED. `worker_loop` now
+  acquires one of K = NESTOR_WORKER_RUN_CONCURRENCY slots (default 1) BEFORE it
+  claims, and dispatches each claimed run as its own `asyncio.Task` via
+  `_dispatch_one`, so K runs execute concurrently in one process. K=4 is a
+  MEMORY bound sized from measured container memory, never a spend ceiling --
+  a spend cap is deferred by operator ruling (23.3-CONTEXT.md section 9).
+  `--max-instances` is INERT on this service (no HTTP traffic => Cloud Run never
+  autoscales it), so throughput is `min-instances` x K and nothing else.
+
 CRITICAL ORDERING (T-06-02):
   1. CLAIM step: claim_one() uses elevated worker role (BYPASSRLS user).
      This is a 1-statement surgical bypass -- the CLAIM_SQL itself runs
@@ -66,6 +76,7 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nestor_pulse_sdk.concurrency import run_concurrency
 from nestor_pulse_sdk.db.base import get_sessionmaker
 from nestor_pulse_sdk.db.rls import set_tenant_context
 from nestor_pulse_sdk.pipeline.tribunal.reliability import terminal_state
@@ -820,28 +831,137 @@ async def execute_run(claimed: dict) -> None:
                 await _hb
 
 
+async def _dispatch_one(claimed: dict, sem: asyncio.Semaphore) -> None:
+    """Execute ONE claimed run, then give its concurrency slot back.
+
+    This is the body that used to sit inline at the bottom of `worker_loop`'s
+    `while` block, moved into a coroutine so the loop can hand it to
+    `asyncio.create_task` and go straight back to claiming.
+
+    THE DEFENSIVE GUARD BELOW IS THE SAME ONE IT REPLACES, deliberately
+    unchanged. A single run -- or even a logging error inside its own failure
+    path -- must NEVER kill the worker: it would stall the queue and, in an A/B
+    fan-out, the sibling arm. Swallow and keep going. That is what keeps "a
+    FAILED run does not block the queue" (23.3-CONTEXT.md section 7) true now
+    that the guard lives per task instead of per loop iteration. The failure
+    path was already correct; this plan does not "fix" it (trap 5).
+
+    THE SLOT IS RELEASED IN THE `finally`, ON EVERY PATH -- success,
+    RunCancelled, exception, and the TimeoutError branch plan 23.3-01 added.
+    A slot leaked on any one of those paths shrinks the worker to K-1 for the
+    rest of the process's life, and the symptom -- throughput quietly halving
+    some time after an unrelated failure -- is close to undiagnosable
+    (T-23.3-13).
+
+    The import is lazy for the same reason it always was: `runs.execute` imports
+    `execute_run` from THIS module, so a module-level import here would be a
+    cycle.
+    """
+    from nestor_pulse_sdk.runs.execute import execute_run_locked
+
+    try:
+        # The per-run 64-bit advisory lock WRAPS the dispatch so >1 executor is
+        # safe for the audit chain (ENGINE-08, T-13-06). It re-checks
+        # claimability under the lock, consumes the CR-01 fencing token, then
+        # delegates to execute_run() (runner.run() + set_tenant_context,
+        # T-06-02 preserved). None of that is rebuilt here -- it is precisely
+        # what made more than one executor safe before this plan existed
+        # (23.3-CONTEXT.md section 4, trap 4).
+        await execute_run_locked(claimed)
+    except Exception:  # noqa: BLE001
+        try:
+            log.exception("execute_run_crashed", run_id=str(claimed["id"]))
+        except Exception:
+            pass
+    finally:
+        sem.release()
+
+
 async def worker_loop() -> None:
     """
-    Main poll loop. Claims one run at a time via SKIP LOCKED, dispatches it
-    through the per-run advisory lock (execute_run_locked), then polls again.
-    Sleeps between polls when the queue is empty.
+    Main poll loop. Acquires one of K concurrency slots, claims a run via SKIP
+    LOCKED, DISPATCHES it as its own asyncio.Task, and goes straight back to
+    claiming. Sleeps between polls when the queue is empty.
 
-    D-09 single-worker simplification: one Cloud Run instance with min-instances=1
-    and always-on CPU. The advisory lock (ENGINE-08) makes >1 poller/instance
-    safe, so this loop can now run at max-instances > 1 without forking the audit
-    chain (D-08: size for 5+ concurrent).
+    K is `nestor_pulse_sdk.concurrency.run_concurrency()`
+    (NESTOR_WORKER_RUN_CONCURRENCY, default 1). At K=1 this loop reproduces the
+    strictly serial loop it replaces exactly, which is what makes the change
+    revertible with one environment variable instead of a rollback.
+
+    ⭐ `--max-instances` IS INERT ON THIS SERVICE. The worker takes no real HTTP
+    traffic -- `_health_server` below exists only to satisfy Cloud Run's
+    requirement that every revision bind $PORT -- and Cloud Run autoscales a
+    SERVICE on request concurrency. With no requests it never scales up, so the
+    effective instance count is `minScale` and raising `--max-instances` buys
+    nothing at all. The only two knobs that change throughput are
+    `--min-instances` (M) and NESTOR_WORKER_RUN_CONCURRENCY (K), together giving
+    M x K concurrent runs (23.3-CONTEXT.md section 3, trap 1). If you came here
+    to buy throughput by raising max-instances, stop: it does nothing.
+
+    K IS A MEMORY BOUND, NOT A SPEND CEILING. It is sized against measured
+    container memory (idle ~123 MiB, ~245 MiB marginal per in-flight run against
+    a 2Gi limit), and a spend/concurrency cap is DEFERRED BY OPERATOR RULING,
+    2026-09-07 (23.3-CONTEXT.md section 9). Do not re-purpose K as one, and do
+    not "relax" it on the belief that it was chosen for cost.
+
+    >1 executor was ALREADY safe before this change, and none of that is rebuilt
+    here: `claim_one`'s FOR UPDATE SKIP LOCKED stops two pollers claiming the
+    same row; the per-run 64-bit advisory lock plus the CR-01 fencing-token
+    consume in `runs/execute.py` keep the audit chain single-writer (ENGINE-08 /
+    T-13-06); and the liveness heartbeat is a PER-RUN task cancelled in
+    `execute_run`'s `finally`. The heartbeat must STAY per-run -- hoisting it up
+    here would make every concurrent run share one liveness signal and silently
+    break stale reclaim (23.3-CONTEXT.md trap 9).
+
+    D-09's "one run at a time" simplification is what this loop retires. The
+    ordering D-09 protected is untouched: the claim still runs with NO tenant
+    context, and `execute_run` still sets it immediately afterwards (T-06-02).
+
+    There is deliberately NO shutdown drain, cancellation handler or graceful
+    SIGTERM path. Cloud Run's lifecycle plus the existing stale reclaim and the
+    MAX_RECLAIMS ceiling already cover instance death (section 7); a second
+    recovery mechanism would only be a second thing to disagree with the first.
     """
-    # Imported here (not at module top) to keep the import graph acyclic:
-    # runs.execute lazily imports execute_run from THIS module.
-    from nestor_pulse_sdk.runs.execute import execute_run_locked
+    concurrency = run_concurrency()
+    sem = asyncio.Semaphore(concurrency)
+    # STRONG REFERENCES, and they are load-bearing. `asyncio.create_task` returns
+    # the ONLY strong reference to the task; a task that is created and dropped
+    # can be garbage-collected while it is still running, which here would
+    # abandon a paid research run whose heartbeat is still asserting liveness
+    # (T-23.3-12). `add_done_callback(inflight.discard)` is what stops the set
+    # growing for the life of the process.
+    inflight: set[asyncio.Task] = set()
     sessionmaker = get_sessionmaker()
-    log.info("worker_started", worker_id=WORKER_ID, poll_s=POLL_INTERVAL_SECONDS)
+    log.info(
+        "worker_started",
+        worker_id=WORKER_ID,
+        poll_s=POLL_INTERVAL_SECONDS,
+        run_concurrency=concurrency,
+    )
     while True:
-        # CLAIM step: runs WITHOUT tenant context (worker sees all tenants' work)
+        # SLOT FIRST, THEN CLAIM -- never the other way round. Claiming first and
+        # then blocking on the semaphore would park a row at status='running'
+        # with a heartbeat_at freshly stamped by CLAIM_SQL and NO heartbeat task
+        # running for it. After STALE_RUN_MINUTES that row is stale-reclaimed and
+        # RE-EXECUTED AT FULL COST, unattended -- the D-E money defect, rebuilt
+        # (T-23.3-11).
+        await sem.acquire()
+        # CLAIM step: runs WITHOUT tenant context (worker sees all tenants' work).
+        # This session is opened and CLOSED here, before anything is dispatched,
+        # and is never captured by the task created below. Each dispatched run
+        # reaches the database only through its own per-block sessions. A session
+        # shared across concurrent runs would carry one run's transaction-local
+        # `app.tenant_id` into another run's transaction -- a CROSS-TENANT
+        # defect, not a performance bug, and the highest-severity risk in this
+        # phase (23.3-CONTEXT.md trap 3, T-23.3-09).
         async with sessionmaker() as session:
             async with session.begin():
                 claimed = await claim_one(session)
         if claimed is None:
+            # Nothing claimed: hand the slot straight back BEFORE sleeping.
+            # Holding it over an idle tick would retire one slot per empty poll
+            # and the worker would silently stop claiming altogether.
+            sem.release()
             # REAP (D-E) on the EMPTY-QUEUE tick only: one statement per idle
             # poll, never competing with real work. Runs that have gone silent
             # again after using up their recoveries are failed with a sentence
@@ -872,8 +992,9 @@ async def worker_loop() -> None:
                         ),
                     )
             except Exception:  # noqa: BLE001
-                # Same defensive posture as the dispatch guard below: the reap is
-                # housekeeping and must never stall the queue.
+                # Same defensive posture as the dispatch guard, which now lives
+                # in `_dispatch_one`: the reap is housekeeping and must never
+                # stall the queue.
                 log.warning("stale_reap_failed", exc_info=True)
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
             continue
@@ -887,20 +1008,15 @@ async def worker_loop() -> None:
                 max_reclaims=MAX_RECLAIMS,
             )
         log.info("run_claimed", run_id=str(claimed["id"]), engine=claimed["engine"])
-        # EXECUTE step: the per-run 64-bit advisory lock WRAPS the dispatch so
-        # >1 poller/instance is safe for the audit chain (ENGINE-08, T-13-06).
-        # execute_run_locked re-checks claimability under the lock, then delegates
-        # to execute_run() (runner.run() + set_tenant_context, T-06-02 preserved).
-        # Defensive guard: a single run (or even a logging error inside its own
-        # failure path) must NEVER kill the worker -- it would stall the queue and,
-        # in an A/B fan-out, the sibling arm. Swallow + keep polling.
-        try:
-            await execute_run_locked(claimed)
-        except Exception:  # noqa: BLE001
-            try:
-                log.exception("execute_run_crashed", run_id=str(claimed["id"]))
-            except Exception:
-                pass
+        # DISPATCH step: ONE TASK PER CLAIMED RUN. This is the line that ends the
+        # one-run-per-instance defect -- the loop no longer waits for a run to
+        # finish before claiming the next one. `_dispatch_one` owns the slot from
+        # here and releases it in its `finally` on every exit path. Everything
+        # the dispatched run does (the advisory lock, the fencing-token consume,
+        # the per-run heartbeat, the terminal writes) is unchanged.
+        task = asyncio.create_task(_dispatch_one(claimed, sem))
+        inflight.add(task)
+        task.add_done_callback(inflight.discard)
 
 
 async def _health_server(port: int) -> None:
