@@ -8,6 +8,7 @@ import type {
   LocalizedIntakeSchema,
 } from "@/lib/intake-types";
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import { writableFieldKeys } from "@/lib/intake-writable";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { FieldRenderer } from "./FieldRenderer";
 import { toast } from "sonner";
@@ -169,6 +170,17 @@ export function IntakeForm({
  const section = sections[currentStep];
  const isLast = currentStep === sections.length - 1;
 
+ // The ONE writable-field rule, shared by `handleChange`, `saveCurrentSection` and the
+ // `disabled=` prop below. It used to be written out twice and the copies drifted: the
+ // renderer re-opened `proposal_list` for the validation phase while the two save paths
+ // still early-returned on a blanket `!editable`, so the enabled control's value was
+ // never sent (DEF-23.2-12). See `lib/intake-writable.ts` for why widening it without
+ // widening the server's D-23.2-05 table blocks submission outright.
+ const writableKeys = useMemo(
+ () => writableFieldKeys(sections, { editable, isValidationPhase }),
+ [sections, editable, isValidationPhase],
+ );
+
  const completedSections = useMemo(() => {
  return sections.map((s) => {
  const allRequiredFilled = sectionMissingRequired(s, answers).length === 0;
@@ -193,7 +205,13 @@ export function IntakeForm({
 
  // Section-batch save (D-03): edits only mark the section dirty — no per-field
  // network call. The whole section's dirty batch is PATCHed on advance/leave.
- if (!editable) return;
+ //
+ // Only WRITABLE fields are marked dirty. A read-only field can still reach this
+ // handler — `ValidationDiffForField`'s revert button calls it for the refined
+ // longtext/radio fields — and marking one dirty in the validation phase makes the
+ // section PATCH 409 (D-23.2-05), which `doSubmit` treats as a failure and refuses
+ // to submit on. So the guard is narrowed here, not removed.
+ if (!writableKeys.has(key)) return;
  setDirtyFields((prev) => {
  const next = new Set(prev);
  next.add(key);
@@ -201,16 +219,19 @@ export function IntakeForm({
  });
  setSaveStatus("dirty");
  },
- [storageKey, editable],
+ [storageKey, writableKeys],
  );
 
  // PATCH the current section's dirty answers in one batch. Returns false on failure
  // so callers can GATE navigation (UI-SPEC Net-New 3: a failed PATCH does not advance).
  const saveCurrentSection = useCallback(async (): Promise<boolean> => {
- if (!editable) return true;
+ // No blanket `!editable` bail: the validation phase is not editable yet DOES have one
+ // writable field (`proposal_list`), and bailing here discarded it (DEF-23.2-12).
+ // `writableKeys` is re-applied rather than trusted from `dirtyFields` alone so a key
+ // that went stale across a phase change can never be sent.
  const dirtyKeys = section.fields
  .map((f) => f.key)
- .filter((k) => dirtyFields.has(k));
+ .filter((k) => dirtyFields.has(k) && writableKeys.has(k));
  if (dirtyKeys.length === 0) return true;
  setSaveStatus("saving");
  const batch: AnswerInput[] = dirtyKeys.map((k) => toAnswerInput(k, answers[k]));
@@ -227,7 +248,7 @@ export function IntakeForm({
  });
  setSaveStatus("saved");
  return true;
- }, [editable, section, dirtyFields, answers, intakeId, t]);
+ }, [writableKeys, section, dirtyFields, answers, intakeId, t]);
 
  // clear localStorage when fully submitted
  useEffect(() => {
@@ -491,14 +512,19 @@ export function IntakeForm({
      the form stays read-only on purpose: those answers were validated at submission,
      and re-opening them after review would let the client silently rewrite reviewed
      content. A proposal is different in kind — it is a decision we are ASKING the
-     client to make, which is why it alone becomes editable here. */}
+     client to make, which is why it alone becomes editable here.
+
+     260907. That rule now comes from `writableKeys` instead of being spelled out again
+     here. The inline expression was equivalent, but it was a SECOND copy, and the save
+     paths held a third that disagreed — so the checkbox was enabled and its value was
+     dropped (DEF-23.2-12). Enabled and saved are now the same predicate. */}
  <FieldRenderer
  field={f}
  value={answers[f.key]}
  onChange={(v) => handleChange(f.key, v)}
  intakeId={intakeId}
  error={errors[f.key]}
- disabled={!editable && !(isValidationPhase && f.type === "proposal_list")}
+ disabled={!writableKeys.has(f.key)}
  clientSurface={isValidationPhase}
  />
  {isValidationPhase && (
