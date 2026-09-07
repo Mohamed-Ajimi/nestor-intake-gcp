@@ -129,6 +129,21 @@ _MAX_METRICS_AUTH_RETRIES = 200
 _MAX_METRICS_AUTH_OUTAGE_SECONDS = _MAX_METRICS_AUTH_RETRIES * POLL_SECONDS
 
 
+def _utc_now():
+    """The DRIVER's own clock, timezone-aware UTC.
+
+    A named function rather than an inline ``datetime.now(timezone.utc)`` for one
+    reason: it is the seam the heartbeat tests move, and naming it makes the
+    distinction this module depends on explicit — :func:`_seam_datetime` parses a
+    timestamp the ENGINE asserted, this produces one the DRIVER asserts. The two
+    must never be confused, because the whole value of ``driver_heartbeat_at`` is
+    that it says something the engine cannot say on the driver's behalf.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    return _dt.now(_tz.utc)
+
+
 def _seam_datetime(value: Any, field: str) -> Any:
     """Parse an ISO-8601 timestamp from the seam, or return ``None``. NEVER raises.
 
@@ -314,6 +329,25 @@ def mirror_tick(
     #
     # Same present-only discipline as the timestamps above (see ``_cursor_values``).
     values.update(_cursor_values(metrics))
+    # Plan 23.3-04 (DEF-23.2-03) — THE DRIVER'S LIVENESS CLAIM. Written on EVERY
+    # tick, UNCONDITIONALLY, and it is the ONE value in this dict that is not gated
+    # on "present in ``metrics``".
+    #
+    # Everything above is MIRRORED FROM the seam and is skipped when the engine did
+    # not send it. This one is ASSERTED BY THE DRIVER ABOUT ITSELF. Gating it the
+    # same way would make a driver that is alive but receiving sparse metrics look
+    # DEAD, and the reconciler's designed response to a dead driver is to take the
+    # run over — so a gated heartbeat would "recover" runs that were never lost, at
+    # ~$45 each.
+    #
+    # NOT ``func.now()``: the value must be the driver's assertion at the moment it
+    # TICKED, not the database's at the moment the row was written. Under a slow
+    # write those differ, and that difference is exactly the signal — a driver stuck
+    # waiting on a connection is not a driver that is alive. Timezone-aware UTC, the
+    # same clock source the rest of this app uses for tz-aware stamps, because the
+    # column is ``timestamptz`` and a naive value would be re-read in the server's
+    # own zone.
+    values["driver_heartbeat_at"] = _utc_now()
 
     with tenant_session(identity) as session:
         rowcount = ResearchRunRepository(session, identity).patch(research_run_id, **values)

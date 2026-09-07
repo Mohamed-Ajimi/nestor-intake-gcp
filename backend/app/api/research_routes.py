@@ -453,7 +453,23 @@ def trigger_research(
             space_id=intake_space_id,
             metadata={"from": old_status, "to": new_status},
         )
-        values = dict(intake_id=intake_id, status="queued", attempt=attempt)
+        # Plan 23.3-04 (DEF-23.2-03) — the ACTING HUMAN, stamped in the SAME INSERT
+        # that creates the row. Never a follow-up patch: a second statement is a
+        # window in which the poll driver can start against a row that carries no
+        # actor, and the whole reason the column exists is that a stateless
+        # reconciler has no request identity of its own and must REPLAY this one
+        # across a seam that requires a non-empty X-Acting-User-Id / -Email and
+        # answers 400 without them (D-05 attribution on a frozen audit chain).
+        #
+        # ``identity.email`` is ``str | None``. A superadmin token without one stores
+        # NULL here on purpose — see the WARNING below.
+        values = dict(
+            intake_id=intake_id,
+            status="queued",
+            attempt=attempt,
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
+        )
         # (3) The DB's own refusal, translated (D-23.2-12, part 1). create/create_in_space
         # FLUSH to populate the server-side id, so the IntegrityError surfaces HERE, inside
         # the block. Caught around the create ONLY — a genuine FK violation elsewhere in
@@ -475,6 +491,20 @@ def trigger_research(
             )
         # Captured INSIDE the tx: expire_on_commit detaches `run` at block exit.
         research_run_id = str(run.id)
+
+    # Plan 23.3-04 — the gap, made VISIBLE before it matters. A NULL acting_email is
+    # stored deliberately (never "", never a placeholder address: a fabricated actor on
+    # a legally load-bearing attribution chain is worse than a skipped sweep), but it
+    # means the reconciler will have to SKIP this row rather than call a seam that would
+    # answer 400, and the D-10 completion mail has nobody to go to. WARNING level and
+    # naming the run, so the gap is findable now rather than during an incident.
+    if not identity.email:
+        _log.warning(
+            "research run %s has NO acting_email (identity.uid=%s): a reconciler sweep "
+            "will SKIP this run rather than invent an actor, and no completion mail can "
+            "be sent for it",
+            research_run_id, identity.uid,
+        )
 
     # Schedule the pool-safe poll driver AFTER the 202 (the ~19-min drive holds no
     # request connection). It mirrors each tick into research_runs and mails on terminal.
@@ -607,8 +637,18 @@ def resume_research(
     # The intake row's own status is NOT touched — it is already ``in_research``.
     run_id = run.id
     with tenant_session(identity) as txs:
+        # Plan 23.3-04 — the RESUMING human replaces the triggering one. A resume is a
+        # NEW human action on the same row: if the row kept whoever triggered it hours
+        # earlier, a later sweep would replay the WRONG person's attribution across the
+        # audit seam, and the D-10 completion mail would go to someone who did not ask
+        # for this. Same short tenant_session, so it commits strictly before add_task.
         ResearchRunRepository(txs, identity).patch(
-            run_id, status="queued", error_message=None, completed_at=None
+            run_id,
+            status="queued",
+            error_message=None,
+            completed_at=None,
+            acting_user_id=identity.uid,
+            acting_email=identity.email,
         )
         audit.log(
             txs,
