@@ -278,3 +278,81 @@ non-formatting lint errors, dead code, `AGENTS.md` contradictions.
 
 Full register with mechanisms and measured evidence:
 `.planning/phases/23.2-authorization-depth-*/deferred-items.md`.
+
+## 2026-09-07 (evening) — production readiness, and the one thing that is actually blocking it
+
+Two deploys landed today (`20260907-113058` — phase 23.2 + its two follow-ups + migration 0016;
+`20260907-161728` — phase 23.3 concurrency + migration 0017). The question that followed was
+whether the product is ready for production. The short answer and the evidence are below.
+
+### ⛔ THE BLOCKER: the production database has NO BACKUPS
+
+Measured on `nestor-pg`, 2026-09-07:
+
+| setting | value |
+|---|---|
+| `settings.backupConfiguration.enabled` | **False** |
+| point-in-time recovery | **not enabled** |
+| `gcloud sql backups list` | **ZERO backups exist** |
+| `settings.availabilityType` | **ZONAL** (no HA) |
+
+⚠ **The trap:** a backup `startTime` of `22:00` and `retainedBackups` of `7` ARE set — but they are
+inert while `enabled = False`. Reading those two fields alone makes the instance look configured.
+
+**Blast radius if the instance is lost: every client's intake, answers, research runs, artifacts and
+reports.** This is one setting, not an architectural gap. Agreed action: fix it next session.
+
+**The fix** (⚠ verify the restart behaviour first — enabling automated backups is online, but
+enabling PITR on Cloud SQL for PostgreSQL turns on WAL archiving and requires an INSTANCE RESTART;
+if so, split it — backups now, PITR in a window):
+
+```
+gcloud sql instances patch nestor-pg \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
+  --backup-start-time=22:00 --retained-backups-count=7 \
+  --enable-point-in-time-recovery --retained-transaction-log-days=7
+```
+
+Three things to decide separately rather than bundle: **ZONAL -> REGIONAL** (real HA; a restart and
+roughly double the instance cost), a **restore rehearsal** (a backup never restored is a hope, not a
+guarantee — clone to a new instance from a backup, check schema + row counts, delete), and whether
+`infra/main.tf` declares backup config at all, because if it does not then a `terraform apply` could
+revert a hand-set value — the same shape as DEF-23.3-14.
+
+### The verdict
+
+**The product is good for production once backups are on.** Tenant isolation is hardened across two
+external audits; authorization has now been examined on both axes (23.1 — who may call which verb;
+23.2 — what a legitimate caller may see and change); concurrency, a hang backstop and an
+orphaned-run reconciler shipped today.
+
+### What is a maturity backlog, NOT a blocker
+
+Recorded explicitly because an earlier version of this assessment framed them as gates, which was
+wrong. **"Nobody has reviewed X" is not evidence that X is broken.**
+
+* **Zero browser/E2E tests.** A real risk — DEF-23.2-12 was exactly that defect class and survived
+  two audits, eleven plans and a fully green suite — but plenty of production software ships without
+  them.
+* **Rate limiting, secrets-in-logs, monitoring/alerting** — never audited. Unknown, not known-bad.
+* **GDPR / data retention** — never reviewed. ⚠ An earlier note of mine called this "legal
+  exposure" and cited a 2026-08-02 deadline; that date belongs to a Tribunal **audit-trail feature**
+  and was stretched into a compliance deadline without evidence. It is still worth reviewing for a
+  firm holding clients' strategy documents, but it is not a known breach and should not be recorded
+  as one.
+* **Uncapped concurrent spend** — 8 simultaneous runs at ~$25–45 each, no ceiling, no per-tenant
+  limit. **Deferred by explicit operator ruling** (2026-09-07, reaffirmed: "leave it like that")
+  until there is data to size a cap. Recorded as DEF-23.3-00, decision OPEN. Not a blocker by
+  decision, listed here only so the exposure stays visible.
+
+### Still unproven after today's two deploys
+
+* **No research run has exercised phase 23.3 at all.** Concurrency, the 120-minute hang backstop and
+  the reconciler are proven by tests and by config read-back only. The two-client concurrent test is
+  the next functional action.
+* The reconciler is **unobservable while healthy** — it logs only when it claims an orphan, so an
+  idle sweep and a dead sweep look identical. Its liveness today was inferred from the absence of
+  its two failure signals.
+* The 23.1 role gate has still never been observed live, across three deploys.
+* ⛔ `infra/main.tf:381` still sets `min_instance_count = 0` for `nestor-api` while live is
+  `minScale=1` — a routine `terraform apply` would silently disable the reconciler (DEF-23.3-14).

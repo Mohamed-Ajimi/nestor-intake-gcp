@@ -25,6 +25,14 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
+⛔ **NEXT ACTION: TURN ON CLOUD SQL BACKUPS.** `nestor-pg` has
+`backupConfiguration.enabled = False`, no PITR, **ZERO backups in existence** and ZONAL (no HA),
+measured 2026-09-07. ⚠ The backup WINDOW is set (22:00 / 7 retained) while backups are OFF, so
+reading those two fields alone makes it look configured. Losing the instance loses every client's
+intake, answers, runs and reports. Command + the PITR-restart caveat: `.planning/STAKEHOLDER-NOTES.md`,
+2026-09-07 (evening). **This is the only thing blocking production** — authorization is hardened
+across two audits and concurrency/durability shipped today.
+
 **Phase 23.3 — concurrent research execution — COMPLETE (6/6 plans) and ✅ DEPLOYED 2026-09-07, tag `20260907-161728`.**
 Live: `nestor-api-00050-w2l` · `tribunal-api-00025-q4m` · `tribunal-worker-20260907-161728-162720`;
 `nestor-frontend` UNCHANGED at `00037-bqs` (zero diff). INTAKE alembic head **0017**.
