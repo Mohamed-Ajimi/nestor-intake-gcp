@@ -14,7 +14,12 @@ Plan 09 deep-research adapters consume the two-phase API; they do NOT extend thi
 Synthesis steps consume the atomic-call methods.
 
 Design decisions:
-  - _SEMAPHORE(8): bounds all in-flight LLM calls per worker (PATTERNS lines 302-304).
+  - _SEMAPHORE(LLM_SLOTS_PER_RUN * run_concurrency()): bounds all in-flight LLM calls
+    in the worker PROCESS (PATTERNS lines 302-304). LLM_SLOTS_PER_RUN is 8 -- the budget
+    ONE run is entitled to, and the value _SKEPTIC_CONCURRENCY is sized to saturate.
+    The process budget scales with NESTOR_WORKER_RUN_CONCURRENCY so that K concurrent
+    runs are not each starved to 8/K slots. At the default K=1 this is 8, exactly as
+    before (23.3-02).
   - Autonomous transactions: each audit write uses a dedicated DB session so the audit row
     commits even if the LLM-using transaction rolls back (Anti-pattern line 584).
   - cache_read_input_tokens + cache_creation_input_tokens extracted explicitly from
@@ -75,6 +80,10 @@ from nestor_pulse_sdk.pipeline.tribunal.checkpoints import safe_job_id
 # roundabout: a grep cannot tell a comment from a call, and this phase gates
 # both a forbidden form and a COUNT of the permitted one.
 from nestor_pulse_sdk.runs import run_events
+# 23.3-02. A LEAF module: `concurrency` imports only os + logging and nothing
+# from this package, so importing it here adds no cycle and lets `runs/` and
+# `audit/` read the SAME number without `audit` importing `runs`.
+from nestor_pulse_sdk.concurrency import LLM_SLOTS_PER_RUN, run_concurrency
 
 log = logging.getLogger(__name__)
 
@@ -253,7 +262,39 @@ GEMINI_INTERACTIONS_REVISION = os.environ.get(
     "NESTOR_GEMINI_INTERACTIONS_REVISION", "2026-05-20"
 )
 
-_SEMAPHORE = asyncio.Semaphore(8)  # bounds ALL in-flight LLM calls per worker
+# ---------------------------------------------------------------------------
+# THE PROCESS-WIDE LLM BUDGET SCALES WITH K; ONE RUN'S BUDGET DOES NOT (23.3-02).
+#
+# This is a MODULE-LEVEL semaphore -- every coroutine in the worker process
+# shares it, across all five acquisition sites below (anthropic_messages,
+# serpapi_search, gemini_generate, openai_response, end_call). This sentence
+# deliberately does NOT spell the guard form out: a grep counting acquisitions
+# cannot tell a comment from code, and prose that quotes the statement verbatim
+# would inflate that count by one forever. Until phase
+# 23.3 the worker executed exactly one run at a time, so that one run held the
+# whole budget and a fixed `Semaphore(8)` was right by accident of the loop
+# being serial.
+#
+# `pipeline/tribunal/pipeline.py`'s `_SKEPTIC_CONCURRENCY` (default 8) sizes the
+# skeptic stage -- ~79% of a run's cost -- to saturate exactly those 8 slots. So
+# K concurrent runs against an unchanged fixed `Semaphore(8)` would give each run
+# 8/K slots, stretching every run's wall clock by roughly K and pushing runs into
+# the run-level ceiling added by 23.3-01: a timeout backstop would then start
+# killing LEGITIMATE runs, and the symptom would read as "the ceiling is too
+# aggressive" rather than "the semaphore was not scaled".
+#
+# Multiplying by run_concurrency() keeps each concurrent run's provider
+# parallelism byte-for-byte identical to today at ANY K. This is SCHEDULING, not
+# engine behaviour: the same calls are made, to the same models, with the same
+# prompts (23.3-CONTEXT.md section 9). At the default K=1 the expression
+# evaluates to 8 and today's behaviour is preserved exactly -- this plan is a
+# no-op until 23.3-03 raises K.
+#
+# run_concurrency() is read ONCE, here, at import. A runtime change to
+# NESTOR_WORKER_RUN_CONCURRENCY does NOT resize an already-built semaphore; the
+# value is deployment configuration.
+# ---------------------------------------------------------------------------
+_SEMAPHORE = asyncio.Semaphore(LLM_SLOTS_PER_RUN * run_concurrency())
 
 #: Leftover numeric citation markers once annotations are resolved into links.
 _CITE_MARKER_RE = re.compile(r"\s*\[cite[:_][^\]]*\]")
@@ -1948,7 +1989,22 @@ def build_audited_client(
     if anthropic_client is None:
         from anthropic import AsyncAnthropic  # noqa: PLC0415
 
-        anthropic_client = AsyncAnthropic()
+        # 23.3-02. THE BOUND IS OURS, NOT THE SDK'S.
+        #
+        # Be honest about what this buys, because 23.3-CONTEXT.md section 6 is:
+        # the SDK's own default already applies, so this client was never
+        # literally unbounded -- it was the only construction in the engine not
+        # bounded BY INTENT. What changes is ownership: an anthropic release
+        # that changes its default can no longer silently change ours.
+        #
+        # 600 s is chosen, not guessed. It sits ABOVE the longest single
+        # Anthropic call the pipeline permits itself (`_SKEPTIC_TIMEOUT_S` = 300,
+        # the stage that is ~79% of run cost), so it cannot truncate a legal
+        # call, and far BELOW the 120-minute run ceiling of 23.3-01, so it stays
+        # a per-call bound rather than a second run-level one. It also matches
+        # the SDK's current default, which is what makes this change
+        # behaviour-neutral today.
+        anthropic_client = AsyncAnthropic(timeout=600.0)
 
     if gemini_client is None:
         from google import genai  # noqa: PLC0415
