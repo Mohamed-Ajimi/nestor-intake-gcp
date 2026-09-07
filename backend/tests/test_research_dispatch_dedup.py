@@ -781,10 +781,19 @@ def test_downgrade_removes_the_index_and_re_allows_duplicates(engine, set_space)
                 ).all()
             }
 
-    before = _index_names()
-    assert INDEX_NAME in before
-
     try:
+        # ISOLATE 0016's OWN STEP. Since phase 23.3 the head is 0017, so a single
+        # `downgrade(0015)` would walk 0017 -> 0016 -> 0015 and this test's "and NOTHING
+        # else" assertion would fire on 0017's `ix_research_runs_orphan_candidates` —
+        # a TRUE observation about the wrong revision. Stepping down to 0016 first, and
+        # only then reading `before`, keeps every assertion below about 0016 alone, which
+        # is what this test is for. The `finally` restores head either way.
+        command.downgrade(cfg, REVISION)
+        assert _current_revision(engine) == REVISION
+
+        before = _index_names()
+        assert INDEX_NAME in before
+
         command.downgrade(cfg, PREVIOUS_REVISION)
         assert _current_revision(engine) == PREVIOUS_REVISION
 
@@ -806,7 +815,10 @@ def test_downgrade_removes_the_index_and_re_allows_duplicates(engine, set_space)
         )
         _cleanup(engine, space)
 
-        command.upgrade(cfg, "head")
+        # Back up to 0016 ONLY, not to head: `before` was read at 0016, so re-applying
+        # 0017 as well would legitimately add its index and make this comparison lie.
+        # The `finally` below is what returns the session-scoped schema to head.
+        command.upgrade(cfg, REVISION)
         assert _index_names() == before, "the re-upgrade must restore exactly the index."
     finally:
         _cleanup(engine, space)

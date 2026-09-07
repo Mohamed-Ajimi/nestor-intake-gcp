@@ -131,6 +131,92 @@ class ResearchRun(Base):
     #: (``run_task.finalize_parked``). NULL means "no events yet" — never 0,
     #: which would claim a stream positioned at its start.
     event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # ---- Phase 23.3 RECONCILER columns (plan 23.3-04, migration 0017,
+    #      COST-01 / DEF-23.2-03). All NULLABLE, NO server_default — the app is
+    #      the sole writer, and this table holds paid, IN-FLIGHT rows, so four
+    #      nullable undefaulted columns are a metadata-only ADD COLUMN with no
+    #      table rewrite. NULL means "this run predates the reconciler", which is
+    #      a state the sweep must be able to observe and SKIP.
+    #:
+    #: WHO. ``Identity.uid`` of the human who triggered or resumed this run.
+    #: Exists because the Tribunal seam REQUIRES a non-empty ``X-Acting-User-Id``
+    #: and answers 400 without one (``auth/internal_caller.py``) — the D-05
+    #: acting-user attribution is a hard legal constraint on a FROZEN audit
+    #: chain. Today the actor is derived in-process from the live request
+    #: ``Identity`` (``run_task.load_trigger_context``), which a stateless sweep
+    #: does not have; so the row must carry the ORIGINAL human's and the sweep
+    #: must REPLAY it. Inventing a system actor would corrupt exactly the
+    #: attribution the chain exists to carry.
+    acting_user_id: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+        comment=(
+            "Identity.uid of the human who triggered or resumed this run. Persisted so "
+            "a stateless reconciler can REPLAY the original actor's D-05 attribution "
+            "across the Tribunal seam (which requires a non-empty X-Acting-User-Id and "
+            "answers 400 without one) rather than inventing a system actor on a frozen "
+            "audit chain. NULL = the run predates 0017."
+        ),
+    )
+    #: The same human's address. TWO consumers: the seam's required
+    #: ``X-Acting-User-Email`` header, and the D-10 completion / park mail, which
+    #: otherwise has nobody to write to when a run is finished by a sweep instead
+    #: of by its own driver. ``Identity.email`` is ``str | None``, so a superadmin
+    #: token without one stores NULL here DELIBERATELY — never ``""``, never a
+    #: placeholder address. Plan 05's reconciler skips such a row rather than
+    #: calling a seam that will answer 400: a fabricated actor on a legally
+    #: load-bearing chain is worse than a skipped sweep.
+    acting_email: Mapped[str | None] = mapped_column(
+        String,
+        nullable=True,
+        comment=(
+            "The same human's address. Two consumers: the seam's required "
+            "X-Acting-User-Email header, and the D-10 completion / park mail, which "
+            "otherwise has nobody to write to when a run is finished by a sweep "
+            "instead of by its own driver. NULL is DELIBERATE when Identity.email is "
+            "None — never '' and never a placeholder address; a fabricated actor on a "
+            "legally load-bearing chain is worse than a skipped sweep."
+        ),
+    )
+    #: LIVENESS. Bumped by ``run_task.mirror_tick`` on EVERY tick (~3 s,
+    #: ``POLL_SECONDS``), UNCONDITIONALLY — it is the driver's assertion about
+    #: ITSELF, never a value mirrored from the seam.
+    #:
+    #: MUST NOT be confused with ``created_at`` or ``started_at``. Those are
+    #: stamped ONCE and never move, which is exactly why the D-E defect happened:
+    #: a live 35-minute provider long-poll was indistinguishable from a process
+    #: that died 35 minutes ago, and the designed response to a dead process is to
+    #: re-run at FULL COST. A liveness signal is the one that MOVES. There is no
+    #: ``updated_at`` on this table, which is why this column has to exist at all.
+    driver_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "LIVENESS. Bumped by run_task.mirror_tick on EVERY tick (~3s), "
+            "unconditionally — the driver's assertion about ITSELF, never a value "
+            "mirrored from the seam. MUST NOT be confused with created_at or "
+            "started_at: those are stamped ONCE and never move, which is exactly why "
+            "the D-E defect happened — a live 35-minute provider long-poll was "
+            "indistinguishable from a process that died 35 minutes ago, and the "
+            "designed response to a dead process is to re-run at full cost. A liveness "
+            "signal is the one that MOVES."
+        ),
+    )
+    #: THE LEASE. Set by a sweep when it CLAIMS this row, so a second nestor-api
+    #: instance (``maxScale=4``) skips it. A LEASE, not a lock: it EXPIRES, so a
+    #: sweep that dies mid-flight cannot strand the row — which is the very
+    #: failure mode the reconciler exists to end, and reintroducing it one layer
+    #: up would be absurd.
+    reconcile_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "Set by a sweep when it CLAIMS this row, so a second nestor-api instance "
+            "(maxScale=4) skips it. A LEASE, not a lock: it EXPIRES, so a sweep that "
+            "dies mid-flight cannot strand the row — which is the very failure mode "
+            "the reconciler exists to end."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -175,6 +261,36 @@ class ResearchRun(Base):
             "uq_research_runs_one_inflight_per_intake",
             "intake_id",
             unique=True,
+            postgresql_where=text("status IN ('queued', 'running', 'needs_report_spec')"),
+        ),
+        # Phase 23.3 / DEF-23.2-03 (migration 0017) — the ORPHAN-CANDIDATE scan.
+        # A PARTIAL btree on the liveness column so the reconciler's "which
+        # non-terminal runs have a stale (or absent) driver heartbeat?" query never
+        # seq-scans a table of terminal, paid runs.
+        #
+        # The predicate is the SAME three literals as
+        # uq_research_runs_one_inflight_per_intake above, sourced from 0017's own
+        # _INFLIGHT tuple, so the two indexes cannot disagree about what "in flight"
+        # means. ``needs_report_spec`` is the easy one to drop and the one that matters
+        # most: a run sitting there is ALIVE, awaiting an operator's report spec.
+        #
+        # POSITIVE IN (...), never NOT IN (terminal) — and here the direction matters
+        # MORE than it does for the sibling index. mirror_tick writes the engine's
+        # status VERBATIM into a plain String with no CHECK constraint, so the engine
+        # can emit a status this repository has never heard of. Under a negated
+        # predicate that unknown status would count as a candidate and the sweep would
+        # treat a perfectly healthy run as an ORPHAN — and the response to an orphan is
+        # to TAKE IT OVER. Failing open costs a missed sweep; failing closed would cost
+        # a live run being seized.
+        #
+        # The name is byte-identical to migration 0017's. ⚠ ``alembic check`` will NOT
+        # protect this: its postgresql compare_indexes inspects the unique flag and the
+        # expressions only and never looks at postgresql_where, so a drifted predicate
+        # passes it SILENTLY (DEF-23.2-15). tests/test_research_run_reconciler_columns.py
+        # pins the name AND the three literals against the deployed pg_indexes.indexdef.
+        Index(
+            "ix_research_runs_orphan_candidates",
+            "driver_heartbeat_at",
             postgresql_where=text("status IN ('queued', 'running', 'needs_report_spec')"),
         ),
     )
