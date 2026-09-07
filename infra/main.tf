@@ -67,6 +67,29 @@ resource "google_sql_database_instance" "main" {
       # Intentionally NO IP allowlist block here -- access is gated by IAM, not
       # by network range (T-02-14). Adding one is the anti-pattern we avoid.
     }
+
+    # Automated backups + PITR. This block was ABSENT until 2026-09-07 -- never
+    # declared at all, not declared-then-disabled -- and that omission is exactly
+    # why nestor-pg ran with automated backups off and ZERO backups in existence.
+    # Same class of defect as DEF-23.3-14: hand-set on the live instance but left
+    # undeclared here, so a routine apply would have reverted it. Values match the
+    # live read-back of 2026-09-07 value-for-value so plan reports no diff on this
+    # resource; location is deliberately NOT declared (unset live, so declaring it
+    # would CREATE a diff). MEASURED 2026-09-07: enabling PITR on Cloud SQL for
+    # PostgreSQL required NO instance restart -- nestor-pg stayed RUNNABLE across
+    # operation a6db2b00-d00f-4680-b4e9-867a00000024, which corrects the earlier
+    # project note warning that a restart would be needed.
+    backup_configuration {
+      enabled                        = true
+      start_time                     = "22:00"
+      point_in_time_recovery_enabled = true
+      transaction_log_retention_days = 7
+
+      backup_retention_settings {
+        retained_backups = 7
+        retention_unit   = "COUNT"
+      }
+    }
   }
 }
 
