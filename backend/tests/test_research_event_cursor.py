@@ -500,8 +500,8 @@ def test_the_cursor_column_exists_live_and_is_a_nullable_bigint(engine):
     )
 
 
-def test_the_intake_alembic_head_is_0016(engine):
-    """The INTAKE line's version table is at 0016 after ``alembic upgrade head``.
+def test_the_intake_alembic_head_is_0017(engine):
+    """The INTAKE line's version table is at 0017 after ``alembic upgrade head``.
 
     This is the direct statement the build log does not print. It also pins the line:
     the tribunal line's own head lives in a DIFFERENT version table
@@ -514,11 +514,16 @@ def test_the_intake_alembic_head_is_0016(engine):
     Was ``0013`` until plan 23.1-12 added 0014 (the single-running-skill-run partial
     unique index), then ``0014`` until plan 23.1-13 added 0015 (dropping the dead
     ``skill_runs.started_at``), then ``0015`` until plan 23.2-10 added 0016 (the
-    single-in-flight-research-run partial unique index, D-23.2-12 / F-05). The literal is
-    a DELIBERATE hardcode, not an oversight: it is what turns "a migration landed" into a
-    red test, so an unintended or half-applied head cannot pass silently. Every revision
-    on this line therefore updates this one literal and this function's name — the next
-    one does it again.
+    single-in-flight-research-run partial unique index, D-23.2-12 / F-05), then ``0016``
+    until plan 23.3-04 added 0017 (the four reconciler columns + the orphan-candidate
+    index, DEF-23.2-03). The literal is a DELIBERATE hardcode, not an oversight: it is
+    what turns "a migration landed" into a red test, so an unintended or half-applied head
+    cannot pass silently. Every revision on this line therefore updates this one literal
+    and this function's name — the next one does it again.
+
+    ⛔ ``0019`` is RESERVED: ROADMAP Phase 24 records that DEF-22-06 already claims it for
+    the write-side source-identity fix, which is why 23.3-04 took 0017 and not a later
+    number.
     """
     from sqlalchemy import text
 
@@ -530,6 +535,6 @@ def test_the_intake_alembic_head_is_0016(engine):
             ).all()
         }
 
-    assert heads == {"0016"}, (
-        f"the intake alembic line must be at exactly 0016, found {heads}"
+    assert heads == {"0017"}, (
+        f"the intake alembic line must be at exactly 0017, found {heads}"
     )

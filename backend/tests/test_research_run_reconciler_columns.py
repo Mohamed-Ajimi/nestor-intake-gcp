@@ -46,6 +46,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -102,6 +103,13 @@ _SUPERADMIN_TEST_PASSWORD = "gsd_test_superadmin_pw"  # noqa: S105 -- ephemeral 
 #: prove the heartbeat is NOT one of the seam's own timestamps.
 _STARTED_ISO = "2026-07-27T08:09:00Z"
 _STARTED_DT = datetime(2026, 7, 27, 8, 9, 0, tzinfo=timezone.utc)
+
+#: This revision and the one immediately below it (test 8).
+REVISION = "0017"
+PREVIOUS_REVISION = "0016"
+
+# backend/tests/test_research_run_reconciler_columns.py -> backend/ is parents[1]
+_BACKEND = Path(__file__).resolve().parents[1]
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +434,57 @@ def _indexdef(engine, name: str) -> str | None:
             {"s": SCHEMA, "t": TABLE, "n": name},
         ).first()
     return None if row is None else row[0]
+
+
+def _alembic_cfg(engine):
+    """An alembic ``Config`` bound to the test engine's DSN (mirrors conftest)."""
+    from alembic.config import Config
+
+    cfg = Config(str(_BACKEND / "alembic.ini"))
+    # render_as_string(hide_password=False): str(engine.url) masks the password as the
+    # literal "***", which alembic would then use as the real password (conftest:172).
+    cfg.set_main_option("sqlalchemy.url", engine.url.render_as_string(hide_password=False))
+    return cfg
+
+
+#: Alembic's own bookkeeping table. env.py sets no ``version_table_schema``, so it lands in
+#: the connection's default schema (``public``) — NOT in ``nestor``.
+_VERSION_TABLE = "public.alembic_version"
+
+
+def _current_revision(engine) -> str | None:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        row = conn.execute(text(f"SELECT version_num FROM {_VERSION_TABLE}")).first()
+    return None if row is None else row[0]
+
+
+def _column_names(engine) -> set[str]:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = :s AND table_name = :t"
+            ),
+            {"s": SCHEMA, "t": TABLE},
+        ).all()
+    return {r[0] for r in rows}
+
+
+def _index_names(engine) -> set[str]:
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = :s AND tablename = :t"
+            ),
+            {"s": SCHEMA, "t": TABLE},
+        ).all()
+    return {r[0] for r in rows}
 
 
 def _statuses_in(predicate: str) -> frozenset[str]:
@@ -848,3 +907,57 @@ def test_a_full_trigger_mirror_finalize_cycle_reaches_the_same_terminal(
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
+
+
+# ===========================================================================
+# Test 8 — 0017 REVERSES (added beyond the plan's seven; see the SUMMARY)
+# ===========================================================================
+
+def test_the_migration_reverses_and_re_applies(engine):
+    """``downgrade`` drops exactly the four columns + the index, and ``upgrade`` restores them.
+
+    The plan's done-criterion says "0017 applies and reverses", and NOTHING in the seven
+    behaviours it listed would have noticed a broken ``downgrade()`` — an unexercised
+    reversal is a claim, not a proof, and this repository has been bitten by exactly that
+    shape before. 0016's sibling proof lives in ``test_research_dispatch_dedup.py``; this is
+    its counterpart.
+
+    It drives the REAL alembic commands against the container and asserts on the real
+    catalog, never on this repository's migration source text. ``upgrade head`` runs in the
+    ``finally`` so a failure here cannot leave the session-scoped schema behind for the
+    rest of the suite.
+    """
+    from alembic import command
+
+    cfg = _alembic_cfg(engine)
+    assert _current_revision(engine) == REVISION, (
+        f"the engine fixture should have run 'alembic upgrade head' already, leaving "
+        f"{REVISION}; got {_current_revision(engine)!r}"
+    )
+
+    columns_before = _column_names(engine)
+    indexes_before = _index_names(engine)
+    assert set(RECONCILER_COLUMNS) <= columns_before
+    assert ORPHAN_INDEX in indexes_before
+
+    try:
+        command.downgrade(cfg, PREVIOUS_REVISION)
+        assert _current_revision(engine) == PREVIOUS_REVISION
+
+        columns_after = _column_names(engine)
+        indexes_after = _index_names(engine)
+        assert columns_after == columns_before - set(RECONCILER_COLUMNS), (
+            "downgrade must drop the four columns and NOTHING else — every other column "
+            f"on a table of paid runs must survive. removed="
+            f"{sorted(columns_before - columns_after)!r}"
+        )
+        assert indexes_after == indexes_before - {ORPHAN_INDEX}, (
+            "downgrade must drop the orphan index and leave 0011's and 0016's untouched. "
+            f"removed={sorted(indexes_before - indexes_after)!r}"
+        )
+    finally:
+        command.upgrade(cfg, "head")
+
+    assert _current_revision(engine) == REVISION
+    assert _column_names(engine) == columns_before, "the re-upgrade must restore the columns"
+    assert _index_names(engine) == indexes_before, "the re-upgrade must restore the index"
