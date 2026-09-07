@@ -744,6 +744,77 @@ Plans:
 - [ ] 23.2-10-PLAN.md — wave 4: alembic 0016 partial unique index + `patch_if` CAS + in-tx `attempt`, so a concurrent trigger cannot buy a second ~$45 run (D-23.2-12)
 - [ ] 23.2-11-PLAN.md — wave 5: the merged-head seam check, the 65-route gate walk (26 gated), widening the client pin from 10 routes to 17, and the deferral register
 
+### Phase 23.3: concurrent research execution — in-instance concurrency, a run-level timeout backstop, and an orphaned-run reconciler (INSERTED)
+
+**Goal:** Make concurrent deep-research runs a property of the product rather than something that happens to work. Today the engine executes runs strictly one at a time, a hung run blocks every queued run behind it with no bound, and the nestor-side poll driver is an in-process `BackgroundTask` whose death silently orphans a paid run. After this phase: several clients' runs execute at once on the existing pull-worker; a run that hangs is cancelled at a measured ceiling instead of blocking the queue forever; and any non-terminal `research_runs` row is recovered by a stateless sweep regardless of which instance dispatched it.
+**Requirements**: COST-01 (no paid work lost or duplicated — extended to orphaned runs), plus DEF-23.2-03 (durable dispatch) from `.planning/phases/23.2-*/deferred-items.md`
+**Depends on:** Phase 23.2 (deployed 2026-09-07, tag `20260907-113058`)
+**Authority:** `23.3-CONTEXT.md` — the measured run-duration table, the serial-execution mechanism with file:line, and decisions D-23.3-01..
+**Plans:** TBD
+
+**Scope note — the spend cap is DEFERRED BY OPERATOR RULING (2026-09-07).** `NESTOR_TRIBUNAL_UNCAPPED=1`
+is live on `tribunal-worker`, so raising concurrency raises the maximum simultaneous spend. The
+operator has explicitly deferred a concurrency/spend ceiling until there is data to size it with.
+**Do not add one in this phase; do not quietly cap concurrency as a proxy for it.** Record the
+exposure, leave the decision open.
+
+- **The measured basis.** Wall-clock spans computed from audit-blob timestamps in
+  `gs://project-cb01b861-cb4a-438d-b9a-nestor-audit/runs/`: `368ff3a0` 43.7 min · `9c84e5a9`
+  46.7 min · `fb9484dd` 51.8 min · **`7dcf51d5` 64.2 min** · `d6bb3aae` **1472 min** (the stalled
+  run from the 2026-07-28 incident). ⛔ **A real run EXCEEDED 60 minutes.** That is the number that
+  decides the architecture.
+- **D-23.3-01 — KEEP THE PULL WORKER.** Push dispatch was considered and REJECTED on that measurement:
+  a Pub/Sub push or Cloud Tasks HTTP target is bounded by Cloud Run's 60-minute request ceiling
+  (Cloud Tasks worse still, at a 30-minute dispatch deadline), and `7dcf51d5` would have been killed
+  mid-run. A pull worker has no request timeout and is the correct shape for 45–65-minute jobs.
+  Anyone proposing "just use Pub/Sub" must first answer the 64.2-minute run.
+- **The serial mechanism, exactly.** `worker_loop` (`tribunal/nestor_pulse_sdk/runs/worker.py:736`)
+  claims ONE run then `await execute_run_locked(claimed)` — the entire run — before claiming again.
+  Concurrency is therefore capped at one run per instance. `minScale=1` and the worker has no real
+  HTTP traffic (its `_health_server` exists only to satisfy Cloud Run's PORT contract), so Cloud Run
+  will never autoscale it: **`maxScale=5` is inert and effective concurrency is exactly `minScale`.**
+- **Multi-poller is ALREADY SAFE — do not rebuild it.** The claim is `FOR UPDATE SKIP LOCKED`
+  (`claim_one`, `:161`) and the dispatch is wrapped in a per-run 64-bit advisory lock precisely so
+  more than one poller is safe for the audit chain (ENGINE-08 / T-13-06). The heartbeat is already a
+  per-run `asyncio.Task` (`:314`, cancelled in the `finally` at `:715`). The machinery exists; only
+  the loop is serial.
+- **Runs are I/O-bound, not CPU-bound** — they spend 35+ minutes long-polling provider APIs
+  (`PROVIDER_TIMEOUT_S`, `degraded_parallel.py:13`). So in-instance concurrency buys far more than
+  extra instances: a semaphore of K on `min-instances=M` gives M×K concurrent runs at M× idle cost.
+  Worker pool is SQLAlchemy defaults (5 + 10 overflow = 15 conns/instance, `db/base.py:34`) and the
+  loop holds NO connection across the dispatch, so K is bounded by memory (2Gi) not connections.
+- **The hang is real and unbounded.** There is **no `wait_for` or `asyncio.timeout` anywhere around
+  `runner.run()`**. Worse, the heartbeat is a SEPARATE task that keeps writing every 30s during a
+  hang, so a hung run never looks stale, is never reaped (`STALE_RUN_MINUTES=60`), and the worker
+  stays blocked forever. `d6bb3aae`'s 1472 minutes is that failure observed in production.
+  ⚠ Stage-level timeouts DO already exist (35 min per provider, a skeptic timeout, 30s redirect
+  resolver, SerpAPI, `AsyncOpenAI(timeout=3600)`) — the run-level bound is a BACKSTOP over them, not
+  a replacement. ⛔ `asyncio` cancellation only bites at an `await`; a synchronous or C-extension
+  hang will not be interrupted, so the backstop must not be described as a complete cure.
+  The one client built with no explicit timeout is the bare `AsyncAnthropic()`
+  (`audit/audited_llm_client.py:1951`) — the SDK default applies, but it is the only unbounded-by-
+  intent construction, and the skeptic stage it serves is ~79% of run cost.
+- **A FAILED run already does NOT block the queue** — the `except Exception` around
+  `execute_run_locked` is the last statement in the loop body (`:796`), and `execute_run_locked`'s
+  own `finally` finalizes the row. Only a HANG blocks. Do not "fix" the failure path; it is correct.
+- **The durability hole is in nestor-api, NOT the worker.** The worker already has an at-least-once
+  guarantee (SKIP LOCKED claim + 30s heartbeat + stale reclaim + `MAX_RECLAIMS=2` then failed with a
+  worded reason). What is fragile is `run_poll_driver` (`backend/app/research/run_task.py:643`): a
+  `while True` inside a FastAPI `BackgroundTask` with no wall-clock cap. If that nestor-api instance
+  recycles, the engine keeps executing and spending while `research_runs` is never mirrored or
+  finalized, and nothing sweeps it. **The fix is a stateless reconciler, not a dispatch rewrite.**
+- ⚠ **Cloud Scheduler API is NOT ENABLED on this project** (verified 2026-09-07 — `gcloud scheduler
+  jobs list` returns `PERMISSION_DENIED: Cloud Scheduler API has not been used`). Enabling it is an
+  operator/IAM action the agent cannot perform. So the reconciler's trigger must EITHER be an
+  in-process periodic sweep in nestor-api (self-healing: `minScale=1` means a fresh instance sweeps
+  every orphan, and unlike the per-run driver the sweep is stateless so ANY instance can recover ANY
+  run) OR wait on the operator enabling the API. Design for the former, leave the latter as
+  belt-and-braces. ⛔ nestor-api runs `maxScale=4`, so concurrent sweeps must be serialised by an
+  advisory lock or a claim — the same pattern the worker already uses.
+- ⚠ **Changing `min-instances` creates a NEW REVISION, which BOOTS the container — and the worker
+  loop CLAIMS FIRST, SLEEPS LAST.** Any worker config change must be applied with the queue EMPTY.
+  This caused the 2026-07-28 incident.
+
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
 **Goal:** A superadmin can deliberately re-run deep research on an intake that already succeeded, steer that re-run with a note asking for something different from previous runs, see every version of an intake's research, and read the actual cited passage grouped under its link instead of a bare URL.
