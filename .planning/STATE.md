@@ -25,7 +25,11 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-**Phase 23.3 — concurrent research execution — COMPLETE (6/6 plans), NOT DEPLOYED.**
+**Phase 23.3 — concurrent research execution — COMPLETE (6/6 plans) and ✅ DEPLOYED 2026-09-07, tag `20260907-161728`.**
+Live: `nestor-api-00050-w2l` · `tribunal-api-00025-q4m` · `tribunal-worker-20260907-161728-162720`;
+`nestor-frontend` UNCHANGED at `00037-bqs` (zero diff). INTAKE alembic head **0017**.
+⛔ **NO research run has been executed — concurrency, the 120-min backstop and the reconciler are
+proven by tests and config read-back ONLY. The two-client concurrent test is the next action.**
 Merged and pushed at `4836474`. Backend **791 passed / 2 skipped / 0 failed**; `frontend/` and
 `tribunal/nestor_pulse_sdk/pipeline/` diffs both EMPTY; zero provider spend; no deploy.
 

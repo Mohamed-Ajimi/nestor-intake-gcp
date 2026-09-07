@@ -6450,3 +6450,69 @@ that claimed nothing logs nothing — silence there is the expected, correct sta
 | `tribunal-worker` minScale (M) / K | |
 | worker claimed anything on boot? | |
 | DEF-23.3-00 acknowledged by | |
+
+### 23.3 DEPLOY RECORD — executed 2026-09-07, `SHARED_TAG=20260907-161728`, code `0e498c7`
+
+**Live after this deploy:**
+
+| service | revision | note |
+|---|---|---|
+| `nestor-api` | `nestor-api-00050-w2l` | reconciler + lifespan timer |
+| `tribunal-api` | `tribunal-api-00025-q4m` | reaches all 3 changed modules (111-module walk) |
+| `tribunal-worker` | `tribunal-worker-20260907-161728-162720` | `minScale=2`, K=4, timeout 120 min |
+| `nestor-frontend` | `nestor-frontend-00037-bqs` | **UNCHANGED — zero-line diff across all of 23.3** |
+
+INTAKE alembic head **0017**. Migration proved by the literal `Running upgrade 0016 -> 0017`.
+⚠ The job was STILL pinned to `20260907-113058` (the morning's deploy) — without the repin it would
+have re-applied 0016 and reported SUCCESS having applied nothing. Second time in one day.
+
+**Live worker config read back:** `minScale=2` · `maxScale=5` (INERT) ·
+`NESTOR_WORKER_RUN_CONCURRENCY=4` · `NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120` ·
+`NESTOR_TRIBUNAL_UNCAPPED=1` (unchanged — operator ruling).
+
+#### The empty-queue gate — what was actually proved, and when
+
+The runbook demands a `worker_user` SQL read; **no DB access was available from this session, so the
+gate was satisfied by log evidence instead** and that difference is recorded rather than glossed:
+
+* `tribunal-worker` had logged **exactly two lines since 04:08:34** — `worker_started` and
+  `worker_health_server_started` — across ~10 hours of polling every 2.0 s. A `queued` row is
+  claimed within seconds; a `running` row orphaned by a dead worker goes stale at 60 min and is
+  reaped. Neither event appeared.
+* ⭐ **The retroactive proof is stronger than the pre-check:** the new revision booted at 14:27:55
+  and **claimed NOTHING**. A booting worker claims first and sleeps last, so an empty claim log at
+  boot is direct evidence the queue was genuinely empty. That is the 2026-07-28 failure not
+  recurring, observed rather than assumed.
+
+#### ⛔ The worker deploy script has NO `--account`, and the gcloud config had drifted TWO steps
+
+`deploy-worker.sh` pins `--project` six times and `--account` **zero** times, so the ACTIVE gcloud
+config is the sole authority for identity when it runs. At that moment `gcloud config` read
+**`mohamed.ajimi@agiliz.com` / `nc-ai-prod`** — a different account AND a different project. The
+config was therefore SET and the script run in the SAME shell invocation, with the identity echoed
+immediately before the deploy. **Anyone running that script from an unchecked shell deploys as
+whoever happens to be active.** Three separate identity drifts occurred in this one session (gcloud
+twice, GitHub twice).
+
+#### Post-deploy verification
+
+* both worker instances booted (`worker_started` x2, the new one logging `run_concurrency=4`),
+  **`run_claimed` = 0**
+* `nestor-api` `/readyz` → **200**
+* ⚠ **The reconciler is UNOBSERVABLE while healthy.** `_reconcile_loop` logs only
+  `if counts.get("claimed")`, so a sweep that finds no orphans prints NOTHING — deliberately, to
+  avoid a line every 5 minutes forever. Its liveness was therefore inferred from the ABSENCE of the
+  two negative signals (`could not start the research reconcile timer` and the kill-switch
+  `disabled` WARNING), neither of which appeared. That inference is sound but it is not positive
+  confirmation, and **a silent reconciler is indistinguishable from a dead one** — the same shape as
+  the D-E defect the Tribunal side already paid for. Worth a heartbeat/counter later.
+
+#### What this deploy does NOT prove
+
+* **No research run has been executed.** Concurrency, the 120-minute backstop and the reconciler
+  have all been proven by tests and by config read-back, **never by a live run**. The two-client
+  concurrent test is still outstanding and is the only thing that exercises any of it.
+* The role gate remains unobserved live, now across three deploys.
+* ⛔ **`infra/main.tf:381` still says `min_instance_count = 0`** for `nestor-api`. Live is
+  `minScale=1`; a routine `terraform apply` would silently disable the reconciler by removing its
+  premise (DEF-23.3-14). The runbook was corrected; the Terraform was NOT.
