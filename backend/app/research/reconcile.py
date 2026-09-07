@@ -52,8 +52,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.auth.identity import Identity
-from app.db.ai_session import tenant_session
-from app.db.base import get_sessionmaker, get_superadmin_engine
+from app.db.ai_session import superadmin_session, tenant_session
 from app.db.repository import ResearchRunRepository
 from app.mail import resend
 from app.mail.render import (
@@ -123,11 +122,18 @@ SWEEP_BATCH = 10
 def claim_orphans(limit: int = SWEEP_BATCH) -> list[dict[str, Any]]:
     """Claim up to ``limit`` orphaned runs in ONE short, committed transaction.
 
-    Runs on ``get_superadmin_engine()`` — cross-space reach, NO GUC — for exactly the
-    reason :func:`app.db.ai_session.sweep_orphaned_skill_runs` does the same thing: the
-    sweep does not know which space a lost run belongs to until it has read the row, so it
-    cannot set a tenant GUC first. The 0011 ``research_runs_superadmin_all`` policy
-    (``current_user = 'app_superadmin'``) is what admits the statement.
+    Runs on :func:`app.db.ai_session.superadmin_session` — cross-space reach, NO GUC — for
+    exactly the reason :func:`app.db.ai_session.sweep_orphaned_skill_runs` reaches for the
+    same engine: the sweep does not know which space a lost run belongs to until it has
+    read the row, so it cannot set a tenant GUC first. The 0011
+    ``research_runs_superadmin_all`` policy (``current_user = 'app_superadmin'``) is what
+    admits the statement.
+
+    The session comes from the ``app/db/`` seam rather than from an engine fetched here,
+    because ``scripts/ci_no_raw_db_access.sh`` (D-03) fails the build for any module
+    outside that directory that constructs its own engine or sessionmaker. That guard is
+    what keeps the per-space filter structural, so this module asks the seam for the
+    session it needs instead of the guard being widened for it.
 
     The transaction is deliberately TINY and COMMITS BEFORE ANY SEAM CALL (T-16-06). The
     row lock ``FOR UPDATE SKIP LOCKED`` takes lives only for the duration of this
@@ -183,9 +189,7 @@ def claim_orphans(limit: int = SWEEP_BATCH) -> list[dict[str, Any]]:
                   acting_user_id, acting_email, bundle_key
         """
     )
-    engine = get_superadmin_engine()
-    maker = get_sessionmaker(engine)
-    with maker.begin() as session:
+    with superadmin_session() as session:
         result = session.execute(
             claim_sql,
             {
