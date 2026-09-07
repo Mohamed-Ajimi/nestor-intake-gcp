@@ -305,6 +305,28 @@ class _ImmediateRunner:
         return {"output_text": self._text}
 
 
+def _bind_worker_to(live_engine, monkeypatch):
+    """Make `execute_run` use THIS test's engine.
+
+    NOT a convenience — without it this file is order-dependent and lies.
+    `db.base.get_engine()` is `lru_cache`d PER PROCESS, while pytest-asyncio gives
+    every test its OWN event loop. So the first test to open a connection caches an
+    engine whose pooled asyncpg connections belong to a loop that is closed by the
+    time the next test runs; `pool_pre_ping` then fails with "Event loop is closed"
+    and `execute_run`'s generic `except Exception` writes 'failed'. That is a
+    HARNESS artifact wearing the exact costume of a real regression: it made the
+    comparability guard below report a completed run as 'failed'.
+
+    `worker` binds `get_sessionmaker` at module import, so the patch target is the
+    name in `worker`, not in `db.base`. `_heartbeat_loop` reads the same module
+    global and is therefore bound too. Nothing under test is bypassed: the branch,
+    the fenced SQL and the tenant context all still execute against a real Postgres.
+    """
+    from nestor_pulse_sdk.runs import worker
+
+    monkeypatch.setattr(worker, "get_sessionmaker", lambda: _sessionmaker(live_engine))
+
+
 def _install_runner(monkeypatch, runner):
     """Patch the LAZY import target.
 
@@ -365,6 +387,7 @@ async def _run_until_timeout(live_engine, tenant_id, monkeypatch):
     run_id, _ = await _seed_running_run(live_engine, tenant_id)
     runner = _HangingRunner()
     _install_runner(monkeypatch, runner)
+    _bind_worker_to(live_engine, monkeypatch)
     existed = hasattr(worker, "RUN_TIMEOUT_MINUTES")
     monkeypatch.setattr(
         worker, "RUN_TIMEOUT_MINUTES", _TEST_CEILING_MINUTES, raising=False
@@ -451,6 +474,7 @@ async def test_the_queue_keeps_moving_after_a_timeout(
     second_id, _ = await _seed_running_run(live_engine, one_org)
     second_runner = _ImmediateRunner()
     _install_runner(monkeypatch, second_runner)
+    _bind_worker_to(live_engine, monkeypatch)
     # The ceiling stays collapsed: a run that finishes at once must be unaffected
     # by it, and leaving it collapsed proves the ceiling is not simply inert now.
     existed = hasattr(worker, "RUN_TIMEOUT_MINUTES")
@@ -491,6 +515,7 @@ async def test_a_run_inside_the_ceiling_is_untouched(live_engine, one_org, monke
     run_id, _ = await _seed_running_run(live_engine, one_org)
     runner = _ImmediateRunner("the report body")
     _install_runner(monkeypatch, runner)
+    _bind_worker_to(live_engine, monkeypatch)
     # A generous ceiling: 120 minutes is the committed default and this run
     # returns instantly, so the ceiling must be entirely invisible to it.
     existed = hasattr(worker, "RUN_TIMEOUT_MINUTES")

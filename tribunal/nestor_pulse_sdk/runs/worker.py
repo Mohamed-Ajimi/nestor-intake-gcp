@@ -93,6 +93,38 @@ HEARTBEAT_INTERVAL_SECONDS = float(os.environ.get("NESTOR_WORKER_HEARTBEAT_S", "
 # unattended re-execute loop is a repeating spend (D-E: the worst case was a
 # permanently stalling run re-billing every 60 minutes, forever).
 MAX_RECLAIMS = int(os.environ.get("NESTOR_WORKER_MAX_RECLAIMS", "2"))
+# RUN-LEVEL WALL-CLOCK CEILING (D-23.3-04) -- the backstop around runner.run().
+#
+# WHY 120, DERIVED AND NOT PREFERRED. Wall-clock spans measured from the audit
+# blobs in gs://...-nestor-audit/runs/<run_id>/ (23.3-CONTEXT.md § 1):
+#   0830d8b5 15.0 · 5d919ab3 16.0 · 1315ea6a 16.8 · b188a83e 18.5 · 368ff3a0 43.7
+#   · 9c84e5a9 46.7 · fb9484dd 51.8 · 7dcf51d5 64.2 · d6bb3aae 1472 (the hang).
+#   * 7dcf51d5 at 64.2 minutes is the longest run that legitimately COMPLETED.
+#   * 120 is 1.87x that, so ordinary variance above the longest run ever observed
+#     does not kill a run that has already spent ~$25-45.
+#   * A ceiling BELOW ~64.2 does not merely kill legitimate runs -- it BURNS the
+#     money they already spent, which is strictly worse than the hang it prevents.
+#   * It bounds d6bb3aae's 1472-minute pathology to 120 minutes, a 12x reduction.
+#   * It is UNRELATED to Cloud Run's --timeout=3600, which applies to REQUESTS.
+#     The poll loop is not a request, so nobody should "align" the two.
+# If you lower this, you need a NEW duration measurement, not a preference.
+#
+# THIS IS A BACKSTOP, NOT A REPLACEMENT. Stage-level timeouts already exist and
+# are the first line: 35 min per provider (degraded_parallel.py), a skeptic batch
+# timeout (pipeline.py), a 30 s redirect-resolver deadline, a SerpAPI timeout, and
+# AsyncOpenAI(timeout=3600) (audited_llm_client.py). Coverage is better than "there
+# are no timeouts" -- say so honestly rather than overselling this constant.
+#
+# ⛔ IT IS NOT A CURE. asyncio cancellation only takes effect at an `await` point.
+# A hang inside a synchronous call or a C extension is NOT interrupted, the task
+# never yields, and the worker stays blocked exactly as it is today. This ceiling
+# ends the class of hang that parks on an await; it ends no other class. Do not
+# write, here or in a summary, that a hung run is now impossible.
+#
+# Read as a float (like POLL_INTERVAL_SECONDS and HEARTBEAT_INTERVAL_SECONDS,
+# unlike STALE_RUN_MINUTES) so a test can collapse it sub-minute without a code
+# change -- tests/test_run_timeout_backstop.py drives it at 0.02.
+RUN_TIMEOUT_MINUTES = float(os.environ.get("NESTOR_WORKER_RUN_TIMEOUT_MINUTES", "120"))
 
 # ---------------------------------------------------------------------------
 # CLAIM SQL -- SELECT FOR UPDATE SKIP LOCKED
@@ -283,6 +315,28 @@ def _reap_message() -> str:
     )
 
 
+def _timeout_message() -> str:
+    """One plain sentence for a run stopped by the run-level ceiling.
+
+    Same register as `_reap_message()` -- never a code, never an exception repr.
+    It NAMES THE CEILING, because the whole point of this message is that whoever
+    opens the run can tell "we stopped it" from "it crashed", and the two look
+    identical in the status column.
+
+    The value is read from the module global at CALL time, not captured at import,
+    so the number in the message is always the number that actually applied.
+    `:g` keeps 120.0 rendering as "120" rather than "120.0".
+    """
+    return (
+        f"This run was stopped after {RUN_TIMEOUT_MINUTES:g} minutes, the ceiling "
+        "this system puts on a single research run. The longest run that ever "
+        "finished normally took about 64 minutes, so a run still going at this "
+        "point is not slow, it is stuck. Rather than leave it running up an "
+        "unbounded bill and blocking the queue behind it, it was stopped here so "
+        "that a person can look at it."
+    )
+
+
 async def execute_run(claimed: dict) -> None:
     """
     Dispatch + execute a claimed run.
@@ -312,11 +366,23 @@ async def execute_run(claimed: dict) -> None:
         # can be silent for ~35 minutes (deep research long-polls); without this
         # task the stale reclaim cannot tell that silence from a dead process.
         _hb = asyncio.create_task(_heartbeat_loop(claimed["id"]))
-        result = await runner.run(
-            brief=claimed["brief"],
-            run_id=claimed["id"],
-            tenant_id=claimed["tenant_id"],
-        )
+        # THE RUN-LEVEL CEILING (D-23.3-04). It wraps the ENGINE AWAIT AND
+        # NOTHING ELSE. Every post-completion branch below -- needs_input,
+        # needs_report_spec, park, the success finalize -- stays OUTSIDE it on
+        # purpose: a slow terminal DB write must not be cancelled by a ceiling
+        # that exists to bound the engine, and a run cancelled between "finished"
+        # and "recorded as finished" is the one outcome worse than the hang.
+        #
+        # The heartbeat is deliberately left running across this block. It is
+        # per-run and the `finally` cancels it on every exit path including this
+        # one; hoisting it anywhere else would make concurrent runs share one
+        # liveness signal and silently break stale reclaim (23.3-CONTEXT trap 9).
+        async with asyncio.timeout(RUN_TIMEOUT_MINUTES * 60):
+            result = await runner.run(
+                brief=claimed["brief"],
+                run_id=claimed["id"],
+                tenant_id=claimed["tenant_id"],
+            )
         # CLARIFICATION (0005): a vague brief -> the engine asked questions instead
         # of researching. Park the run as 'needs_input' carrying the questions; do
         # NOT mark it completed or write a report. The user answers via
@@ -685,6 +751,43 @@ async def execute_run(claimed: dict) -> None:
         # Stop the wasted work; do NOT mark it failed.
         log.info("run_cancelled", run_id=str(claimed["id"]))
         return
+    except TimeoutError:
+        # THE ORDER OF THIS BRANCH IS LOAD-BEARING. It sits AFTER RunCancelled and
+        # IMMEDIATELY BEFORE `except Exception`. In Python 3.11+ asyncio.TimeoutError
+        # IS the builtin TimeoutError, which derives from OSError and therefore from
+        # Exception -- so without its own branch the generic handler below catches it
+        # and writes error_message = str(exc), and str(TimeoutError()) is the EMPTY
+        # STRING. The operator would open a 'failed' run carrying no reason at all,
+        # which is the failure mode a ceiling is supposed to remove, not create.
+        # (tests/test_run_timeout_backstop.py asserts on the message for exactly this
+        # reason: the bounded-hang test alone passes on that broken shape.)
+        log.error(
+            "run_timed_out",
+            run_id=str(claimed["id"]),
+            ceiling_minutes=RUN_TIMEOUT_MINUTES,
+        )
+        # Same fenced terminal write as the failure path below. The D-23.1-06
+        # ownership fence is NOT optional here: an unfenced write moves the row off
+        # 'running' and so disarms the real owner's own status guard on the way past.
+        # `:wid` is the module WORKER_ID -- THIS process -- never claimed['worker_id'],
+        # which after a stale reclaim is a stale in-memory copy that would make the
+        # predicate trivially true for a worker that has already lost the run.
+        async with sessionmaker() as session:
+            async with session.begin():
+                # SET LOCAL app.tenant_id BEFORE any tenant-scoped query (T-06-02)
+                await set_tenant_context(session, claimed["tenant_id"])
+                await session.execute(
+                    text(
+                        "UPDATE run SET status='failed', completed_at=NOW(), "
+                        "error_message=:e "
+                        "WHERE id=:id AND status='running' AND worker_id = :wid"
+                    ),
+                    {
+                        "e": _timeout_message()[:1000],
+                        "id": claimed["id"],
+                        "wid": WORKER_ID,
+                    },
+                )
     except Exception as exc:
         log.exception("run_failed", run_id=str(claimed["id"]))
         # FAILURE: update status to failed -- but only if the run is still running
