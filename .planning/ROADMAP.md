@@ -817,12 +817,12 @@ exposure, leave the decision open.
 
 Plans:
 
-- [ ] 23.3-01-PLAN.md — wave 1 — run-level timeout backstop around `runner.run()` (120 min, derived from the measured 64.2-min maximum) + a worded terminal message
-- [ ] 23.3-02-PLAN.md — wave 1 — scale the process-wide LLM semaphore with worker concurrency so each run keeps its 8 in-flight slots; pin an explicit timeout on the bare `AsyncAnthropic()`
-- [ ] 23.3-03-PLAN.md — wave 2 — in-instance worker concurrency (semaphore K=4 + `create_task`), `MIN_INSTANCES=2`; barrier-proven interleaving and per-run session isolation
-- [ ] 23.3-04-PLAN.md — wave 1 — migration 0017: actor, driver heartbeat and reconcile lease on `research_runs`; start writing all three
-- [ ] 23.3-05-PLAN.md — wave 2 — the stateless orphaned-run reconciler: lease claim (SKIP LOCKED), mirror/finalize via CAS, no connection held across the seam
-- [ ] 23.3-06-PLAN.md — wave 3 — trigger the sweep from nestor-api's lifespan off the event loop; runbook corrections; deferral register (incl. the uncapped-spend exposure)
+- [x] 23.3-01-PLAN.md — wave 1 — run-level timeout backstop around `runner.run()` (120 min, derived from the measured 64.2-min maximum) + a worded terminal message
+- [x] 23.3-02-PLAN.md — wave 1 — scale the process-wide LLM semaphore with worker concurrency so each run keeps its 8 in-flight slots; pin an explicit timeout on the bare `AsyncAnthropic()`
+- [x] 23.3-03-PLAN.md — wave 2 — in-instance worker concurrency (semaphore K=4 + `create_task`), `MIN_INSTANCES=2`; barrier-proven interleaving and per-run session isolation
+- [x] 23.3-04-PLAN.md — wave 1 — migration 0017: actor, driver heartbeat and reconcile lease on `research_runs`; start writing all three
+- [x] 23.3-05-PLAN.md — wave 2 — the stateless orphaned-run reconciler: lease claim (SKIP LOCKED), mirror/finalize via CAS, no connection held across the seam
+- [x] 23.3-06-PLAN.md — wave 3 — trigger the sweep from nestor-api's lifespan off the event loop; runbook corrections; deferral register (incl. the uncapped-spend exposure)
 
 **Wave structure:** wave 1 = {01, 02, 04} (disjoint files: worker loop / LLM client / backend) · wave 2 = {03, 05} (03 needs 01+02 on `worker.py` and `concurrency.py`; 05 needs 04's columns) · wave 3 = {06} (needs 05's `sweep_once`).
 

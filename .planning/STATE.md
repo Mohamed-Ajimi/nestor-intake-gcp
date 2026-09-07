@@ -25,14 +25,26 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
-Phase: 23.2 (authorization depth — field-level confidentiality, answer lifecycle, operator-artifact
-deletion, fail-closed membership, research dispatch idempotency, notification decoupling)
-Plan: **11 of 11 COMPLETE.** All five waves merged.
-Backend **736 passed / 2 skipped / 0 failed** (608 baseline + 128, arithmetic reconciled exactly).
-Frontend tsc 0, 154 vitest, i18n PASS, `frontend/` diff EMPTY. Tribunal CAS+checkpoint 43/0 under
-the `app_user` DSN. Route inventory **unchanged**: 65 routes, 26 gated — this phase changed what
-routes RETURN and ACCEPT, never who may call them. All eight cross-plan seams verified at the
-merged head. Client pin widened from ten routes to **seventeen**, no exclusions.
+**Phase 23.3 — concurrent research execution — COMPLETE (6/6 plans), NOT DEPLOYED.**
+Merged and pushed at `4836474`. Backend **791 passed / 2 skipped / 0 failed**; `frontend/` and
+`tribunal/nestor_pulse_sdk/pipeline/` diffs both EMPTY; zero provider spend; no deploy.
+
+Concurrency is now `MIN_INSTANCES=2` x `NESTOR_WORKER_RUN_CONCURRENCY=4` = **8 simultaneous runs**.
+⛔ **The spend cap stays DEFERRED — operator ruling reaffirmed 2026-09-07 ("leave it uncapped").**
+`NESTOR_TRIBUNAL_UNCAPPED=1` is live, so 8 concurrent runs is ~$198-360 of simultaneous uncapped
+spend (DEF-23.3-00). K and M were deliberately NOT lowered as a proxy for a cap.
+
+**Rollback with no code change:** `NESTOR_WORKER_RUN_CONCURRENCY=1` restores serial execution;
+`NESTOR_RECONCILE_INTERVAL_S=0` disables the reconciler sweep and logs that it did.
+
+⚠ **BEFORE ANY `terraform apply`: `infra/main.tf:381` still says `min_instance_count = 0`**, which
+would silently disable the reconciler (its premise is that an instance always exists). Live is
+`minScale=1`; the runbook was corrected, the Terraform was NOT (DEF-23.3-14).
+
+**Deploy is the next action** — see `infra/DEPLOY-RUNBOOK.md` section Phase 23.3 for the ordering
+(queue verified EMPTY first; a worker deploy BOOTS the loop, which CLAIMS FIRST and SLEEPS LAST).
+
+⛔ DO NOT run `gsd-sdk query state.advance-plan` — it has corrupted this file before.
 
 **ZERO provider spend, NO deploy, NO Tribunal run. Nothing has been observed in production.**
 Deploy is operator work, and it is NOT done — see `deferred-items.md` in the phase directory.
