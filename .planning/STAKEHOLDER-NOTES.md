@@ -223,3 +223,58 @@ into it without an explicit decision.
     validation run deferred since Phase 21 (the audit bucket's newest write is still
     `2026-08-05T19:21:31Z`, so no deployed engine code has ever executed).
     ⛔ Carries the alembic **0019** collision with DEF-22-06 — resolve the ordering explicitly.
+
+---
+
+## 2026-09-07 — Phase 23.2 complete. What is left, and the agreed ship order.
+
+**Status: built, tested, pushed at `0df626a`. NOT DEPLOYED.** Backend 736 passed / 2 skipped / 0
+failed; tribunal 43/0; route inventory unchanged at 65/26. Every defect it fixes is still live in
+production until it ships.
+
+**Decision taken today:** do NOT fix and ship everything together. Staged, in this order.
+
+### 1. Deploy 23.2 — alone, first
+- `nestor-api` + `nestor-frontend`. Build to `europe-west1-docker.pkg.dev`, **not** `gcr.io`.
+- Repoint the `nestor-migrate` job to the new image **before** running it, then apply **migration
+  0016**. Verify from the alembic log lines, **not** the exit code.
+- `tribunal-api` + `tribunal-worker` — undeployed since 23.1, now also carry plan 05's fixes.
+- Observe the role gate live: a real `role=user` token → 404 on an operator verb, 200 on
+  `/skill-runs`. Never yet done.
+- ⚠ Migration 0016 resolves pre-existing duplicate in-flight research runs and temporarily drops
+  FORCE RLS. It should be the only variable in its deploy.
+
+### 2. Small follow-up — the only item actively losing user data
+- **DEF-23.2-12**: a client ticks "keep Nestor's proposal", the tick is discarded while the status
+  advances. One line of frontend; the server already accepts the write.
+- **DEF-23.2-13**: `required` / `min_length` / `min_items` enforcement, on `POST /submit`.
+
+### 3. End-to-end tests — BEFORE the architecture work
+- **There are currently ZERO browser/E2E tests.** All 10 frontend test files cover pure functions.
+  ~890 assertions exist and none proves a user can complete an intake.
+- This must be in place before refactoring background dispatch, not after.
+
+### 4. A third audit — scoped deliberately
+Two audits have run; both were authorization. **No review at all** of: rate limiting/abuse, secrets
+in logs, backup and restore, disaster recovery, monitoring and alerting, and **data retention /
+GDPR**. ⚠ Notes carry an audit-trail legal deadline of **2026-08-02 — this has passed**; please
+confirm its status.
+
+### 5. Durable background dispatch — its own phase
+- **DEF-23.2-03, the largest real risk.** AI skills and the research driver run on FastAPI
+  `BackgroundTasks`. Cloud Run recycles instances; a death mid-research loses a ~$45 paid run
+  silently, with no reconciler. Both audits saw it; neither prioritised it.
+
+### In parallel — no application code
+- Tribunal CI gap (37 tests gate nothing). ⚠ do **not** simply append the three files to
+  `cloudbuild.test-critical.yaml:32` — it is one pytest invocation and the result is two spurious
+  failures that look like "the new tests broke the build".
+- tfstate bucket + `terraform init -migrate-state`; `app_superadmin` rotation; backend
+  `cloudbuild.test.yaml` never exercised in Cloud Build.
+
+### Hygiene — fold into phases that already touch those files
+npm audit (12 findings — **scan the runtime image first**, several are build-time only), 60
+non-formatting lint errors, dead code, `AGENTS.md` contradictions.
+
+Full register with mechanisms and measured evidence:
+`.planning/phases/23.2-authorization-depth-*/deferred-items.md`.
