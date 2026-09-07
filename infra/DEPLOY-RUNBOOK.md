@@ -6543,9 +6543,12 @@ had ever been backed up.
 ```
 gcloud sql instances patch nestor-pg \
   --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
-  --backup-start-time=22:00 --retained-backups-count=7 \
   --enable-point-in-time-recovery --retained-transaction-log-days=7
 ```
+
+⚠ **Two flags that were NOT passed, and why the result is still correct.** `--backup-start-time` and `--retained-backups-count` were never sent. They did not need to be: `startTime=22:00` and `retainedBackups=7` were already stored on the instance (inert while `enabled=false`), and **enabling PITR implicitly enables automated backups**, which activated the values already there. The read-back confirms `enabled=true` with those same two values. If you are reproducing this on an instance with NO stored window, pass all four flags.
+
+⛔ **How this command actually got run — a trap worth not repeating.** It was issued as `echo n | gcloud sql instances patch ...`, intended as a read-only probe that would DECLINE at the confirmation prompt and merely reveal whether a restart was required. **It applied.** gcloud sees a non-TTY stdin, treats the invocation as non-interactive, and answers its own prompt with the DEFAULT — which is *proceed*. The piped `n` is never read. **There is no dry-run for gcloud mutations:** to learn what a change would do, use `describe`/`list` or the docs — never the mutating verb. The change here was the intended one and verified healthy, but it landed on production earlier than planned.
 
 Operation `a6db2b00-d00f-4680-b4e9-867a00000024` (`UPDATE`, `DONE`), 20:01:13.682 → 20:04:18.828Z.
 The full id was read back with `gcloud sql operations list --instance=nestor-pg` with `--account`
