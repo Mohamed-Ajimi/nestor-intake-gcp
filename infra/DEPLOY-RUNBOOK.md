@@ -6516,3 +6516,92 @@ twice, GitHub twice).
 * ⛔ **`infra/main.tf:381` still says `min_instance_count = 0`** for `nestor-api`. Live is
   `minScale=1`; a routine `terraform apply` would silently disable the reconciler by removing its
   premise (DEF-23.3-14). The runbook was corrected; the Terraform was NOT.
+
+### 2026-09-07 — Cloud SQL backups + PITR ENABLED on `nestor-pg` (no deploy, no build)
+
+Not a deploy. A single patch to the production database instance plus the Terraform declaration
+that keeps it. Recorded here because the runbook is where the live-state record lives.
+
+#### What was wrong
+
+`nestor-pg` was running the production tenant database with:
+
+| field | pre-fix value |
+|---|---|
+| `settings.backupConfiguration.enabled` | **`False`** |
+| `pointInTimeRecoveryEnabled` | **off** |
+| backups in existence | **ZERO** |
+| `availabilityType` | `ZONAL` (no HA) |
+
+⚠ **The trap that made it read as configured:** `startTime` was already `22:00` and
+`retainedBackups` was already `7`. Both are INERT while `enabled` is false. Reading those two
+fields alone — the natural thing to do — makes the instance look backed up. It was not. Nothing
+had ever been backed up.
+
+#### The command actually used
+
+```
+gcloud sql instances patch nestor-pg \
+  --account=tools@dotto.be --project=project-cb01b861-cb4a-438d-b9a \
+  --backup-start-time=22:00 --retained-backups-count=7 \
+  --enable-point-in-time-recovery --retained-transaction-log-days=7
+```
+
+Operation `a6db2b00-d00f-4680-b4e9-867a00000024` (`UPDATE`, `DONE`), 20:01:13.682 → 20:04:18.828Z.
+The full id was read back with `gcloud sql operations list --instance=nestor-pg` with `--account`
+and `--project` pinned, per the standing operator rule (the gcloud config drifts mid-session).
+A `BACKUP_VOLUME` operation `2ff10200-8256-457d-a9bd-12f400000024` ran inside that window
+(20:02:41 → 20:04:12Z) — the first backup this database has ever had.
+
+#### ⭐ MEASURED: enabling PITR required NO instance restart
+
+The instance stayed `RUNNABLE` across the entire UPDATE operation, and `/readyz` returned
+`{"status":"ready","db":"ok"}` afterwards.
+
+**This CORRECTS the earlier project note** (`.planning/STAKEHOLDER-NOTES.md`, 2026-09-07) which
+warned that enabling PITR turns on WAL archiving and would require an INSTANCE RESTART, and
+advised splitting the change into two windows — backups now, PITR later. That split was
+unnecessary. ⚠ **Scope the correction to Cloud SQL for PostgreSQL only.** MySQL and SQL Server
+were never measured here; this finding must not be generalised to them.
+
+#### Read-back after
+
+| field | live value |
+|---|---|
+| `enabled` | `true` |
+| `startTime` | `"22:00"` |
+| `pointInTimeRecoveryEnabled` | `true` |
+| `transactionLogRetentionDays` | `7` |
+| `backupRetentionSettings.retainedBackups` | `7` |
+| `backupRetentionSettings.retentionUnit` | `"COUNT"` |
+
+One backup now exists: id `1788811361290`, type `AUTOMATED`, status `SUCCESSFUL`.
+`availabilityType` still `ZONAL`; `state` still `RUNNABLE`.
+
+#### Terraform — the omission that armed this
+
+`infra/main.tf`'s `google_sql_database_instance.main` had **no `backup_configuration` block at
+all**. Not declared-then-disabled — never declared. That omission is why the instance ran with
+backups off in the first place, and it also left the hand-fix above one routine `terraform apply`
+away from being reverted to zero backups.
+
+The block is now declared and matches the read-back table above value-for-value, so `plan` reports
+no diff on this resource. `location` is deliberately NOT declared — it is unset live, so declaring
+it would CREATE a diff rather than remove one.
+
+⛔ This is the **same class of defect as DEF-23.3-14** (`min_instance_count = 0` at
+`infra/main.tf:381` while live is `minScale=1`). DEF-23.3-14 remains **OPEN** and was deliberately
+left untouched here — it is tracked separately.
+
+#### What this does NOT prove
+
+* ⛔ **No backup has ever been restored.** A backup that has never been restored is a hope, not a
+  guarantee. A restore rehearsal — clone to a new instance, check schema and row counts, delete the
+  clone — is still outstanding. Until then "we have backups" means "we have files we believe are
+  backups".
+* ⛔ **The instance is still `ZONAL`** — no HA. Backups bound the DATA LOSS; they do not remove the
+  OUTAGE. Losing the zone is still an outage.
+* PITR retains 7 days of transaction logs. Nothing was measured about how long an actual
+  point-in-time recovery would TAKE, or whether the recovery window is adequate for this workload.
+* No deploy, no build, no migration, no image push and no provider spend accompanied this change.
+  No service revision changed.
