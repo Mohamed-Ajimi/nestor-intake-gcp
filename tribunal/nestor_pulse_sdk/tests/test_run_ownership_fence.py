@@ -97,6 +97,7 @@ files explicitly and this is not one of them — the same standing gap
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import uuid
 from pathlib import Path
@@ -227,6 +228,128 @@ def test_heartbeat_sql_carries_both_guards():
     """T-23.1-16 + T-23.1-19 — the liveness write is fenced AND still cancel-guarded."""
     worker_mod = pytest.importorskip("nestor_pulse_sdk.runs.worker")
     _assert_both_guards(worker_mod._HEARTBEAT_SQL.text, "_HEARTBEAT_SQL")
+
+
+# ---------------------------------------------------------------------------
+# DEF-23.3-01 - the heartbeat's OUTCOME must stay observable
+#
+# On 2026-09-08 two healthy runs were reclaimed at claim +3600.20s and +3600.22s,
+# i.e. `heartbeat_at` never moved after CLAIM_SQL stamped it, with ZERO
+# `run_heartbeat_failed` lines. The loop discarded its result, so "the UPDATE ran
+# and matched nothing" and "the loop never got a turn" were indistinguishable in
+# production. The two log lines guarded below are what tell them apart.
+#
+# This test is DELIBERATELY offline. The live proof further down needs a DSN and
+# skips without one; if the guard existed only there, the diagnostic could be
+# deleted and every ordinary CI run would stay green.
+# ---------------------------------------------------------------------------
+
+class _FakeBegin:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeResult:
+    """Carries a rowcount that is NOT 1, so a hardcoded log value cannot pass."""
+
+    rowcount = 7
+
+
+class _FakeSession:
+    def __init__(self, executed):
+        self._executed = executed
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def begin(self):
+        return _FakeBegin()
+
+    async def execute(self, sql, params=None):
+        self._executed.append((str(sql), params))
+        return _FakeResult()
+
+
+async def _drive_heartbeat_loop(worker, run_id, *, want: int, timeout_s: float = 5.0):
+    """Run the REAL `_heartbeat_loop` until `want` `run_heartbeat` lines land.
+
+    Returns the captured log entries. It always cancels the task, which is also
+    what keeps the exception contract honest: widening `except Exception` to
+    BaseException would swallow the CancelledError and this helper would hang to
+    its timeout instead of returning.
+    """
+    structlog = pytest.importorskip("structlog")
+    with structlog.testing.capture_logs() as logs:
+        task = asyncio.create_task(worker._heartbeat_loop(run_id))
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        try:
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+                if sum(1 for e in logs if e.get("event") == "run_heartbeat") >= want:
+                    break
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+        return list(logs)
+
+
+async def test_heartbeat_loop_logs_rowcount_on_every_iteration(monkeypatch):
+    """DEF-23.3-01 - `run_heartbeat` must carry the UPDATE's ROWCOUNT.
+
+    Separate assertions, because separate regressions are possible and a compound
+    one would not say which happened:
+      1. the entry line disappears -> "task never created" stops being readable
+      2. the per-iteration line disappears -> back to the silent loop of 09-08
+      3. the `rowcount` key disappears -> a matched row and a zero-row no-op look
+         identical again, which is the whole defect this diagnostic exists for
+    """
+    worker = pytest.importorskip("nestor_pulse_sdk.runs.worker")
+    executed: list = []
+    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        worker, "get_sessionmaker", lambda: (lambda: _FakeSession(executed))
+    )
+    run_id = uuid.uuid4()
+
+    logs = await _drive_heartbeat_loop(worker, run_id, want=2)
+
+    started = [e for e in logs if e.get("event") == "run_heartbeat_started"]
+    assert len(started) == 1, (
+        "`run_heartbeat_started` is not emitted exactly once at loop entry. "
+        "Without it, 'the heartbeat task was never created' and 'it was created "
+        "but starved' are the same observation in the logs (DEF-23.3-01)."
+    )
+    assert started[0]["wid"] == worker.WORKER_ID
+    assert started[0]["run_id"] == str(run_id)
+
+    beats = [e for e in logs if e.get("event") == "run_heartbeat"]
+    assert len(beats) >= 2, (
+        "`run_heartbeat` is not emitted per iteration - the loop is silent again, "
+        "which is exactly the state that made DEF-23.3-01 undiagnosable."
+    )
+    for beat in beats:
+        assert "rowcount" in beat, (
+            "`run_heartbeat` lost its `rowcount` key. A zero-row UPDATE is then "
+            "indistinguishable from a landed one and the diagnostic is worthless."
+        )
+        assert beat["rowcount"] == _FakeResult.rowcount, (
+            "`rowcount` is not the value the statement actually returned"
+        )
+        assert beat["run_id"] == str(run_id)
+        assert beat["wid"] == worker.WORKER_ID
+
+    assert not [e for e in logs if e.get("event") == "run_heartbeat_failed"], (
+        "the loop raised; the rowcount assertions above would be reading a path "
+        "that never reaches the UPDATE"
+    )
+    assert executed, "the loop logged without ever issuing the UPDATE"
 
 
 @pytest.mark.parametrize(
@@ -673,6 +796,46 @@ async def test_cancelled_run_heartbeat_matches_zero_rows(worker_db):
         "while the ownership fence was added"
     )
     assert (await _read_run(sessionmaker, run_id))["heartbeat_at"] == before
+
+
+async def test_heartbeat_loop_logs_rowcount_1_for_the_owner_live(worker_db, monkeypatch):
+    """DEF-23.3-01, LIVE - the real loop, the real Postgres, the rowcount READ.
+
+    The offline guard above proves the line exists and carries the number the
+    statement returned. This proves the number a HEALTHY owner produces against a
+    real migrated schema is 1 - the top row of the four-outcome reading table the
+    production grep will be scored against. Without it, "rowcount=1 means healthy"
+    would be an assumption rather than a measured baseline.
+
+    Unlike `_heartbeat_once`, this drives `_heartbeat_loop` ITSELF, so it covers
+    the loop's own session and transaction handling and not only the SQL.
+    """
+    worker = pytest.importorskip("nestor_pulse_sdk.runs.worker")
+    sessionmaker, tenant_id, project_id = worker_db
+    run_id = await _seed_run(
+        sessionmaker, tenant_id, project_id, worker_id=worker.WORKER_ID
+    )
+    before = (await _read_run(sessionmaker, run_id))["heartbeat_at"]
+    monkeypatch.setattr(worker, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
+
+    logs = await _drive_heartbeat_loop(worker, run_id, want=1, timeout_s=15.0)
+
+    failed = [e for e in logs if e.get("event") == "run_heartbeat_failed"]
+    assert not failed, f"the live heartbeat loop raised: {failed}"
+    assert [e for e in logs if e.get("event") == "run_heartbeat_started"], (
+        "no `run_heartbeat_started` line from the live loop"
+    )
+    beats = [e for e in logs if e.get("event") == "run_heartbeat"]
+    assert beats, "the live loop issued no observable heartbeat at all"
+    assert beats[0]["rowcount"] == 1, (
+        "the OWNER's heartbeat reported rowcount != 1 against a real row. Either "
+        "the fence is locking out the legitimate owner, or the diagnostic is not "
+        "reporting the UPDATE's real rowcount - both make the production reading "
+        "table (DEF-23.3-01) unusable."
+    )
+    assert (await _read_run(sessionmaker, run_id))["heartbeat_at"] > before, (
+        "rowcount said 1 but heartbeat_at did not move"
+    )
 
 
 # ---------------------------------------------------------------------------

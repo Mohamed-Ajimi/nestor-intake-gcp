@@ -284,14 +284,45 @@ async def _heartbeat_loop(run_id) -> None:
     liveness it is no longer entitled to assert.
     """
     sessionmaker = get_sessionmaker()
+    # DIAGNOSTIC (DEF-23.3-01, 2026-09-09) -- OBSERVABILITY ONLY, NOT A FIX.
+    #
+    # On 2026-09-08 two healthy concurrent runs were reclaimed at claim +3600.20s
+    # and +3600.22s -- the SAME 200 ms offset, i.e. exactly STALE_RUN_MINUTES with
+    # heartbeat_at never having moved since CLAIM_SQL stamped it. Zero heartbeats
+    # landed in 60 minutes where ~120 were due, and there were ZERO
+    # `run_heartbeat_failed` lines, so the loop was not raising either.
+    #
+    # The two lines below exist to separate three indistinguishable causes:
+    #   `run_heartbeat_started` + `run_heartbeat rowcount=1` -> heartbeat healthy
+    #   `run_heartbeat_started`, no `run_heartbeat`          -> task STARVED
+    #   `run_heartbeat` with rowcount=0                      -> UPDATE matches no row
+    #   neither line                                         -> task never created
+    # Until those lines are read from production, DO NOT "fix" this loop -- a
+    # guessed fix destroys the evidence the next run would have given us.
+    #
+    # `result.rowcount` for an UPDATE is available as soon as the statement
+    # executes, so it is read inside the still-open `session.begin()` block.
+    # Volume is ~2 lines/min/run, ~8/min at NESTOR_WORKER_RUN_CONCURRENCY=4.
+    log.info(
+        "run_heartbeat_started",
+        run_id=str(run_id),
+        wid=WORKER_ID,
+        interval_s=HEARTBEAT_INTERVAL_SECONDS,
+    )
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
         try:
             async with sessionmaker() as session:
                 async with session.begin():
-                    await session.execute(
+                    result = await session.execute(
                         _HEARTBEAT_SQL,
                         {"id": str(run_id), "wid": WORKER_ID},
+                    )
+                    log.info(
+                        "run_heartbeat",
+                        run_id=str(run_id),
+                        rowcount=result.rowcount,
+                        wid=WORKER_ID,
                     )
         except Exception:  # noqa: BLE001
             log.warning("run_heartbeat_failed", run_id=str(run_id), exc_info=True)
