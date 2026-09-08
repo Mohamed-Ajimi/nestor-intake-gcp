@@ -6608,3 +6608,92 @@ left untouched here — it is tracked separately.
   point-in-time recovery would TAKE, or whether the recovery window is adequate for this workload.
 * No deploy, no build, no migration, no image push and no provider spend accompanied this change.
   No service revision changed.
+
+
+### 260908-m7j DEPLOY RECORD — executed 2026-09-08, frontend-only, code `eeb79ea`
+
+**Defect:** DEF-23.2-16 — AI-refined answers persist as localized `{nl,fr,en}` objects in
+`answers.value_json`; every read boundary handed the object straight to the renderers, so
+`FieldRenderer`'s `<textarea value={value ?? ""}>` displayed the literal `[object Object]`.
+Reported from a live client-validation walkthrough.
+
+| service | revision | note |
+|---|---|---|
+| `nestor-frontend` | **`nestor-frontend-00038-t89`** | 100% traffic |
+| `nestor-api` | `nestor-api-00050-w2l` | UNCHANGED — frontend-only fix |
+| `tribunal-api` | `tribunal-api-00025-q4m` | UNCHANGED |
+| `tribunal-worker` | `tribunal-worker-20260907-161728-162720` | UNCHANGED |
+
+Image tag `frontend:20260908-162930`, build `7ceeca18-33ae-48c3-88b5-a658a43cf901` (SUCCESS, 3m38s).
+Immutable digest actually serving, read back off the revision (the tag is mutable — never cite it as
+proof):
+
+```
+frontend@sha256:46a5494e8b83050aa6ce11de9d317666d11dacd38ae8fb5a9b0357e7bd206054
+```
+
+**No migration.** INTAKE alembic head stays `0017`; no backend, schema or write-policy change.
+
+#### The fix, and why it is on the read side
+
+`resolveAnswerValue(value, lang)` (`frontend/src/lib/i18n/resolveAnswerValue.ts`) resolves localized
+text nested anywhere inside an answer value, wired at the three — and only three — `value_json` read
+boundaries: `intake.$id.tsx:84`, `intake.$id.results.tsx:106`, `admin.pulse.intakes.$id.tsx:452`.
+
+Resolving on READ rather than fixing the write path was deliberate: **it repairs intakes already
+broken in the database with no migration**, and keeps the multilingual payload in `value_json` for
+surfaces whose report language differs from the operator's UI language.
+
+Locale selection is delegated entirely to the existing `pick()` in `localizeSchema.ts`, whose
+docstring is load-bearing: its last-resort scan is restricted to the three locale keys ON PURPOSE, so
+`undefined` reliably means "not a localized value". That is the discriminator which lets a
+stakeholder row `{name, role, email}` and a radio-with-other `{choice, text}` survive untouched. A
+second resolver would drift on the fallback. `pick()` was NOT modified.
+
+⚠ The admin boundary resolves **exactly once**, because that value feeds `rows`, `initialMap` AND
+`draft`. Resolving per consumer would give `initial` and `draft` distinct references and the
+dirty-field diff would then report every answer as edited.
+
+#### Gates
+
+RED measured before implementing: the suite failed to collect (`Cannot find package
+'@/lib/i18n/resolveAnswerValue'`) and the pre-fix rendered value was measured as the literal
+`[object Object]`.
+
+Green, re-run by the orchestrator on the merged `master` rather than taken on report:
+`npx tsc --noEmit` exit 0; `npx vitest run` = **12 files / 180 tests passing** (161 baseline + 19
+new). `localizeSchema.ts`, `AIReviewPanel.tsx`, `IntakeForm.tsx`, `FieldDisplay.tsx` and
+`FieldRenderer.tsx` byte-identical to HEAD. Zero dependency changes.
+
+⚠ **The plan's lint baseline was wrong and the executor caught it.** It claimed "~60 pre-existing
+errors" (a figure from the main checkout); the worktree measured **29,526**, of which 22,983 are
+`Delete ␍` — the worktree checks out CRLF while the committed blobs are LF. Substituted a per-file
+gate: the three route files went 2,199 → 2,223, and that **+24 is exactly the net added line count**,
+one CRLF complaint per added line, absent from the committed LF blob. Zero new errors of any other
+rule class.
+
+#### Post-deploy verification
+
+`/` → **307 → /admin** (the SSR auth gate, expected for an anonymous request); `/auth/login` → **200**.
+
+⛔ **NOT verified: the symptom disappearing in a real render.** No route was opened in a browser and
+`[object Object]` was never observed becoming the refined text. The fix is proven by unit test and
+wiring gates only. A client-validation walkthrough on an AI-reviewed intake is still owed, on all
+three routes.
+
+#### Accepted consequence
+
+A later save of a **touched** field now persists the resolved scalar string, collapsing that field's
+stored `{nl,fr,en}` object to the read-time language. Untouched fields are never sent on save, so
+their objects survive. Preserving the multilingual payload through edits would require writing back
+into the same locale slot — a larger change, deliberately not attempted here.
+
+#### Pre-existing, found and NOT fixed
+
+The admin page re-localises the **schema** on language change (`useMemo` deps include
+`i18n.language`) but resolves **answer values** inside a load effect keyed on `[id]` only. A
+mid-session language switch therefore changes labels while answer text stays in the load-time
+language. Present in the HEAD baseline. Fixing it needs an answers re-fetch per switch.
+
+**Rollback, no rebuild:** `gcloud run services update nestor-frontend --region=europe-west1
+--image=<the 00037-bqs digest>`, or route traffic back to `nestor-frontend-00037-bqs`.
