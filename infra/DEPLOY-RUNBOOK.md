@@ -6697,3 +6697,107 @@ language. Present in the HEAD baseline. Fixing it needs an answers re-fetch per 
 
 **Rollback, no rebuild:** `gcloud run services update nestor-frontend --region=europe-west1
 --image=<the 00037-bqs digest>`, or route traffic back to `nestor-frontend-00037-bqs`.
+
+
+### 260908-vno DEPLOY RECORD — executed 2026-09-08, frontend-only, code `6a7d3a1`
+
+Second frontend deploy of 2026-09-08. Fixes the SECOND consumer of the same root cause as
+`260908-m7j`, found during the live client-validation walkthrough that the first fix unblocked.
+
+| service | revision | note |
+|---|---|---|
+| `nestor-frontend` | **`nestor-frontend-00039-hv6`** | 100% traffic |
+| `nestor-api` / `tribunal-api` / `tribunal-worker` | unchanged | frontend-only |
+
+Image `frontend:20260908-231100`, build `aeaee888` (SUCCESS). Immutable digest read off the
+revision (the tag is mutable — never cite it as proof):
+
+```
+frontend@sha256:4872d08c275e63a9e9559caf546d495480f748defdabc6215f6c3ba4f33d3aa1
+```
+
+No migration. INTAKE head stays `0017`. Gates re-run by the orchestrator on merged `master`:
+`tsc --noEmit` exit 0, `vitest` **193 passed** (180 baseline + 13 new).
+
+#### ⭐ THE ACTUAL ORIGIN — a contract change whose consumer sweep missed two surfaces
+
+Both of today's frontend defects trace to ONE event, on **2026-08-31**, quick task `260831-lm4`:
+
+* `a374923` — *"intake skill output contract requires nl+fr+en"*. Before this the skill emitted
+  plain strings; after it, every string it authors is a `{nl, fr, en}` object.
+* `5e78394` — *"one shared resolver renders localized AI text on all four surfaces"*, patching
+  `FieldRenderer.ProposalListControl`, `FieldDisplay` (proposal_list + list case), `AIReviewPanel`
+  and `NestorBriefingPDF`.
+
+**Two consumers were not in that sweep**, and both broke silently on the same day:
+
+1. the SCALAR `text`/`longtext` branches — only the proposal-list and list cases were covered.
+   Rendered the literal `[object Object]`. Fixed by `260908-m7j`.
+2. `ValidationDiff.tsx` — **zero lines touched by lm4**. Its
+   `typeof p.suggested !== "string"` guard (present since the original scaffold `1781f2f`, and
+   correct until the day the data stopped being strings) made `getSimpleProposal` return `null` for
+   every proposal, so no diff card rendered at all. Fixed here.
+
+⚠ **The four surfaces lm4 did patch include `NestorBriefingPDF.tsx`, which no longer exists** — it
+was deleted in phase 23.1. So a contract change patched four consumers, one has since been deleted,
+and two were never patched. **The contract itself is not pinned by any test.** Any consumer added
+tomorrow inherits the same trap. That is the durable lesson, not either individual fix.
+
+Why nobody noticed for eight days: the four covered surfaces are the ones an OPERATOR uses. The two
+missed ones only appear when a CLIENT walks a validation on a refined intake — which nobody had done
+until 2026-09-08. The failure modes also hid differently: the scalar case shouted `[object Object]`,
+the diff case rendered nothing, which reads as "Nestor changed nothing".
+
+#### The change
+
+`IntakeForm.tsx` — one import plus one statement: the proposals payload is resolved at its load
+boundary, so `ValidationDiff` receives the strings its guards already expect.
+
+```ts
+setProposals(resolveAnswerValue(parsed, i18n.language) as Proposals);
+```
+
+`ValidationDiff.tsx` was deliberately NOT edited — loosening its guards would put locale logic in a
+third place. Fence enforced by a `git diff --exit-code` gate over `ValidationDiff.tsx`,
+`AIReviewPanel.tsx`, `resolveAnswerValue.ts` and `localizeSchema.ts`; it passed.
+
+#### Pre-fix values, now pinned permanently in the suite
+
+| call | pre-fix |
+|---|---|
+| `getSimpleProposal(raw, "decision_or_goal")` | `null` |
+| `isFieldChanged("decision_or_goal", answer, raw)` | `false` |
+| `sectionHasChange(...)` | `false` |
+
+Keeping the raw-shape case in the committed suite is what stops the fix being silently undone.
+
+#### ⛔ Post-deploy verification — INCOMPLETE
+
+`/auth/login` → **200**. The `[object Object]` half WAS confirmed live by the operator after
+`00038-t89`. **The diff cards were NOT confirmed** — this record was written before the operator
+re-checked. Do not treat "diff cards render" as observed.
+
+#### ⛔ Open defect, confirmed and NOT fixed — refined research questions
+
+`ValidationDiff.tsx:64` and `:211` branch on `fieldKey === "research_questions"`. Verified against
+`backend/app/data/pulse_intake_v1.json`: **`research_questions` is a SECTION id (line 216), not a
+field key** — the field inside it is `"key": "questions"` (line 224). The branch compares a field key
+against a section id, so it **can never fire, in any locale, for any intake**. Refined-question cards
+have never rendered.
+
+This is NOT a variant of the localized-object bug and today's resolve pass does not address it. It
+needs both sides moved together: `AIReviewPanel.tsx:383` WRITES `field_key: "research_questions"`,
+`admin.pulse.intakes.$id.tsx:390` READS it, and `research_questions_refined[].original_index` indexes
+into whichever array actually holds the questions. Its own task.
+
+#### Known limitations recorded, not fixed
+
+* The proposals effect early-returns on `proposals !== null`, so a mid-session language switch does
+  not re-resolve loaded proposals until reload. One new `exhaustive-deps` WARNING at
+  `IntakeForm.tsx:162` flags exactly this; lint does not gate the build (`frontend/cloudbuild.yaml`
+  gates on tsc + vitest only).
+* Same shape on the admin route from `260908-m7j`: the schema re-localises on language change while
+  answer values resolve inside a load effect keyed on `[id]`.
+
+**Rollback, no rebuild:** route traffic back to `nestor-frontend-00038-t89` (which still carries the
+`[object Object]` fix), or `00037-bqs` for the pre-today state.
