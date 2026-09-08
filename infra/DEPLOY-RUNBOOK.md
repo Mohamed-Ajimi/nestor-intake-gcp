@@ -6801,3 +6801,142 @@ into whichever array actually holds the questions. Its own task.
 
 **Rollback, no rebuild:** route traffic back to `nestor-frontend-00038-t89` (which still carries the
 `[object Object]` fix), or `00037-bqs` for the pre-today state.
+
+
+### 260909-168 DEPLOY RECORD — executed 2026-09-08 23:38Z, tribunal-worker ONLY, code `5d9c0ae`
+
+**Defect:** DEF-23.3-01 — the run liveness heartbeat never lands, so HEALTHY runs are reclaimed as
+"dead" at exactly `NESTOR_WORKER_STALE_MINUTES` and restarted. First observed on the FIRST real run
+under the 23.3 concurrency deploy (the two-client test, 2026-09-08).
+
+| service | revision | note |
+|---|---|---|
+| `tribunal-worker` | **`tribunal-worker-20260908-233038-013724`** | 100% traffic, minScale 2, both instances booted |
+| `tribunal-api` / `nestor-api` / `nestor-frontend` | unchanged | worker-only |
+
+Image `tribunal-worker:20260908-233038`, build `c7c7c441-00f3-402a-92ef-bdd4888c196b` (SUCCESS, 2m07s).
+Immutable digest read off the revision, not the tag:
+
+```
+tribunal-worker@sha256:fdd92fb2f9449cb84090e1ce4e64b34fb82b20680eed2f1d0d73777d01444634
+```
+
+No migration. Deployed via `deploy-worker.sh` (NOT `services update --image`) because the 60->90
+change lives in the script's `--set-env-vars`. Read-back on the revision: `STALE_MINUTES=90`,
+`RUN_TIMEOUT_MINUTES=120`, `RUN_CONCURRENCY=4`, 6 secrets bound (SERP included), SA `tribunal-run`.
+
+#### What was measured — the evidence, so nobody re-derives it
+
+```
+21:21:14.014  run_claimed                     53afdc83  (Meridiaan)
+21:21:14.149  run_claimed                     6c762dc7  (Vandersteen)
+22:21:14.215  run_reclaimed_from_dead_worker  53afdc83  reclaim_count=1
+22:21:14.367  run_reclaimed_from_dead_worker  6c762dc7  reclaim_count=1
+```
+
+Claim **+3600.20s** and **+3600.22s** — the same 200 ms offset on both. `CLAIM_SQL` stamps
+`heartbeat_at = NOW()`; staleness is `COALESCE(heartbeat_at, started_at) < NOW() - stale`. Firing at
+exactly 3600 s proves `heartbeat_at` never moved after the claim: **zero of ~120 due heartbeats
+landed**, with **zero `run_heartbeat_failed` lines**. `NESTOR_WORKER_HEARTBEAT_S` was unset (default
+30). Both runs were healthy and mid-pipeline when reclaimed.
+
+#### Three consequences, all observed on the same two runs
+
+1. **A finished report was silently discarded.** Attempt 1 of the Vandersteen run reached stage
+   `done` ("Run complete" in the feed) — *"Writing the final report from 345 verified fact(s) and
+   1845 numbered source(s)"*, 7m47s. Its terminal write is fenced `WHERE ... worker_id = :wid`
+   (D-23.1-06) and the report-body INSERT is gated on `completed.rowcount`. The run had already been
+   stolen, so rowcount was 0 and the report body was dropped **with no log line**. The fence is
+   correct; the reclaim upstream was not.
+2. **The restart re-bills the expensive half.** Deep research restored from checkpoint (free);
+   distillation, merge, gates, **108 skeptic sessions**, adjudication, conflict detection and
+   synthesis re-ran at full price. Skeptic is about 79% of run cost.
+3. **Claims accumulate across attempts.** Attempt 1 sent 345 to synthesis, attempt 2 sent 389, and
+   attempt 2's synthesis wrote from **734 = 345 + 389**. Sources 1845 -> 2683. Each restart makes the
+   final stage heavier and slower, so each attempt is LESS likely to beat the window than the last.
+   Same family as the `yield_records.complete_assignment: affected 2 rows, expected exactly 1`
+   warnings. **Independent of the heartbeat — corrupts ANY resumed run, including after a genuine
+   crash.** Not fixed here.
+
+Both runs were cancelled by the operator at 23:10:21 before a third reclaim. Bounded by
+`MAX_RECLAIMS=2` — not infinite, but never delivers.
+
+**Why now:** first real run since `20260907-161728` raised minScale to 2. A reclaim needs a SECOND
+poller to steal the run; with one instance the broken heartbeat had nobody to act on it. Inference
+from the config change, not measured.
+
+#### What this deploy does — and deliberately does NOT do
+
+* `_heartbeat_loop` logs `run_heartbeat_started` at entry and `run_heartbeat` with
+  `rowcount=` every iteration. `_HEARTBEAT_SQL`, the ownership fence, the status guard, the binds and
+  the `except Exception` contract are byte-identical (executor compared objects against the base blob).
+* `NESTOR_WORKER_STALE_MINUTES` 60 -> **90**, STOPGAP. While the heartbeat does not land this
+  value is the maximum length of a healthy run, and 60 sat BELOW the 64.2-min longest run that ever
+  completed. 90 stays strictly below `RUN_TIMEOUT_MINUTES=120` so the two cannot tie. Code default
+  stays 60. `infra/variables.tf` default also moved to 90 (`5d9c0ae`) — a `terraform apply` would
+  otherwise have silently reverted this.
+* **It does NOT fix the heartbeat.** Three-plus causes were indistinguishable from outside; a guessed
+  fix would destroy the evidence the next run gives.
+
+#### How to read the next run — the entire point of this deploy
+
+```
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="tribunal-worker"
+  AND resource.labels.revision_name="tribunal-worker-20260908-233038-013724"
+  AND (textPayload:"run_heartbeat_started" OR textPayload:"rowcount=")' \
+  --order=asc --limit=2000 --format="value(timestamp,textPayload)"
+```
+
+`run_heartbeat` is a SUBSTRING of `run_heartbeat_started` and `run_heartbeat_failed` — grep on
+`rowcount=` to isolate iterations. structlog is unconfigured, so these are `textPayload`, not
+`jsonPayload`.
+
+| observed | reading |
+|---|---|
+| `run_heartbeat_started` + `rowcount=1` every ~30 s to the end | heartbeat healthy — cause is elsewhere |
+| `run_heartbeat_started`, then `rowcount=1` lines that **stop** at time T | the task **DIED** at T — `except Exception` does not catch `CancelledError`; something cancelled it. **Executor's leading hypothesis:** fits zero writes + zero failures + healthy runs better than starvation, which should have landed *some* of 120 |
+| `run_heartbeat_started`, **no** `rowcount=` lines at all | task **starved** — event loop never yielded to it |
+| `rowcount=0` lines | UPDATE's WHERE (id / status / worker_id) does not match |
+| neither line | task never created |
+
+Counts alone cannot separate rows 2 and 3 — **timestamps can**.
+
+#### Gates
+
+Local, no DSN: 18 passed / **21 skipped** — the skip message itself says *"THIS IS NOT A PASS"*.
+Re-run by the orchestrator against a throwaway Postgres 16 (roles `worker_user`/`app_user`,
+superuser DSN): **44 passed, 0 skipped** across `test_run_ownership_fence`, `test_async_worker`,
+`test_worker_in_instance_concurrency`, `test_run_timeout_backstop`, `test_stale_reclaim` — including
+the new `test_heartbeat_loop_logs_rowcount_1_for_the_owner_live`, which the executor mutation-proved
+(reverted `worker.py` -> red). That the loop logs `rowcount=1` correctly against real Postgres
+weakens the zero-row theory and points at rows 2/3 above.
+
+Full tribunal suite: **165 failed / 2347 passed** — identical 164 failing node ids on the base tree,
+**zero regressions**; cross-file state pollution when run monolithically (CI runs six separate gates).
+Not investigated further; not claimed benign.
+
+`pip install -e ".[dev]"` FAILS on this repo (flat layout, multiple top-level packages) — install
+`structlog asyncpg alembic` directly and run from `tribunal/`.
+
+#### Owed
+
+1. **Start ONE run and read the table above.** Nothing else is decidable until then.
+2. Fix the actual cause once known. If row 2: find what cancels the task (`asyncio.all_tasks()`
+   sweeps, TaskGroup teardown) or shield it. If row 3: move the heartbeat off the event loop.
+3. **Stop discarding finished reports** — at minimum log when the fenced terminal write matches 0
+   rows; better, check ownership BEFORE final synthesis.
+4. **Make resume idempotent** — replace, don't accumulate (the 734 defect).
+5. **Docs still say 60** — five handbook pages and ~20 runbook read-backs, including two
+   troubleshooting entries that tell an operator to "confirm `NESTOR_WORKER_STALE_MINUTES=60`",
+   which now re-introduces the defect. Executor-flagged, not fixed.
+6. Revert 60 <- 90 in BOTH `deploy-worker.sh` and `variables.tf` once row 1 is observed.
+
+Also found, unrelated, not touched: the backend's interactive report-shaping path
+(`needs_report_spec`, `/report-proposal`, `/report-spec`, `/rewrite`) has **zero frontend handling**
+and the status is absent from `RESEARCH_TERMINAL`. Unreachable from the intake flow
+(`brief.py` never sets `[INTERACTIVE_REPORT]`) but a loaded trap — and `/rewrite` off cached research
+is an unused capability.
+
+**Rollback, no rebuild:** route traffic back to `tribunal-worker-20260907-161728-162720`. That restores
+STALE=60 and the silent heartbeat.
