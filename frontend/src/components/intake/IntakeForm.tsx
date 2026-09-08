@@ -8,6 +8,7 @@ import type {
   LocalizedIntakeSchema,
 } from "@/lib/intake-types";
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import { resolveAnswerValue } from "@/lib/i18n/resolveAnswerValue";
 import { writableFieldKeys } from "@/lib/intake-writable";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { FieldRenderer } from "./FieldRenderer";
@@ -152,7 +153,8 @@ export function IntakeForm({
       const fullRes = await getSkillRunFull(payload.intake.id, latest.id);
       if (cancelled || !fullRes.success) return;
       const parsed = fullRes.data.output_parsed;
-      if (parsed && typeof parsed === "object") setProposals(parsed as Proposals);
+      if (parsed && typeof parsed === "object")
+        setProposals(resolveAnswerValue(parsed, i18n.language) as Proposals);
     })();
     return () => {
       cancelled = true;
