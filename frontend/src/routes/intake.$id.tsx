@@ -9,6 +9,8 @@ import { getIntake } from "@/lib/api/intakes";
 import { listAnswers } from "@/lib/api/answers";
 import { getTemplates } from "@/lib/api/templates";
 import type { IntakePayload, IntakeSchema } from "@/lib/intake-types";
+import i18n from "@/lib/i18n";
+import { resolveAnswerValue } from "@/lib/i18n/resolveAnswerValue";
 import { IntakeForm } from "@/components/intake/IntakeForm";
 
 // frontend/src/routes/intake.$id.tsx — the authenticated USER fill/submit route
@@ -79,9 +81,16 @@ function UserIntakeFillPage() {
 
       // Backend `AnswerView` carries the scalar `value` plus structured `value_json`
       // (lists/objects); the form expects one value per field key.
+      //
+      // DEF-23.2-16: the AI review persists refined answer text as a localized
+      // `{nl, fr, en}` object in `value_json`, which rendered as `[object Object]` in the
+      // form's `<textarea>`. Resolving on READ repairs intakes that are already broken in
+      // the database without a migration or any write-path change — the same rule
+      // `FieldDisplay`'s list branch already applies. Non-localized shapes (string lists,
+      // proposal_list, file descriptors, radio-with-other) pass through by reference.
       const answersMap: Record<string, unknown> = {};
       for (const a of answersRes.data) {
-        answersMap[a.field_key] = a.value_json ?? a.value;
+        answersMap[a.field_key] = resolveAnswerValue(a.value_json ?? a.value, i18n.language);
       }
 
       const intake = intakeRes.data;

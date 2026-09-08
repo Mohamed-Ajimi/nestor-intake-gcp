@@ -10,6 +10,8 @@ import { listAnswers } from "@/lib/api/answers";
 import { getTemplates } from "@/lib/api/templates";
 import type { LocalizedIntakeSchema } from "@/lib/intake-types";
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import i18n from "@/lib/i18n";
+import { resolveAnswerValue } from "@/lib/i18n/resolveAnswerValue";
 import { FieldDisplay } from "@/components/intake/FieldDisplay";
 import { StatusPill } from "@/components/intake/_status";
 
@@ -101,9 +103,13 @@ function UserIntakeResultsPage() {
         return;
       }
 
+      // DEF-23.2-16: refined answer text is persisted as a localized `{nl, fr, en}` object
+      // in `value_json`, which reached `FieldDisplay`'s scalar branch as `[object Object]`.
+      // Resolve on READ — no migration, no write-path change. Non-localized shapes pass
+      // through by reference.
       const answersMap: Record<string, unknown> = {};
       for (const a of answersRes.data) {
-        answersMap[a.field_key] = a.value_json ?? a.value;
+        answersMap[a.field_key] = resolveAnswerValue(a.value_json ?? a.value, i18n.language);
       }
 
       setRawSchema((template.schema ?? null) as unknown as LocalizedIntakeSchema | null);

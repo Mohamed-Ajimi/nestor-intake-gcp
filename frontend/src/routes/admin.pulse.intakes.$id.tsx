@@ -25,6 +25,7 @@ import * as storage from "@/lib/api/storage";
 import { getTemplates } from "@/lib/api/templates";
 import type { IntakeField, IntakeSchema, LocalizedIntakeSchema } from "@/lib/intake-types";
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
+import { resolveAnswerValue } from "@/lib/i18n/resolveAnswerValue";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
 import { FieldRenderer } from "@/components/intake/FieldRenderer";
 import { StatusPill } from "@/components/intake/_status";
@@ -446,10 +447,18 @@ function IntakeDetailPage() {
  );
 
  const answersRes = await listAnswers(id);
+ // DEF-23.2-16: the AI review persists refined answer text as a localized
+ // `{nl, fr, en}` object in `value_json`, which rendered as `[object Object]`.
+ // Resolve on READ — repairs already-broken intakes with no migration and no
+ // write-path change, the same rule `FieldDisplay`'s list branch already applies.
+ // Resolved EXACTLY ONCE here on purpose: this value feeds `rows`, `initialMap` AND
+ // `draft` below, so resolving separately per consumer would give `initial` and
+ // `draft` distinct object references and the dirty-field diff would then report
+ // every answer as edited.
  const rows: AnswerRow[] = answersRes.success
  ? answersRes.data.map((a) => ({
  field_key: a.field_key,
- value: a.value_json ?? a.value,
+ value: resolveAnswerValue(a.value_json ?? a.value, i18n.language),
  edited_by_client: null,
  client_edited_at: null,
  updated_at: "",
