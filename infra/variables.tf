@@ -266,9 +266,9 @@ variable "tribunal_worker_max_instances" {
 }
 
 variable "tribunal_worker_stale_minutes" {
-  description = "NESTOR_WORKER_STALE_MINUTES for the worker — how long a `running` claim may go without a heartbeat before another poller may re-claim it. Calibrated in Phase 16; carried here as a plain non-secret env (matches the old deploy script's default 60)."
+  description = "NESTOR_WORKER_STALE_MINUTES for the worker — how long a `running` claim may go without a heartbeat before another poller may re-claim it. Calibrated in Phase 16; carried here as a plain non-secret env. ⚠ 90 is a STOPGAP (DEF-23.3-01, 2026-09-09): the liveness heartbeat is not landing, so this value is effectively the maximum length of a healthy run, and 60 sat below the 64.2-minute longest run that ever completed. Must match tribunal/infrastructure/cloud-run/deploy-worker.sh; revert both to 60 once production logs show `run_heartbeat` with `rowcount=1`. Keep strictly below tribunal_worker_run_timeout (120) so the two cannot tie."
   type        = string
-  default     = "60"
+  default     = "90"
 }
 
 variable "tribunal_image_tag" {
