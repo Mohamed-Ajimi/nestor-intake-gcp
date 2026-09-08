@@ -48,12 +48,12 @@ INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
 # revision that does NOT start polling.
 #
 # WHY THIS OVERRIDE EXISTS (2026-07-28). This script's `gcloud run deploy` sets
-# --min-instances=1 AND --set-env-vars=...NESTOR_WORKER_STALE_MINUTES=60 in ONE atomic
+# --min-instances=1 AND --set-env-vars=...NESTOR_WORKER_STALE_MINUTES=90 in ONE atomic
 # command. So a plain re-run both UNPAUSES the worker and reverts the staleness window at
 # the same instant. When an unresolved run is still sitting in status='running' with a NULL
 # heartbeat_at (any run predating migration 0014), CLAIM_SQL's
 # COALESCE(heartbeat_at, started_at) falls back to a stale started_at, the row is older than
-# 60 minutes, reclaim_count is below the ceiling — and the fresh worker CLAIMS AND
+# the staleness window, reclaim_count is below the ceiling — and the fresh worker CLAIMS AND
 # RE-EXECUTES IT AT FULL COST, unattended.
 #
 # That is the D-E money defect the 15.2 gap phase was built to close, and the
@@ -213,6 +213,37 @@ echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 #   Roll back with `--set-env-vars=...NESTOR_WORKER_RUN_CONCURRENCY=1...`; the loop is
 #   strictly serial at K=1 by design.
 #
+# NESTOR_WORKER_STALE_MINUTES=90 — ⚠ STOPGAP (DEF-23.3-01, 2026-09-09). NOT A TUNING
+#   IMPROVEMENT, AND NOT PERMANENT.
+#
+#   WHY IT WAS RAISED. The run liveness heartbeat is not landing. On 2026-09-08 two
+#   HEALTHY concurrent runs — both in final report assembly — were reclaimed at claim
+#   +3600.20s and +3600.22s, the same 200 ms offset, i.e. exactly this window with
+#   heartbeat_at never having moved since CLAIM_SQL stamped it. Zero of the ~120 due
+#   heartbeats landed, and there were zero run_heartbeat_failed lines.
+#
+#   WHAT THAT MAKES THIS VALUE. While the heartbeat does not land, this is effectively
+#   THE MAXIMUM LENGTH OF A HEALTHY RUN — past it a live run is restarted from the top
+#   of the pipeline, re-billing what it already spent. At 60 that ceiling sat BELOW
+#   64.2 minutes, the longest run that has ever completed normally (7dcf51d5, the same
+#   figure the RUN_TIMEOUT_MINUTES derivation below is built on), so the setting would
+#   reset the longest known-good run.
+#
+#   WHY 90 AND NOT SOMETHING ELSE. 90 clears 64.2 by ~26 minutes and stays STRICTLY
+#   BELOW NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120, so the run-level ceiling and the stale
+#   reclaim cannot tie or race. Do NOT set 120 (it ties the ceiling). Do NOT change
+#   RUN_TIMEOUT_MINUTES to compensate.
+#
+#   ⚠ REVERT TO 60 once the heartbeat is PROVEN to land — that is, once production logs
+#   show `run_heartbeat` with `rowcount=1` (the diagnostic added to
+#   nestor_pulse_sdk/runs/worker.py::_heartbeat_loop on 2026-09-09). With a working
+#   heartbeat a live run never goes stale at ANY value, so 60 is correct in principle
+#   and recovers a genuinely dead worker fastest. 90 only buys headroom while we wait
+#   for that evidence.
+#
+#   The code DEFAULT stays 60 (worker.py STALE_RUN_MINUTES). This line overrides it on
+#   the deployed service, which is the only place the stopgap applies.
+#
 # NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 — D-23.3-04, plan 23.3-01. Pinned here as well as
 #   in code for the same reason NESTOR_OPENAI_DR_MODEL is: neither one alone can resurrect
 #   the failure. 120 = 1.87x the measured 64.2-minute longest run that legitimately
@@ -247,7 +278,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=5 \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol,NESTOR_WORKER_RUN_CONCURRENCY=4,NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=90,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol,NESTOR_WORKER_RUN_CONCURRENCY=4,NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120" \
   --set-secrets="${TRIBUNAL_SECRETS}"
 
 echo
