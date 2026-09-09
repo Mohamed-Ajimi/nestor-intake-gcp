@@ -10,6 +10,7 @@ import { useRunEvents } from "@/lib/research/useRunEvents";
 import { canHaveVerificationReport } from "@/lib/research/verificationGate";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
 import { AuditBodyPanel } from "@/components/intake/AuditBodyPanel";
+import { EmptyFeed } from "@/components/research/EmptyFeed";
 import { RunFeed } from "@/components/research/RunFeed";
 import { RunStatusCard } from "@/components/research/RunStatusCard";
 import { RunActions } from "@/components/research/RunActions";
@@ -349,7 +350,7 @@ function ResearchRunPage() {
               {t("research.runPage.loadingEvents")}
             </div>
           ) : events.length === 0 ? (
-            <EmptyFeed status={status} isTerminal={isTerminal} />
+            <EmptyFeed status={status} isTerminal={isTerminal} title={statusLabel(status, t)} />
           ) : (
             <RunFeed
               events={events}
@@ -400,32 +401,6 @@ function ResearchRunPage() {
 function eventAuditId(event: RunEvent): string | null {
   const v = event.meta?.["audit_id"];
   return typeof v === "string" && v.length > 0 ? v : null;
-}
-
-/**
- * The three honest readings of an empty feed. One generic "no events" message would collapse
- * three genuinely different situations into a shrug:
- *
- *  - QUEUED: the run has been accepted but the engine has not picked it up yet, so it has no
- *    engine id and no events could exist. This is the COLD-OPEN window an operator lands in
- *    the instant they click through from the trigger — the page must read as "not started",
- *    not as "broken" and not as an error.
- *  - ACTIVE: the engine is working and the first event has not arrived (or a long poll is in
- *    flight, which is silence that is NOT a stall — the withdrawn-D-C lesson: on 2026-07-27
- *    exactly this silence was misread as a hang on a run that was fine).
- *  - TERMINAL: the run finished and left no history. For a run that predates 15.3 that is
- *    simply the truth, and saying so beats an empty page that looks like a failed load.
- */
-function EmptyFeed({ status, isTerminal }: { status: string; isTerminal: boolean }) {
-  const { t } = useTranslation("intake");
-  const message = isTerminal
-    ? t("research.runPage.feed.emptyTerminal")
-    : status === "queued"
-      ? t("research.runPage.feed.emptyQueued")
-      : t("research.runPage.feed.emptyActive");
-  return (
-    <div className="py-10 text-center font-mono text-[12px] text-ink/50">{message}</div>
-  );
 }
 
 /**

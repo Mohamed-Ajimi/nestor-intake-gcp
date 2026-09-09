@@ -26,12 +26,19 @@ import {
   projectResearchTrace,
   traceIdentity,
 } from "@/lib/research/groupedTrace";
-import { ResearchTrace } from "@/components/research/ResearchTrace";
+import { ResearchTraceBody, TraceSection } from "@/components/research/ResearchTrace";
 
-// Correlated deep-research events now render as question/provider cards. The original
-// renderer below remains available in a disclosure, unchanged for historical stages.
-// Pass order is derived across the whole feed, so a late event from an older execution
-// cannot reactivate it after another stage. No event transport or research control lives here.
+// EVERY PHASE RENDERS IN THE SECTION SHELL, FROM ITS FIRST EVENT. The shell used to be
+// welded to the deep-research task grouping — `projectResearchTrace` skips every stage but
+// `deep_research`, so the design appeared for one stage of one run and only once trace
+// metadata had arrived. Opening a run showed the OLD feed and the new one turned up mid-run.
+// The grouping is now an ENHANCEMENT that fills a phase's body when there is something to
+// group, never the switch that decides whether the design renders at all.
+//
+// Correlated deep-research events render as question/provider cards. The original renderer
+// below remains available in a disclosure, unchanged for historical stages. Pass order is
+// derived across the whole feed, so a late event from an older execution cannot reactivate it
+// after another stage. No event transport or research control lives here.
 
 // frontend/src/components/research/RunFeed.tsx — the run page's activity feed, converted
 // from the operator's design of record (docs/design/prototypes/ResearchRunImproved.tsx).
@@ -208,8 +215,13 @@ export function RunFeed({
 }
 
 /**
- * One phase block: its divider, its rows, its summary — and, once complete, a collapse
- * toggle that previews the last two rows exactly as the design does.
+ * ONE PHASE, ONE SECTION. The divider row's text becomes the section TITLE and the summary
+ * row's content becomes the header SUBLINE — neither is rendered as a row any more, so the
+ * phase label and the "worked for …" line each appear exactly once.
+ *
+ * The body is the grouped deep-research trace where the projection found executions, and the
+ * plain rows (with the collapse toggle) everywhere else. Both bodies get the same liveness,
+ * cursor and audit drill-down behaviour; the only difference is the shape of the rendering.
  */
 const FeedGroup = React.memo(function FeedGroup({
   events,
@@ -279,66 +291,106 @@ const FeedGroup = React.memo(function FeedGroup({
     </React.Fragment>
   );
 
+  // The phase is live when the engine is still in it: a running feed, the last group, and no
+  // summary yet (the summary IS the phase's closing line). Same value the rows' spinners use.
+  const live = feedActive && isLastGroup && !summary;
+
+  // TITLE. The engine's own phase label, carried by the divider event (15.3-03) — this
+  // component still looks up no stage vocabulary and still needs none. The two fallbacks are
+  // for feeds that carry no divider at all: a grouped body is a research pass and says so, and
+  // anything else gets a neutral label rather than a raw stage identifier in a serif heading.
+  const title =
+    divider?.text ||
+    (grouped ? t("research.runPage.trace.title") : t("research.runPage.feed.stageFallback"));
+
   return (
-    <div>
-      {divider && (
-        <FeedRow
-          event={divider}
-          live={false}
-          cursorSeq={cursorSeq}
-          canDrill={canDrill}
-          onDrill={onDrill}
-          drilldownAuditId={drilldownAuditId}
-        />
-      )}
-
-      {/* D-09: this toggle used to render on `isComplete` ALONE, while the preview above
-          slices `body` — and `body` excludes the divider and the summary, which are the two
-          rows `_stage_event_boundary` emits automatically for every stage. So a phase that
-          emits no detail rows had an EMPTY body, and the operator got a "Show more" button
-          that expanded to reveal nothing. Eight of the engine's thirteen stages were in
-          exactly that state. Ask whether rows are hidden, not whether the phase is over. */}
-      {!grouped && isComplete && hasHiddenRows(body.length) && (
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="flex items-center gap-1.5 pb-1.5 font-mono text-[11.5px] text-ink/50 hover:text-ink"
-        >
-          <ChevronDown
-            className={`h-3 w-3 transition-transform ${collapsed ? "" : "rotate-180"}`}
-          />
-          {collapsed ? t("research.runPage.feed.showMore") : t("research.feed.showLess")}
-        </button>
-      )}
-
+    <TraceSection
+      title={title}
+      subline={summaryLine(summary, t)}
+      active={live}
+      eventCount={body.length}
+      unmatched={grouped && unmatched}
+      // Only the grouped body re-presents its rows, so only it offers the originals. A
+      // plain-row phase already IS its rows and must not print every one of them twice.
+      raw={grouped ? body.map(renderEvent) : undefined}
+    >
       {grouped ? (
-        <ResearchTrace
+        <ResearchTraceBody
           executions={executions}
           activeExecutionId={activeExecutionId}
           executionIds={executionIds}
-          active={feedActive && isLastGroup && !summary}
-          eventCount={body.length}
-          unmatched={unmatched}
-        >
-          {body.map(renderEvent)}
-        </ResearchTrace>
-      ) : (
-        shown.map(renderEvent)
-      )}
-
-      {summary && (
-        <FeedRow
-          event={summary}
-          live={false}
-          cursorSeq={cursorSeq}
-          canDrill={canDrill}
-          onDrill={onDrill}
-          drilldownAuditId={drilldownAuditId}
+          active={live}
         />
+      ) : (
+        body.length > 0 && (
+          <div className="px-4 py-3 sm:px-5">
+            {/* D-09: this toggle used to render on `isComplete` ALONE, while the preview
+                slices `body` — and `body` excludes the divider and the summary, which are the
+                two rows `_stage_event_boundary` emits automatically for every stage. So a
+                phase that emits no detail rows had an EMPTY body, and the operator got a
+                "Show more" button that expanded to reveal nothing. Eight of the engine's
+                thirteen stages were in exactly that state. Ask whether rows are hidden, not
+                whether the phase is over. */}
+            {isComplete && hasHiddenRows(body.length) && (
+              <button
+                type="button"
+                onClick={() => setCollapsed((c) => !c)}
+                className="flex items-center gap-1.5 pb-1.5 font-mono text-[11.5px] text-ink/50 hover:text-ink"
+              >
+                <ChevronDown
+                  className={`h-3 w-3 transition-transform ${collapsed ? "" : "rotate-180"}`}
+                />
+                {collapsed ? t("research.runPage.feed.showMore") : t("research.feed.showLess")}
+              </button>
+            )}
+            {shown.map(renderEvent)}
+          </div>
+        )
       )}
-    </div>
+    </TraceSection>
   );
 });
+
+/**
+ * The phase summary, as the section header's subline rather than as a row.
+ *
+ * Same parsing and the same `t()` keys the summary ROW used — "Worked for X · N actions ·
+ * N items · $Y", each part only if the engine carried it — lifted out of FeedRow because the
+ * summary is no longer a row. A summary that carries nothing at all yields nothing, so an
+ * empty header line can never appear.
+ */
+function summaryLine(
+  summary: RunEvent | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): React.ReactNode {
+  if (!summary) return undefined;
+  const meta = summary.meta ?? null;
+  const parts: string[] = [];
+  const worked = metaStr(meta, "worked");
+  const actions = metaNum(meta, "actions");
+  const items = metaNum(meta, "items");
+  const cost = metaStr(meta, "cost");
+  if (worked) parts.push(t("research.runPage.feed.workedFor", { duration: worked }));
+  if (actions != null) parts.push(t("research.runPage.feed.actionsCount", { count: actions }));
+  if (items != null && items > 0) {
+    parts.push(t("research.runPage.feed.itemsCount", { count: items }));
+  }
+  if (cost) {
+    const formatted = fmtCost(cost, "");
+    if (formatted) parts.push(formatted);
+  }
+  if (parts.length === 0 && !summary.text) return undefined;
+  return (
+    <>
+      {parts.map((p) => (
+        <span key={p} className="font-mono">
+          {p}
+        </span>
+      ))}
+      {summary.text && <span>{summary.text}</span>}
+    </>
+  );
+}
 
 /** Kinds rendered one indent level in, as children of the dispatch header above them. */
 const INDENTED_KINDS = new Set(["agent_run", "agent_done", "agent_retry", "agent_fail"]);
@@ -368,46 +420,11 @@ const FeedRow = React.memo(function FeedRow({
   const showCursor = cursorSeq != null && cursorSeq === event.seq;
   const meta = event.meta ?? null;
 
-  // ── divider: the uppercase phase label with a hairline rule beside it. ──────────────
-  // The text is the human LABEL, carried by the event itself (15.3-03) — this component
-  // looks up no stage vocabulary and needs none.
-  if (event.kind === "divider") {
-    return (
-      <div className="flex items-center gap-3 pb-2 pt-5">
-        <span className="whitespace-nowrap font-mono text-[10.5px] uppercase tracking-[0.13em] text-ink/50">
-          {event.text}
-        </span>
-        <div className="h-px flex-1 bg-ink/10" />
-      </div>
-    );
-  }
-
-  // ── summary: "Worked for X · N actions · N items · $Y", each part only if carried. ──
-  if (event.kind === "summary") {
-    const parts: string[] = [];
-    const worked = metaStr(meta, "worked");
-    const actions = metaNum(meta, "actions");
-    const items = metaNum(meta, "items");
-    const cost = metaStr(meta, "cost");
-    if (worked) parts.push(t("research.runPage.feed.workedFor", { duration: worked }));
-    if (actions != null) parts.push(t("research.runPage.feed.actionsCount", { count: actions }));
-    if (items != null && items > 0) {
-      parts.push(t("research.runPage.feed.itemsCount", { count: items }));
-    }
-    if (cost) {
-      const formatted = fmtCost(cost, "");
-      if (formatted) parts.push(formatted);
-    }
-    if (parts.length === 0 && !event.text) return null;
-    return (
-      <div className="flex flex-wrap gap-x-4 pb-2.5 pl-[26px] pt-1.5 font-mono text-[11.5px] text-ink/50">
-        {parts.map((p) => (
-          <span key={p}>{p}</span>
-        ))}
-        {event.text && <span>{event.text}</span>}
-      </div>
-    );
-  }
+  // NO `divider` OR `summary` BRANCH LIVES HERE ANY MORE, and their absence is the point.
+  // Both are now the SECTION's header — the divider's text is its title and the summary is
+  // its subline — and `body` has always excluded both kinds, so a row renderer for either
+  // could only ever produce the duplicate the section was built to remove. The summary's
+  // parsing moved intact to `summaryLine` above; nothing about it was reinterpreted.
 
   // ── dispatch: the bold header the agent rows hang under. ────────────────────────────
   if (event.kind === "dispatch") {

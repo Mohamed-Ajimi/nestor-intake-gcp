@@ -555,6 +555,7 @@
         "itemsCount": "{{count}} items",
         "liveBadge": "live",
         "showMore": "Show more",
+        "stageFallback": "Run activity",
         "emptyQueued": "This run is queued — the engine has not started it yet, so there is no activity to show.",
         "emptyActive": "Waiting for the first event. Silence here can also mean a long provider call is in flight.",
         "emptyTerminal": "This run produced no event history.",
