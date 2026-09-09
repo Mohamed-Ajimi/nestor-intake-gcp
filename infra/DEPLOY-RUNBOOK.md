@@ -6940,3 +6940,120 @@ is an unused capability.
 
 **Rollback, no rebuild:** route traffic back to `tribunal-worker-20260907-161728-162720`. That restores
 STALE=60 and the silent heartbeat.
+
+
+### 260909-3ow DEPLOY RECORD — executed 2026-09-09 01:00Z, tribunal-worker ONLY, code `c80c2e3` — THE ROOT CAUSE
+
+**Supersedes the heartbeat-only framing of `260909-168` above.** DEF-23.3-01 is not a heartbeat
+bug; the heartbeat was the first symptom that became visible.
+
+| service | revision | note |
+|---|---|---|
+| `tribunal-worker` | **`tribunal-worker-20260909-005403-025920`** | 100% traffic, minScale 2, both instances booted (`41b20a6d`, `a4bd25c6`) |
+| everything else | unchanged | worker-only |
+
+Image `tribunal-worker:20260909-005403`, build `33337b3d-8d2c-4850-bdcc-c2bcc41f98c4` (SUCCESS).
+Digest read off the revision: `sha256:fcbab94e37113f6ee6bdfce01ac4f2537dbcbd4535e5173c009bd7f5727153ce`.
+Deployed via `deploy-worker.sh` at 00:59:13Z, serving at 01:00:08Z. Env unchanged from the previous
+revision — `STALE_MINUTES` is STILL 90 (see "Owed").
+
+#### The cause — measured on run `9b79e10f`, 2026-09-09, from the 260909-168 diagnostic
+
+```
+Dockerfile:36   CMD ["python", "-m", "nestor_pulse_sdk.runs.worker"]
+```
+
+`-m` runs `worker.py` as `__main__`; at import it draws `WORKER_ID = hostname-pid-uuid4()`. That copy
+runs the poll loop and `claim_one`, so `CLAIM_SQL` stamps the row with ITS id. Dispatch goes
+`_dispatch_one` -> `execute.py::execute_run_locked` -> `execute.py:135`
+`from nestor_pulse_sdk.runs.worker import execute_run` — Python does not know `__main__` IS that
+module, so `worker.py` is imported a SECOND time under its canonical name: a second module object,
+a second `uuid4()`. `execute_run` and `_heartbeat_loop` live in that copy and bind the second id.
+
+Observed, one instance (`00a41e8c1d9656…`), one process:
+
+```
+worker_started          worker_id=localhost-1-d35c5630
+run_claimed             run_id=9b79e10f
+run_heartbeat_started   wid=localhost-1-cbcd49a4
+run_heartbeat           rowcount=0  wid=localhost-1-cbcd49a4      every 30 s, 65 minutes, never 1
+```
+
+Reproduced locally by the executor on unmodified code (RED, verbatim): `__main__` copy
+`7HD4N44-60500-1f22a40c` vs canonical copy `7HD4N44-60500-3d2aebf6` — same pid, two draws.
+
+#### Blast radius — every ownership-fenced write, not just the heartbeat
+
+Every D-23.1-06 `WHERE … worker_id = :wid` predicate in `execute_run` binds the SECOND copy's id:
+the heartbeat, the `needs_input` park, the `needs_report_spec` park, the success finalize, the
+failure write. **All match zero rows.** The report-body INSERT is gated on `completed.rowcount`, so a
+run that finishes perfectly cannot be recorded and its report is discarded — with no log line on
+that path. Observed end-to-end on `9b79e10f`: feed reached "Writing the final report… 4m 06s" ->
+"Run complete"; last log 00:49:24 (the finalize preparing the operator surface); heartbeats stopped
+(cancelled by `execute_run`'s `finally`); NO terminal/cancel/crash line; row left `running`,
+`completed_at` NULL. The UI renders exactly that: "Run complete" beside a spinner that never stops.
+
+⚠ CORRECTION to the 2026-09-08 note above: the "Run complete + spinner" screenshot was NOT a
+stage-label collision. The run had genuinely finished and its completion write was rejected. Same
+bug, both days. The 09-08 "finished report thrown away" was THIS, not the reclaim.
+
+The consume step in `execute.py` passes only because it binds `claimed["worker_id"]` — the value
+FROM THE ROW — never the module constant.
+
+#### History — what broke it, and when
+
+* **2026-07-20, Phase 13** (`6acaff9`, `001007d`): `-m runs.worker` entrypoint + `execute.py`'s lazy
+  import. Two `WORKER_ID`s from this day on. HARMLESS: nothing checked the id.
+* **2026-09-04, Phase 23.1 plan 05** (`2c02c26` heartbeat, `6722560` terminal + park writes,
+  D-23.1-06): the ownership fence. Correct intent — a displaced worker must not write over a run it
+  lost — built on the assumption that `WORKER_ID` is one value per process. In the container it is
+  two. The fence turned a latent oddity into total failure.
+* **2026-09-07** `20260907-161728`: first worker image carrying the fence goes live.
+* **2026-09-08**: first real runs. Broke immediately. **No run completed on any fenced build.**
+
+Why no gate caught it: tests import the canonical module -> one copy -> identical ids ->
+`owner_heartbeat_advances_heartbeat_at` passes honestly. The two-copy state exists ONLY under the
+container's `-m` entrypoint. The suite could not observe the runtime it was certifying.
+
+#### The fix (4 files, +424/-3, no deletions of logic)
+
+* NEW `nestor_pulse_sdk/runs/worker_main.py` — launcher: `from nestor_pulse_sdk.runs.worker import main`.
+* `infrastructure/cloud-run/worker/Dockerfile:36` -> `CMD ["python","-m","nestor_pulse_sdk.runs.worker_main"]`.
+* `worker.py` `__main__` block: `sys.modules.setdefault("nestor_pulse_sdk.runs.worker", sys.modules[__name__])`
+  before `main()` — belt-and-braces so the LEGACY local invocation cannot double-import either.
+* NEW `tests/test_worker_single_module_identity.py` — runs BOTH entry paths under `runpy` with
+  `run_name="__main__"`, asserts object identity of the two `WORKER_ID` lookups and exactly one module
+  object resolving to `runs/worker.py`; third test pins the Dockerfile CMD array.
+* `execute.py:135` deliberately untouched — the cycle is real; the launcher makes it harmless.
+
+Gates on merged master: new file 3 passed; worker subset 21 passed / 21 skipped (DB-gated; not
+passes); `import nestor_pulse_sdk.runs.worker_main` OK. Fence grep: `_HEARTBEAT_SQL`, `CLAIM_SQL`,
+`REAP_SQL`, `_CONSUME_CLAIM_SQL`, STALE=90 line all unchanged.
+
+#### ⛔ Post-deploy verification — INCOMPLETE
+
+Digest and boot verified. **`run_heartbeat rowcount=1` has NOT yet been observed live** — the
+operator cancelled `9b79e10f` before the 01:14 reclaim and no new run had been claimed as of 01:39Z.
+The first heartbeat of the next run is the proof. Do not treat this deploy as behaviourally
+confirmed until that line exists.
+
+#### Owed
+
+1. **Observe `rowcount=1` on the first new run.** Then confirm a run reaches `completed` with a
+   report body — the first since 09-07.
+2. **Revert `NESTOR_WORKER_STALE_MINUTES` 90 -> 60 in BOTH** `deploy-worker.sh:281` and
+   `infra/variables.tf:269` once (1) holds. Both must move together.
+3. **Log when a fenced terminal write matches 0 rows.** Today that path is silent; it hid a
+   discarded report for two days.
+4. **Make resume idempotent** (claims accumulated 734 = 345 + 389 across attempts). Independent bug.
+5. **How many runs were silently discarded since 09-07?** Not investigated — needs a DB query:
+   `status='running'` rows with a `done` stage and NULL `completed_at`.
+6. Docs: 5 references to the old entrypoint (`docs/handbook/03-architecture.md:81`,
+   `09-tribunal-service.md:460`, `13-infrastructure-and-deploy.md:301,:410`, this file `:5222`) and
+   the ~25 that still say `STALE_MINUTES=60`.
+7. The retry path (`research_routes.py:356`) creates a NEW run id on `failed|cancelled|needs_input`
+   and is capped at `_MAX_ATTEMPTS = 3` per intake; checkpoints are per run id so a retry starts
+   clean. Safe to use after this deploy; no new intake required.
+
+**Rollback, no rebuild:** route traffic back to `tribunal-worker-20260908-233038-013724` — which
+restores the double import and the silent discard. Do not.
