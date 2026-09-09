@@ -86,8 +86,12 @@ function Shell({
   children?: React.ReactNode;
 }) {
   return (
+    // Container tokens only, matched to the section shells below it (`border-ink/20` on
+    // `bg-paper`) so the card and the phases read as one page rather than two designs. The
+    // accent left border, the padding rhythm, the live region and every word of the content
+    // are deliberately unchanged.
     <div
-      className="mb-5 border border-ink/30 border-l-4 bg-paperLight px-6 py-5"
+      className="mb-5 border border-ink/20 border-l-4 bg-paper px-6 py-5"
       style={{ borderLeftColor: accent }}
       role="status"
       aria-live="polite"

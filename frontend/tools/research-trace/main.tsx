@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import i18next from "i18next";
 import { I18nextProvider } from "react-i18next";
+import { EmptyFeed } from "@/components/research/EmptyFeed";
 import { RunFeed } from "@/components/research/RunFeed";
 import type { RunEvent } from "@/lib/api/research";
 import en from "@/locales/en/intake.json";
@@ -80,9 +81,29 @@ states.forEach((state, i) =>
   }),
 );
 
+// A WHOLE RUN THAT NEVER REACHES DEEP RESEARCH — the case the old design could not show at
+// all. `projectResearchTrace` finds nothing here, so every one of these phases takes the
+// plain-row body inside its own section shell. This is what an operator sees for the first
+// minutes of every run, and it is the fixture that would have caught the boundary defect.
+const wholeRunEvents: RunEvent[] = [
+  { stage: "adaptive_intake", kind: "divider", text: "Adaptive intake" },
+  { stage: "adaptive_intake", kind: "thinking", text: "Reading the submitted intake answers" },
+  { stage: "adaptive_intake", kind: "tool", text: "Resolving localized answer values" },
+  { stage: "adaptive_intake", kind: "thinking", text: "Summarising the client's context" },
+  { stage: "adaptive_intake", kind: "summary", text: "", meta: { worked: "18s", actions: 3 } },
+  { stage: "question_workshop", kind: "divider", text: "Question workshop" },
+  { stage: "question_workshop", kind: "plan", text: "Drafting candidate research questions" },
+  { stage: "question_workshop", kind: "streams", text: "Ranking 14 candidates" },
+  { stage: "question_workshop", kind: "summary", text: "", meta: { worked: "42s", actions: 9 } },
+  { stage: "research_division", kind: "divider", text: "Research division" },
+  { stage: "research_division", kind: "plan", text: "Splitting 6 questions into angles" },
+].map((partial, i) => ({ seq: i + 1, ts: "2026-09-09T08:00:00Z", meta: null, ...partial }));
+
 export function Fixture() {
   const [active, setActive] = useState(true);
   const [legacy, setLegacy] = useState(false);
+  const [wholeRun, setWholeRun] = useState(false);
+  const [empty, setEmpty] = useState(false);
   const [audit, setAudit] = useState<string | null>(null);
   return (
     <I18nextProvider i18n={locale}>
@@ -101,6 +122,18 @@ export function Fixture() {
             Legacy events
           </label>
           <label>
+            <input
+              type="checkbox"
+              checked={wholeRun}
+              onChange={(e) => setWholeRun(e.target.checked)}
+            />{" "}
+            Whole run (no deep research)
+          </label>
+          <label>
+            <input type="checkbox" checked={empty} onChange={(e) => setEmpty(e.target.checked)} />{" "}
+            No events yet
+          </label>
+          <label>
             Language{" "}
             <select defaultValue="en" onChange={(e) => void locale.changeLanguage(e.target.value)}>
               <option value="en">English</option>
@@ -109,14 +142,25 @@ export function Fixture() {
             </select>
           </label>
         </div>
+        {empty && (
+          <EmptyFeed
+            status={active ? "running" : "queued"}
+            isTerminal={false}
+            title={active ? "Running" : "Queued"}
+          />
+        )}
         <RunFeed
           events={
-            legacy
-              ? events.map((event) => ({
-                  ...event,
-                  meta: { provider: event.meta?.provider, audit_id: event.meta?.audit_id },
-                }))
-              : events
+            empty
+              ? []
+              : wholeRun
+                ? wholeRunEvents
+                  : legacy
+                    ? events.map((event) => ({
+                        ...event,
+                        meta: { provider: event.meta?.provider, audit_id: event.meta?.audit_id },
+                      }))
+                    : events
           }
           isActive={active}
           drilldownAuditId={audit}

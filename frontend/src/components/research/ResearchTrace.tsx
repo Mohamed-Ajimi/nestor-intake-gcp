@@ -6,33 +6,125 @@ import { displayTaskState, type TraceExecution, type TraceTask } from "@/lib/res
 type DisplayState = ReturnType<typeof displayTaskState>;
 const label = (key: string) => `research.runPage.trace.${key}`;
 
-/** Presentation only. Original rows (and their audit panels) are supplied by RunFeed. */
-export const ResearchTrace = React.memo(function ResearchTrace({
+// The brand's live colour. Repeated rather than imported from RunFeed because RunFeed imports
+// THIS module — a shared constant would have to move to a third file to avoid the cycle, and
+// the run page already carries the literal in two places for the same reason.
+const FLUO_PINK = "#FF2D87";
+
+/**
+ * THE SHELL — one phase of a run, whatever that phase is.
+ *
+ * This used to be welded to the deep-research task grouping, so the design appeared for
+ * exactly one stage of one run and only once trace metadata had arrived; opening a run showed
+ * the old feed and the new design turned up mid-run, once, for one section. The shell knows
+ * nothing about executions, tasks or providers now: it takes a title, an optional subline, a
+ * body and an optional raw-events footer, which is all it ever actually needed.
+ *
+ * `title` is the phase label the ENGINE emitted (the divider row's text). No stage vocabulary
+ * lives here or in RunFeed — an engine that adds a phase still costs this component nothing.
+ *
+ * `data-trace-section` is the structural hook the suite counts. "The phase title appears" is
+ * satisfied by the old divider row too, so a text assertion cannot tell the two designs apart;
+ * counting shells can. It is an attribute rather than a class so no styling can depend on it.
+ */
+export const TraceSection = React.memo(function TraceSection({
+  title,
+  subline,
+  active,
+  eventCount,
+  unmatched,
+  raw,
+  children,
+}: {
+  title: string;
+  subline?: React.ReactNode;
+  active: boolean;
+  eventCount: number;
+  unmatched?: boolean;
+  raw?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const { t } = useTranslation("intake");
+  return (
+    <section
+      data-trace-section=""
+      className="my-4 min-w-0 border border-ink/20 bg-paper text-ink [color-scheme:only_light]"
+    >
+      <header className="border-b border-ink/15 px-4 py-4 sm:px-5">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h3 className="min-w-0 break-words font-serif text-xl leading-tight sm:text-2xl">
+            {title}
+          </h3>
+          {/* The phase the engine is working in RIGHT NOW. Driven by the same value the rows'
+              spinners are, so the two can never disagree, and it is a plain badge — the page's
+              one live region is the status card, and a second one would announce twice. */}
+          {active && (
+            <span
+              className="shrink-0 border px-1.5 py-px font-mono text-[10px] uppercase tracking-[0.08em] motion-safe:animate-pulse"
+              style={{ color: FLUO_PINK, borderColor: FLUO_PINK }}
+            >
+              {t("research.runPage.feed.liveBadge")}
+            </span>
+          )}
+        </div>
+        {subline && (
+          <p className="mt-2 flex max-w-2xl flex-wrap gap-x-4 gap-y-1 font-sans text-xs leading-relaxed text-ink/60">
+            {subline}
+          </p>
+        )}
+      </header>
+      {children}
+      {/* The original chronological record, only where there IS a second rendering of it to
+          fall back to. A plain-row phase already IS its raw rows, so it gets no footer that
+          would print every line of it twice. */}
+      {raw !== undefined && (
+        <details className="border-t border-ink/20">
+          <summary className="cursor-pointer px-4 py-3 font-mono text-[11px] focus-visible:outline-2 focus-visible:outline-ink sm:px-5">
+            {t(label("raw"), { count: eventCount })}
+          </summary>
+          <div className="border-t border-ink/10 px-4 pb-4 sm:px-5">
+            <p className="my-3 font-sans text-xs text-ink/60">{t(label("rawHint"))}</p>
+            {raw}
+          </div>
+        </details>
+      )}
+      {unmatched && (
+        <p className="border-t border-ink/10 px-4 py-2 font-sans text-xs text-ink/60 sm:px-5">
+          {t(label("unmatched"))}
+        </p>
+      )}
+    </section>
+  );
+});
+
+/**
+ * THE DEEP-RESEARCH BODY — question groups, provider task badges and the results bar.
+ *
+ * An ENHANCEMENT that fills a phase's shell when `projectResearchTrace` found executions, no
+ * longer the switch that decides whether the design renders at all. Presentation only: the
+ * original rows (and their audit panels) are supplied by RunFeed as the shell's `raw`.
+ *
+ * The scope caveat lives HERE, not in the shell's subline, because it is a statement about
+ * these bands specifically — researcher activity is not claim verification — and it must
+ * travel with them wherever they are rendered.
+ */
+export const ResearchTraceBody = React.memo(function ResearchTraceBody({
   executions,
   active,
   activeExecutionId,
   executionIds,
-  eventCount,
-  unmatched,
-  children,
 }: {
   executions: TraceExecution[];
   active: boolean;
   activeExecutionId?: string | null;
   executionIds?: string[];
-  eventCount: number;
-  unmatched: boolean;
-  children: React.ReactNode;
 }) {
   const { t } = useTranslation("intake");
   return (
-    <section className="my-4 min-w-0 border border-ink/20 bg-paper text-ink [color-scheme:only_light]">
-      <header className="border-b border-ink/15 px-4 py-4 sm:px-5">
-        <h3 className="font-serif text-xl leading-tight sm:text-2xl">{t(label("title"))}</h3>
-        <p className="mt-2 max-w-2xl font-sans text-xs leading-relaxed text-ink/60">
-          {t(label("scope"))}
-        </p>
-      </header>
+    <>
+      <p className="border-b border-ink/15 px-4 py-3 font-sans text-xs leading-relaxed text-ink/60 sm:px-5">
+        {t(label("scope"))}
+      </p>
       {executions.map((execution, index) => {
         const current = active && execution.id === (activeExecutionId ?? executions.at(-1)?.id);
         const count = (state: string) =>
@@ -141,21 +233,51 @@ export const ResearchTrace = React.memo(function ResearchTrace({
           </div>
         );
       })}
-      <details className="border-t border-ink/20">
-        <summary className="cursor-pointer px-4 py-3 font-mono text-[11px] focus-visible:outline-2 focus-visible:outline-ink sm:px-5">
-          {t(label("raw"), { count: eventCount })}
-        </summary>
-        <div className="border-t border-ink/10 px-4 pb-4 sm:px-5">
-          <p className="my-3 font-sans text-xs text-ink/60">{t(label("rawHint"))}</p>
-          {children}
-        </div>
-      </details>
-      {unmatched && (
-        <p className="border-t border-ink/10 px-4 py-2 font-sans text-xs text-ink/60 sm:px-5">
-          {t(label("unmatched"))}
-        </p>
-      )}
-    </section>
+    </>
+  );
+});
+
+/**
+ * The two composed: a deep-research trace in its own shell, titled from the trace vocabulary
+ * rather than from a phase divider.
+ *
+ * RunFeed does NOT use this — it composes `TraceSection` + `ResearchTraceBody` itself so the
+ * title can be the engine's own phase label and the subline can be that phase's summary. This
+ * export is the standalone rendering (and the one the presentation tests drive directly).
+ */
+export const ResearchTrace = React.memo(function ResearchTrace({
+  executions,
+  active,
+  activeExecutionId,
+  executionIds,
+  eventCount,
+  unmatched,
+  children,
+}: {
+  executions: TraceExecution[];
+  active: boolean;
+  activeExecutionId?: string | null;
+  executionIds?: string[];
+  eventCount: number;
+  unmatched: boolean;
+  children: React.ReactNode;
+}) {
+  const { t } = useTranslation("intake");
+  return (
+    <TraceSection
+      title={t(label("title"))}
+      active={active}
+      eventCount={eventCount}
+      unmatched={unmatched}
+      raw={children}
+    >
+      <ResearchTraceBody
+        executions={executions}
+        active={active}
+        activeExecutionId={activeExecutionId}
+        executionIds={executionIds}
+      />
+    </TraceSection>
   );
 });
 
