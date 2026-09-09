@@ -7071,3 +7071,64 @@ Completion with a report body still pending at the time of writing (run in fligh
 
 **Rollback, no rebuild:** route traffic back to `tribunal-worker-20260908-233038-013724` — which
 restores the double import and the silent discard. Do not.
+
+
+### 20260909-trace DEPLOY RECORD — executed 2026-09-09 09:19–09:22Z, THREE services, code `7188b7e` (STATE row `bd7c515`)
+
+**Change:** grouped, correlated researcher trace in the run feed. Authored by a separate agent; gated,
+built and deployed by this session. The engine now stamps `trace_*` meta (`trace_execution_id`,
+`trace_task_id`, `trace_group_id`, `trace_question`, `trace_state`, `trace_attempt`, `trace_total`)
+on deep-research events (`research_division.py`, coerced to scalars in `run_events.py`); the
+frontend groups the feed by those ids and **falls back to the existing feed when no event carries
+them** (`RunFeed.tsx`: `grouped = executions.length > 0`).
+
+| service | revision | image digest |
+|---|---|---|
+| `nestor-frontend` | **`nestor-frontend-00040-tgk`** | `frontend@sha256:e73c7d1d6473d940d6c741308eb6e36b89c720921f87320fe6b4e7221f728f3f` |
+| `tribunal-api` | **`tribunal-api-20260909-091435-111943`** | `tribunal-api@sha256:b8556d52b19812c0f936bbf68eea5309458891466412feb223d9c48ecc86b241` |
+| `tribunal-worker` | **`tribunal-worker-20260909-091435-112037`** | `tribunal-worker@sha256:63a7c29752381d76fa1ef6e5abf7890d0bc95eefbee4799ff5c84e89a5767307` |
+| `nestor-api` | `nestor-api-00050-w2l` | unchanged — no `backend/` files in the diff |
+
+Builds: frontend `92af8c8e` (`frontend:20260909-091501`, substitutions recovered from
+`aeaee888-2953-4616-a611-7aaaf0e2c643`, values never echoed), tribunal-api `eec3df40`, tribunal-worker
+`d87045cf` (both `:20260909-091435`). All SUCCESS, confirmed by `builds describe`, not exit code.
+Digests read back off the revisions match the builds. Deployed api → worker (via the two deploy
+scripts; env + 6 secrets + SA byte-identical to the previous revisions; worker `STALE=90`
+`TIMEOUT=120` `CONC=4` minScale 2) → frontend (`services update --image` by digest, nothing else
+touched). Worker was idle for 30+ min before its restart, re-checked inline immediately before.
+
+**Deploy surface derived by IMPORT, not by path:** `run_events.py` is reached by both the API
+(`runs/stages.py`) and the worker; `research_division.py` by the worker only. Hence three images.
+
+#### Gates (re-run here, not taken on report)
+
+Frontend: `tsc --noEmit` exit 0; `vitest` **262 passed** (15 files; new `groupedTrace.test.ts` 48,
+`ResearchTrace.test.ts` 16, `feedRows.test.ts`); `scripts/i18n-audit.mjs` **PASS** (A/B/C clean, 106
+CHECK-D advisories — pre-existing class). Tribunal: 207 passed across `test_run_event_emit`,
+`test_run_events`, `test_run_events_api`, `test_research_division_assignment`,
+`test_research_division_yield`; `test_hash_chain_replay` 13 passed (`run_events` is not referenced by
+`audit/` or `verification/` — trace meta does not enter the chained rows); worker subset 11 passed /
+10 skipped (DB-gated, not passes).
+
+Post-deploy: `/auth/login` 200, `/admin` 200 (unchanged behaviour), tribunal-api `/readyz` 200
+(`/healthz` 404 is pre-existing — smoke on `/readyz`), zero ERROR lines on any of the three
+revisions in the first 10 minutes. The worker logged THREE worker_started lines at 09:21:41 — two MANUAL_OR_CUSTOMER_MIN_INSTANCE starts (the minScale pair) plus one DEPLOYMENT_ROLLOUT start Cloud Run adds to absorb traffic shifting; three distinct worker ids, each started once, no SIGTERM/exit. A rollout-time extra poller, not a crash-restart; it scales back to 2.
+
+#### Revert — two anchors, both immediate
+
+* **Code:** `state-before-trace-visuals-260909` → `2962815`; the new state is
+  `state-after-trace-visuals-260909` → `bd7c515`. Both tags pushed.
+* **Live:** route traffic back to `nestor-frontend-00039-hv6` / `tribunal-api-00025-q4m` /
+  `tribunal-worker-20260909-005403-025920`. No rebuild.
+* **Partial revert also works:** rolling back EITHER the worker OR the frontend alone removes the
+  grouped view — it renders only when events carry `trace_*` meta and falls back to the old feed
+  otherwise. There is no code-level feature switch; the Cloud Run revision is the switch.
+
+#### Not verified
+
+* No research run has executed on the new engine build yet — the `trace_*` meta has not been
+  observed on a live event, and the grouped view has not been seen rendering live data. Both are
+  proven by tests only. The next run is the proof; the fallback means the failure mode is "old feed",
+  not "broken feed".
+* The frontend `tools/research-trace/` dev harness (own `vite.config.ts`) is not part of the
+  production build; not exercised here.
