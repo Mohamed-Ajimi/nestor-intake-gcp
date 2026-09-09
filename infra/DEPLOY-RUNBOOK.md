@@ -7053,7 +7053,7 @@ Completion with a report body still pending at the time of writing (run in fligh
 
 #### Owed
 
-1. ~~Observe `rowcount=1`~~ DONE 06:37Z. **Still observe: a run reaching `completed` WITH a report body.** Then confirm a run reaches `completed` with a
+1. ~~Observe `rowcount=1`~~ DONE 06:37Z. ~~A run reaching `completed` WITH a report body~~ **DONE 07:40Z** — run `6668b27e` finished in one pass (64 min, no reclaim), heartbeats ceased at 07:40:36 with no crash/error line, operator confirmed a saved report in the UI. **First completed run on any fenced build.** ⚠ the success finalize emits NO log line — the only backend evidence of completion is heartbeat cessation without a crash; add one alongside the 0-row log (owed #3). Then confirm a run reaches `completed` with a
    report body — the first since 09-07.
 2. **Revert `NESTOR_WORKER_STALE_MINUTES` 90 -> 60 in BOTH** `deploy-worker.sh:281` and
    `infra/variables.tf:269` once (1) holds. Both must move together.
