@@ -7037,9 +7037,23 @@ operator cancelled `9b79e10f` before the 01:14 reclaim and no new run had been c
 The first heartbeat of the next run is the proof. Do not treat this deploy as behaviourally
 confirmed until that line exists.
 
+#### PROOF OBSERVED 2026-09-09 06:37Z
+
+Run `6668b27e-1ea7-42be-9e88-8ef34d27615e` (operator Try again on the cancelled intake):
+
+```
+06:36:20  run_claimed             6668b27e
+06:36:34  run_heartbeat_started   wid=localhost-1-a4bd25c6
+06:37:04  run_heartbeat           rowcount=1  wid=localhost-1-a4bd25c6
+```
+
+`a4bd25c6` is one of the two `worker_started` ids on this revision (`41b20a6d`, `a4bd25c6`) — the
+claim and the fenced writes now carry the SAME identity. First landed heartbeat on any fenced build.
+Completion with a report body still pending at the time of writing (run in flight).
+
 #### Owed
 
-1. **Observe `rowcount=1` on the first new run.** Then confirm a run reaches `completed` with a
+1. ~~Observe `rowcount=1`~~ DONE 06:37Z. **Still observe: a run reaching `completed` WITH a report body.** Then confirm a run reaches `completed` with a
    report body — the first since 09-07.
 2. **Revert `NESTOR_WORKER_STALE_MINUTES` 90 -> 60 in BOTH** `deploy-worker.sh:281` and
    `infra/variables.tf:269` once (1) holds. Both must move together.
