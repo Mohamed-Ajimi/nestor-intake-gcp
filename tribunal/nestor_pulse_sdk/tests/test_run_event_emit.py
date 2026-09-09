@@ -106,6 +106,8 @@ Cloud Build gate:
 from __future__ import annotations
 
 import json
+import asyncio
+import copy
 import logging
 import re
 import uuid
@@ -577,10 +579,120 @@ async def test_a_batch_of_three_angles_emits_one_dispatch_then_three_agent_runs(
 
     # The routing lines land once each, on the division stage rather than on the
     # money stage.
-    assert len(recorder.of("plan")) == 1
+    assert len([r for r in recorder.of("plan") if r["stage"] == "research_division"]) == 1
     assert len(recorder.of("streams")) == 1
     assert recorder.of("plan")[0]["stage"] == "research_division"
     assert "3 angles" in recorder.of("plan")[0]["text"]
+
+
+async def test_trace_identity_survives_parallel_completion_and_new_invocations(monkeypatch):
+    recorder = _install(monkeypatch)
+    second_done = asyncio.Event()
+
+    async def runner(*, query, **kwargs):
+        if query.startswith("first"):
+            await asyncio.wait_for(second_done.wait(), timeout=1)
+        else:
+            second_done.set()
+        return {"status": "success", "report": query}
+
+    _single_stream(monkeypatch, {"openai": runner})
+    monkeypatch.setattr(rd, "_ANGLE_CONCURRENCY", 2)
+    angles = [
+        {"query": q, "focus_area": "Same text", "provider": "openai"}
+        for q in ("first", "second")
+    ]
+    before = copy.deepcopy(angles)
+    run_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    results = await rd.run_angles(angles=angles, audited=None, run_id=run_id, tenant_id=tenant_id)
+    queued = [r for r in recorder.rows if (r["meta"] or {}).get("trace_state") == "queued"]
+    assert len(queued) == 2
+    assert max(recorder.rows.index(r) for r in queued) < min(
+        recorder.rows.index(r) for r in recorder.of("agent_run")
+    )
+    assert [r["meta"]["angle"] for r in recorder.of("agent_done")] == [2, 1]
+    execution = recorder.of("dispatch")[0]["meta"]["trace_execution_id"]
+    uuid.UUID(execution)
+    assert recorder.of("dispatch")[0]["meta"]["trace_total"] == 2
+    assert len({r["meta"]["trace_group_id"] for r in queued}) == 2
+    for r in queued + recorder.of("agent_run") + recorder.of("agent_done"):
+        assert r["meta"]["trace_execution_id"] == execution
+        assert r["meta"]["trace_task_id"] == f"angle:{r['meta']['angle']}"
+        assert r["meta"]["trace_attempt"] == 1
+        assert r["meta"]["trace_question"] == "Same text"
+    assert angles == before
+    assert all(not any(k.startswith("trace_") for k in result) for _, result in results)
+    recorder.rows.clear()
+    await rd.run_angles(angles=angles, audited=None, run_id=run_id, tenant_id=tenant_id)
+    assert recorder.of("dispatch")[0]["meta"]["trace_execution_id"] != execution
+
+
+@pytest.mark.parametrize("raises", [False, True])
+async def test_trace_failure_retry_and_routed_provider_keep_one_task(monkeypatch, raises):
+    recorder = _install(monkeypatch)
+    calls = {}
+    failing = _runner_raising if raises else _runner_envelope_error
+    _single_stream(monkeypatch, {
+        "openai": failing(calls, "openai", "offline failure"),
+        "claude": _runner_ok(calls, "claude"),
+    })
+    await rd.run_angles(
+        angles=[{"query": "q", "focus_area": "A", "provider": "openai", "corroboration_key": "g1"}],
+        audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4(),
+    )
+    rows = [r for r in recorder.rows if (r["meta"] or {}).get("trace_task_id")]
+    assert [r["meta"]["trace_state"] for r in rows] == [
+        "queued", "running", "failed", "retrying", "running", "completed",
+    ]
+    assert [r["meta"]["trace_attempt"] for r in rows] == [1, 1, 1, 2, 2, 2]
+    assert len({r["meta"]["trace_task_id"] for r in rows}) == 1
+    assert all(r["meta"]["trace_group_id"] == "group:g1" for r in rows)
+    assert all(r["meta"]["provider"] == "claude" for r in rows[-3:])
+    assert len(calls["openai"]) == len(calls["claude"]) == 1
+
+
+async def test_trace_restore_skip_and_fallback_are_explicit(monkeypatch):
+    recorder = _install(monkeypatch)
+    calls = {}
+    _single_stream(monkeypatch, {"claude": _runner_ok(calls, "claude")})
+    angles = [
+        {"query": "restored", "focus_area": "A", "provider": "gemini"},
+        {"query": "skip", "focus_area": "B", "provider": "gemini", "corroboration": True, "corroboration_key": "g1"},
+        {"query": "sibling", "focus_area": "B", "provider": "claude", "corroboration_key": "g1"},
+        {"query": "fallback", "focus_area": "C", "provider": "openai"},
+    ]
+    restored = {"status": "success", "_angle": "A", "_retry_used": True}
+    results = await rd.run_angles(
+        angles=angles, audited=None, run_id=uuid.uuid4(), tenant_id=uuid.uuid4(),
+        resume_results={0: ("gemini", restored)},
+    )
+    done = {r["meta"]["angle"]: r["meta"] for r in recorder.of("agent_done")}
+    assert done[1]["trace_state"] == "restored"
+    assert done[1]["trace_attempt"] == 1  # current invocation, not the cached retry
+    assert results[0][1] is restored
+    assert done[2]["trace_state"] == "skipped"
+    assert done[2]["trace_group_id"] == done[3]["trace_group_id"]
+    assert done[4]["provider"] == "claude"
+    assert len(calls["claude"]) == 2
+
+
+async def test_trace_uuid_build_failure_cannot_interrupt_research(monkeypatch, caplog):
+    recorder = _install(monkeypatch)
+    calls = {}
+    _single_stream(monkeypatch, {"openai": _runner_ok(calls, "openai")})
+    run_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+
+    def broken_uuid():
+        raise RuntimeError("trace id unavailable")
+
+    monkeypatch.setattr(rd.uuid, "uuid4", broken_uuid)
+    results = await rd.run_angles(
+        angles=[{"query": "q", "focus_area": "A", "provider": "openai"}],
+        audited=None, run_id=run_id, tenant_id=tenant_id,
+    )
+    assert len(results) == len(calls["openai"]) == 1
+    assert "event DROPPED, run unaffected" in caplog.text
+    assert not recorder.of("agent_done")
 
 
 async def test_the_streams_line_names_a_dark_provider_rather_than_hiding_it(

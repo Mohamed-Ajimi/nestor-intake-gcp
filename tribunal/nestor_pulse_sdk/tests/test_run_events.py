@@ -369,6 +369,36 @@ async def test_an_unknown_meta_key_is_dropped_with_a_warning(rec, caplog) -> Non
     assert any("'whatever'" in m for m in messages)
 
 
+async def test_trace_metadata_survives_scrubbing_clamping_and_allowlist(rec):
+    run_id, tenant_id = _new_run()
+    await rex.open_run(run_id, tenant_id)
+    meta = {
+        "trace_execution_id": str(uuid.uuid4()), "trace_task_id": "angle:1",
+        "trace_group_id": "group:g1", "trace_question": "Ask person@example.com " + "x" * 500,
+        "trace_state": "running", "trace_attempt": 1, "trace_total": 3,
+        "unsupported_trace_key": "discard",
+    }
+    rex.emit(run_id, stage="deep_research", kind="agent_run", text="safe", meta=meta)
+    await rex.close_run(run_id)
+    stored = rec.rows[0]["meta"]
+    for key in meta.keys() - {"trace_question", "unsupported_trace_key"}:
+        assert stored[key] == meta[key]
+    assert "person@example.com" not in stored["trace_question"]
+    assert REDACTED in stored["trace_question"]
+    # Existing emitter clamp keeps MAX_TEXT_CHARS then appends an ellipsis.
+    assert len(stored["trace_question"]) <= rex.MAX_TEXT_CHARS + 1
+    assert "unsupported_trace_key" not in stored
+
+
+@pytest.mark.parametrize("value", [{"unexpected": "object"}, ["array"], object()])
+def test_trace_metadata_does_not_stringify_non_scalar_values(value):
+    stored = rex._normalise_meta(
+        {"trace_task_id": value, "provider": "openai"},
+        run_id="offline", stage="deep_research", kind="agent_run",
+    )
+    assert stored == {"provider": "openai"}
+
+
 # ===========================================================================
 # (c) / (d) -- D-07: redaction, and the ORDER of redaction.
 # ===========================================================================

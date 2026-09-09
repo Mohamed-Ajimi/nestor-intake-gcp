@@ -21,6 +21,17 @@ import { fmtCost } from "@/lib/research/runClock";
 // prettier-ignore
 import { COLLAPSED_PREVIEW_ROWS, hasHiddenRows, isRowLive, settledSeqs } from "@/lib/research/feedRows";
 import type { RunEvent } from "@/lib/api/research";
+import {
+  traceExecutionIds,
+  projectResearchTrace,
+  traceIdentity,
+} from "@/lib/research/groupedTrace";
+import { ResearchTrace } from "@/components/research/ResearchTrace";
+
+// Correlated deep-research events now render as question/provider cards. The original
+// renderer below remains available in a disclosure, unchanged for historical stages.
+// Pass order is derived across the whole feed, so a late event from an older execution
+// cannot reactivate it after another stage. No event transport or research control lives here.
 
 // frontend/src/components/research/RunFeed.tsx — the run page's activity feed, converted
 // from the operator's design of record (docs/design/prototypes/ResearchRunImproved.tsx).
@@ -59,8 +70,8 @@ import type { RunEvent } from "@/lib/api/research";
 // ⚠ VOLUME BEHAVIOUR IS INSPECTED, NOT MEASURED — and the reason is narrower than this
 // comment used to claim. It asserted that the frontend had no test framework at all, and that
 // was MEASURABLY FALSE: vitest 3.2.4 sits in frontend/package.json, frontend/vitest.config.ts is
-// committed (environment: node, include: src/**/*.test.ts) and five pure .test.ts files run
-// under it today. What is absent is jsdom and @testing-library/react, so RENDER-COUNT
+// committed (environment: node, include: src/**/*.test.ts). Pure and server-rendered component
+// tests run under it. What is absent is jsdom and @testing-library/react, so RENDER-COUNT
 // assertions — the only thing that would actually measure the memo boundaries below — remain
 // unavailable. Those boundaries are therefore still inspected: a React.memo defeated by an
 // inline object or inline callback prop would LOOK correct in review while re-rendering every
@@ -110,6 +121,8 @@ export function RunFeed({
   }, []);
   const stableAfterRow = useCallback((event: RunEvent) => afterRowRef.current?.(event) ?? null, []);
   const canDrill = !!onDrillDown;
+  const executionIds = useMemo(() => traceExecutionIds(events), [events]);
+  const activeExecutionId = executionIds.at(-1) ?? null;
 
   // Grouping is recomputed only when the events array identity changes — i.e. when the
   // loader actually appended something, not on every cursor blink.
@@ -167,6 +180,8 @@ export function RunFeed({
           <FeedGroup
             key={group.key}
             events={group.events}
+            activeExecutionId={activeExecutionId}
+            executionIds={executionIds}
             // A group is COMPLETE once a later group exists after it — the engine has moved
             // on, so nothing further will be appended to this one.
             isComplete={!isLast}
@@ -198,6 +213,8 @@ export function RunFeed({
  */
 const FeedGroup = React.memo(function FeedGroup({
   events,
+  activeExecutionId,
+  executionIds,
   isComplete,
   isLastGroup,
   feedActive,
@@ -208,6 +225,8 @@ const FeedGroup = React.memo(function FeedGroup({
   renderAfterRow,
 }: {
   events: RunEvent[];
+  activeExecutionId: string | null;
+  executionIds: string[];
   isComplete: boolean;
   isLastGroup: boolean;
   feedActive: boolean;
@@ -234,6 +253,31 @@ const FeedGroup = React.memo(function FeedGroup({
   // only when the group's own array identity changes — i.e. when the loader appended — so it
   // cannot run on a cursor blink.
   const settled = useMemo(() => settledSeqs(events), [events]);
+  const executions = useMemo(() => projectResearchTrace(events), [events]);
+  const grouped = executions.length > 0;
+  const unmatched = body.some((event) => event.kind.startsWith("agent_") && !traceIdentity(event));
+  const renderEvent = (ev: RunEvent) => (
+    <React.Fragment key={ev.seq}>
+      <FeedRow
+        event={ev}
+        live={isRowLive({
+          kind: ev.kind,
+          seq: ev.seq,
+          settled,
+          isLastGroup,
+          feedActive:
+            feedActive &&
+            !summary &&
+            (!traceIdentity(ev) || ev.meta?.trace_execution_id === activeExecutionId),
+        })}
+        cursorSeq={cursorSeq}
+        canDrill={canDrill}
+        onDrill={onDrill}
+        drilldownAuditId={drilldownAuditId}
+      />
+      {renderAfterRow(ev)}
+    </React.Fragment>
+  );
 
   return (
     <div>
@@ -254,7 +298,7 @@ const FeedGroup = React.memo(function FeedGroup({
           emits no detail rows had an EMPTY body, and the operator got a "Show more" button
           that expanded to reveal nothing. Eight of the engine's thirteen stages were in
           exactly that state. Ask whether rows are hidden, not whether the phase is over. */}
-      {isComplete && hasHiddenRows(body.length) && (
+      {!grouped && isComplete && hasHiddenRows(body.length) && (
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
@@ -267,29 +311,20 @@ const FeedGroup = React.memo(function FeedGroup({
         </button>
       )}
 
-      {shown.map((ev) => (
-        <React.Fragment key={ev.seq}>
-          <FeedRow
-            event={ev}
-            // Computed HERE, above the memo boundary, so FeedRow receives a primitive and
-            // its memo still holds.
-            live={isRowLive({
-              kind: ev.kind,
-              seq: ev.seq,
-              settled,
-              isLastGroup,
-              feedActive,
-            })}
-            cursorSeq={cursorSeq}
-            canDrill={canDrill}
-            onDrill={onDrill}
-            drilldownAuditId={drilldownAuditId}
-          />
-          {/* The 15.3-09 seam: an injected panel hangs BENEATH a row without this
-              component importing it, and stays outside the row's memo boundary. */}
-          {renderAfterRow(ev)}
-        </React.Fragment>
-      ))}
+      {grouped ? (
+        <ResearchTrace
+          executions={executions}
+          activeExecutionId={activeExecutionId}
+          executionIds={executionIds}
+          active={feedActive && isLastGroup && !summary}
+          eventCount={body.length}
+          unmatched={unmatched}
+        >
+          {body.map(renderEvent)}
+        </ResearchTrace>
+      ) : (
+        shown.map(renderEvent)
+      )}
 
       {summary && (
         <FeedRow
@@ -392,8 +427,8 @@ const FeedRow = React.memo(function FeedRow({
   // (research_division.py:2392, workshop.py:525, workshop_rank.py:1837) exactly ONE sets
   // meta.is_live — research_division.py:2407, as the literal True. It is therefore a
   // CONSTANT, not a liveness signal, and the badge outlived its row for exactly the reason
-  // the spinner did. Liveness is now derived from position and run state, which are facts
-  // this component actually holds.
+  // the spinner did. Liveness uses run state and correlated task/pass identity where present,
+  // with the historical positional heuristic retained only for uncorrelated rows.
   const indented = INDENTED_KINDS.has(event.kind);
   const auditId = metaStr(meta, "audit_id");
   const sub = metaStr(meta, "sub");

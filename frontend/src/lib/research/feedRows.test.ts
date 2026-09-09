@@ -53,6 +53,58 @@ describe("settledSeqs — pairing starts to finishes by position (D-07: there is
   });
 });
 
+describe("settledSeqs — correlated research events", () => {
+  const task = (seq: number, kind: string, id: string, attempt = 1, execution = "pass-1") => ({
+    seq,
+    kind,
+    meta: { trace_execution_id: execution, trace_task_id: id, trace_attempt: attempt },
+  });
+  it("settles the actual finishing task, not the oldest parallel start", () => {
+    expect(
+      settledSeqs([
+        task(1, "agent_run", "a"),
+        task(2, "agent_run", "b"),
+        task(3, "agent_done", "b"),
+      ]),
+    ).toEqual(new Set([2]));
+  });
+  it("never pairs legacy terminals with identified tasks or vice versa", () => {
+    expect(
+      settledSeqs([
+        ev(1, "agent_run"),
+        task(2, "agent_run", "b"),
+        task(3, "agent_done", "b"),
+        ev(4, "agent_done"),
+      ]),
+    ).toEqual(new Set([2, 1]));
+    expect(settledSeqs([task(1, "agent_run", "a"), ev(2, "agent_done")])).toEqual(new Set());
+  });
+  it("a retry settles its old start but an old failure cannot settle the new attempt", () => {
+    expect(
+      settledSeqs([
+        task(1, "agent_run", "a"),
+        task(2, "agent_retry", "a", 2),
+        task(3, "agent_run", "a", 2),
+        task(4, "agent_fail", "a", 1),
+      ]),
+    ).toEqual(new Set([1]));
+  });
+  it("a new pass makes an unfinished earlier pass inactive", () => {
+    expect(
+      settledSeqs([task(1, "agent_run", "a"), task(2, "agent_run", "a", 1, "pass-2")]),
+    ).toEqual(new Set([1]));
+  });
+  it("a late old-pass row cannot reactivate that pass", () => {
+    expect(
+      settledSeqs([
+        task(1, "agent_run", "a"),
+        task(2, "agent_run", "a", 1, "pass-2"),
+        task(3, "agent_run", "b"),
+      ]),
+    ).toEqual(new Set([1, 3]));
+  });
+});
+
 describe("isRowLive — a spinner is a claim about NOW", () => {
   it("SC2: a finished run shows no spinner anywhere", () => {
     expect(

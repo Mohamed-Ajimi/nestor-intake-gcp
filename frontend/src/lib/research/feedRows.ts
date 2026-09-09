@@ -1,4 +1,5 @@
 import type { RunEvent } from "@/lib/api/research";
+import { latestTraceExecutionId, traceIdentity } from "@/lib/research/groupedTrace";
 
 // frontend/src/lib/research/feedRows.ts — the two rules the run feed renders by, lifted OUT
 // of RunFeed.tsx so they can be MEASURED rather than inspected.
@@ -31,13 +32,9 @@ export const AGENT_TERMINAL_KINDS: ReadonlySet<string> = new Set(["agent_done", 
 /**
  * Which `agent_run` rows in a group have already had their finish line arrive.
  *
- * THE MECHANISM, STATED HONESTLY. D-07 measured that there is NO correlation key between an
- * `agent_run` event and its `agent_done` / `agent_fail`: `workshop.py:520-577` emits the start
- * row with `meta=None` and composes the finish row separately, sharing no identifier, and
- * `research_division.py:2389` does the same. The pairing in the engine is CONVENTION AND
- * POSITION, not data — start rows and finish rows appear in matching order within a stage.
- * This function reproduces that convention rather than reading an identifier that does not
- * exist. It is not a lookup and it must not be described as one.
+ * New research events settle by execution/task/attempt identity. Older events and workshop
+ * rows have no reliable key: retain their historical FIFO display heuristic, but NEVER pair
+ * them with correlated rows. FIFO is not proof of a specific parallel task's completion.
  *
  * Walk the group's events in order holding a FIFO of the `seq` values of `agent_run` rows seen
  * and not yet paired. Each terminal row shifts the OLDEST unpaired `seq` off that list and
@@ -52,10 +49,30 @@ export const AGENT_TERMINAL_KINDS: ReadonlySet<string> = new Set(["agent_done", 
  *     on the most recent work rather than on the oldest — which is the correct direction to
  *     fail, since the newest row is the one for which "now" is still plausible.
  */
-export function settledSeqs(events: ReadonlyArray<Pick<RunEvent, "seq" | "kind">>): Set<number> {
+export function settledSeqs(
+  events: ReadonlyArray<Pick<RunEvent, "seq" | "kind" | "meta">>,
+): Set<number> {
   const settled = new Set<number>();
   const unpaired: number[] = [];
+  const correlated: { seq: number; identity: string; attempt: number; execution: unknown }[] = [];
+  const latestExecution = latestTraceExecutionId(events);
   for (const ev of events) {
+    const identity = traceIdentity(ev);
+    if (identity) {
+      const attempt = typeof ev.meta?.trace_attempt === "number" ? ev.meta.trace_attempt : 1;
+      if (ev.kind === "agent_run") {
+        correlated.push({ seq: ev.seq, identity, attempt, execution: ev.meta?.trace_execution_id });
+      } else if (AGENT_TERMINAL_KINDS.has(ev.kind) || ev.kind === "agent_retry") {
+        for (const start of correlated) {
+          if (
+            start.identity === identity &&
+            (start.attempt === attempt || (ev.kind === "agent_retry" && start.attempt < attempt))
+          )
+            settled.add(start.seq);
+        }
+      }
+      continue;
+    }
     if (ev.kind === "agent_run") {
       unpaired.push(ev.seq);
       continue;
@@ -64,6 +81,9 @@ export function settledSeqs(events: ReadonlyArray<Pick<RunEvent, "seq" | "kind">
       const oldest = unpaired.shift();
       if (oldest !== undefined) settled.add(oldest);
     }
+  }
+  for (const start of correlated) {
+    if (start.execution !== latestExecution) settled.add(start.seq);
   }
   return settled;
 }

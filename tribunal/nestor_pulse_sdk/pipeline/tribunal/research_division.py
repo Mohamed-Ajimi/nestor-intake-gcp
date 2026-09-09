@@ -2100,6 +2100,29 @@ async def run_angles(
 
     sem = asyncio.Semaphore(_ANGLE_CONCURRENCY)
 
+    # Display identity only: one invocation is not a worker lease or run-attempt
+    # counter. Never attach these IDs to angles/results: checkpoint identity and
+    # research behavior must remain unchanged. Lazily build even the UUID inside
+    # emit_safe's thunk so telemetry construction cannot interrupt paid work.
+    trace_execution_id: str | None = None
+
+    def _trace_meta(i: int | None = None, state: str = "", attempt: int = 1) -> dict[str, Any]:
+        nonlocal trace_execution_id
+        if trace_execution_id is None:
+            trace_execution_id = str(uuid.uuid4())
+        meta: dict[str, Any] = {"trace_execution_id": trace_execution_id}
+        if i is not None:
+            angle = angles[i]
+            key = angle.get("corroboration_key")
+            meta.update({
+                "trace_task_id": f"angle:{i + 1}",
+                "trace_group_id": f"group:{key}" if key else f"angle:{i + 1}",
+                "trace_question": str(angle.get("sub_question") or angle.get("focus_area") or ""),
+                "trace_state": state,
+                "trace_attempt": attempt,
+            })
+        return meta
+
     # --- R3 restore map. Read TOLERANTLY: these values came back out of a JSON
     # `output` row, so a recorded tuple arrives as a two-element list (ASVS V5 —
     # a checkpoint payload is untrusted-shaped input, never a trusted object).
@@ -2157,6 +2180,7 @@ async def run_angles(
             build=lambda: (
                 _agent_done_text(i + 1, provider),
                 {
+                    **_trace_meta(i, "completed", 2 if result.get("_retry_used") else 1),
                     "angle": i + 1,
                     "provider": provider,
                     "cost": result.get("cost_usd"),
@@ -2239,7 +2263,7 @@ async def run_angles(
                 build=lambda: (
                     f"Angle {i + 1:02d} restored from checkpoint — not "
                     f"re-dispatched, cost nothing on this attempt · {provider}",
-                    {"angle": i + 1, "provider": provider},
+                    {**_trace_meta(i, "restored"), "angle": i + 1, "provider": provider},
                 ),
             )
             await _notify(i, True)
@@ -2286,7 +2310,8 @@ async def run_angles(
                         f"Angle {i + 1:02d} not researched — stream {preferred} is "
                         f"unavailable and {len(survivors)} independent stream(s) "
                         f"already cover this sub-question",
-                        {"angle": i + 1, "provider": preferred},
+                        {**_trace_meta(i, "skipped", 2 if force_provider is not None else 1),
+                         "angle": i + 1, "provider": preferred},
                     ),
                 )
                 await _notify(i, False)
@@ -2407,7 +2432,8 @@ async def run_angles(
                     f"Angle {i + 1:02d} — "
                     f"{angle.get('sub_question') or angle.get('focus_area') or ''}"
                     f" · {provider}",
-                    {"angle": i + 1, "provider": provider, "is_live": True},
+                    {**_trace_meta(i, "running", 2 if force_provider is not None else 1),
+                     "angle": i + 1, "provider": provider, "is_live": True},
                 ),
             )
             # R7: the two resume kwargs are added ONLY for the two background
@@ -2483,7 +2509,8 @@ async def run_angles(
                     build=lambda _exc=exc: (
                         f"Angle {i + 1:02d} failed — {type(_exc).__name__}: "
                         f"{str(_exc)[:160]} · 0 facts · {provider}",
-                        {"angle": i + 1, "provider": provider},
+                        {**_trace_meta(i, "failed", 2 if force_provider is not None else 1),
+                         "angle": i + 1, "provider": provider},
                     ),
                 )
                 await _notify(i, False)
@@ -2567,7 +2594,8 @@ async def run_angles(
                 f"Angle {i + 1:02d} failed — "
                 f"{str(reason)[:160] or 'provider returned no reason'} "
                 f"· 0 facts · {provider}",
-                {"angle": i + 1, "provider": provider},
+                {**_trace_meta(i, "failed", 2 if force_provider is not None else 1),
+                 "angle": i + 1, "provider": provider},
             ),
         )
         await _notify(i, False)
@@ -2587,9 +2615,26 @@ async def run_angles(
             f"Dispatching {len(angles)} agents — Angles "
             + ", ".join(f"{n + 1:02d}" for n in range(min(len(angles), 12)))
             + (f" +{len(angles) - 12} more" if len(angles) > 12 else ""),
-            None,
+            {**_trace_meta(), "trace_total": len(angles)},
         ),
     )
+    # Announce the planned denominator before any concurrent worker starts.
+    # Queued provider is the requested stream; start/terminal rows record the
+    # actual routing decision (including disabled-stream fallback and retries).
+    for i, angle in enumerate(angles):
+        run_events.emit_safe(
+            run_id,
+            stage="deep_research",
+            kind="plan",
+            build=lambda i=i, angle=angle: (
+                f"Angle {i + 1:02d} queued — "
+                f"{angle.get('sub_question') or angle.get('focus_area') or ''}",
+                {**_trace_meta(i, "queued"), "angle": i + 1,
+                 "provider": angle.get("provider") or _STAKES_PROVIDER.get(
+                     angle.get("stakes", "med"), _STAKES_PROVIDER["med"]
+                 )},
+            ),
+        )
     gathered = await asyncio.gather(*(_one_angle(i, a) for i, a in enumerate(angles)))
     all_results: list[tuple[str, dict]] = [r for r in gathered if r is not None]
 
@@ -2628,6 +2673,7 @@ async def run_angles(
                     f"{a.get('focus_area')!r} got NO research from {original} "
                     f"· retry 2/2 · now on {alt} · no backoff",
                     {
+                        **_trace_meta(i, "retrying", 2),
                         "angle": i + 1,
                         "provider": alt,
                         "attempt": 2,

@@ -107,9 +107,14 @@ _MAX_STAGE_CHARS = 64
 #: exactly as `StageFeed._normalise_row` does for row fields -- the column is
 #: JSONB, so an unfiltered dict would quietly grow it with typo'd keys the UI
 #: never reads (T-15.3-05).
+_TRACE_META_FIELDS = (
+    "trace_execution_id", "trace_task_id", "trace_group_id", "trace_question",
+    "trace_state", "trace_attempt", "trace_total",
+)
 _META_FIELDS = (
     "sub", "is_live", "worked", "actions", "items", "cost", "audit_id",
     "provider", "model", "angle", "attempt", "max", "wait_s",
+    *_TRACE_META_FIELDS,
 )
 
 #: How often a repeated queue-overflow drop is re-logged, after the first one.
@@ -598,6 +603,14 @@ def _normalise_meta(
             continue
         if value is None:
             # Omitted rather than written as a JSON null -- keeps the column small.
+            continue
+        if key in _TRACE_META_FIELDS and not isinstance(value, (str, bool, int, float)):
+            # Correlation IDs and state are scalars, never repr(dict/list/object).
+            # Keep historical coercion behavior for the pre-existing meta keys.
+            log.warning(
+                "run_events: non-scalar trace meta %r dropped (run=%s stage=%s kind=%s)",
+                key, run_id, stage, kind,
+            )
             continue
         if isinstance(value, bool) or isinstance(value, (int, float)):
             out[key] = value
