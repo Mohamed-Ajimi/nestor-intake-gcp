@@ -7132,3 +7132,68 @@ revisions in the first 10 minutes. The worker logged THREE worker_started lines 
   not "broken feed".
 * The frontend `tools/research-trace/` dev harness (own `vite.config.ts`) is not part of the
   production build; not exercised here.
+
+
+### 260909-g8b DEPLOY RECORD — executed 2026-09-09, nestor-frontend ONLY, code `3992d13`
+
+**Change:** the new trace design is now THE run page. `7188b7e` (deployed 09:22Z as
+`nestor-frontend-00040-tgk`) rendered the grouped shell only for the `deep_research` phase and only
+after the first trace-tagged event; opening a run showed the old feed. Operator ruling: "make the new
+design the whole run page." Every phase of every run now renders inside the `TraceSection` shell from
+the first event — divider text as the section title, the summary as the header subline — and the
+deep-research task grouping is the BODY of its phase only, no longer the trigger for the design.
+`EmptyFeed` renders inside a shell too, so a just-opened or queued run is already the new design.
+`RunStatusCard`'s container adopted the shell tokens (`border-ink/20` / `bg-paper`); content, accent
+border and live region unchanged.
+
+| service | revision | image digest |
+|---|---|---|
+| `nestor-frontend` | **`nestor-frontend-00041-g9j`** | `frontend@sha256:0e16471214a5c0e3a631387b9a4d67aba50d3c172c656aad2bd252c04237bcd0` |
+| `nestor-api` / `tribunal-api` / `tribunal-worker` | unchanged | frontend-only — no worker restart, no run interrupted |
+
+Build `c4a476fd-0fb0-4c9c-89f3-71eb9b57a1b7` → `frontend:20260909-101602`, SUCCESS confirmed by
+`builds describe`; substitutions recovered from `92af8c8e-06ed-44d7-84b4-12bbe598e089` (values never
+echoed). Deployed with `services update --image=<repo>@sha256:…`; digest read back off the revision.
+
+#### Gates — re-run by the orchestrator on the MERGED tree, not taken on report
+
+`tsc --noEmit` exit 0 · `vitest` **266 passed / 16 files** (baseline 262/15; +4 new in
+`RunFeedSections.test.ts`, none modified or deleted; all 16 `ResearchTrace.test.ts` pass unchanged) ·
+`scripts/i18n-audit.mjs` PASS (A/B/C clean, 106 pre-existing CHECK-D advisories) · `npm run build`
+✓ 23.10s · offline harness `tools/research-trace` builds. Fence review on the branch: nothing outside
+`frontend/`; `groupedTrace.ts:98` (`stage !== "deep_research"`) untouched; `RESEARCH_TERMINAL`,
+`isTerminal`, footer ticker untouched; no feature flag; no `components/ui/` edits; no dependency change.
+
+**RED evidence, written before `RunFeed.tsx` was touched (commit `299981b`):**
+```
+expected +0 to be 2   // occurrences(html, "data-trace-section") on a two-phase run with no deep_research
+expected 1351 to be less than 1084   // summary rendered AFTER the rows, i.e. as a row, not in the header
+```
+Both structural on purpose — a text assertion ("the phase title appears") is satisfied by the old
+divider row too and could not tell the designs apart.
+
+#### Post-deploy (10:20:33–10:21:33Z): digest read back off the revision matches the build; `/auth/login` 200, `/admin` 200; zero ERROR lines on the revision in its first minute.
+
+⛔ **No browser has seen the visual result.** Every assertion is server-rendered markup; the offline
+harness at `npx vite --config tools/research-trace/vite.config.ts` (now includes a fixture run with
+NO deep-research events) is the way to look without spending on a run. Same gap as every frontend
+deploy in this project: zero browser/E2E coverage.
+
+#### Revert — ONE lever now, not two
+
+Route traffic to `nestor-frontend-00040-tgk` (tag `state-after-trace-visuals-260909`), or further to
+`nestor-frontend-00039-hv6` (tag `state-before-trace-visuals-260909`) for the pre-trace page. The
+former "partial revert" property — rolling back the WORKER alone restored the old feed — **no longer
+exists**: the design no longer depends on engine data.
+
+#### Found by the executor, not touched
+
+* `npm run build` rewrites `frontend/src/routeTree.gen.ts` LF→CRLF-neutral on CRLF checkouts — a
+  whole-file phantom diff; restored before commit both times. A `*.gen.ts text eol=lf` gitattribute
+  would end it.
+* Four dead locale keys (`trace.activity`, `trace.provider`, `trace.status`, `trace.audit`) in all
+  three locales — the audit checks parity, not usage.
+* A phase with divider + summary but no detail rows renders a header-only panel (eight of the
+  engine's thirteen stages). Truthful; reads thinner than busy phases.
+* `groupedTrace.ts:98` is now the ONLY reason a phase gets the grouped body; if the engine ever tags
+  another stage it lights up with no frontend change. Never exercised.
