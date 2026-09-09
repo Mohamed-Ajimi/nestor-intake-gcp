@@ -2,7 +2,12 @@
 # infrastructure/cloud-run/worker/Dockerfile
 #
 # Multi-stage build for the Nestor Pulse SDK worker (poll loop).
-# Entrypoint: python -m nestor_pulse_sdk.runs.worker
+# Entrypoint: python -m nestor_pulse_sdk.runs.worker_main
+#
+# The entrypoint is the worker_main LAUNCHER, never runs.worker itself: `-m
+# nestor_pulse_sdk.runs.worker` runs worker.py as `__main__`, and execute.py's lazy
+# `from nestor_pulse_sdk.runs.worker import execute_run` then loads a SECOND copy with a
+# SECOND WORKER_ID, so every ownership-fenced write matches zero rows (DEF-23.3-01).
 #
 # Worker has NO exposed HTTP port -- Cloud Run keeps it warm via
 # --min-instances=1 --no-cpu-throttling regardless of inbound requests.
@@ -33,4 +38,4 @@ COPY nestor_pulse_sdk ./nestor_pulse_sdk
 COPY nestor_pulse ./nestor_pulse
 ENV PYTHONUNBUFFERED=1
 # No PORT / EXPOSE -- background worker, no HTTP server
-CMD ["python", "-m", "nestor_pulse_sdk.runs.worker"]
+CMD ["python", "-m", "nestor_pulse_sdk.runs.worker_main"]

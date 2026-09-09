@@ -1084,7 +1084,15 @@ async def _health_server(port: int) -> None:
 
 
 def main() -> None:
-    """Entrypoint: `python -m nestor_pulse_sdk.runs.worker`."""
+    """Entrypoint. Invoked by the launcher: `python -m nestor_pulse_sdk.runs.worker_main`.
+
+    Do NOT go back to `python -m nestor_pulse_sdk.runs.worker`: that runs THIS file as
+    `__main__`, and execute.py's lazy `from nestor_pulse_sdk.runs.worker import
+    execute_run` then loads a SECOND copy of it with a SECOND `WORKER_ID` — the claim is
+    stamped by one copy and every ownership-fenced write is issued by the other, so they
+    all match zero rows (DEF-23.3-01). The `__main__` block below self-aliases as a
+    belt-and-braces guard for that legacy invocation.
+    """
     from pathlib import Path
     from dotenv import load_dotenv
 
@@ -1128,4 +1136,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Belt-and-braces for the LEGACY `python -m nestor_pulse_sdk.runs.worker`
+    # invocation (still used locally). Register this very module object under its
+    # canonical name BEFORE main() runs, so execute.py's lazy
+    # `from nestor_pulse_sdk.runs.worker import execute_run` resolves to THIS copy
+    # instead of importing worker.py a second time and drawing a second WORKER_ID
+    # (DEF-23.3-01). The container uses runs/worker_main.py and never needs this.
+    import sys
+
+    sys.modules.setdefault("nestor_pulse_sdk.runs.worker", sys.modules[__name__])
     main()
