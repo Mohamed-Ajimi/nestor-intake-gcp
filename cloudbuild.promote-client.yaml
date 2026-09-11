@@ -1,0 +1,118 @@
+# cloudbuild.promote-client.yaml — promote a release to the CLIENT environment.
+#
+# ---------------------------------------------------------------------------
+# THIS FILE BUILDS NO IMAGE, AND THAT ABSENCE IS THE GUARANTEE.
+# ---------------------------------------------------------------------------
+# D-23.4-04: a release promotes the SAME image digests the dev build produced.
+# There is therefore exactly ONE step below, and it is not a docker build. The
+# three promotable services — the intake backend image, the tribunal api image
+# and the tribunal worker image — are never rebuilt for the client: their digests
+# are resolved out of the source registry by infra/promote.sh and deployed by
+# @sha256. If a build step for any of them ever appears in this file, the
+# guarantee is gone and a client release is no longer the artifact that was
+# tested in dev.
+#
+# The ONE exception is the frontend, and promote.sh owns it: Vite inlines VITE_*
+# at BUILD time, so a promoted dev frontend image would point the client's
+# browser at the dev API. It is rebuilt per environment, inside promote.sh, with
+# the substitutions below.
+#
+# ---------------------------------------------------------------------------
+# THERE IS NO TRIGGER YET. (Operator ruling, 2026-09-11 — option `triggers-later`.)
+# ---------------------------------------------------------------------------
+# MEASURED 2026-09-11 in both projects: zero Cloud Build triggers, zero
+# repository connections. When a trigger is eventually created, its pattern is a
+# TAG pattern — `client-v*` — not a branch pattern. The dev branch is `master`
+# (operator ruling, option `branch-master`) and master alone does NOT promote:
+# the tag is the boundary that protects the client.
+#
+# INVOKE BY HAND, from the tagged commit (run from the repo root):
+#   git checkout client-v1.0.0
+#   gcloud builds submit . \
+#     --config=cloudbuild.promote-client.yaml \
+#     --substitutions=_SOURCE_PROJECT=project-cb01b861-cb4a-438d-b9a,_TARGET_PROJECT=nestor-pulse-prod,_IMAGE_TAG=<the dev release sha>,_API_BASE_URL=<client api url>,_FB_API_KEY=<client firebase web key>,_FB_AUTH_DOMAIN=nestor-pulse-prod.firebaseapp.com,_FB_PROJECT_ID=nestor-pulse-prod \
+#     --project=project-cb01b861-cb4a-438d-b9a --account=tools@dotto.be
+#   gcloud builds describe <FULL-UUID> --format='value(status,statusDetail)'
+# Confirm with describe and the FULL UUID; a short id returns nothing and a piped
+# exit code reports the PIPE, not the build.
+#
+# REHEARSE IT FIRST. promote.sh accepts DRY_RUN=1 and makes no outbound call at
+# all in that mode, so the exact ordering of a release can be read offline before
+# anything is submitted:
+#   DRY_RUN=1 SOURCE_PROJECT=... TARGET_PROJECT=... IMAGE_TAG=... \
+#   GCLOUD_ACCOUNT=tools@dotto.be SKIP_FRONTEND=1 bash infra/promote.sh
+#
+# ---------------------------------------------------------------------------
+# WHAT THE BUILD SERVICE ACCOUNT NEEDS (operator to-do; not granted by this file)
+# ---------------------------------------------------------------------------
+# The build runs in the SOURCE project but moves services in the TARGET project,
+# so its service account needs cross-project run.admin, iam.serviceAccountUser,
+# logging.viewer and artifactregistry.reader on the target, plus
+# cloudbuild.builds.editor in the target (promote.sh submits the queue gate and
+# the frontend rebuild there). Until those grants exist, run promote.sh from an
+# operator shell instead — it is the same script and takes the same inputs.
+
+substitutions:
+  # The dev project, where the images were built. REQUIRED.
+  _SOURCE_PROJECT: ''
+  _TARGET_PROJECT: 'nestor-pulse-prod'
+  # The tag the three promotable images carry in the source registry. REQUIRED —
+  # promote.sh resolves it to digests immediately and deploys none of them by tag.
+  _IMAGE_TAG: ''
+  _REGION: 'europe-west1'
+  _REPO: 'nestor'
+  # The CLIENT environment's public frontend build-time config.
+  _API_BASE_URL: ''
+  # NO VALUE HERE, BY DESIGN. The Firebase web key literal is blocked by the
+  # agent permission classifier, and a committed copy would outlive its rotation.
+  # The operator supplies it at invocation; promote.sh fails closed, by name, when
+  # it is empty.
+  _FB_API_KEY: ''
+  _FB_AUTH_DOMAIN: 'nestor-pulse-prod.firebaseapp.com'
+  _FB_PROJECT_ID: 'nestor-pulse-prod'
+  # Terraform's record of what is running. Written back by promote.sh step 10 so
+  # the next `terraform apply` cannot quietly roll the release back.
+  _TFVARS_FILE: 'infra/env/client.tfvars'
+  # Optional: a Firebase id token so the post-promotion smoke can do its THIRD
+  # check (one authenticated intake read). Without it promote.sh prints, in
+  # capitals, that the check did not run.
+  _SMOKE_ID_TOKEN: ''
+
+steps:
+  # The whole promotion. One step, one script, the same script the dev deploy
+  # runs — so the ordering, the idle gate and the smoke are not re-implemented
+  # here where they would drift.
+  - id: promote
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    env:
+      - 'SOURCE_PROJECT=${_SOURCE_PROJECT}'
+      - 'TARGET_PROJECT=${_TARGET_PROJECT}'
+      - 'IMAGE_TAG=${_IMAGE_TAG}'
+      - 'REGION=${_REGION}'
+      - 'REPO=${_REPO}'
+      - 'API_BASE_URL=${_API_BASE_URL}'
+      - 'FB_API_KEY=${_FB_API_KEY}'
+      - 'FB_AUTH_DOMAIN=${_FB_AUTH_DOMAIN}'
+      - 'FB_PROJECT_ID=${_FB_PROJECT_ID}'
+      - 'TFVARS_FILE=${_TFVARS_FILE}'
+      - 'SMOKE_ID_TOKEN=${_SMOKE_ID_TOKEN}'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        # Inside a build the identity is the build's service account, so there is
+        # no second account to pin; GCLOUD_ACCOUNT is required by promote.sh and
+        # is filled from the active credential.
+        export GCLOUD_ACCOUNT="$$(gcloud config get-value account 2>/dev/null)"
+        if [ -z "$$GCLOUD_ACCOUNT" ]; then
+          echo "ERROR: no active gcloud account inside the build." >&2
+          exit 1
+        fi
+        bash infra/promote.sh
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Two migrations, four deploys, two queue gates, one frontend build and the smoke.
+timeout: '3600s'
