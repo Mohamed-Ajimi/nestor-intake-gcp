@@ -1,0 +1,178 @@
+# cloudbuild.deploy-dev.yaml — build the three promotable images and deploy them
+# to the DEV project through the SAME ordered path a client release uses.
+#
+# ---------------------------------------------------------------------------
+# THE BRANCH: master. (Operator ruling, 2026-09-11 — option `branch-master`.)
+# ---------------------------------------------------------------------------
+# D-23.4-04 left the dev branch open ("develop, or master, operator to confirm").
+# It is master. The repository's only branch is master, every merge lands there,
+# and introducing `develop` would add a merge step per change to a one-developer
+# repository. The promotion boundary that actually protects the client is the
+# release TAG, not the branch. The consequence, accepted: "what is on master" no
+# longer equals "what the client has" — the client's contents are given by the
+# tag that was last promoted and by the deploy record promote.sh prints.
+#
+# ---------------------------------------------------------------------------
+# THERE IS NO TRIGGER YET. (Operator ruling, 2026-09-11 — option `triggers-later`.)
+# ---------------------------------------------------------------------------
+# MEASURED 2026-09-11 in BOTH projects: `gcloud builds triggers list` returns
+# "Listed 0 items" and `gcloud builds connections list --region=europe-west1`
+# returns "Listed 0 items". A trigger needs a 2nd-gen GitHub host connection,
+# which is an interactive console OAuth flow. This config is committed so it can
+# be invoked BY HAND now and attached to a trigger later, once the promotion has
+# run end to end at least once. A trigger that fires an unproven script into an
+# environment is worse than no trigger.
+#
+# INVOKE BY HAND (from the repo root, on master):
+#   gcloud builds submit . \
+#     --config=cloudbuild.deploy-dev.yaml \
+#     --substitutions=_PROJECT=project-cb01b861-cb4a-438d-b9a,_IMAGE_TAG=$(git rev-parse --short HEAD),_API_BASE_URL=<dev api url>,_FB_API_KEY=<dev firebase web key>,_FB_AUTH_DOMAIN=<dev>.firebaseapp.com,_FB_PROJECT_ID=<dev firebase project> \
+#     --project=project-cb01b861-cb4a-438d-b9a --account=tools@dotto.be
+#   gcloud builds describe <FULL-UUID> --format='value(status,statusDetail)'
+# Confirm with describe and the FULL UUID. Never read the result from a pipe:
+# `gcloud builds submit | tail` reports the PIPE's status, so a FAILED build
+# exits 0.
+#
+# ---------------------------------------------------------------------------
+# WHY THE DEV DEPLOY PROMOTES THE PROJECT TO ITSELF
+# ---------------------------------------------------------------------------
+# The last step calls infra/promote.sh with SOURCE_PROJECT and TARGET_PROJECT
+# BOTH set to ${_PROJECT}. That is deliberate. The dev deploy and the client
+# promotion then run the SAME ordered code path — the digest resolution, the
+# idle gate at steps 2 and 7, the migration-first ordering, the worker last, the
+# smoke — so the path the client depends on is exercised on EVERY dev deploy
+# rather than once per release. A release path that only runs at release time is
+# a path that gets debugged in front of the client.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE BUILD SERVICE ACCOUNT NEEDS (operator to-do; not granted by this file)
+# ---------------------------------------------------------------------------
+# This build launches OTHER builds (the queue gate and the frontend rebuild, both
+# inside promote.sh) and moves Cloud Run services and jobs. Its service account
+# therefore needs, in the dev project: cloudbuild.builds.editor, run.admin,
+# iam.serviceAccountUser, artifactregistry.writer and logging.viewer.
+# A missing grant shows up as a failure inside promote.sh, not here.
+
+substitutions:
+  # REQUIRED. The DEV project. No default: a config that guesses its target is
+  # the defect this phase exists to remove.
+  _PROJECT: ''
+  _REGION: 'europe-west1'
+  _REPO: 'nestor'
+  # The release tag carried by all three images.
+  #
+  # NOT defaulted to '$SHORT_SHA' as a literal, deliberately: Cloud Build does
+  # NOT expand substitutions inside substitution DEFAULTS, so the default would
+  # arrive as the seven characters "$SHORT_SHA" and every image would be tagged
+  # with that string. The resolve step below uses the built-in $SHORT_SHA (which
+  # a branch trigger supplies and a by-hand `builds submit` leaves EMPTY) when
+  # _IMAGE_TAG is not passed, and fails the build when neither exists.
+  _IMAGE_TAG: ''
+  # The DEV environment's public frontend build-time config. Vite inlines these
+  # at BUILD time, which is why the frontend is rebuilt per environment and never
+  # promoted.
+  _API_BASE_URL: ''
+  _FB_API_KEY: ''
+  _FB_AUTH_DOMAIN: ''
+  _FB_PROJECT_ID: ''
+  # Optional: the dev tfvars file to write the promoted tags back into.
+  _TFVARS_FILE: ''
+
+steps:
+  # -------------------------------------------------------------------------
+  # 0. Resolve the tag ONCE, and fail closed if there is no tag to use.
+  # -------------------------------------------------------------------------
+  - id: resolve-tag
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        TAG='${_IMAGE_TAG}'
+        if [ -z "$$TAG" ]; then TAG="$SHORT_SHA"; fi
+        if [ -z "$$TAG" ]; then
+          echo "ERROR: no image tag. Pass _IMAGE_TAG=<sha>; \$SHORT_SHA only exists on a trigger." >&2
+          exit 1
+        fi
+        printf '%s' "$$TAG" > /workspace/image_tag.txt
+        echo "image tag for this build: $$TAG"
+
+  # -------------------------------------------------------------------------
+  # 1-3. Build and push the three promotable images. The client promotion
+  #      contains NO equivalent of these steps — it moves these very digests.
+  # -------------------------------------------------------------------------
+  - id: build-backend
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        TAG="$$(cat /workspace/image_tag.txt)"
+        IMG="${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/backend:$${TAG}"
+        docker build -f backend/Dockerfile -t "$${IMG}" backend
+        docker push "$${IMG}"
+
+  - id: build-tribunal-api
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        TAG="$$(cat /workspace/image_tag.txt)"
+        IMG="${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/tribunal-api:$${TAG}"
+        # Build context is tribunal/ — requirements.txt, nestor_pulse_sdk/ AND
+        # nestor_pulse/ must all be in context (see the Dockerfile header).
+        docker build -f tribunal/infrastructure/cloud-run/api/Dockerfile -t "$${IMG}" tribunal
+        docker push "$${IMG}"
+
+  - id: build-tribunal-worker
+    name: 'gcr.io/cloud-builders/docker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        TAG="$$(cat /workspace/image_tag.txt)"
+        IMG="${_REGION}-docker.pkg.dev/${_PROJECT}/${_REPO}/tribunal-worker:$${TAG}"
+        docker build -f tribunal/infrastructure/cloud-run/worker/Dockerfile -t "$${IMG}" tribunal
+        docker push "$${IMG}"
+
+  # -------------------------------------------------------------------------
+  # 4. The deploy itself — the same script the client release runs.
+  # -------------------------------------------------------------------------
+  - id: promote-to-dev
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    env:
+      - 'SOURCE_PROJECT=${_PROJECT}'
+      - 'TARGET_PROJECT=${_PROJECT}'
+      - 'REGION=${_REGION}'
+      - 'REPO=${_REPO}'
+      - 'API_BASE_URL=${_API_BASE_URL}'
+      - 'FB_API_KEY=${_FB_API_KEY}'
+      - 'FB_AUTH_DOMAIN=${_FB_AUTH_DOMAIN}'
+      - 'FB_PROJECT_ID=${_FB_PROJECT_ID}'
+      - 'TFVARS_FILE=${_TFVARS_FILE}'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        export IMAGE_TAG="$$(cat /workspace/image_tag.txt)"
+        # Inside a build the identity is the build's service account, so there is
+        # no second account to pin; GCLOUD_ACCOUNT is required by promote.sh and
+        # is filled from the active credential.
+        export GCLOUD_ACCOUNT="$$(gcloud config get-value account 2>/dev/null)"
+        if [ -z "$$GCLOUD_ACCOUNT" ]; then
+          echo "ERROR: no active gcloud account inside the build." >&2
+          exit 1
+        fi
+        bash infra/promote.sh
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Three image builds, two migrations, four deploys, two queue gates and the smoke.
+timeout: '3600s'
