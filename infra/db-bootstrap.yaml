@@ -1,0 +1,151 @@
+# infra/db-bootstrap.yaml — ONE-TIME DATABASE PREREQUISITES FOR A FRESH ENVIRONMENT
+#
+# WHY THIS FILE EXISTS. The intake migrations run as the least-privilege runtime
+# identity (the Cloud Run service account's IAM DB user, DB_USER on the migrate Job).
+# On Cloud SQL that user is created with LOGIN and ZERO Postgres privileges, so on a
+# brand-new database `alembic upgrade head` dies on its very first statement:
+#
+#     42501 permission denied for schema public        (CREATE TABLE alembic_version)
+#
+# and would then die again on 0001's `CREATE SCHEMA nestor` and `CREATE EXTENSION
+# pgcrypto / vector` (extensions need cloudsqlsuperuser). Phase 2 (2026-06-19) worked
+# around this ONCE, by hand, on the dev project — temp postgres password, temp
+# cloudsqlsuperuser grant, revoke afterwards — and recorded it as a DESIGN GAP. Plan
+# 23.4-03 hit the identical 42501 on nestor-pulse-prod on 2026-09-11. This file is
+# the gap closed: the same prerequisites, as a repeatable, read-back-verified step.
+#
+# WHAT IT DOES (as `app_superadmin`, the BUILT_IN user Terraform creates, whose
+# password Terraform seeds into Secret Manager — API-created BUILT_IN users are
+# members of cloudsqlsuperuser on Cloud SQL for PostgreSQL):
+#   1. CREATE EXTENSION IF NOT EXISTS pgcrypto, vector   (0001 needs both)
+#   2. CREATE SCHEMA IF NOT EXISTS nestor (owned by the admin) and
+#      GRANT ALL ON SCHEMA nestor TO "<runtime SA db user>"
+#      — the migrations create and own their tables inside it; 0003/0005's
+#        ALTER DEFAULT PRIVILEGES are keyed on CURRENT_USER, i.e. that same role.
+#   3. GRANT CREATE ON SCHEMA public TO "<runtime SA db user>"
+#      — alembic_version lives in public.
+#   4. Read everything back and print it; exit non-zero if any of the three is missing.
+#
+# WHAT IT DOES NOT DO. It grants NO superuser, NO cloudsqlsuperuser membership and NO
+# CREATEROLE to the runtime identity. Nothing here touches the `tribunal` schema:
+# tribunal-migrate connects as app_user (BUILT_IN, cloudsqlsuperuser) via
+# DATABASE_URL and creates its own schema (runbook § Phase 13, T-13-09).
+#
+# EXIT CODES (the answer is the exit status; see queue-check.yaml for why):
+#   0   all three prerequisites present after the run
+#   90  _PROJECT / _RUNTIME_DB_USER missing
+#   81  psql could not be installed        82  proxy binary could not be fetched
+#   83  proxy did not come up              84  admin password secret unreadable/empty
+#   85  psql could not connect as admin
+#   86  pgcrypto  87  vector  88  CREATE SCHEMA nestor  89  GRANT ALL ON nestor  95  GRANT CREATE ON public
+#   94  a prerequisite is still missing after the statements ran
+#
+# HOW TO RUN IT (by hand, from the repo root, as the environment's runtime SA — it
+# already holds cloudsql.client and secretAccessor on the superadmin password secret;
+# --no-source because that SA cannot read the Cloud Build source bucket):
+#   gcloud builds submit --no-source --config=infra/db-bootstrap.yaml \
+#     --substitutions=_PROJECT=<project-id>,_RUNTIME_DB_USER=nestor-run@<project-id>.iam \
+#     --service-account=projects/<project-id>/serviceAccounts/nestor-run@<project-id>.iam.gserviceaccount.com \
+#     --project=<project-id> --account=tools@dotto.be
+#   gcloud builds describe <FULL-UUID> --project=<project-id> --format=json   # steps[0].exitCode
+#
+# ESCAPING: Cloud Build substitutes inside this whole body, COMMENTS INCLUDED. Every
+# shell dollar is doubled; the only single-dollar forms are the declared _NAME keys.
+
+substitutions:
+  _PROJECT: ''                     # REQUIRED
+  _REGION: 'europe-west1'
+  _INSTANCE: 'nestor-pg'
+  _DB: 'nestor'
+  _ADMIN_USER: 'app_superadmin'
+  _ADMIN_SECRET: 'nestor-app-superadmin-db-password'
+  _RUNTIME_DB_USER: ''             # REQUIRED — the IAM DB user, e.g. nestor-run@<project-id>.iam
+  _PROXY_VERSION: 'v2.14.3'        # pinned, never latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 300s
+
+steps:
+  - id: db-bootstrap
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -uo pipefail
+
+        PROJ='${_PROJECT}'
+        REG='${_REGION}'
+        INST='${_INSTANCE}'
+        DB='${_DB}'
+        ADMIN='${_ADMIN_USER}'
+        SEC='${_ADMIN_SECRET}'
+        RT='${_RUNTIME_DB_USER}'
+        PROXY_VERSION='${_PROXY_VERSION}'
+
+        if [ -z "$$PROJ" ] || [ -z "$$RT" ]; then
+          echo "CONFIG ERROR: _PROJECT and _RUNTIME_DB_USER are both required."
+          exit 90
+        fi
+        echo "==> db-bootstrap: $$PROJ:$$REG:$$INST db=$$DB admin=$$ADMIN runtime=$$RT"
+
+        if ! command -v psql >/dev/null 2>&1; then
+          echo "==> installing postgresql-client"
+          if ! { apt-get update -qq >/dev/null 2>&1 && \
+                 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client >/dev/null 2>&1; }; then
+            echo "COULD NOT INSTALL psql."; exit 81
+          fi
+        fi
+
+        if ! curl -fsSL -o /usr/local/bin/cloud-sql-proxy \
+             "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/$${PROXY_VERSION}/cloud-sql-proxy.linux.amd64"; then
+          echo "COULD NOT DOWNLOAD cloud-sql-proxy $${PROXY_VERSION}."; exit 82
+        fi
+        chmod +x /usr/local/bin/cloud-sql-proxy || exit 82
+
+        cloud-sql-proxy --address 127.0.0.1 --port 5432 "$${PROJ}:$${REG}:$${INST}" &
+        PROXY_PID=$$!
+        trap 'kill $$PROXY_PID 2>/dev/null || true' EXIT
+        READY=0
+        for _ in $$(seq 1 40); do
+          if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then READY=1; break; fi
+          sleep 1
+        done
+        if [ "$$READY" != "1" ]; then echo "PROXY DID NOT COME UP."; exit 83; fi
+
+        # The admin password: read at run time, never written to disk, never echoed.
+        export PGPASSWORD="$$(gcloud secrets versions access latest --secret="$${SEC}" --project="$${PROJ}" 2>/dev/null)"
+        if [ -z "$${PGPASSWORD:-}" ]; then echo "COULD NOT READ secret $${SEC}."; exit 84; fi
+        export PGHOST=127.0.0.1 PGPORT=5432 PGUSER="$${ADMIN}" PGDATABASE="$${DB}" PGCONNECT_TIMEOUT=15
+
+        CUR="$$(psql -tAX -c 'SELECT current_user' 2>&1)"
+        if [ $$? -ne 0 ]; then echo "PSQL COULD NOT CONNECT: $${CUR}"; exit 85; fi
+        echo "==> connected as $$(printf '%s' "$${CUR}" | tr -d '[:space:]')"
+
+        # :"rt" is psql's QUOTED-IDENTIFIER interpolation, so the SA name (which carries
+        # '@' and '.') is emitted as one safe identifier. One psql call per statement so
+        # the failing one is identifiable from the exit code alone (logs may be unreadable).
+        # The admin OWNS schema nestor: CREATE SCHEMA ... AUTHORIZATION <other role> needs
+        # membership of that role, which a cloudsqlsuperuser member does not have (exit 86
+        # on the first attempt, 2026-09-11). The runtime identity gets ALL on the schema
+        # instead, which is what the migrations need to create and own their tables.
+        psql -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pgcrypto" || { echo "FAILED: CREATE EXTENSION pgcrypto"; exit 86; }
+        psql -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector"   || { echo "FAILED: CREATE EXTENSION vector"; exit 87; }
+        psql -v ON_ERROR_STOP=1 -c "CREATE SCHEMA IF NOT EXISTS nestor"      || { echo "FAILED: CREATE SCHEMA nestor"; exit 88; }
+        echo 'GRANT ALL ON SCHEMA nestor TO :"rt";'    | psql -v ON_ERROR_STOP=1 -v rt="$${RT}" || { echo "FAILED: GRANT ALL ON SCHEMA nestor"; exit 89; }
+        echo 'GRANT CREATE ON SCHEMA public TO :"rt";' | psql -v ON_ERROR_STOP=1 -v rt="$${RT}" || { echo "FAILED: GRANT CREATE ON SCHEMA public"; exit 95; }
+
+        echo "==> read-back"
+        EXT="$$(psql -tAX -c "SELECT string_agg(extname, ',' ORDER BY extname) FROM pg_extension WHERE extname IN ('pgcrypto','vector')")"
+        NES="$$(echo "SELECT has_schema_privilege(:'rt', 'nestor', 'CREATE');" | psql -tAX -v rt="$${RT}")"
+        PUB="$$(echo "SELECT has_schema_privilege(:'rt', 'public', 'CREATE');" | psql -tAX -v rt="$${RT}")"
+        echo "extensions=$${EXT} runtime_can_create_in_nestor=$${NES} runtime_can_create_in_public=$${PUB}"
+
+        if [ "$${EXT}" != "pgcrypto,vector" ] || [ "$${NES}" != "t" ] || [ "$${PUB}" != "t" ]; then
+          echo "A PREREQUISITE IS MISSING AFTER THE RUN. Refusing to report success."
+          exit 94
+        fi
+        echo "==> database ready for the runtime-identity migration job."
+        exit 0

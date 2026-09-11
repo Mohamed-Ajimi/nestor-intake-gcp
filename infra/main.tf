@@ -315,6 +315,16 @@ resource "google_project_iam_member" "runtime_cloudsql_instance_user" {
 # create/lookup IdP users. Token VERIFICATION (verify_id_token) needs NO role; only
 # claim WRITES / user creation do. Still least-privilege: no firebase.admin /
 # owner / editor -- just identitytoolkit.admin (T-03-14).
+# Cloud Build steps that run AS the runtime SA (infra/queue-check.yaml, infra/db-bootstrap.yaml)
+# need this to write their step output to Cloud Logging; without it the build's
+# statusDetail still carries the exit code but the human-readable lines are lost
+# (runbook Q-PRE-4 asked for the same grant on dev; added for every environment 2026-09-11).
+resource "google_project_iam_member" "runtime_log_writer" {
+  project = var.project
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.runtime.email}"
+}
+
 resource "google_project_iam_member" "runtime_identitytoolkit_admin" {
   project = var.project
   role    = "roles/identitytoolkit.admin"
