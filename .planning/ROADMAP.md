@@ -833,7 +833,7 @@ Plans:
 **Goal:** The client can log in to and test the app on its OWN GCP project (`nestor-pulse-prod`) while development continues on the current project, and every future fix or feature reaches the client through a repeatable promotion: build once, promote the same image digests, migrations first, worker only when idle, smoke after. Stood up from the existing Terraform plus the recorded manual wiring, proven with one observed end-to-end research run BEFORE any client user exists, and written down as ONE consolidated bootstrap + promotion runbook so the next environment is a checklist.
 **Requirements**: TBD (operations phase — decisions D-23.4-01..07 in 23.4-CONTEXT.md are the contract)
 **Depends on:** Phase 23.3
-**Plans:** 5 plans
+**Plans:** 3/5 plans executed
 
 **Success criteria:**
 1. `terraform apply` against `nestor-pulse-prod` from a `client.tfvars` with a GCS state backend; all four Cloud Run services + both migrate jobs + seed job exist there at the dev image digests; Identity Platform authorized domains carry both frontend hostnames.
@@ -844,10 +844,10 @@ Plans:
 6. `infra/BOOTSTRAP.md` (or equivalent) stands up an environment from zero as a numbered checklist, including every manual step the runbook records as drift; `infra/DEPLOY-RUNBOOK.md` carries the 23.4 record.
 
 Plans:
-- [ ] 23.4-01-PLAN.md — wave 1 — parametrise `infra/` for a second project (GCS backend per env, registry project, scaling floors, ONE shared Anthropic secret, STALE 90→60 in variables.tf) and apply it to `nestor-pulse-prod`
-- [ ] 23.4-02-PLAN.md — wave 1 — the D-23.4-07 code fixes (attempt cap excludes `cancelled`, frontend surfaces `needs_investigation`, STALE 90→60 in `deploy-worker.sh`) and four tribunal deploy scripts that refuse to guess a project
+- [x] 23.4-01-PLAN.md — wave 1 — parametrise `infra/` for a second project (GCS backend per env, registry project, scaling floors, ONE shared Anthropic secret, STALE 90→60 in variables.tf) and apply it to `nestor-pulse-prod`
+- [x] 23.4-02-PLAN.md — wave 1 — the D-23.4-07 code fixes (attempt cap excludes `cancelled`, frontend surfaces `needs_investigation`, STALE 90→60 in `deploy-worker.sh`) and four tribunal deploy scripts that refuse to guess a project
 - [ ] 23.4-03-PLAN.md — wave 2 — first client deploy at the promoted digests, second-pass URL wiring + authorized domains, both migrations, superadmin seed, and the observed proving run (D-23.4-06)
-- [ ] 23.4-04-PLAN.md — wave 2 — the promotion pipeline: fail-closed worker idle gate, `infra/promote.sh` (build once, promote by digest, migrations first, smoke after), two Cloud Build configs
+- [x] 23.4-04-PLAN.md — wave 2 — the promotion pipeline: fail-closed worker idle gate, `infra/promote.sh` (build once, promote by digest, migrations first, smoke after), two Cloud Build configs
 - [ ] 23.4-05-PLAN.md — wave 3 — `infra/BOOTSTRAP.md` from-zero checklist, the 23.4 deploy record + promotion section, STATE.md, and the operator to-do list
 
 **Wave structure:** wave 1 = {01, 02} (file-disjoint: `infra/*.tf` + `infra/env/` versus backend/frontend/tribunal scripts) · wave 2 = {03, 04} (03 needs 01's Terraform and 02's fixes in the images it promotes; 04 needs 02's hardened scripts; file-disjoint from each other) · wave 3 = {05} (writes the record of what 03 and 04 did).
