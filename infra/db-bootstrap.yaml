@@ -22,8 +22,8 @@
 #      GRANT ALL ON SCHEMA nestor TO "<runtime SA db user>"
 #      — the migrations create and own their tables inside it; 0003/0005's
 #        ALTER DEFAULT PRIVILEGES are keyed on CURRENT_USER, i.e. that same role.
-#   3. GRANT CREATE ON SCHEMA public TO "<runtime SA db user>"
-#      — alembic_version lives in public.
+#   3. GRANT CREATE ON SCHEMA public TO "<runtime SA db user>" (alembic_version lives there)
+#      and GRANT CREATE ON DATABASE nestor (0001's CREATE SCHEMA IF NOT EXISTS checks it first)
 #   4. Read everything back and print it; exit non-zero if any of the three is missing.
 #
 # WHAT IT DOES NOT DO. It grants NO superuser, NO cloudsqlsuperuser membership and NO
@@ -37,7 +37,7 @@
 #   81  psql could not be installed        82  proxy binary could not be fetched
 #   83  proxy did not come up              84  admin password secret unreadable/empty
 #   85  psql could not connect as admin
-#   86  pgcrypto  87  vector  88  CREATE SCHEMA nestor  89  GRANT ALL ON nestor  95  GRANT CREATE ON public
+#   86  pgcrypto  87  vector  88  CREATE SCHEMA nestor  89  GRANT ALL ON nestor  95  GRANT CREATE ON public  96  GRANT CREATE ON DATABASE
 #   94  a prerequisite is still missing after the statements ran
 #
 # HOW TO RUN IT (by hand, from the repo root, as the environment's runtime SA — it
@@ -136,14 +136,19 @@ steps:
         psql -v ON_ERROR_STOP=1 -c "CREATE SCHEMA IF NOT EXISTS nestor"      || { echo "FAILED: CREATE SCHEMA nestor"; exit 88; }
         echo 'GRANT ALL ON SCHEMA nestor TO :"rt";'    | psql -v ON_ERROR_STOP=1 -v rt="$${RT}" || { echo "FAILED: GRANT ALL ON SCHEMA nestor"; exit 89; }
         echo 'GRANT CREATE ON SCHEMA public TO :"rt";' | psql -v ON_ERROR_STOP=1 -v rt="$${RT}" || { echo "FAILED: GRANT CREATE ON SCHEMA public"; exit 95; }
+        # 0001 runs CREATE SCHEMA IF NOT EXISTS nestor, and PostgreSQL checks CREATE on the
+        # DATABASE before it checks existence (42501 "permission denied for database nestor",
+        # measured 2026-09-11 with the schema already present).
+        echo 'GRANT CREATE ON DATABASE nestor TO :"rt";' | psql -v ON_ERROR_STOP=1 -v rt="$${RT}" || { echo "FAILED: GRANT CREATE ON DATABASE nestor"; exit 96; }
 
         echo "==> read-back"
         EXT="$$(psql -tAX -c "SELECT string_agg(extname, ',' ORDER BY extname) FROM pg_extension WHERE extname IN ('pgcrypto','vector')")"
         NES="$$(echo "SELECT has_schema_privilege(:'rt', 'nestor', 'CREATE');" | psql -tAX -v rt="$${RT}")"
         PUB="$$(echo "SELECT has_schema_privilege(:'rt', 'public', 'CREATE');" | psql -tAX -v rt="$${RT}")"
-        echo "extensions=$${EXT} runtime_can_create_in_nestor=$${NES} runtime_can_create_in_public=$${PUB}"
+        DBC="$$(echo "SELECT has_database_privilege(:'rt', 'nestor', 'CREATE');" | psql -tAX -v rt="$${RT}")"
+        echo "extensions=$${EXT} runtime_can_create_in_nestor=$${NES} runtime_can_create_in_public=$${PUB} runtime_can_create_schema_in_db=$${DBC}"
 
-        if [ "$${EXT}" != "pgcrypto,vector" ] || [ "$${NES}" != "t" ] || [ "$${PUB}" != "t" ]; then
+        if [ "$${EXT}" != "pgcrypto,vector" ] || [ "$${NES}" != "t" ] || [ "$${PUB}" != "t" ] || [ "$${DBC}" != "t" ]; then
           echo "A PREREQUISITE IS MISSING AFTER THE RUN. Refusing to report success."
           exit 94
         fi
