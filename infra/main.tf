@@ -63,6 +63,10 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier = var.tier # db-custom-1-3840 -> default max_connections=100 (A4/D-04)
+    # ENTERPRISE is what dev runs (read back 2026-09-11) and the only edition that accepts a
+    # db-custom-* tier. Left unset, the API now defaults new instances to ENTERPRISE_PLUS and
+    # rejects db-custom-1-3840 with `Invalid Tier ... for (ENTERPRISE_PLUS) Edition`.
+    edition = "ENTERPRISE"
 
     # IAM database authentication -- the ONLY auth path; there is no built-in
     # DB credential to store or leak (D-03/D-09).
