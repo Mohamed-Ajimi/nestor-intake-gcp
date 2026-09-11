@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
+import { classifyTriggerOutcome } from "@/lib/research/triggerOutcome";
 import { toast } from "sonner";
 import { ArrowLeft, Clock, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import {
@@ -809,13 +810,25 @@ function IntakeDetailPage() {
     setBusyKey("startResearch", true);
     try {
       const res = await triggerResearch(id);
-      if (!res.success) {
-        const codeKey = resolveErrorKey(res.code);
-        toast.error(codeKey ? t(codeKey) : res.error || t("intakeDetail.toast.researchStartFailed"));
-        return;
+      // An over-cap trigger is a 202 with a null `research_run_id`, NOT a 4xx — `res.success`
+      // is `true` for a run that never started, so the body decides, not the flag (D-23.4-07).
+      switch (classifyTriggerOutcome(res)) {
+        case "error": {
+          const code = res.success ? undefined : res.code;
+          const codeKey = resolveErrorKey(code);
+          const message = res.success ? "" : res.error;
+          toast.error(codeKey ? t(codeKey) : message || t("intakeDetail.toast.researchStartFailed"));
+          return;
+        }
+        case "needs_investigation":
+          // No `load()`: nothing changed server-side, and re-fetching would read as a refresh.
+          toast.warning(t("intakeDetail.toast.researchNeedsInvestigation"));
+          return;
+        case "started":
+          toast.success(t("intakeDetail.toast.researchStarted"));
+          await load();
+          return;
       }
-      toast.success(t("intakeDetail.toast.researchStarted"));
-      await load();
     } finally {
       setBusyKey("startResearch", false);
     }

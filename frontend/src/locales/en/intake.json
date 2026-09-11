@@ -471,7 +471,8 @@
       "resumeOk": "Research resumed — it picks up where it stopped.",
       "resumeError": "The research could not be resumed.",
       "retryOk": "A new research run has been started.",
-      "retryError": "A new research run could not be started."
+      "retryError": "A new research run could not be started.",
+      "needsInvestigation": "This intake has used up its research attempts. No new run was started and nothing was charged — someone needs to look at it."
     },
     "costFallback": "—",
     "dateFallback": "—",
