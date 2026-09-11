@@ -828,6 +828,16 @@ Plans:
 
 ⛔ **This phase deploys nothing and spends nothing.** Everything is provable by local tests; the deploy is a separate operator-run step, and it must start with the Tribunal queue verified EMPTY.
 
+### Phase 23.4: client environment — stand up the fresh nestor-pulse-prod project from the existing Terraform plus the recorded manual wiring, seed the client space, prove it with one run, and build the dev-to-client promotion pipeline (build once, promote by digest, worker idle gate, post-promotion smoke) with a consolidated bootstrap runbook (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 23
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23.4 to break down)
+
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
 **Goal:** A superadmin can deliberately re-run deep research on an intake that already succeeded, steer that re-run with a note asking for something different from previous runs, see every version of an intake's research, and read the actual cited passage grouped under its link instead of a bare URL.
