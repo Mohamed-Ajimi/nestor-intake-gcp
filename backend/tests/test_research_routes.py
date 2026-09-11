@@ -16,6 +16,10 @@ What each case proves:
 | ``brief_never_opts_into_gates``        | the brief handed to create_run has NO [INTERACTIVE_REPORT]|
 |                                        | and enumerates the questions — SEAM-04 at the boundary.   |
 | ``attempt_cap_3``                      | a 4th trigger → needs_investigation, NO create_run call.  |
+| ``attempt_cap_ignores_cancelled``      | 2 failed + 1 cancelled → NOT capped: a 4th run starts.    |
+|                                        | A deliberate stop spent nothing and may not cost an       |
+|                                        | attempt (D-23.4-07).                                      |
+| ``attempt_cap_all_cancelled_never_caps``| 3 cancellations and 0 failures never cap the intake.     |
 | ``completion_mail_to_trigger_user``    | the completed run mails the acting user (fake_resend).    |
 | ``research_stream_terminal_set``       | the SSE stream closes on ``completed`` (does not hang) —  |
 |                                        | RESEARCH_TERMINAL, not the skill-run success set.         |
@@ -555,6 +559,98 @@ def test_attempt_cap_3(
         assert not fake_tribunal_client["create_run"], (
             "the 4th attempt must make NO create_run call (no double-charge)."
         )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_attempt_cap_ignores_cancelled(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
+    """2 failed + 1 cancelled prior runs -> NOT capped (D-23.4-07).
+
+    A ``cancelled`` run is a DELIBERATE stop that spent nothing, and it is already a legal
+    retry trigger via ``_RETRYABLE_RUN_STATUSES``. Counting it toward a cap whose stated
+    purpose (D-04) is "a runaway retrigger must not re-charge Tribunal" punishes the one
+    operator action that PREVENTS spend.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status="decomposed")
+    _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+    # Three prior rows, but only TWO of them are cap-eligible.
+    for i, run_status in enumerate(("failed", "cancelled", "failed")):
+        _seed_research_run(
+            engine, set_space, space, intake_id, uuid.uuid4(), status=run_status, attempt=i + 1
+        )
+    _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert resp.status_code == 202, f"expected 202 wrapper, got {resp.status_code}"
+        body = resp.json()
+        assert body.get("status") != "needs_investigation", (
+            f"a cancelled run must NOT consume one of the three attempts, got {body!r}"
+        )
+        assert body["research_run_id"] is not None, (
+            f"the trigger must have started a real run, got {body!r}"
+        )
+        # A 4th row IS inserted, the intake DID flip, and the seam WAS called.
+        assert _count_runs(engine, set_space, space, intake_id) == 4
+        assert _read_intake_status(engine, set_space, space, intake_id) == "in_research"
+        assert fake_tribunal_client["create_run"], "create_run must have been called"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_attempt_cap_all_cancelled_never_caps(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
+    """3 cancelled runs and 0 failures -> never capped (D-23.4-07).
+
+    Cancelling is free and deliberate; no number of cancellations may lock an intake out of
+    the research it has not yet had.
+    """
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status="decomposed")
+    _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+    for i in range(3):
+        _seed_research_run(
+            engine, set_space, space, intake_id, uuid.uuid4(), status="cancelled", attempt=i + 1
+        )
+    _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    try:
+        resp = TestClient(app).post(
+            f"/intakes/{intake_id}/research",
+            headers={"Authorization": "Bearer overridden"},
+        )
+        assert resp.status_code == 202, f"expected 202 wrapper, got {resp.status_code}"
+        body = resp.json()
+        assert body.get("status") != "needs_investigation", (
+            f"three cancellations must not cap the intake, got {body!r}"
+        )
+        assert body["research_run_id"] is not None
+        assert _count_runs(engine, set_space, space, intake_id) == 4
+        assert _read_intake_status(engine, set_space, space, intake_id) == "in_research"
+        assert fake_tribunal_client["create_run"], "create_run must have been called"
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
