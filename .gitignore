@@ -39,3 +39,4 @@ Thumbs.db
 *.tfstate
 *.tfstate.*
 .terraform/
+*.tfplan

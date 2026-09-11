@@ -110,9 +110,11 @@ resource "google_sql_database" "app" {
   # WR-06: the instance-level deletion_protection does NOT cover the database
   # object. Protect the tenant DB itself so a `terraform destroy` targeting this
   # resource (or a config change forcing its replacement) cannot silently drop the
-  # `nestor` database while the instance survives. deletion_protection guards the
-  # provider-level destroy; prevent_destroy is the Terraform-core backstop.
-  deletion_protection = true
+  # `nestor` database while the instance survives. `deletion_policy = "ABANDON"`
+  # makes a provider-level destroy leave the database in place (the provider has no
+  # `deletion_protection` on this resource — validated 2026-09-11, google v6.50.0);
+  # prevent_destroy is the Terraform-core backstop.
+  deletion_policy = "ABANDON"
 
   lifecycle {
     prevent_destroy = true

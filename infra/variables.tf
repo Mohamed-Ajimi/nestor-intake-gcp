@@ -363,7 +363,7 @@ variable "tribunal_audit_bucket_secret_id" {
 }
 
 variable "tribunal_audit_bucket_name" {
-  description = "Name of the GCS audit-evidence bucket for the Tribunal hash-chain bodies (7y per-object retention, mode=Unlocked — D-09). Default \"\" derives `${var.project}-nestor-audit` in main.tf. Set explicitly to pin a name."
+  description = "Name of the GCS audit-evidence bucket for the Tribunal hash-chain bodies (7y per-object retention, mode=Unlocked — D-09). Default \"\" derives `$${var.project}-nestor-audit` in main.tf. Set explicitly to pin a name."
   type        = string
   default     = ""
 }
