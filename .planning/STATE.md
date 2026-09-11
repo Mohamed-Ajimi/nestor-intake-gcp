@@ -4,12 +4,12 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-11T10:36:09.217Z"
-last_activity: "2026-09-01 -- DEPLOYED tag `20260901-134253`: claude-sonnet-5 + gemini-3.7-flash live on tribunal-api-00023-bc6 / tribunal-worker-00009-fkm, both digests proven, NO run triggered. Tree is FULLY DEPLOYED — nothing committed-but-unbuilt."
+last_updated: "2026-09-11T11:22:21.757Z"
+last_activity: 2026-09-11 -- Phase 23.4 planning complete
 progress:
   total_phases: 24
   completed_phases: 18
-  total_plans: 178
+  total_plans: 183
   completed_plans: 177
   percent: 75
 ---
@@ -368,7 +368,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Executing Phase 23
+Status: Ready to execute
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -478,7 +478,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-09-01 -- DEPLOYED tag `20260901-134253`: claude-sonnet-5 + gemini-3.7-flash live on tribunal-api-00023-bc6 / tribunal-worker-00009-fkm, both digests proven, NO run triggered. Tree is FULLY DEPLOYED — nothing committed-but-unbuilt.
+Last activity: 2026-09-11 -- Phase 23.4 planning complete
 
 Progress: [██████████] 100%
 
