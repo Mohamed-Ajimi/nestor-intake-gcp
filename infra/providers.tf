@@ -16,20 +16,33 @@ terraform {
 
   # WR-06: remote state for the infra that owns the only credentialed path to the
   # tenant DB. Local state has no locking, is easy to lose, and is not shareable --
-  # an unacceptable risk for a resource set carrying deletion_protection. Provision
-  # a versioned GCS bucket once in Cloud Shell, then UNCOMMENT the backend block
-  # below and run `terraform init -migrate-state` to move local state into it:
+  # an unacceptable risk for a resource set carrying deletion_protection.
   #
-  #   gsutil mb -l "$TF_VAR_region" -b on "gs://${TF_VAR_project}-nestor-tfstate"
-  #   gsutil versioning set on "gs://${TF_VAR_project}-nestor-tfstate"
+  # D-23.4-01: the block below is now LIVE and PARTIAL -- it names the gcs backend but
+  # deliberately carries NO bucket. Terraform therefore cannot resolve a state location
+  # on its own, and every init MUST name the environment it is initialising:
   #
-  # The block is shipped commented (not live) because `terraform init` would fail
-  # against a not-yet-created bucket; uncommenting is a one-line step in the runbook.
+  #   terraform -chdir=infra init -reconfigure -backend-config=env/client.gcs.tfbackend
+  #   terraform -chdir=infra init -reconfigure -backend-config=env/dev.gcs.tfbackend
   #
-  # backend "gcs" {
-  #   bucket = "<your-project-id>-nestor-tfstate" # the bucket created above
-  #   prefix = "nestor-intake/infra"
-  # }
+  # A bare `terraform init` now PROMPTS for the bucket instead of silently writing a
+  # local `terraform.tfstate`. That prompt IS THE POINT. A silent local state file is
+  # exactly how this project's own state was lost: the dev project has no recorded
+  # state anywhere and its resources were created by hand, so nobody can now say what
+  # was applied. An interactive prompt is the cheap failure; a second, divergent,
+  # unshareable state file is the expensive one.
+  #
+  # The bucket is created ONCE PER PROJECT, by the operator, BEFORE the first init --
+  # `init` against a not-yet-created bucket fails, and that ordering is a runbook step,
+  # not a Terraform resource (a backend cannot bootstrap its own storage):
+  #
+  #   gcloud storage buckets create gs://<project-id>-tfstate --location=europe-west1 \
+  #     --uniform-bucket-level-access --project=<project-id> --account=tools@dotto.be
+  #   gcloud storage buckets update gs://<project-id>-tfstate --versioning \
+  #     --project=<project-id> --account=tools@dotto.be
+  #
+  # Versioning is not optional: it is the only recovery path from a corrupted apply.
+  backend "gcs" {}
 }
 
 provider "google" {
