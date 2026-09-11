@@ -24,11 +24,34 @@
 # db/base.py reads DATABASE_URL from os.environ directly.
 #
 # Re-run safe (zero-downtime revisions).
+#
+# ---------------------------------------------------------------------------
+# THIS SCRIPT DEPLOYS PAID INFRASTRUCTURE, AND THERE ARE TWO PROJECTS NOW.
+# ---------------------------------------------------------------------------
+# A script that GUESSES its target lands a client release in the dev project, or
+# a dev experiment in front of the client. GOOGLE_PROJECT is REQUIRED and has NO
+# default — it never had one here, and it must not gain one.
+#
+# Optional but recommended: GCLOUD_ACCOUNT. `gcloud auth login` has silently
+# switched BOTH account and project mid-session on this machine, there are four
+# accounts on it, and deploy scripts inherit ambient gcloud config without
+# complaining. Setting it pins --account on every call below.
+# ---------------------------------------------------------------------------
 
 set -euo pipefail
 
-PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
+PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id — there is no default, and there must not be: two projects exist and a guess deploys to the wrong one}"
 REGION="${REGION:-europe-west1}"
+
+GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
+ACCOUNT_ARGS=()
+if [ -n "$GCLOUD_ACCOUNT" ]; then
+  ACCOUNT_ARGS=(--account="$GCLOUD_ACCOUNT")
+else
+  echo "WARNING: GCLOUD_ACCOUNT is not set — using whatever account gcloud is currently" >&2
+  echo "         configured with. That config has reverted mid-session on this machine," >&2
+  echo "         and four accounts are logged in. Export GCLOUD_ACCOUNT to pin it." >&2
+fi
 INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
 # Phase 14 (WR-03/D-04b): the DEDICATED least-privilege Tribunal runtime SA — NOT the
 # intake nestor-run SA. Making caller SA (nestor-run) != callee SA (tribunal-run) is what
@@ -60,7 +83,7 @@ command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1;
 
 if [ -z "${TRIBUNAL_SERVICE_URL:-}" ]; then
   # Self-heal: the seam audience IS this service's own run.app URL (no path — Pitfall 4).
-  TRIBUNAL_SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" \
+  TRIBUNAL_SERVICE_URL="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${SERVICE_NAME}" \
     --region="${REGION}" --project="${PROJECT}" \
     --format='value(status.url)' 2>/dev/null || true)"
   [ -n "${TRIBUNAL_SERVICE_URL}" ] && \
@@ -106,7 +129,7 @@ TRIBUNAL_SERPAPI_SECRET="${TRIBUNAL_SERPAPI_SECRET:-Nestor_SERP}"
 # the VALUE is never read, echoed or logged by this script.
 TRIBUNAL_ANTHROPIC_SECRET="${TRIBUNAL_ANTHROPIC_SECRET:-Nestor_Claude2}"
 
-LIVE_ANTHROPIC_SECRET="$(gcloud run services describe "${SERVICE_NAME}" \
+LIVE_ANTHROPIC_SECRET="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${SERVICE_NAME}" \
   --region="${REGION}" --project="${PROJECT}" \
   --flatten='spec.template.spec.containers[].env[]' \
   --filter='spec.template.spec.containers.env.name=ANTHROPIC_API_KEY' \
@@ -129,7 +152,7 @@ OPENAI_API_KEY=Nestor_OpenAI:latest"
 # Append the SERPAPI mapping ONLY when the secret actually exists. Binding a non-existent
 # secret fails the whole `gcloud run deploy`, and a missing D10 stream must never block
 # shipping the rest of the phase.
-if gcloud secrets describe "${TRIBUNAL_SERPAPI_SECRET}" --project="${PROJECT}" >/dev/null 2>&1; then
+if gcloud "${ACCOUNT_ARGS[@]}" secrets describe "${TRIBUNAL_SERPAPI_SECRET}" --project="${PROJECT}" >/dev/null 2>&1; then
   TRIBUNAL_SECRETS="${TRIBUNAL_SECRETS},SERPAPI_API_KEY=${TRIBUNAL_SERPAPI_SECRET}:latest"
   echo "==> own-researcher key will be mounted from secret: ${TRIBUNAL_SERPAPI_SECRET}"
 else
@@ -148,7 +171,7 @@ echo "==> Deploying ${SERVICE_NAME} with image: ${API_IMAGE_URL}"
 
 REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
 
-gcloud run deploy "${SERVICE_NAME}" \
+gcloud "${ACCOUNT_ARGS[@]}" run deploy "${SERVICE_NAME}" \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --image="${API_IMAGE_URL}" \
@@ -166,7 +189,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --set-secrets="${TRIBUNAL_SECRETS}"
 
 # Print the deployed URL
-API_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+API_URL=$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${SERVICE_NAME}" \
   --region="${REGION}" \
   --project="${PROJECT}" \
   --format='value(status.url)' 2>/dev/null || echo "")

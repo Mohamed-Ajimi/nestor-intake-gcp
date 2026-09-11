@@ -14,6 +14,7 @@ import {
   type ResearchRun,
 } from "@/lib/api/research";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
+import { classifyTriggerOutcome } from "@/lib/research/triggerOutcome";
 // The confirm gate reuses the SAME dialog affordance the research TRIGGER and the embedded
 // card already use — the house pattern for a destructive or paid research action. No new
 // dialog component is introduced and `components/ui/**` is not modified (CLAUDE.md).
@@ -176,23 +177,38 @@ export function RunActions({
   const handleFreshAttempt = async () => {
     if (busy) return;
     setBusy(true);
-    // The three-attempt cap is enforced server-side, so the affordance is always offered and
-    // an over-cap request comes back as a rejection, surfaced below as a toast.
+    // The attempt cap is enforced server-side, so the affordance is always offered. An
+    // over-cap request is NOT a rejection: it comes back as a 202 with a null
+    // `research_run_id`, so `res.success` is `true` for a run that never started —
+    // `classifyTriggerOutcome` is what tells the two apart (D-23.4-07).
     const res = await triggerResearch(intakeId);
     setBusy(false);
-    if (!res.success) {
-      fail(res, "research.actions.retryError");
-      return;
+    switch (classifyTriggerOutcome(res)) {
+      case "error":
+        // `fail` takes the narrowed failure shape. The classifier returns "error" only when
+        // `res.success` is false, so this guard is a type-level formality that lets the
+        // compiler see the narrowing — not a second copy of the rule.
+        if (!res.success) fail(res, "research.actions.retryError");
+        return;
+      case "needs_investigation":
+        // Deliberately NO onReload(): nothing changed server-side, and a reload here is
+        // exactly what made the no-op look like a successful refresh.
+        toast.warning(t("research.actions.needsInvestigation"));
+        return;
+      case "started": {
+        toast.success(t("research.actions.retryOk"));
+        const freshId = res.success ? res.data?.research_run_id : null;
+        if (freshId && freshId !== run.id) {
+          // A new attempt is a NEW run with its own id and its own history. Staying on this
+          // URL would leave the operator watching the old run's frozen feed while the new
+          // one runs.
+          void navigate({ to: "/admin/pulse/runs/$runId", params: { runId: freshId } });
+          return;
+        }
+        onReload();
+        return;
+      }
     }
-    toast.success(t("research.actions.retryOk"));
-    const freshId = res.data?.research_run_id;
-    if (freshId && freshId !== run.id) {
-      // A new attempt is a NEW run with its own id and its own history. Staying on this URL
-      // would leave the operator watching the old run's frozen feed while the new one runs.
-      void navigate({ to: "/admin/pulse/runs/$runId", params: { runId: freshId } });
-      return;
-    }
-    onReload();
   };
 
   return (

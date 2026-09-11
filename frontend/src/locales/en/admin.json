@@ -146,6 +146,7 @@
       "contextPackStartFailed": "Failed to start Context Pack",
       "contextPackStarted": "Context Pack generation started — this takes about 1–2 minutes.",
       "researchStarted": "Deep research started — progress appears below.",
+      "researchNeedsInvestigation": "This intake has used up its research attempts. No new run was started and nothing was charged — someone needs to look at it.",
       "researchStartFailed": "Failed to start research",
       "researchResumed": "Research resumed",
       "researchResumeFailed": "Could not resume the research",

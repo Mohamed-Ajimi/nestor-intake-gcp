@@ -146,6 +146,7 @@
       "contextPackStartFailed": "Échec du démarrage du Context Pack",
       "contextPackStarted": "Génération du Context Pack lancée — cela prend environ 1 à 2 minutes.",
       "researchStarted": "Deep research lancée — la progression s'affiche ci-dessous.",
+      "researchNeedsInvestigation": "Cette intake a épuisé ses tentatives de recherche. Aucune nouvelle exécution n'a démarré et rien n'a été facturé — quelqu'un doit y jeter un œil.",
       "researchStartFailed": "Échec du démarrage de la recherche",
       "researchResumed": "Recherche reprise",
       "researchResumeFailed": "Impossible de reprendre la recherche",

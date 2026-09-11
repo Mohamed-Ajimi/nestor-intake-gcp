@@ -329,15 +329,35 @@ export const RESEARCH_TERMINAL = new Set([
 ]);
 
 /**
+ * The body of a 202 from `POST /intakes/{id}/research`.
+ *
+ * `research_run_id` is NULLABLE, and that is the whole point (D-23.4-07). The backend
+ * answers an over-cap trigger with **HTTP 202**, not a 4xx:
+ * `{"research_run_id": null, "status": "needs_investigation", "attempts": N}`. A 202 means
+ * `ApiResult.success` is `true`, so `success` alone CANNOT tell a started run from a
+ * refused one — every caller MUST inspect the body. This type was declared
+ * with a NON-nullable `research_run_id` until 23.4-02, which made the refusal
+ * un-representable and let both call sites type-check while showing a green toast and
+ * doing nothing.
+ *
+ * Classify it with `classifyTriggerOutcome` (`@/lib/research/triggerOutcome`) rather than
+ * re-deriving the branches at each call site.
+ */
+export type TriggerResearchResponse = {
+  research_run_id: string | null;
+  status?: string;
+  attempts?: number;
+};
+
+/**
  * Trigger a deep-research run for an intake. Mirrors `getSkillRunFull`: a one-shot
  * `apiFetch` over the token-attaching transport (never fork the transport), method POST.
- * Returns `{ research_run_id }` on 202. Space-scoped server-side; a cross-space intake is
- * existence-hidden as 404. Returns `{success,error?}` — never throws (CLAUDE.md).
+ * Returns a `TriggerResearchResponse` on 202 — which may be a REFUSAL; see that type.
+ * Space-scoped server-side; a cross-space intake is existence-hidden as 404. Returns
+ * `{success,error?}` — never throws (CLAUDE.md).
  */
-export function triggerResearch(
-  intakeId: string,
-): Promise<ApiResult<{ research_run_id: string }>> {
-  return apiFetch<{ research_run_id: string }>(`/intakes/${intakeId}/research`, {
+export function triggerResearch(intakeId: string): Promise<ApiResult<TriggerResearchResponse>> {
+  return apiFetch<TriggerResearchResponse>(`/intakes/${intakeId}/research`, {
     method: "POST",
   });
 }

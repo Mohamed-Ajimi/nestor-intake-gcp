@@ -471,7 +471,8 @@
       "resumeOk": "Recherche reprise — elle repart là où elle s'était arrêtée.",
       "resumeError": "La recherche n'a pas pu être reprise.",
       "retryOk": "Une nouvelle exécution de recherche a démarré.",
-      "retryError": "Impossible de démarrer une nouvelle exécution de recherche."
+      "retryError": "Impossible de démarrer une nouvelle exécution de recherche.",
+      "needsInvestigation": "Cette intake a épuisé ses tentatives de recherche. Aucune nouvelle exécution n'a démarré et rien n'a été facturé — quelqu'un doit y jeter un œil."
     },
     "costFallback": "—",
     "dateFallback": "—",

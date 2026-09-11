@@ -146,6 +146,7 @@
       "contextPackStartFailed": "Context Pack starten mislukt",
       "contextPackStarted": "Context Pack-generatie gestart — dit duurt ± 1–2 minuten.",
       "researchStarted": "Deep research gestart — de voortgang verschijnt hieronder.",
+      "researchNeedsInvestigation": "Deze intake heeft zijn research-pogingen opgebruikt. Er is geen nieuwe run gestart en er is niets aangerekend — iemand moet er even naar kijken.",
       "researchStartFailed": "Research starten mislukt",
       "researchResumed": "Research hervat",
       "researchResumeFailed": "De research kon niet worden hervat",

@@ -13,16 +13,52 @@
 #
 # Plan: 01-10.5 Task 2.
 # Re-run safe -- each invocation produces a new SHA-tagged image.
+#
+# ---------------------------------------------------------------------------
+# THIS SCRIPT BUILDS AND PUSHES PAID INFRASTRUCTURE, AND THERE ARE TWO PROJECTS NOW.
+# ---------------------------------------------------------------------------
+# A script that GUESSES its target lands a client release in the dev project, or
+# a dev experiment in front of the client. So GOOGLE_PROJECT is REQUIRED and has
+# NO default: this script used to default to the dev project id, which is the
+# exact failure it now refuses to make. It also calls artifact-registry-create.sh,
+# so the two MUST agree on the variable name — they now share this one.
+#
+# Optional but recommended: GCLOUD_ACCOUNT. `gcloud auth login` has silently
+# switched BOTH account and project mid-session on this machine, there are four
+# accounts on it, and deploy scripts inherit ambient gcloud config without
+# complaining. Setting it pins --account on every call below, and it is exported
+# so the artifact-registry-create.sh child inherits the same pin.
+# ---------------------------------------------------------------------------
 
 set -euo pipefail
 
-PROJECT="${GOOGLE_CLOUD_PROJECT:-project-cb01b861-cb4a-438d-b9a}"
+# Canonical name is GOOGLE_PROJECT (deploy-api.sh / deploy-worker.sh already use it);
+# GOOGLE_CLOUD_PROJECT is accepted for back-compat. Neither has a literal default.
+PROJECT="${GOOGLE_PROJECT:-${GOOGLE_CLOUD_PROJECT:?set GOOGLE_PROJECT to the target project id — there is no default, and there must not be: the default used to be the DEV project}}"
 REGION="${REGION:-europe-west1}"
 REPO="nestor-pulse"
 REGISTRY="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}"
+# NOTE: the `nestor-pulse-runtime@` local part belongs to the RETIRED standalone-project
+# layout — it is a THIRD service-account name, matching neither `nestor-run` nor
+# `tribunal-run`, which are the ones Terraform actually manages today. Left as-is
+# deliberately (it derives from ${PROJECT}, so it follows the required project), but do
+# not read it as current: override with RUNTIME_SA_EMAIL if a caller needs it to be right.
 RUNTIME_SA="${RUNTIME_SA_EMAIL:-nestor-pulse-runtime@${PROJECT}.iam.gserviceaccount.com}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
+ACCOUNT_ARGS=()
+if [ -n "$GCLOUD_ACCOUNT" ]; then
+  ACCOUNT_ARGS=(--account="$GCLOUD_ACCOUNT")
+  export GCLOUD_ACCOUNT
+else
+  echo "WARNING: GCLOUD_ACCOUNT is not set — using whatever account gcloud is currently" >&2
+  echo "         configured with. That config has reverted mid-session on this machine," >&2
+  echo "         and four accounts are logged in. Export GCLOUD_ACCOUNT to pin it." >&2
+fi
+# The child script reads the SAME project variable; export so it cannot diverge.
+export GOOGLE_PROJECT="$PROJECT"
 
 command -v gcloud >/dev/null 2>&1 || { echo "ERROR: gcloud not on PATH"; exit 1; }
 
@@ -62,7 +98,7 @@ images:
   - '${API_LATEST}'
 EOF
 
-gcloud builds submit \
+gcloud "${ACCOUNT_ARGS[@]}" builds submit \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --service-account="projects/${PROJECT}/serviceAccounts/${RUNTIME_SA}" \
@@ -93,7 +129,7 @@ images:
   - '${WORKER_LATEST}'
 EOF
 
-gcloud builds submit \
+gcloud "${ACCOUNT_ARGS[@]}" builds submit \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --service-account="projects/${PROJECT}/serviceAccounts/${RUNTIME_SA}" \
