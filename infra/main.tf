@@ -1141,6 +1141,29 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
         cpu_idle = false
       }
 
+      # The seven plain env names the live worker carries (23.4-03, mirrors the single
+      # --set-env-vars line in tribunal/infrastructure/cloud-run/deploy-worker.sh). Terraform
+      # is the source of truth for the client environment, so all seven live here too.
+      env {
+        name  = "NESTOR_ENV"
+        value = "prod"
+      }
+      env {
+        name  = "NESTOR_WORKER_POLL_INTERVAL"
+        value = "2.0"
+      }
+      env {
+        name  = "NESTOR_OPENAI_DR_MODEL"
+        value = "gpt-5.6-sol"
+      }
+      env {
+        name  = "NESTOR_WORKER_RUN_CONCURRENCY"
+        value = "4"
+      }
+      env {
+        name  = "NESTOR_WORKER_RUN_TIMEOUT_MINUTES"
+        value = "120"
+      }
       # D-07: uncapped this phase (matches the old deploy-worker.sh env).
       env {
         name  = "NESTOR_TRIBUNAL_UNCAPPED"
@@ -1262,6 +1285,10 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
         container_port = 8080
       }
 
+      env {
+        name  = "NESTOR_ENV"
+        value = "prod"
+      }
       env {
         name  = "NESTOR_TRIBUNAL_UNCAPPED"
         value = "1"

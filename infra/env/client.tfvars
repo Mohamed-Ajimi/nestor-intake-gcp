@@ -50,7 +50,7 @@ image_registry_project = "project-cb01b861-cb4a-438d-b9a"
 # All three are promoted dev tags, set by plan 23.4-03 Task 1. Until that plan
 # runs there is no image in the client's pull path, so the Cloud Run services
 # created by the first apply are EXPECTED to fail to become ready.
-image_tag          = "<capture-after-first-deploy>" # 23.4-03 Task 1 — the promoted backend tag
+image_tag          = "f5e2b9ad" # 23.4-03 Task 1 — the promoted backend tag
 frontend_image_tag = "<capture-after-first-deploy>" # 23.4-03 Task 1 — the promoted frontend tag
 
 # ------------------------------------------------------------ nestor-api tier
@@ -111,7 +111,7 @@ tribunal_api_min_instances    = 0
 # landed) was removed on 2026-09-09.
 tribunal_worker_stale_minutes = "60"
 
-tribunal_image_tag = "<capture-after-first-deploy>" # 23.4-03 Task 1 — the promoted tribunal tag
+tribunal_image_tag = "f5e2b9ad" # 23.4-03 Task 1 — the promoted tribunal tag
 
 tribunal_gemini_secret_id = "Nestor_Gemini"
 tribunal_openai_secret_id = "Nestor_OpenAI"
