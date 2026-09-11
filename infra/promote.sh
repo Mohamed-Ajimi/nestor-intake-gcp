@@ -539,6 +539,17 @@ fi
 # The ONLY file this script edits. Without it Terraform's record and the running
 # images drift apart silently, and the next `terraform apply` quietly rolls the
 # environment back to whatever the file still said.
+#
+# EXERCISED 2026-09-11 against the real infra/env/client.tfvars: the three keys
+# are matched anchored, so `image_tag` does NOT also hit `frontend_image_tag`,
+# column alignment survives, and no other variable is touched. Two things it
+# DOES do, both intended and neither a correctness problem:
+#   * the trailing explanatory comment on a rewritten line is replaced along
+#     with the value ("<capture-after-first-deploy>" stops being true the moment
+#     a real tag is written, so the note goes with it);
+#   * `sed -i` writes LF. On a Windows checkout (core.autocrlf=true) that
+#     re-lines the WHOLE file and produces a noisy diff. Inside Cloud Build,
+#     which is where this runs, everything is LF already.
 # ---------------------------------------------------------------------------
 say "STEP 10/10 record the promoted tags in the tfvars file"
 set_tfvar() {

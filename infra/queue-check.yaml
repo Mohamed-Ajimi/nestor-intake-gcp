@@ -30,17 +30,33 @@
 #   errored" is never "the check passed".
 #
 # ---------------------------------------------------------------------------
-# TRAP 1 — A GREEN BUILD IS NOT AN EMPTY QUEUE.
+# TRAP 1 — A GREEN BUILD IS NOT AN EMPTY QUEUE. (CORRECTED 2026-09-11.)
 # ---------------------------------------------------------------------------
 # This config is meant to be run as the EXISTING nestor-run@ service account,
 # which already holds secretAccessor on DATABASE_URL_WORKER (no IAM change, no
-# Cloud SQL authorized-network change). nestor-run@ does NOT hold
-# roles/logging.logWriter, so the build's stdout is LOST: the build can go
-# SUCCESS and `gcloud builds log` returns an EMPTY "REMOTE BUILD OUTPUT". The
-# rows printed below are for a human who has the logs; the MACHINE answer is the
-# code, which Cloud Build surfaces in the build's statusDetail
-# ("build step 0 ... exited with status 93") and in a non-zero `gcloud builds
-# submit`.
+# Cloud SQL authorized-network change).
+#
+# WHAT THE RUNBOOK SAID (2026-07-28): nestor-run@ does NOT hold
+# roles/logging.logWriter, so the build's stdout is LOST and `gcloud builds log`
+# returns an EMPTY "REMOTE BUILD OUTPUT".
+#
+# WHAT WAS MEASURED on the first two real runs of this file (builds
+# a8db291a-c3d2-4fe4-8d5b-b8b8a0f4d343 and 88afa4a6-46b0-4346-a287-7e8be75b2216,
+# both as nestor-run@): the output was FULLY READABLE — every `==>` line below,
+# and all 20 offending rows, came back from `gcloud builds log`. The premise has
+# changed; do not rely on the old claim in either direction.
+#
+# NONE OF THAT CHANGES THE DESIGN, and that is the point: the machine answer is
+# the EXIT CODE, which does not depend on whether anyone can read the logs.
+# Keep it that way. The code is NOT in the build's `statusDetail` — that field
+# came back EMPTY on the FAILURE — it is in `steps[0].exitCode` and in
+# `failureInfo.detail`:
+#   gcloud builds describe <FULL-UUID> \
+#     --format='value(steps[0].exitCode,failureInfo.detail)'
+#   -> 93   Build step failure: build step 0 "...cloud-sdk:slim" failed: step
+#           exited with non-zero status: 93
+# `gcloud builds submit` also exits non-zero, but it returns 1 for ANY failure
+# and never hands back this code, so read it from the build.
 #
 # ---------------------------------------------------------------------------
 # TRAP 2 — CONNECT AS worker_user, NEVER AS app_user.
