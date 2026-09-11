@@ -1,0 +1,266 @@
+# infra/queue-check.yaml — THE TRIBUNAL RUN-QUEUE IDLE GATE (fail closed)
+#
+# Answers ONE question: "is any tribunal run claimable right now?" — i.e. may a
+# tribunal-worker revision be deployed without killing a paid run?
+#
+# WHY THIS FILE EXISTS. A worker deploy creates a NEW REVISION, which BOOTS the
+# container, and the poll loop CLAIMS FIRST and SLEEPS LAST. `--min-instances=0`
+# is therefore NOT protection: a booting instance claims before it ever reaches
+# its first sleep. An empty queue is the only protection. That is what caused the
+# 2026-07-28 incident, and until now the rule existed only as a prose warning in
+# infra/DEPLOY-RUNBOOK.md and in the "APPLY THESE VALUES WITH THE QUEUE VERIFIED
+# EMPTY" paragraph of tribunal/infrastructure/cloud-run/deploy-worker.sh.
+#
+# ---------------------------------------------------------------------------
+# THE EXIT-CODE CONTRACT — THE ANSWER IS THE EXIT STATUS, NEVER THE STDOUT
+# ---------------------------------------------------------------------------
+#   0   no row in tribunal.run has status 'queued' or 'running'. SAFE to deploy
+#       the worker.
+#   90  the proxy did not come up, a prerequisite could not be installed, the
+#       secret could not be read, or psql could not connect. UNKNOWN, therefore
+#       NOT SAFE.
+#   91  `SELECT current_user` is not worker_user. (See trap 2 below.) This is the
+#       ANTI-VACUITY check and it is the one that matters most: a gate that cannot
+#       see the rows always passes.
+#   92  tribunal.run is not present in information_schema.tables. The schema is
+#       not there, so the answer is meaningless.
+#   93  one or more claimable rows. NOT SAFE.
+#
+#   ANYTHING NON-ZERO MEANS DO NOT DEPLOY. The gate is fail-closed, and "the check
+#   errored" is never "the check passed".
+#
+# ---------------------------------------------------------------------------
+# TRAP 1 — A GREEN BUILD IS NOT AN EMPTY QUEUE.
+# ---------------------------------------------------------------------------
+# This config is meant to be run as the EXISTING nestor-run@ service account,
+# which already holds secretAccessor on DATABASE_URL_WORKER (no IAM change, no
+# Cloud SQL authorized-network change). nestor-run@ does NOT hold
+# roles/logging.logWriter, so the build's stdout is LOST: the build can go
+# SUCCESS and `gcloud builds log` returns an EMPTY "REMOTE BUILD OUTPUT". The
+# rows printed below are for a human who has the logs; the MACHINE answer is the
+# code, which Cloud Build surfaces in the build's statusDetail
+# ("build step 0 ... exited with status 93") and in a non-zero `gcloud builds
+# submit`.
+#
+# ---------------------------------------------------------------------------
+# TRAP 2 — CONNECT AS worker_user, NEVER AS app_user.
+# ---------------------------------------------------------------------------
+# worker_user matches the permissive `worker_all` RLS policy on the tribunal
+# schema (migration 0008) and can therefore see queued/running rows across ALL
+# tenants. app_user is tenant-scoped and returns a FALSELY EMPTY queue, which
+# would read as "safe". That is why exit 91 exists and why it is checked BEFORE
+# the queue query rather than after.
+#
+# ---------------------------------------------------------------------------
+# BOTH OBVIOUS SHORTCUTS ARE CLOSED (measured 2026-07-28, still true).
+# ---------------------------------------------------------------------------
+#   * nestor-pg's authorized-networks list is EMPTY, so there is no public-IP
+#     route without patching production networking.
+#   * tribunal-api rejects a plain Cloud Run invoker token with "invalid internal
+#     caller token" (the Phase-14 lockdown), so the seam cannot answer it either.
+# The path that works is this one: a --no-source build, as nestor-run@, with the
+# Cloud SQL proxy. --no-source is REQUIRED: nestor-run@ cannot read the Cloud
+# Build source bucket and a sourced build dies with `storage.objects.get denied`
+# BEFORE the step runs.
+#
+# ---------------------------------------------------------------------------
+# HOW TO RUN IT BY HAND
+# ---------------------------------------------------------------------------
+#   gcloud builds submit --no-source --config=infra/queue-check.yaml \
+#     --substitutions=_PROJECT=<project-id> \
+#     --service-account=projects/<project-id>/serviceAccounts/nestor-run@<project-id>.iam.gserviceaccount.com \
+#     --project=<project-id> --account=tools@dotto.be
+#   gcloud builds describe <FULL-UUID> --format='value(status,statusDetail)'
+# Short build ids return nothing from `describe`; always use the full UUID, and
+# never read the answer from a piped exit code.
+#
+# ---------------------------------------------------------------------------
+# _INVERT — A SELF-TEST KNOB. NEVER SET IT DURING A PROMOTION.
+# ---------------------------------------------------------------------------
+# _INVERT=1 flips the claimable predicate to `status NOT IN ('queued','running')`,
+# so every COMPLETED run counts as claimable and the gate MUST refuse with 93.
+# It exists for exactly one purpose: to PROVE the gate is able to fail, because a
+# gate that has only ever been seen passing is not a gate. It changes no data (the
+# only statements here are SELECTs), but a promotion run with _INVERT=1 set would
+# refuse every time and would teach the operator to ignore the gate. Set it only
+# in a deliberate self-test, and record the build UUID when you do.
+
+substitutions:
+  # REQUIRED. Empty is a configuration error and exits 90 (UNKNOWN, not safe).
+  _PROJECT: ''
+  _REGION: 'europe-west1'
+  _INSTANCE: 'nestor-pg'
+  _SECRET: 'DATABASE_URL_WORKER'
+  # Self-test knob — see the block above. '' = normal, '1' = inverted.
+  _INVERT: ''
+  # T-23.4-SC: the proxy version is PINNED, never 'latest'. A gate that fetches a
+  # moving binary is a supply-chain hole in the one place that guards money.
+  _PROXY_VERSION: 'v2.14.3'
+
+options:
+  # nestor-run@ has no logWriter; CLOUD_LOGGING_ONLY is also mandatory when a build
+  # runs as a user-specified service account.
+  logging: CLOUD_LOGGING_ONLY
+
+# A gate that hangs must FAIL, not stall a release.
+timeout: 180s
+
+steps:
+  - id: queue-check
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # NOTE ON ESCAPING: Cloud Build substitutes ${_NAME} before bash ever sees
+        # this script, and an unescaped $NAME would be read as a (missing) built-in
+        # substitution. Every SHELL dollar below is therefore written $$. To lint
+        # this body locally, extract it and undo that doubling — this is the exact
+        # command used in the plan's acceptance criterion 5:
+        #   python -c "import yaml;s=yaml.safe_load(open('infra/queue-check.yaml'))['steps'][0]['args'][-1];open('/tmp/qc.sh','w').write(s.replace('\$\$','\$'))"
+        #   bash -n /tmp/qc.sh
+        #
+        # No `set -e`: every failure mode below has its OWN exit code, and -e would
+        # replace them with 1 and destroy the contract.
+        set -uo pipefail
+
+        PROJ='${_PROJECT}'
+        REG='${_REGION}'
+        INST='${_INSTANCE}'
+        SEC='${_SECRET}'
+        INV='${_INVERT}'
+        PROXY_VERSION='${_PROXY_VERSION}'
+
+        if [ -z "$$PROJ" ]; then
+          echo "CONFIG ERROR: _PROJECT is empty. Pass --substitutions=_PROJECT=<project-id>."
+          echo "UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+
+        echo "==> queue-check: project=$$PROJ instance=$$PROJ:$$REG:$$INST secret=$$SEC"
+
+        # psql. The slim cloud-sdk image carries gcloud, curl and python3 but does
+        # not guarantee a postgres client; install it from the image's own distro
+        # when it is absent. A failure here is UNKNOWN, not "safe".
+        if ! command -v psql >/dev/null 2>&1; then
+          echo "==> installing postgresql-client"
+          if ! { apt-get update -qq >/dev/null 2>&1 && \
+                 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client >/dev/null 2>&1; }; then
+            echo "COULD NOT INSTALL psql — the queue cannot be read. UNKNOWN is NOT SAFE."
+            exit 90
+          fi
+        fi
+
+        # Cloud SQL proxy, pinned version (T-23.4-SC), from Google's own release URL.
+        if ! curl -fsSL -o /usr/local/bin/cloud-sql-proxy \
+             "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/$${PROXY_VERSION}/cloud-sql-proxy.linux.amd64"; then
+          echo "COULD NOT DOWNLOAD cloud-sql-proxy $${PROXY_VERSION}. UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+        chmod +x /usr/local/bin/cloud-sql-proxy || exit 90
+
+        cloud-sql-proxy --address 127.0.0.1 --port 5432 "$${PROJ}:$${REG}:$${INST}" &
+        PROXY_PID=$$!
+        trap 'kill $$PROXY_PID 2>/dev/null || true' EXIT
+
+        READY=0
+        for _ in $$(seq 1 40); do
+          if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then READY=1; break; fi
+          sleep 1
+        done
+        if [ "$$READY" != "1" ]; then
+          echo "PROXY DID NOT COME UP on 127.0.0.1:5432 within 40s. UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+
+        # The worker DSN. Read at RUN TIME from Secret Manager and never written to
+        # disk, never echoed, never interpolated into a printed command.
+        DSN="$$(gcloud secrets versions access latest --secret="$${SEC}" --project="$${PROJ}" 2>/dev/null)"
+        if [ -z "$${DSN:-}" ]; then
+          echo "COULD NOT READ secret $${SEC} in $${PROJ} (or it is empty). UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+
+        # Split the DSN into PG* env vars so psql talks to the proxy on localhost
+        # regardless of how the secret addresses the instance (unix socket, private
+        # IP, whatever) and regardless of which driver prefix it carries. Nothing is
+        # printed; the assignments go straight into the process environment.
+        # `eval "$(...)"` on its own would report SUCCESS when the parser printed
+        # nothing, so the result is captured and checked BEFORE it is evaluated.
+        PGENV="$$(DSN="$$DSN" python3 -c '
+        import os, re, shlex
+        from urllib.parse import urlsplit, unquote
+        raw = os.environ["DSN"].strip()
+        raw = re.sub(r"^[a-z0-9+.\-]+://", "x://", raw, count=1)
+        u = urlsplit(raw)
+        db = (u.path or "").lstrip("/").split("?")[0] or "postgres"
+        if not u.username:
+            raise SystemExit("no user in DSN")
+        print("export PGUSER=" + shlex.quote(unquote(u.username)))
+        print("export PGPASSWORD=" + shlex.quote(unquote(u.password or "")))
+        print("export PGDATABASE=" + shlex.quote(db))
+        ' 2>/dev/null)"
+        if [ $$? -ne 0 ] || [ -z "$${PGENV}" ]; then
+          echo "COULD NOT PARSE the worker DSN. UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+        eval "$${PGENV}"
+        unset PGENV
+        export PGHOST=127.0.0.1
+        export PGPORT=5432
+        export PGCONNECT_TIMEOUT=15
+
+        CUR="$$(psql -tAX -c 'SELECT current_user' 2>&1)"
+        if [ $$? -ne 0 ]; then
+          echo "PSQL COULD NOT CONNECT: $${CUR}"
+          echo "UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+        CUR="$$(printf '%s' "$${CUR}" | tr -d '[:space:]')"
+
+        # ANTI-VACUITY. A tenant-scoped role sees an empty queue and the gate would
+        # wave every deploy through. See trap 2 in the header.
+        if [ "$${CUR}" != "worker_user" ]; then
+          echo "ANTI-VACUITY FAILURE: connected as '$${CUR}', expected worker_user."
+          echo "A tenant-scoped role returns a FALSELY EMPTY queue. Refusing."
+          exit 91
+        fi
+        echo "==> connected as worker_user (RLS worker_all policy — sees all tenants)"
+
+        HAS="$$(psql -tAX -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='tribunal' AND table_name='run'" 2>&1)"
+        if [ $$? -ne 0 ]; then
+          echo "SCHEMA PROBE FAILED: $${HAS}"
+          echo "UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+        if [ "$$(printf '%s' "$${HAS}" | tr -d '[:space:]')" != "1" ]; then
+          echo "tribunal.run IS NOT PRESENT in information_schema.tables."
+          echo "The answer would be meaningless. Refusing."
+          exit 92
+        fi
+
+        if [ "$${INV}" = "1" ]; then
+          PRED="NOT IN ('queued','running')"
+          echo "==> _INVERT=1 — SELF-TEST MODE. Completed runs count as claimable;"
+          echo "    this run is EXPECTED to exit 93. Never set this during a promotion."
+        else
+          PRED="IN ('queued','running')"
+        fi
+
+        ROWS="$$(psql -tAX -c "SELECT id::text || ' status=' || status || ' started=' || COALESCE(started_at::text,'-') || ' hb=' || COALESCE(heartbeat_at::text,'-') || ' reclaims=' || COALESCE(reclaim_count::text,'-') FROM tribunal.run WHERE status $${PRED}" 2>&1)"
+        if [ $$? -ne 0 ]; then
+          echo "QUEUE QUERY FAILED: $${ROWS}"
+          echo "UNKNOWN is NOT SAFE."
+          exit 90
+        fi
+
+        N="$$(printf '%s\n' "$${ROWS}" | grep -c '[^[:space:]]')"
+        if [ "$${N}" != "0" ]; then
+          echo "NOT SAFE — $${N} claimable row(s) in tribunal.run:"
+          printf '%s\n' "$${ROWS}"
+          echo "A worker deploy would restart instances and kill these runs. Refusing."
+          exit 93
+        fi
+
+        echo "==> queue is idle: 0 rows queued or running. Safe to deploy the worker."
+        exit 0
