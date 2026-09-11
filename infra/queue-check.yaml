@@ -112,9 +112,10 @@ steps:
     args:
       - '-c'
       - |
-        # NOTE ON ESCAPING: Cloud Build substitutes ${_NAME} before bash ever sees
-        # this script, and an unescaped $NAME would be read as a (missing) built-in
-        # substitution. Every SHELL dollar below is therefore written $$. To lint
+        # NOTE ON ESCAPING: Cloud Build performs its substitutions on this whole body,
+        # COMMENTS INCLUDED, before bash ever sees it; a single dollar followed by a
+        # name is read as a (missing) built-in substitution and the submit is rejected
+        # (measured 2026-09-11). Every SHELL dollar below is therefore doubled. To lint
         # this body locally, extract it and undo that doubling — this is the exact
         # command used in the plan's acceptance criterion 5:
         #   python -c "import yaml;s=yaml.safe_load(open('infra/queue-check.yaml'))['steps'][0]['args'][-1];open('/tmp/qc.sh','w').write(s.replace('\$\$','\$'))"
