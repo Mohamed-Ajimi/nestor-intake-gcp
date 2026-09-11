@@ -1,0 +1,5 @@
+# Terraform state location for the CLIENT environment (nestor-pulse-prod).
+# Used as: terraform -chdir=infra init -reconfigure -backend-config=env/client.gcs.tfbackend
+# The bucket must already exist and must have versioning ON (see infra/env/README.md).
+bucket = "nestor-pulse-prod-tfstate"
+prefix = "nestor-intake/infra"
