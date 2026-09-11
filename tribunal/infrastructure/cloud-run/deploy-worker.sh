@@ -38,19 +38,44 @@
 # To pause the worker after a session: `--min-instances=0` (see the footer).
 #
 # Re-run safe (zero-downtime revisions).
+#
+# ---------------------------------------------------------------------------
+# THIS SCRIPT DEPLOYS PAID INFRASTRUCTURE, AND THERE ARE TWO PROJECTS NOW.
+# ---------------------------------------------------------------------------
+# A script that GUESSES its target lands a client release in the dev project, or
+# a dev experiment in front of the client. GOOGLE_PROJECT is REQUIRED and has NO
+# default — it never had one here, and it must not gain one. This worker is the
+# component that SPENDS: a wrong-project deploy here starts a poll loop against
+# the wrong queue.
+#
+# Optional but recommended: GCLOUD_ACCOUNT. `gcloud auth login` has silently
+# switched BOTH account and project mid-session on this machine, there are four
+# accounts on it, and deploy scripts inherit ambient gcloud config without
+# complaining. Setting it pins --account on every call below.
+# ---------------------------------------------------------------------------
 
 set -euo pipefail
 
-PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id}"
+PROJECT="${GOOGLE_PROJECT:?export GOOGLE_PROJECT to the intake project id — there is no default, and there must not be: two projects exist and a guess deploys to the wrong one}"
 REGION="${REGION:-europe-west1}"
+
+GCLOUD_ACCOUNT="${GCLOUD_ACCOUNT:-}"
+ACCOUNT_ARGS=()
+if [ -n "$GCLOUD_ACCOUNT" ]; then
+  ACCOUNT_ARGS=(--account="$GCLOUD_ACCOUNT")
+else
+  echo "WARNING: GCLOUD_ACCOUNT is not set — using whatever account gcloud is currently" >&2
+  echo "         configured with. That config has reverted mid-session on this machine," >&2
+  echo "         and four accounts are logged in. Export GCLOUD_ACCOUNT to pin it." >&2
+fi
 INSTANCE_NAME="${INSTANCE_NAME:-nestor-pg}"
 # MIN_INSTANCES — defaults to 1 (the D-04 always-on poll loop). Override to 0 to ship a
 # revision that does NOT start polling.
 #
 # WHY THIS OVERRIDE EXISTS (2026-07-28). This script's `gcloud run deploy` sets
-# --min-instances=1 AND --set-env-vars=...NESTOR_WORKER_STALE_MINUTES=90 in ONE atomic
-# command. So a plain re-run both UNPAUSES the worker and reverts the staleness window at
-# the same instant. When an unresolved run is still sitting in status='running' with a NULL
+# --min-instances=1 AND the whole --set-env-vars= line (NESTOR_WORKER_STALE_MINUTES among
+# them) in ONE atomic command. So a plain re-run both UNPAUSES the worker and resets the
+# staleness window at the same instant. When an unresolved run is still sitting in status='running' with a NULL
 # heartbeat_at (any run predating migration 0014), CLAIM_SQL's
 # COALESCE(heartbeat_at, started_at) falls back to a stale started_at, the row is older than
 # the staleness window, reclaim_count is below the ceiling — and the fresh worker CLAIMS AND
@@ -135,7 +160,7 @@ TRIBUNAL_SERPAPI_SECRET="${TRIBUNAL_SERPAPI_SECRET:-Nestor_SERP}"
 # the VALUE is never read, echoed or logged by this script.
 TRIBUNAL_ANTHROPIC_SECRET="${TRIBUNAL_ANTHROPIC_SECRET:-Nestor_Claude2}"
 
-LIVE_ANTHROPIC_SECRET="$(gcloud run services describe "${SERVICE_NAME}" \
+LIVE_ANTHROPIC_SECRET="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${SERVICE_NAME}" \
   --region="${REGION}" --project="${PROJECT}" \
   --flatten='spec.template.spec.containers[].env[]' \
   --filter='spec.template.spec.containers.env.name=ANTHROPIC_API_KEY' \
@@ -158,7 +183,7 @@ OPENAI_API_KEY=Nestor_OpenAI:latest"
 # Append the SERPAPI mapping ONLY when the secret actually exists. Binding a non-existent
 # secret fails the whole `gcloud run deploy`, and a missing D10 stream must never block
 # shipping the rest of the phase.
-if gcloud secrets describe "${TRIBUNAL_SERPAPI_SECRET}" --project="${PROJECT}" >/dev/null 2>&1; then
+if gcloud "${ACCOUNT_ARGS[@]}" secrets describe "${TRIBUNAL_SERPAPI_SECRET}" --project="${PROJECT}" >/dev/null 2>&1; then
   TRIBUNAL_SECRETS="${TRIBUNAL_SECRETS},SERPAPI_API_KEY=${TRIBUNAL_SERPAPI_SECRET}:latest"
   echo "==> own-researcher key will be mounted from secret: ${TRIBUNAL_SERPAPI_SECRET}"
 else
@@ -213,36 +238,38 @@ echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 #   Roll back with `--set-env-vars=...NESTOR_WORKER_RUN_CONCURRENCY=1...`; the loop is
 #   strictly serial at K=1 by design.
 #
-# NESTOR_WORKER_STALE_MINUTES=90 — ⚠ STOPGAP (DEF-23.3-01, 2026-09-09). NOT A TUNING
-#   IMPROVEMENT, AND NOT PERMANENT.
+# NESTOR_WORKER_STALE_MINUTES=60 — the standing value. The 90 STOPGAP IS OVER (D-23.4-07).
 #
-#   WHY IT WAS RAISED. The run liveness heartbeat is not landing. On 2026-09-08 two
-#   HEALTHY concurrent runs — both in final report assembly — were reclaimed at claim
-#   +3600.20s and +3600.22s, the same 200 ms offset, i.e. exactly this window with
-#   heartbeat_at never having moved since CLAIM_SQL stamped it. Zero of the ~120 due
-#   heartbeats landed, and there were zero run_heartbeat_failed lines.
+#   THE HISTORY, IN THE PAST TENSE. On 2026-09-08 two HEALTHY concurrent runs — both in
+#   final report assembly — were reclaimed at claim +3600.20s and +3600.22s, the same
+#   200 ms offset: exactly the 60-minute window, with heartbeat_at never having moved
+#   since CLAIM_SQL stamped it. Zero of the ~120 due heartbeats landed. This value was
+#   raised to 90 that day to buy headroom, because while the heartbeat did not land the
+#   window was effectively THE MAXIMUM LENGTH OF A HEALTHY RUN, and 60 sat below the
+#   64.2-minute longest run that has ever completed normally (7dcf51d5).
 #
-#   WHAT THAT MAKES THIS VALUE. While the heartbeat does not land, this is effectively
-#   THE MAXIMUM LENGTH OF A HEALTHY RUN — past it a live run is restarted from the top
-#   of the pipeline, re-billing what it already spent. At 60 that ceiling sat BELOW
-#   64.2 minutes, the longest run that has ever completed normally (7dcf51d5, the same
-#   figure the RUN_TIMEOUT_MINUTES derivation below is built on), so the setting would
-#   reset the longest known-good run.
+#   WHY IT IS BACK TO 60. The heartbeat was not a tuning problem. The root cause was that
+#   the worker ran as TWO module copies with TWO WORKER_IDs (`CMD -m runs.worker` plus a
+#   lazy import in execute.py), so every fenced write matched ZERO rows — the heartbeat
+#   could not land at any window size. The single-identity launcher shipped 2026-09-09,
+#   `rowcount=1` was observed on run 6668b27e, and that run completed normally with a
+#   report. The stopgap's own stated revert condition — production logs showing
+#   `run_heartbeat` with `rowcount=1` — was therefore MET.
 #
-#   WHY 90 AND NOT SOMETHING ELSE. 90 clears 64.2 by ~26 minutes and stays STRICTLY
-#   BELOW NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120, so the run-level ceiling and the stale
-#   reclaim cannot tie or race. Do NOT set 120 (it ties the ceiling). Do NOT change
-#   RUN_TIMEOUT_MINUTES to compensate.
+#   THE STANDING RULE. With a working heartbeat a live run never goes stale at ANY value,
+#   so the window is purely a dead-worker recovery time and the SMALLEST safe value is the
+#   right one: 60 recovers a genuinely dead worker fastest. It must stay STRICTLY BELOW
+#   NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 so the run-level ceiling and the stale reclaim
+#   cannot tie or race. Do NOT set 120 (it ties the ceiling). Do NOT change
+#   RUN_TIMEOUT_MINUTES to compensate. If healthy runs are reclaimed again, the bug is the
+#   heartbeat — go read `rowcount=` in the logs; do not raise this number.
 #
-#   ⚠ REVERT TO 60 once the heartbeat is PROVEN to land — that is, once production logs
-#   show `run_heartbeat` with `rowcount=1` (the diagnostic added to
-#   nestor_pulse_sdk/runs/worker.py::_heartbeat_loop on 2026-09-09). With a working
-#   heartbeat a live run never goes stale at ANY value, so 60 is correct in principle
-#   and recovers a genuinely dead worker fastest. 90 only buys headroom while we wait
-#   for that evidence.
+#   KEEP IN STEP WITH `infra/variables.tf` (`tribunal_worker_stale_minutes`). Two places
+#   set this value and a deploy through the other path silently reverts whichever one was
+#   missed — that is how the 90 outlived its own condition.
 #
-#   The code DEFAULT stays 60 (worker.py STALE_RUN_MINUTES). This line overrides it on
-#   the deployed service, which is the only place the stopgap applies.
+#   The code DEFAULT is also 60 (worker.py STALE_RUN_MINUTES), so this line now AGREES with
+#   the code rather than overriding it.
 #
 # NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120 — D-23.3-04, plan 23.3-01. Pinned here as well as
 #   in code for the same reason NESTOR_OPENAI_DR_MODEL is: neither one alone can resurrect
@@ -264,7 +291,7 @@ echo "==> Deploying ${SERVICE_NAME} with image: ${WORKER_IMAGE_URL}"
 
 REVISION_SUFFIX="${IMAGE_TAG//[^A-Za-z0-9-]/-}-$(date +%H%M%S)"
 
-gcloud run deploy "${SERVICE_NAME}" \
+gcloud "${ACCOUNT_ARGS[@]}" run deploy "${SERVICE_NAME}" \
   --project="${PROJECT}" \
   --region="${REGION}" \
   --image="${WORKER_IMAGE_URL}" \
@@ -278,7 +305,7 @@ gcloud run deploy "${SERVICE_NAME}" \
   --max-instances=5 \
   --timeout=3600 \
   --revision-suffix="${REVISION_SUFFIX}" \
-  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=90,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol,NESTOR_WORKER_RUN_CONCURRENCY=4,NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120" \
+  --set-env-vars="NESTOR_ENV=prod,NESTOR_WORKER_POLL_INTERVAL=2.0,NESTOR_WORKER_STALE_MINUTES=60,NESTOR_TRIBUNAL_UNCAPPED=1,NESTOR_OPENAI_DR_MODEL=gpt-5.6-sol,NESTOR_WORKER_RUN_CONCURRENCY=4,NESTOR_WORKER_RUN_TIMEOUT_MINUTES=120" \
   --set-secrets="${TRIBUNAL_SECRETS}"
 
 echo
