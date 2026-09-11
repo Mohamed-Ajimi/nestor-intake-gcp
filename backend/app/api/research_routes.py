@@ -158,7 +158,23 @@ _RETRYABLE_RUN_STATUSES = {"failed", "cancelled", "needs_input"}
 
 #: The 3-attempt cap (D-04): a 4th trigger for an intake returns needs_investigation and
 #: makes NO seam call / schedules NO driver (a runaway retrigger must not re-charge Tribunal).
+#: It counts the NON-exempt prior runs — see ``_CAP_EXEMPT_RUN_STATUSES``.
 _MAX_ATTEMPTS = 3
+
+#: Prior-run statuses that do NOT count toward ``_MAX_ATTEMPTS`` (D-23.4-07).
+#
+# A ``cancelled`` run is a DELIBERATE stop. It spent nothing that a completed run would not
+# have spent more of, and it is ALREADY a legal retry trigger via ``_RETRYABLE_RUN_STATUSES``
+# — so counting it toward a cap whose stated purpose (D-04) is "a runaway retrigger must not
+# re-charge Tribunal" punishes the single operator action that PREVENTS spend. An intake with
+# two genuine failures and one cancellation had two attempts, not three.
+#
+# DELIBERATELY NOT folded into ``_RETRYABLE_RUN_STATUSES``. The two sets answer different
+# questions — "may this run be superseded by a re-trigger?" versus "did this run consume one
+# of the three paid attempts?" — and a status will eventually belong to one and not the other
+# (``needs_input`` is retryable but DID spend, so it still counts). One set for both would
+# drift on the first such change, silently.
+_CAP_EXEMPT_RUN_STATUSES = {"cancelled"}
 
 
 def _next_research_status(current: str) -> str:
@@ -296,9 +312,12 @@ def trigger_research(
       declared FIRST — see the signature comment).
     * 404 if the (in-scope) intake does not exist (D-07 — existence hidden; never 403/200).
     * 409 if the current status is not ``decomposed`` (the scope-ceiling wall).
-    * When ``_MAX_ATTEMPTS`` prior research runs already exist for the intake, the next
-      trigger returns a ``needs_investigation`` response and makes NO seam call / schedules
-      NO driver (D-04 — a runaway retrigger must not re-charge Tribunal).
+    * When ``_MAX_ATTEMPTS`` COUNTED prior research runs already exist for the intake, the
+      next trigger returns a ``needs_investigation`` response and makes NO seam call /
+      schedules NO driver (D-04 — a runaway retrigger must not re-charge Tribunal). Runs in
+      ``_CAP_EXEMPT_RUN_STATUSES`` (``cancelled``) are NOT counted: a deliberate stop spent
+      nothing and must not cost the intake one of its three attempts (D-23.4-07). The
+      ``attempts`` figure in the response is that same counted number, not the row count.
 
     The ``audit_log`` row is written on ``repo.session`` so it commits/rolls back together
     with the status change (one-tx, Pitfall 2). ``metadata`` is structured ``{"from","to"}``
@@ -328,7 +347,10 @@ def trigger_research(
 
     The ``_MAX_ATTEMPTS`` cap deliberately stays on the pre-block read: it must
     short-circuit before the brief is assembled, and moving it into the write tx would
-    change the ``needs_investigation`` response shape.
+    change the ``needs_investigation`` response shape. What it counts on that read is the
+    NON-cancelled prior runs (``counted``), not every row — ``prior`` itself is left
+    unfiltered because the retry path below reads ``prior[0]`` and a cancelled latest run is
+    a legal retry trigger.
     """
     intake = repo.get(intake_id)
     if intake is None:
@@ -337,18 +359,26 @@ def trigger_research(
     # Attempt cap FIRST (D-04): count prior research runs on the same in-scope session.
     run_repo = ResearchRunRepository(repo.session, identity)
     prior = run_repo.list_for_intake(intake_id)
-    if len(prior) >= _MAX_ATTEMPTS:
+    # ``counted`` is the cap's view; ``prior`` stays the TRUE newest-first list, because the
+    # retry path below reads ``prior[0]`` and a cancelled latest run is still a legal retry
+    # trigger (``_RETRYABLE_RUN_STATUSES``). Filtering ``prior`` itself would break that.
+    counted = [r for r in prior if r.status not in _CAP_EXEMPT_RUN_STATUSES]
+    if len(counted) >= _MAX_ATTEMPTS:
         # No status flip, no seam call, no driver — the run is handed to a human.
+        # The exempt count is logged too, so the ``attempts`` figure the operator was shown
+        # can be reconciled against the row count in the database from the logs alone.
         _log.warning(
-            "research attempt cap reached for intake %s (%d prior runs) — "
-            "returning needs_investigation, no driver scheduled",
+            "research attempt cap reached for intake %s (%d counted prior runs, "
+            "%d exempt) — returning needs_investigation, no driver scheduled",
             intake_id,
-            len(prior),
+            len(counted),
+            len(prior) - len(counted),
         )
         return {
             "research_run_id": None,
             "status": "needs_investigation",
-            "attempts": len(prior),
+            # SAME list the cap compared — never a number the cap did not use.
+            "attempts": len(counted),
         }
 
     old_status = intake.status
