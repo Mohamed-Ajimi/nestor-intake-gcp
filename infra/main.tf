@@ -67,6 +67,10 @@ resource "google_sql_database_instance" "main" {
     # db-custom-* tier. Left unset, the API now defaults new instances to ENTERPRISE_PLUS and
     # rejects db-custom-1-3840 with `Invalid Tier ... for (ENTERPRISE_PLUS) Edition`.
     edition = "ENTERPRISE"
+    # API-level deletion protection (settings.deletionProtectionEnabled) — the console /
+    # gcloud flag, distinct from Terraform's own `deletion_protection` above. Dev reads
+    # back True (2026-09-11); without this line a fresh instance comes up False.
+    deletion_protection_enabled = true
 
     # IAM database authentication -- the ONLY auth path; there is no built-in
     # DB credential to store or leak (D-03/D-09).
