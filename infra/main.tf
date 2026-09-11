@@ -32,13 +32,22 @@ locals {
   # the service DB_USER env, and the Job's DB_USER / RUNTIME_DB_USER env.
   runtime_db_user = trimsuffix(google_service_account.runtime.email, ".gserviceaccount.com")
 
-  image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/backend:${var.image_tag}"
+  # D-23.4-04: the project that OWNS the Artifact Registry repo the services PULL from.
+  # Same fallback idiom as tribunal_audit_bucket_name below: an explicit override, else
+  # the target project (which is what every environment did before this variable existed).
+  # Setting it to the DEV project id is what makes "build once, promote the same digest"
+  # a fact rather than a claim -- the client's services reference the very objects the dev
+  # build produced. google_artifact_registry_repository.backend is still created in the
+  # TARGET project; it simply goes unused when this points elsewhere.
+  registry_project = var.image_registry_project != "" ? var.image_registry_project : var.project
+
+  image = "${var.region}-docker.pkg.dev/${local.registry_project}/${var.repo}/backend:${var.image_tag}"
 
   # Phase 12 (INFRA-05 / D-07): the frontend image lives in the SAME `nestor`
   # Artifact Registry repo as the backend (path `.../nestor/frontend:<tag>`); no new
   # repo is provisioned. Mirrors `local.image` above, pathed to the frontend image
   # and driven by its own `var.frontend_image_tag` (passed on apply, two-step deploy).
-  frontend_image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/frontend:${var.frontend_image_tag}"
+  frontend_image = "${var.region}-docker.pkg.dev/${local.registry_project}/${var.repo}/frontend:${var.frontend_image_tag}"
 }
 
 # --------------------------------------------------------------- Cloud SQL (D-01/D-03)
@@ -394,15 +403,17 @@ resource "google_cloud_run_v2_service" "api" {
     # out-of-band `gcloud run services update ... --timeout=900` in DEPLOY-RUNBOOK.md.
     timeout = "900s"
 
-    # D-01a: scale to ZERO when idle (min_instance_count = 0 — warm-pool knob OFF,
-    # no idle cost) while max stays capped so worst-case pooled connections stay
-    # under the Cloud SQL tier (D-04 math: 4 * (pool 2 + overflow 3) = 20 << 100).
-    # CPU-always-allocated (resources.cpu_idle = false below) lets a request's
-    # background work — the 90–120s LLM/Whisper calls (AI-06) — finish after the
-    # response without CPU throttling, even though there is no warm pool.
+    # DEF-23.3-14 (2026-09-07 correction, made declarative here): the floor is a VARIABLE
+    # defaulting to 1, not a hard-coded 0. At 0 there is no instance between requests, the
+    # phase 23.3 orphaned-run reconcile loop never ticks, and a paid research run can be
+    # stranded forever -- silently, because /readyz is request-driven and still answers 200.
+    # max stays capped so worst-case pooled connections stay under the Cloud SQL tier
+    # (D-04 math: 4 * (pool 2 + overflow 3) = 20 << 100). CPU-always-allocated
+    # (resources.cpu_idle = false below) lets a request's background work -- the 90-120s
+    # LLM/Whisper calls (AI-06) -- finish after the response without CPU throttling.
     scaling {
-      min_instance_count = 0 # scale to zero; warm-pool OFF (D-01a)
-      max_instance_count = 4 # D-04 connection-math ceiling (T-7-15)
+      min_instance_count = var.api_min_instances # DEF-23.3-14: 1, never a silent 0
+      max_instance_count = 4                     # D-04 connection-math ceiling (T-7-15)
     }
 
     containers {
@@ -707,7 +718,7 @@ resource "google_cloud_run_v2_service" "frontend" {
     # scale-to-zero posture). No cpu_idle override: the frontend does no request-spawned
     # background work, so the Cloud Run default (CPU throttled between requests) is correct.
     scaling {
-      min_instance_count = 0 # scale to zero (D-02)
+      min_instance_count = var.frontend_min_instances # D-02: scale to zero by default
       max_instance_count = 4
     }
 
@@ -781,11 +792,34 @@ locals {
   # Tribunal images share the existing `nestor` Artifact Registry repo (no new repo),
   # pathed to the two Tribunal image names and driven by var.tribunal_image_tag
   # (passed on apply, like image_tag/frontend_image_tag).
-  tribunal_api_image    = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/tribunal-api:${var.tribunal_image_tag}"
-  tribunal_worker_image = "${var.region}-docker.pkg.dev/${var.project}/${var.repo}/tribunal-worker:${var.tribunal_image_tag}"
+  tribunal_api_image    = "${var.region}-docker.pkg.dev/${local.registry_project}/${var.repo}/tribunal-api:${var.tribunal_image_tag}"
+  tribunal_worker_image = "${var.region}-docker.pkg.dev/${local.registry_project}/${var.repo}/tribunal-worker:${var.tribunal_image_tag}"
 
   # Audit bucket name: explicit var override, else the project-prefixed default.
   tribunal_audit_bucket_name = var.tribunal_audit_bucket_name != "" ? var.tribunal_audit_bucket_name : "${var.project}-nestor-audit"
+
+  # D-23.4-05: ONE Anthropic credential per environment, in ONE container.
+  # The CURRENT project drifted into two containers for one credential --
+  # `nestor-anthropic-api-key` for nestor-api and `Nestor_Claude2` for both tribunal
+  # services -- so a key rotation had to be done twice and could half-succeed. A new
+  # environment collapses them by naming the SAME secret_id in both variables. These
+  # two locals are what makes that expressible: when the ids are equal there is exactly
+  # one google_secret_manager_secret resource, and every consumer resolves its name
+  # through tribunal_claude_secret_name instead of through the (then absent) tribunal
+  # resource. When the ids differ, behaviour is byte-identical to before.
+  tribunal_claude_is_shared = var.tribunal_claude_secret_id == var.anthropic_api_key_secret_id
+
+  # `one(...[*]...)` and NOT `...[0]...`: a Terraform conditional type-checks BOTH arms,
+  # so a literal [0] index into a count = 0 resource raises "Invalid index" at PLAN time
+  # even on the branch that is not taken -- which is precisely the shared-secret case this
+  # local exists to serve. one() yields the single element when the resource exists and
+  # null when it does not, and null is never reached because the ternary selects the other
+  # arm in exactly that case.
+  tribunal_claude_secret_name = (
+    local.tribunal_claude_is_shared
+    ? google_secret_manager_secret.anthropic_api_key.secret_id
+    : one(google_secret_manager_secret.tribunal_claude[*].secret_id)
+  )
 }
 
 # ================================================================================
@@ -913,7 +947,20 @@ resource "google_secret_manager_secret_iam_member" "runtime_tribunal_gemini_acce
   member = "serviceAccount:${google_service_account.tribunal_run.email}"
 }
 
+# D-23.4-05 -- WHY THIS RESOURCE CAN VANISH ENTIRELY:
+# ANTHROPIC_API_KEY is ONE credential. The current project nevertheless holds it in TWO
+# containers (`nestor-anthropic-api-key` for nestor-api, `Nestor_Claude2` for tribunal-api
+# and tribunal-worker) purely as historical drift. A new environment names the SAME
+# secret_id in var.anthropic_api_key_secret_id and var.tribunal_claude_secret_id, which
+# collapses them to one container -- but WITHOUT this count, that configuration declares
+# TWO google_secret_manager_secret resources with ONE secret_id: whichever arm applies
+# second gets a 409 ALREADY_EXISTS, and a later destroy of either would take the container
+# out from under the other. So when the two ids are equal this resource is not created at
+# all and google_secret_manager_secret.anthropic_api_key is the single owner; every
+# consumer reads local.tribunal_claude_secret_name, which resolves to whichever one exists.
 resource "google_secret_manager_secret" "tribunal_claude" {
+  count = local.tribunal_claude_is_shared ? 0 : 1
+
   secret_id = var.tribunal_claude_secret_id
   replication {
     auto {}
@@ -921,7 +968,7 @@ resource "google_secret_manager_secret" "tribunal_claude" {
 }
 
 resource "google_secret_manager_secret_iam_member" "runtime_tribunal_claude_accessor" {
-  secret_id = google_secret_manager_secret.tribunal_claude.secret_id
+  secret_id = local.tribunal_claude_secret_name
   role      = "roles/secretmanager.secretAccessor"
   # Phase 14 (WR-03): repointed to the dedicated tribunal-run SA.
   member = "serviceAccount:${google_service_account.tribunal_run.email}"
@@ -1056,7 +1103,7 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
     timeout = "3600s"
 
     scaling {
-      min_instance_count = 1                                 # D-04: always-on (intake api uses 0)
+      min_instance_count = var.tribunal_worker_min_instances # D-04: always-on poller floor
       max_instance_count = var.tribunal_worker_max_instances # D-08: size for 5+ (default 5)
     }
 
@@ -1121,7 +1168,7 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
         name = "ANTHROPIC_API_KEY"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.tribunal_claude.secret_id
+            secret  = local.tribunal_claude_secret_name
             version = "latest"
           }
         }
@@ -1181,8 +1228,8 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
     timeout = "300s"
 
     scaling {
-      min_instance_count = 0 # scale to zero (matches intake api)
-      max_instance_count = 3 # request-response tier
+      min_instance_count = var.tribunal_api_min_instances # scale to zero by default
+      max_instance_count = 3                              # request-response tier
     }
 
     # 13-REVIEW CR-03: asyncpg unix-socket DSN needs the Cloud SQL volume.
@@ -1247,7 +1294,7 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
         name = "ANTHROPIC_API_KEY"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.tribunal_claude.secret_id
+            secret  = local.tribunal_claude_secret_name
             version = "latest"
           }
         }

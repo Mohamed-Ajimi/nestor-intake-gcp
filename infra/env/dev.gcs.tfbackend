@@ -1,0 +1,26 @@
+# Terraform state location for the DEV environment (project-cb01b861-cb4a-438d-b9a).
+#
+# ⚠ DO NOT USE THIS YET. Two facts make a `terraform apply` against dev from this
+# config destructive:
+#
+#   1. This bucket DOES NOT EXIST. Nobody has created it.
+#   2. The dev project has NO Terraform state anywhere -- not local, not remote. Its
+#      Cloud SQL instance, Cloud Run services, buckets, service accounts and secret
+#      containers were all created BY HAND across phases 2-23 (the "IaC drift" the
+#      runbook documents at length). infra/*.tf is a description of that footprint
+#      that has never been reconciled against it.
+#
+# An `init` against an empty state followed by a `plan` will therefore show every
+# resource as a CREATE. Applying that would attempt to create resources that already
+# exist -- some would 409, and `google_sql_database_instance.main` carries
+# deletion_protection, so the run would half-apply and leave dev in an unknown state.
+#
+# DEV REQUIRES AN `import` PASS FIRST: create the bucket, init against it, then
+# `terraform import` every existing resource until `plan` reports no changes, and only
+# then apply. That import pass is not done. Until it is, this file exists to name the
+# state location, not to authorise an apply.
+#
+# The CLIENT environment has no such problem: nestor-pulse-prod is empty, so its very
+# first plan is an honest all-create.
+bucket = "project-cb01b861-cb4a-438d-b9a-tfstate"
+prefix = "nestor-intake/infra"

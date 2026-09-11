@@ -34,6 +34,13 @@ variable "repo" {
   default     = "nestor"
 }
 
+# ------------------------------------------------ Cross-project image registry (D-23.4-04)
+variable "image_registry_project" {
+  description = "Project that OWNS the Artifact Registry repo the Cloud Run services PULL from. Empty \"\" => the same project as var.project (today's behaviour; unchanged for dev). Set to the DEV project id in a client environment so D-23.4-04's \"build once, promote the same digest\" is LITERALLY true: the client's Cloud Run services reference the identical `...@sha256:...` the dev build produced, with no cross-registry copy and no re-verification of sameness. CONSEQUENCES, accepted deliberately: (1) the dev project's registry becomes a hard runtime dependency of the client environment, and DELETING an image there removes a client ROLLBACK TARGET -- never delete an image any client revision still references; (2) the client project's Cloud Run SERVICE AGENT (service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com) plus the `nestor-run` and `tribunal-run` runtime SAs need roles/artifactregistry.reader on the DEV repo, granted on the dev project. google_artifact_registry_repository.backend stays declared in the TARGET project regardless: an empty repo costs nothing and is the escape hatch if the shared-registry model is later reversed."
+  type        = string
+  default     = ""
+}
+
 variable "image_tag" {
   description = "Backend image tag in Artifact Registry (passed on the second apply; see README)."
   type        = string
@@ -55,6 +62,12 @@ variable "service_name" {
   description = "Cloud Run service name."
   type        = string
   default     = "nestor-api"
+}
+
+variable "api_min_instances" {
+  description = "min_instance_count for the nestor-api Cloud Run service. Default 1, NOT 0 -- this closes DEF-23.3-14. At 0 there is no instance between requests, so `backend/app/api/../main.py::_reconcile_loop` (the phase 23.3 orphaned-run sweeper) never ticks and an orphaned PAID research run is never swept back to a terminal state. The failure is SILENT: /readyz is request-driven, so it keeps returning 200 on a cold-started instance while the loop that was supposed to be running never ran. See the 2026-09-07 correction in infra/DEPLOY-RUNBOOK.md Step 4 (CPU always-allocated + min-instances), which set this to 1 by hand -- this variable is that correction made declarative so a later apply cannot silently undo it."
+  type        = number
+  default     = 1
 }
 
 variable "runtime_sa_id" {
@@ -92,6 +105,12 @@ variable "frontend_service_name" {
   description = "Cloud Run service name for the frontend SSR container (INFRA-05 / D-01). The frontend image lives in the same `nestor` Artifact Registry repo as the backend (path `.../nestor/frontend:<tag>`)."
   type        = string
   default     = "nestor-frontend"
+}
+
+variable "frontend_min_instances" {
+  description = "min_instance_count for the nestor-frontend SSR service. Default 0: the frontend runs no background loop, so scale-to-zero costs only a cold start on the first request and nothing is silently skipped (contrast api_min_instances / DEF-23.3-14). Raise it if SSR cold starts become user-visible."
+  type        = number
+  default     = 0
 }
 
 variable "frontend_image_tag" {
@@ -265,10 +284,22 @@ variable "tribunal_worker_max_instances" {
   default     = 5
 }
 
+variable "tribunal_worker_min_instances" {
+  description = "min_instance_count for the tribunal-worker service -- the number of ALWAYS-ON poller instances. Default 1. Worker concurrency is min_instances x NESTOR_WORKER_RUN_CONCURRENCY (the per-instance run fan-out set by tribunal/infrastructure/cloud-run/deploy-worker.sh, currently 4), so 1 x 4 = 4 simultaneous research runs and the live DEV project runs at 2 x 4 = 8. This is a FLOOR, not a cap: at 0 the poll loop stops entirely and queued paid runs sit unclaimed, which is why it is never 0 in an environment that accepts runs."
+  type        = number
+  default     = 1
+}
+
+variable "tribunal_api_min_instances" {
+  description = "min_instance_count for the request-response tribunal-api service. Default 0: it does no background work between requests, so scale-to-zero costs only a cold start."
+  type        = number
+  default     = 0
+}
+
 variable "tribunal_worker_stale_minutes" {
-  description = "NESTOR_WORKER_STALE_MINUTES for the worker — how long a `running` claim may go without a heartbeat before another poller may re-claim it. Calibrated in Phase 16; carried here as a plain non-secret env. ⚠ 90 is a STOPGAP (DEF-23.3-01, 2026-09-09): the liveness heartbeat is not landing, so this value is effectively the maximum length of a healthy run, and 60 sat below the 64.2-minute longest run that ever completed. Must match tribunal/infrastructure/cloud-run/deploy-worker.sh; revert both to 60 once production logs show `run_heartbeat` with `rowcount=1`. Keep strictly below tribunal_worker_run_timeout (120) so the two cannot tie."
+  description = "NESTOR_WORKER_STALE_MINUTES for the worker - how long a `running` claim may go without a heartbeat before another poller may re-claim it. Calibrated in Phase 16; carried here as a plain non-secret env. HISTORY (D-23.4-07): this was raised 60 -> 90 as a STOPGAP on 2026-09-08 under DEF-23.3-01, when the liveness heartbeat was not landing at all and the value was therefore acting as a hard ceiling on the length of a healthy run - 60 sat below the 64.2-minute longest run that had ever completed, so healthy runs were being reclaimed. The ROOT CAUSE (the worker process held two module copies with two WORKER_IDs, so every fenced heartbeat write matched 0 rows) was fixed and deployed on 2026-09-09, and `run_heartbeat` was observed with `rowcount=1` on run 6668b27e. The condition for the stopgap has passed, so the value is back to 60. Must match tribunal/infrastructure/cloud-run/deploy-worker.sh (reverted in the same release, plan 23.4-02). Keep strictly below tribunal_worker_run_timeout (120) so the two cannot tie."
   type        = string
-  default     = "90"
+  default     = "60"
 }
 
 variable "tribunal_image_tag" {
