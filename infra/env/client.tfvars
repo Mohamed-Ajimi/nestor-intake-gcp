@@ -51,12 +51,16 @@ image_registry_project = "project-cb01b861-cb4a-438d-b9a"
 # runs there is no image in the client's pull path, so the Cloud Run services
 # created by the first apply are EXPECTED to fail to become ready.
 image_tag          = "f5e2b9ad" # 23.4-03 Task 1 — the promoted backend tag
-frontend_image_tag = "<capture-after-first-deploy>" # 23.4-03 Task 1 — the promoted frontend tag
+frontend_image_tag = "client-20260912-135048" # 23.4-03 Task 1 — the promoted frontend tag
 
 # ------------------------------------------------------------ nestor-api tier
 # DEF-23.3-14: 1, never 0. At 0 the phase 23.3 orphaned-run reconcile loop never
 # ticks and a paid research run can be stranded silently.
 api_min_instances = 1
+# Cloud Run IAM lets anyone REACH nestor-api; the request is then gated by the app's own
+# Firebase ID-token check on every protected route. Dev runs this way (read back 2026-09-12:
+# roles/run.invoker -> allUsers); without it the client's browser gets a Cloud Run 403.
+allow_unauthenticated = true
 
 # Operator RULING 1a, 2026-09-11: keep the Agenic address, so the operator owns
 # the client environment and no client user exists until one is deliberately
@@ -71,8 +75,9 @@ frontend_min_instances = 0 # SSR does no background work; a cold start is the on
 # These are baked into the bundle at IMAGE BUILD time (Cloud Build
 # --substitutions), not read at runtime. They are listed here to document the
 # build-arg surface; Terraform does not inject them.
-vite_api_base_url         = "<capture-after-first-deploy>"      # the client nestor-api URL, after its first deploy
-vite_firebase_api_key     = "<capture-after-first-deploy>"      # PUBLIC web identifier, read from the client project's Firebase web app config
+# Captured 2026-09-11 from `gcloud run services describe` on nestor-pulse-prod (23.4-03), not chosen.
+vite_api_base_url         = "https://nestor-api-zqd5qncdnq-ew.a.run.app"      # the client nestor-api URL, after its first deploy
+vite_firebase_api_key     = "AIzaSyCczKyabCcEsvJshzPv_lE9HiaVkKgXxpo"      # PUBLIC web identifier, read from the client project's Firebase web app config
 vite_firebase_auth_domain = "nestor-pulse-prod.firebaseapp.com" # D-23.4-03, no custom domain yet
 vite_firebase_project_id  = "nestor-pulse-prod"
 
@@ -125,4 +130,4 @@ tribunal_audit_bucket_name = "nestor-pulse-prod-nestor-audit"
 # The client tribunal-api URL, used verbatim as the OIDC audience on BOTH
 # services. Captured from `gcloud run services describe tribunal-api` after its
 # first deploy — never guessed, never with a path (Phase 14 Pitfall 4).
-tribunal_service_url = "<capture-after-first-deploy>" # 23.4-03 second-pass wiring
+tribunal_service_url = "https://tribunal-api-zqd5qncdnq-ew.a.run.app" # 23.4-03 second-pass wiring
