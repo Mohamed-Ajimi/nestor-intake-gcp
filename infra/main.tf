@@ -490,6 +490,14 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "NESTOR_ADMIN_EMAIL"
         value = var.nestor_admin_email
       }
+      # The browser origin allowlist the backend enforces (config.cors_allowed_origins parses
+      # the JSON-array form). Dev carried this by hand since Phase 12 Step 12.4; the client
+      # environment gets it from the same variable that already drives the uploads-bucket CORS,
+      # so the two allowlists cannot drift apart (23.4-03, 2026-09-12).
+      env {
+        name  = "CORS_ALLOWED_ORIGINS"
+        value = jsonencode(var.cors_allowed_origins)
+      }
       env {
         name  = "APP_BASE_URL"
         value = var.app_base_url
