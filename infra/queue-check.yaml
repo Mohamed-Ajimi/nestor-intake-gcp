@@ -32,9 +32,11 @@
 # ---------------------------------------------------------------------------
 # TRAP 1 — A GREEN BUILD IS NOT AN EMPTY QUEUE. (CORRECTED 2026-09-11.)
 # ---------------------------------------------------------------------------
-# This config is meant to be run as the EXISTING nestor-run@ service account,
-# which already holds secretAccessor on DATABASE_URL_WORKER (no IAM change, no
-# Cloud SQL authorized-network change).
+# This config must run as the service account that holds secretAccessor on
+# DATABASE_URL_WORKER (no IAM change, no Cloud SQL authorized-network change). In
+# Terraform-built environments that is tribunal-run@ (infra/main.tf binds the accessor
+# there); on dev the hand-built grant sits on nestor-run@. Wrong identity = exit 90
+# (measured on nestor-pulse-prod 2026-09-12), which is a refusal, not a pass.
 #
 # WHAT THE RUNBOOK SAID (2026-07-28): nestor-run@ does NOT hold
 # roles/logging.logWriter, so the build's stdout is LOST and `gcloud builds log`

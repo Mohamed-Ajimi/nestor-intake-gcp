@@ -231,7 +231,13 @@ fi
 # ---------------------------------------------------------------------------
 gate() {
   local when="$1"
-  local sa="projects/${TARGET_PROJECT}/serviceAccounts/nestor-run@${TARGET_PROJECT}.iam.gserviceaccount.com"
+  # The gate must run AS the identity that holds secretAccessor on DATABASE_URL_WORKER.
+  # In every Terraform-built environment that is tribunal-run@ (main.tf binds the accessor
+  # there); dev's hand-built grant sits on nestor-run@ instead. Measured 2026-09-12 on
+  # nestor-pulse-prod: as nestor-run@ the gate exits 90 (secret unreadable), as
+  # tribunal-run@ it answers. Override with GATE_SA=<email> for dev-shaped environments.
+  local gate_sa="${GATE_SA:-tribunal-run@${TARGET_PROJECT}.iam.gserviceaccount.com}"
+  local sa="projects/${TARGET_PROJECT}/serviceAccounts/${gate_sa}"
   local cmd=(gcloud "${ACCOUNT_ARGS[@]}" builds submit --no-source
              --config="${GATE_CONFIG}"
              --substitutions="_PROJECT=${TARGET_PROJECT},_REGION=${REGION}"

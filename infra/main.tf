@@ -882,6 +882,15 @@ resource "google_service_account" "tribunal_run" {
 }
 
 # cloudsql.client ONLY (NOT instanceUser — BUILT_IN-password path, not IAM DB login).
+# Same reason as runtime_log_writer: the idle gate (infra/queue-check.yaml) runs AS this SA in
+# environments where DATABASE_URL_WORKER's accessor is bound to it (all Terraform-built ones),
+# and its step output is lost without logWriter (measured 2026-09-12).
+resource "google_project_iam_member" "tribunal_run_log_writer" {
+  project = var.project
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.tribunal_run.email}"
+}
+
 resource "google_project_iam_member" "tribunal_run_cloudsql_client" {
   project = var.project
   role    = "roles/cloudsql.client"
