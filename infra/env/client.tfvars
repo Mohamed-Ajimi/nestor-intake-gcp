@@ -85,7 +85,7 @@ vite_firebase_project_id  = "nestor-pulse-prod"
 # The client frontend's run.app origins. BOTH hostnames are needed (the
 # <hash>-ew form and the <project-number> form), same as dev. Captured in the
 # second-pass wiring after the frontend's first deploy (23.4-03).
-cors_allowed_origins = ["<capture-after-first-deploy>"]
+cors_allowed_origins = ["https://nestor-frontend-zqd5qncdnq-ew.a.run.app"]
 
 # ----------------------------------------------------- secret CONTAINER names
 # D-23.4-02: Gemini, OpenAI and Resend carry the SAME VALUES as dev, but in THIS
@@ -103,7 +103,7 @@ resend_api_key_secret_id    = "nestor-resend-api-key"
 
 # ------------------------------------------------------------- mail / app URLs
 nestor_admin_email = "mohamed.ajimi@dotto.be"       # same ops address as dev
-app_base_url       = "<capture-after-first-deploy>" # the client frontend URL — 23.4-03 second-pass wiring
+app_base_url       = "https://nestor-frontend-zqd5qncdnq-ew.a.run.app" # the client frontend URL — 23.4-03 second-pass wiring
 
 # -------------------------------------------------------------- tribunal tier
 # 1 x NESTOR_WORKER_RUN_CONCURRENCY=4 = 4 concurrent research runs for the
