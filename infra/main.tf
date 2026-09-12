@@ -753,11 +753,9 @@ resource "google_cloud_run_v2_service" "frontend" {
       }
 
       # Nitro node-server reads PORT/NITRO_PORT. Set PORT=8080 explicitly to match the
-      # container_port above (belt-and-suspenders — Cloud Run also injects PORT at runtime).
-      env {
-        name  = "PORT"
-        value = "8080"
-      }
+      # PORT is NOT set here: Cloud Run reserves it and rejects the service with
+      # "reserved env names were provided: PORT" (measured 2026-09-12 on the first client
+      # create). Cloud Run injects PORT=container_port at runtime.
     }
     # Deliberately NO service_account, NO secret env, NO DB/connector env, NO 900s timeout,
     # and NO cpu_idle=false here (see the block header): the SSR frontend is a stateless
