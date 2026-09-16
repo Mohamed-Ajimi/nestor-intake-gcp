@@ -102,7 +102,7 @@ openai_api_key_secret_id    = "nestor-openai-api-key"
 resend_api_key_secret_id    = "nestor-resend-api-key"
 
 # ------------------------------------------------------------- mail / app URLs
-nestor_admin_email = "mohamed.ajimi@dotto.be"       # same ops address as dev
+nestor_admin_email = "yanick@agenic.be"             # ops mail (admin_validated) goes to the superadmin on the client env (operator ruling 2026-09-16)
 app_base_url       = "https://nestor-frontend-zqd5qncdnq-ew.a.run.app" # the client frontend URL — 23.4-03 second-pass wiring
 
 # -------------------------------------------------------------- tribunal tier
