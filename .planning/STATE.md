@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 23.4 (client-environment-stand-up-the-fresh-nestor-pulse-prod-proj) — EXECUTING
 Plan: 1 of 5
-**→ CURRENT PHASE: 23.5 — tester remarks round 1 (inserted 2026-09-22 after Nestor testing). Next: `/gsd-plan-phase 23.5 --skip-research`.** 23.4 is live on `nestor-pulse-prod` (proving run 09-14, handover 09-17, first real run 09-18); its plan 05 (runbook/records) is still open and folds into 23.5 wave 4.
+**→ CURRENT PHASE: 23.5 — tester remarks round 1 (inserted 2026-09-22 after Nestor testing). PLANNED 2026-09-22: 7 plans / 4 waves, checker 0 blockers (3 warnings fixed inline, commit follows `4ee6640`). Next: `/gsd-execute-phase 23.5`.** 23.4 is live on `nestor-pulse-prod` (proving run 09-14, handover 09-17, first real run 09-18); its plan 05 (runbook/records) is still open and folds into 23.5 wave 4.
 
 (previous pointer) **Phase: 23.4 — client environment (`nestor-pulse-prod`), inserted 2026-09-11. Next: `/gsd-plan-phase 23.4 --skip-research`.** Decision 2026-09-11: the client gets a FRESH project; `project-cb01b861-cb4a-438d-b9a` becomes the dev environment.
 
