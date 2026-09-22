@@ -13,7 +13,7 @@
     "salesNewProject": "Nouveau projet",
     "salesProjects": "Projets",
     "manageUsers": "utilisateurs",
-    "manageSpaces": "spaces"
+    "manageSpaces": "clients"
   },
   "home": {
     "title": "choisissez un produit",
@@ -26,7 +26,7 @@
     }
   },
   "intakeDetail": {
-    "unknownClient": "Client inconnu",
+    "unknownClient": "Projet sans nom",
     "status": {
       "draft": "Brouillon",
       "submitted": "Soumis",
@@ -204,12 +204,12 @@
     "saved": "Client enregistré"
   },
   "spaces": {
-    "title": "espaces",
-    "subtitle": "Gérer les espaces clients — créer, modifier nom/slug et désactiver.",
-    "new": "+ Nouvel espace",
+    "title": "clients",
+    "subtitle": "Gérer les clients — créer, modifier nom/slug et désactiver.",
+    "new": "+ Nouveau client",
     "empty": {
-      "title": "Aucun espace pour l'instant",
-      "body": "Créez le premier espace pour gérer les utilisateurs et les templates."
+      "title": "Aucun client pour l'instant",
+      "body": "Créez le premier client pour gérer les utilisateurs et les templates."
     },
     "table": {
       "name": "Nom",
@@ -228,17 +228,17 @@
       "cancel": "Annuler"
     },
     "confirm": {
-      "title": "Désactiver l'espace ?",
-      "body": "L'espace sera masqué pour les utilisateurs. Les données sont conservées et l'espace peut être réactivé ultérieurement."
+      "title": "Désactiver le client ?",
+      "body": "Le client sera masqué pour les utilisateurs. Les données sont conservées et le client peut être réactivé ultérieurement."
     },
     "toast": {
       "reactivated": "Réactivé",
-      "deactivated": "Espace désactivé"
+      "deactivated": "Client désactivé"
     }
   },
   "spaceForm": {
-    "createTitle": "nouvel espace",
-    "editTitle": "modifier l'espace",
+    "createTitle": "nouveau client",
+    "editTitle": "modifier le client",
     "name": "Nom",
     "slug": "Slug",
     "slugPlaceholder": "p. ex. acme-corp",
@@ -256,7 +256,7 @@
   },
   "invite": {
     "invalidEmail": "Adresse e-mail invalide",
-    "chooseSpace": "Choisissez un espace",
+    "chooseSpace": "Choisissez un client",
     "invalidInput": "Saisie invalide",
     "duplicateAccount": "Un compte existe déjà pour cette adresse e-mail.",
     "inviteFailed": "Échec de l'invitation. Réessayez.",
@@ -276,8 +276,8 @@
     "close": "Fermer",
     "formTitle": "inviter un utilisateur",
     "emailLabel": "Adresse e-mail",
-    "spaceLabel": "Espace",
-    "spacePlaceholder": "Choisissez un espace…",
+    "spaceLabel": "Client",
+    "spacePlaceholder": "Choisissez un client…",
     "roleFixed": "Rôle : utilisateur",
     "cancel": "Annuler",
     "creating": "Création…",
@@ -291,12 +291,12 @@
     "mailSent": "E-mail d'invitation envoyé",
     "deactivated": "Utilisateur désactivé",
     "title": "utilisateurs",
-    "subtitle": "Utilisateurs par espace — inviter, désactiver et réactiver.",
+    "subtitle": "Utilisateurs par client — inviter, désactiver et réactiver.",
     "inviteUser": "+ Inviter un utilisateur",
-    "emptyTitle": "⌀ Aucun utilisateur dans cet espace",
+    "emptyTitle": "⌀ Aucun utilisateur pour ce client",
     "emptyBody": "Invitez le premier utilisateur pour commencer.",
     "colEmail": "E-mail",
-    "colSpace": "Espace",
+    "colSpace": "Client",
     "colStatus": "Statut",
     "colActions": "Actions",
     "statusActive": "ACTIF",
@@ -341,14 +341,14 @@
   },
   "templates": {
     "title": "templates",
-    "subtitle": "Clonez un template standard dans un espace et modifiez le schéma (JSON).",
+    "subtitle": "Clonez un template standard pour un client et modifiez le schéma (JSON).",
     "cloneCta": "+ Cloner un template",
-    "spaceLabel": "Espace",
-    "spacePlaceholder": "Choisissez un espace…",
-    "emptyTitle": "⌀ Aucun template dans cet espace",
+    "spaceLabel": "Client",
+    "spacePlaceholder": "Choisissez un client…",
+    "emptyTitle": "⌀ Aucun template pour ce client",
     "emptyBody": "Clonez un template standard pour commencer.",
     "editSchema": "modifier le schéma →",
-    "chooseSpace": "Choisissez un espace.",
+    "chooseSpace": "Choisissez un client.",
     "nameRequired": "Le nom est obligatoire.",
     "cloned": "Template cloné",
     "cloneTitle": "cloner un template",
@@ -369,17 +369,18 @@
     "saveSchema": "Enregistrer le schéma"
   },
   "intakesNew": {
-    "clientNameRequired": "Indiquez un nom de client.",
+    "clientNameRequired": "Indiquez un nom de projet.",
     "createdTitle": "Intake créé",
     "createdBody": "L'intake est prêt au statut « Brouillon ». Ouvrez-le pour remplir les réponses.",
-    "clientLabel": "Client : {{name}}",
+    "clientLabel": "Projet : {{name}}",
     "openIntake": "Ouvrir l'intake",
     "backToList": "← Retour à la liste des intakes",
     "createAnother": "Créer un autre intake",
     "title": "Nouvel intake",
-    "subtitle": "Donnez un nom au client. L'intake est créé dans l'espace client actif.",
-    "clientNameLabel": "Nom du client",
-    "clientNamePlaceholder": "p. ex. Acme SA",
+    "subtitle": "Donnez un nom au projet. L'intake est créé pour le client actif.",
+    "clientNameLabel": "Nom du projet",
+    "clientNamePlaceholder": "p. ex. Entrée sur le marché Benelux",
+    "noClientSelected": "Choisissez d'abord un client dans la barre supérieure — un intake appartient toujours à un seul client.",
     "cancel": "← Annuler",
     "creating": "Création en cours…",
     "createButton": "Créer l'intake"
@@ -402,7 +403,7 @@
     "intakesFor": "intakes pour {{name}}",
     "total": "{{count}} au total",
     "noIntakes": "Aucun intake pour ce client.",
-    "colName": "Nom",
+    "colName": "Projet",
     "colStatus": "Statut",
     "unnamed": "Sans nom",
     "newIntakeFor": "+ Nouvel intake pour {{name}}"
@@ -410,7 +411,7 @@
   "clients": {
     "title": "clients",
     "subtitle": "Uniquement les clients avec au moins un projet Pulse.",
-    "searchPlaceholder": "rechercher par client ou nom…",
+    "searchPlaceholder": "rechercher par client ou projet…",
     "loading": "Chargement…",
     "emptyTitle": "⌀ Aucun client avec des projets Pulse",
     "emptyBody": "Les clients apparaissent ici dès que vous créez leur premier intake.",
@@ -454,10 +455,10 @@
       "delivered": "Livré",
       "archived": "Archivé"
     },
-    "searchPlaceholder": "Rechercher un client ou un nom…",
+    "searchPlaceholder": "Rechercher un client ou un projet…",
     "showArchived": "Afficher les archivés",
     "colClient": "Client",
-    "colName": "Nom",
+    "colName": "Projet",
     "colStatus": "Statut",
     "colActions": "Actions",
     "emptyTitle": "Aucun intake pour l'instant",

@@ -13,7 +13,7 @@
     "salesNewProject": "New project",
     "salesProjects": "Projects",
     "manageUsers": "users",
-    "manageSpaces": "spaces"
+    "manageSpaces": "clients"
   },
   "home": {
     "title": "choose a product",
@@ -26,7 +26,7 @@
     }
   },
   "intakeDetail": {
-    "unknownClient": "Unknown client",
+    "unknownClient": "Untitled project",
     "status": {
       "draft": "Draft",
       "submitted": "Submitted",
@@ -204,12 +204,12 @@
     "saved": "Client saved"
   },
   "spaces": {
-    "title": "spaces",
-    "subtitle": "Manage client spaces — create, edit name/slug and deactivate.",
-    "new": "+ New space",
+    "title": "clients",
+    "subtitle": "Manage clients — create, edit name/slug and deactivate.",
+    "new": "+ New client",
     "empty": {
-      "title": "No spaces yet",
-      "body": "Create the first space to manage users and templates."
+      "title": "No clients yet",
+      "body": "Create the first client to manage users and templates."
     },
     "table": {
       "name": "Name",
@@ -228,17 +228,17 @@
       "cancel": "Cancel"
     },
     "confirm": {
-      "title": "Deactivate space?",
-      "body": "The space will be hidden from users. Data is retained and the space can be reactivated later."
+      "title": "Deactivate client?",
+      "body": "The client will be hidden from users. Data is retained and the client can be reactivated later."
     },
     "toast": {
       "reactivated": "Reactivated",
-      "deactivated": "Space deactivated"
+      "deactivated": "Client deactivated"
     }
   },
   "spaceForm": {
-    "createTitle": "new space",
-    "editTitle": "edit space",
+    "createTitle": "new client",
+    "editTitle": "edit client",
     "name": "Name",
     "slug": "Slug",
     "slugPlaceholder": "e.g. acme-corp",
@@ -256,7 +256,7 @@
   },
   "invite": {
     "invalidEmail": "Invalid e-mail address",
-    "chooseSpace": "Choose a space",
+    "chooseSpace": "Choose a client",
     "invalidInput": "Invalid input",
     "duplicateAccount": "An account already exists for this e-mail address.",
     "inviteFailed": "Invitation failed. Please try again.",
@@ -276,8 +276,8 @@
     "close": "Close",
     "formTitle": "invite user",
     "emailLabel": "E-mail address",
-    "spaceLabel": "Space",
-    "spacePlaceholder": "Choose a space…",
+    "spaceLabel": "Client",
+    "spacePlaceholder": "Choose a client…",
     "roleFixed": "Role: user",
     "cancel": "Cancel",
     "creating": "Creating…",
@@ -291,12 +291,12 @@
     "mailSent": "Invitation e-mail sent",
     "deactivated": "User deactivated",
     "title": "users",
-    "subtitle": "Users per space — invite, deactivate and reactivate.",
+    "subtitle": "Users per client — invite, deactivate and reactivate.",
     "inviteUser": "+ Invite user",
-    "emptyTitle": "⌀ No users in this space yet",
+    "emptyTitle": "⌀ No users for this client yet",
     "emptyBody": "Invite the first user to get started.",
     "colEmail": "E-mail",
-    "colSpace": "Space",
+    "colSpace": "Client",
     "colStatus": "Status",
     "colActions": "Actions",
     "statusActive": "ACTIVE",
@@ -341,14 +341,14 @@
   },
   "templates": {
     "title": "templates",
-    "subtitle": "Clone a standard template into a space and edit the schema (JSON).",
+    "subtitle": "Clone a standard template for a client and edit the schema (JSON).",
     "cloneCta": "+ Clone template",
-    "spaceLabel": "Space",
-    "spacePlaceholder": "Choose a space…",
-    "emptyTitle": "⌀ No templates in this space yet",
+    "spaceLabel": "Client",
+    "spacePlaceholder": "Choose a client…",
+    "emptyTitle": "⌀ No templates for this client yet",
     "emptyBody": "Clone a standard template to get started.",
     "editSchema": "edit schema →",
-    "chooseSpace": "Choose a space.",
+    "chooseSpace": "Choose a client.",
     "nameRequired": "Name is required.",
     "cloned": "Template cloned",
     "cloneTitle": "clone template",
@@ -369,17 +369,18 @@
     "saveSchema": "Save schema"
   },
   "intakesNew": {
-    "clientNameRequired": "Enter a client name.",
+    "clientNameRequired": "Enter a project name.",
     "createdTitle": "Intake created",
     "createdBody": "The intake is ready at status 'Draft'. Open it to fill in the answers.",
-    "clientLabel": "Client: {{name}}",
+    "clientLabel": "Project: {{name}}",
     "openIntake": "Open intake",
     "backToList": "← Back to intakes list",
     "createAnother": "Create another intake",
     "title": "New intake",
-    "subtitle": "Give the client a name. The intake is created within the active client space.",
-    "clientNameLabel": "Client name",
-    "clientNamePlaceholder": "e.g. Acme Inc.",
+    "subtitle": "Give the project a name. The intake is created for the active client.",
+    "clientNameLabel": "Project name",
+    "clientNamePlaceholder": "e.g. Market entry Benelux",
+    "noClientSelected": "Select a client in the top bar first — an intake is always created for one client.",
     "cancel": "← Cancel",
     "creating": "Creating…",
     "createButton": "Create intake"
@@ -402,7 +403,7 @@
     "intakesFor": "intakes for {{name}}",
     "total": "{{count}} total",
     "noIntakes": "No intakes for this client yet.",
-    "colName": "Name",
+    "colName": "Project",
     "colStatus": "Status",
     "unnamed": "Untitled",
     "newIntakeFor": "+ New intake for {{name}}"
@@ -410,7 +411,7 @@
   "clients": {
     "title": "clients",
     "subtitle": "Only clients with at least one Pulse project.",
-    "searchPlaceholder": "search by client or name…",
+    "searchPlaceholder": "search by client or project…",
     "loading": "Loading…",
     "emptyTitle": "⌀ No clients with Pulse projects yet",
     "emptyBody": "Clients appear here as soon as you create their first intake.",
@@ -454,10 +455,10 @@
       "delivered": "Delivered",
       "archived": "Archived"
     },
-    "searchPlaceholder": "Search client or name…",
+    "searchPlaceholder": "Search client or project…",
     "showArchived": "Show archived",
     "colClient": "Client",
-    "colName": "Name",
+    "colName": "Project",
     "colStatus": "Status",
     "colActions": "Actions",
     "emptyTitle": "No intakes yet",

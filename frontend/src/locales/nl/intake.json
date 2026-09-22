@@ -84,7 +84,7 @@
   },
   "route": {
     "loadFailed": "Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.",
-    "noTemplate": "Geen intakesjabloon beschikbaar voor deze ruimte.",
+    "noTemplate": "Geen intakesjabloon beschikbaar.",
     "loading": "Laden…",
     "backToOverview": "Terug naar overzicht",
     "logout": "Uitloggen"
@@ -167,7 +167,7 @@
   },
   "resultsRoute": {
     "loadFailed": "Kon de intake(s) niet laden. Probeer de pagina te vernieuwen.",
-    "noTemplate": "Geen intakesjabloon beschikbaar voor deze ruimte.",
+    "noTemplate": "Geen intakesjabloon beschikbaar.",
     "loading": "Laden…",
     "backToOverview": "Terug naar overzicht",
     "brand": "Agenic",
@@ -320,7 +320,7 @@
     "loadFailed": "Leden laden mislukt: {{error}}",
     "recipientsLabel": "Ontvangers",
     "loadError": "Leden konden niet geladen worden.",
-    "noMembers": "⌀ Geen actieve leden in deze space",
+    "noMembers": "⌀ Geen actieve leden bij deze klant",
     "inviteFirst": "Nodig eerst iemand uit.",
     "noName": "(geen naam)",
     "cancel": "Annuleren",

@@ -84,7 +84,7 @@
   },
   "route": {
     "loadFailed": "Could not load the intake(s). Please refresh the page.",
-    "noTemplate": "No intake template available for this space.",
+    "noTemplate": "No intake template available.",
     "loading": "Loading…",
     "backToOverview": "Back to overview",
     "logout": "Log out"
@@ -167,7 +167,7 @@
   },
   "resultsRoute": {
     "loadFailed": "Could not load the intake(s). Please refresh the page.",
-    "noTemplate": "No intake template available for this space.",
+    "noTemplate": "No intake template available.",
     "loading": "Loading…",
     "backToOverview": "Back to overview",
     "brand": "Agenic",
@@ -320,7 +320,7 @@
     "loadFailed": "Loading members failed: {{error}}",
     "recipientsLabel": "Recipients",
     "loadError": "Members could not be loaded.",
-    "noMembers": "⌀ No active members in this space",
+    "noMembers": "⌀ No active members for this client",
     "inviteFirst": "Invite someone first.",
     "noName": "(no name)",
     "cancel": "Cancel",
