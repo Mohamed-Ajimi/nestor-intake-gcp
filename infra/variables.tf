@@ -390,3 +390,42 @@ variable "tribunal_service_url" {
   type        = string
   default     = ""
 }
+
+# ================================================================================
+# Phase 23.5 — the two tribunal kill switches (D-23.5-04)
+# ================================================================================
+# The Sources-list fix and the truncated-chapter continuation ship behind
+# environment switches that default to TODAY'S BEHAVIOUR. The default is the
+# whole safety property: an `apply` that forgets to mention them changes nothing,
+# and the revert is one variable flipped back — never a rollback and never a
+# rebuild.
+#
+# Both are STRINGS, not bools, on purpose: they are passed straight through to a
+# Cloud Run env value (which is a string), and `nestor_pulse_sdk/runtime_flags.py`
+# does the parsing. A `bool` here would render as `true`/`false` all the same but
+# would invite a `tostring()` at the call site and make the two representations
+# drift. The reader accepts `1/true/yes/on` and `0/false/no/off`, case-insensitive,
+# and falls back to the DOCUMENTED DEFAULT on anything else — including the empty
+# string Cloud Run gives a declared-but-blank variable — so a typo cannot silently
+# disable a fix.
+#
+# THE FIVE FINE-GRAINED CITATION SWITCHES ARE DELIBERATELY NOT DECLARED HERE.
+# `NESTOR_CITATIONS_SKEPTIC_AS_EVIDENCE`, `NESTOR_CITATIONS_PER_URL_META`,
+# `NESTOR_CITATIONS_PRIMARY_ANCHOR`, `NESTOR_CITATIONS_LEDGER_NUMBERABLE_ONLY` and
+# `NESTOR_CITATIONS_RENDER_RESOLVED` each default TRUE in code and are ANDed with
+# the master, so they are inert until `nestor_citations_v2` is on. Their only job
+# is bisecting a bad dev run in place, without a rebuild — see the § Phase 23.5
+# runbook section for the `gcloud run services update --update-env-vars` form and
+# the IaC drift it creates.
+
+variable "nestor_citations_v2" {
+  description = "NESTOR_CITATIONS_V2 — the MASTER switch for the phase-23.5 Sources-list fix (D-23.5-04), read at call time by tribunal/nestor_pulse_sdk/runtime_flags.py::citations_v2() and consumed in citations/extractor.py (skeptic fan-out, per-url title+grade), citations/numbering.py (primary anchor, resolved-url carry), pipeline/tribunal/pipeline.py (numberable-only ledger) and pipeline/synthesis/steps.py (Sources rendering). Default \"false\" IS today's behaviour byte for byte — pinned by the flags-off goldens in tests/test_citation_replay.py and tests/test_sources_render.py — so an apply that never mentions this variable cannot change what a paid run writes. Set \"true\" only after a dev run has been read against the § Phase 23.5 acceptance numbers. With this off, NO value of any fine-grained NESTOR_CITATIONS_* variable has any effect."
+  type        = string
+  default     = "false"
+}
+
+variable "nestor_synthesis_continue_truncated" {
+  description = "NESTOR_SYNTHESIS_CONTINUE_TRUNCATED — a SEPARATE master (NOT gated by nestor_citations_v2) for the truncated-chapter continuation, read at call time by runtime_flags.py::synthesis_continue_truncated() and consumed in pipeline/synthesis/steps.py. On `stop_reason == \"max_tokens\"` the writer issues ONE continuation call and splices at the last paragraph boundary; if that call also truncates, a one-line notice is appended in the run's language. Kept independent because its blast radius is MONEY and LATENCY — one extra provider call per truncated section plus one for the wrap, measured at 2 on run 7784e71c — where the citation switches only change which rows get written; tying the two together would make one lever mean two things. Default \"false\" = today's behaviour (the cut text is pasted with no continuation and no marker)."
+  type        = string
+  default     = "false"
+}

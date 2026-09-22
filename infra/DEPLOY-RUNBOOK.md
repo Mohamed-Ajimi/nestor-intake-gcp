@@ -7197,3 +7197,399 @@ exists**: the design no longer depends on engine data.
   engine's thirteen stages). Truthful; reads thinner than busy phases.
 * `groupedTrace.ts:98` is now the ONLY reason a phase gets the grouped body; if the engine ever tags
   another stage it lights up with no frontend change. Never exercised.
+
+---
+
+## 23.4 DEPLOY RECORD — client environment `nestor-pulse-prod`, stood up 2026-09-11 → 2026-09-12 (**RECONSTRUCTED**, owed by plan 23.4-05)
+
+> ⚠ **THIS RECORD IS RECONSTRUCTED FROM PLAN SUMMARIES, NOT OBSERVED LIVE BY ITS AUTHOR.**
+> Every value below is copied from `.planning/phases/23.4-*/23.4-03-SUMMARY.md` and
+> `23.4-04-SUMMARY.md`, which recorded them as read-backs at the time. It was written on
+> 2026-09-22 by plan 23.5-07 Task 1 because the client environment had been live for ten days
+> with **no entry in this runbook at all** — the last one above it is `260909-g8b`. Treat the
+> numbers as second-hand: if you are about to act on one, `describe` it first. Where the
+> summaries themselves said a value was inferred rather than read, that is repeated here.
+
+**What shipped:** an entire new GCP project for the client. Not a release — an environment.
+Four Cloud Run services, three Jobs, a Cloud SQL instance, an audit bucket, an uploads bucket,
+two runtime service accounts and the secret containers, all created by `terraform apply`
+against a **fresh** state (52 resources in `gs://nestor-pulse-prod-tfstate/nestor-intake/infra`).
+The dev project `project-cb01b861-cb4a-438d-b9a` became the DEV environment in the same move.
+
+| service / job | revision or execution | image digest |
+|---|---|---|
+| `nestor-api` | `nestor-api-00005-rpb` (00004-zbl + `NESTOR_ADMIN_EMAIL=yanick@agenic.be`, 2026-09-16) | `backend@sha256:cb6616db…26fb3` — **equal to the dev digest for `backend:f5e2b9ad`** |
+| `tribunal-api` | `tribunal-api-00002-qgx` | `tribunal-api@sha256:80d615cb…9a38` — equal to dev |
+| `tribunal-worker` | `tribunal-worker-00002-ckx` (created 2026-09-12T15:57Z) | `tribunal-worker@sha256:a4571316…7b05` — equal to dev |
+| `nestor-frontend` | `nestor-frontend-00001-2vc` | `frontend:client-20260912-135048` = `sha256:12b8c4c6…62e6` — **deliberately NOT the dev digest** (`0e164712…`): Vite inlines `VITE_*` at build time, so the frontend is rebuilt per environment or the client's browser calls the dev API |
+| Jobs | `nestor-migrate`, `tribunal-migrate`, `nestor-seed-superadmin` | all pinned to the `f5e2b9ad` images |
+
+URLs: `nestor-api` `https://nestor-api-zqd5qncdnq-ew.a.run.app` · `tribunal-api`
+`https://tribunal-api-zqd5qncdnq-ew.a.run.app` · frontend
+`https://nestor-frontend-zqd5qncdnq-ew.a.run.app` (also `…-38458006743.europe-west1.run.app`).
+
+**Builds** (all in the DEV project, all `SUCCESS` confirmed by `builds describe`, `$SHA = f5e2b9ad`):
+`2757bf47-0f4a-4f1c-aa57-ee8a9a55a817` backend · `880ad2f0-089e-483c-af8c-b558513600ef`
+tribunal-api · `3ad3a6fa-90bb-4445-9db7-9872baf86700` tribunal-worker ·
+`22105622-bdce-4907-9cbf-702e5ecbc702` frontend (client config).
+
+### Migrations — run BEFORE any service, and the ordering proven by clock
+
+* `nestor-migrate-pl8n9` succeededCount 1, completionTime `2026-09-11T18:27:24Z`; log chain
+  `Running upgrade -> 0001 … 0016 -> 0017`. **INTAKE head 0017.**
+* `tribunal-migrate-b2skc` succeededCount 1, completionTime `2026-09-11T18:29:28Z`; log chain
+  `0001 … 0017 -> 0018`. **TRIBUNAL head 0018.**
+* First service revision created ~`2026-09-12T13:4xZ`; worker revision `15:47:57Z`. Both
+  migrate completionTimes are strictly earlier, so the ordering is a measurement, not a claim.
+* ⚠ **The tribunal head was NOT read back independently.** The intake head was
+  (`INTAKE_HEAD=0017` as `nestor-run@…iam`, build `e7ca540c`). The tribunal read was attempted
+  as `app_user` (builds `cfa5e41f`, `3e59baf2`, both SUCCESS) but the step output was not
+  retrievable from Cloud Logging in-session. **0018 is an INFERENCE from the job log.**
+
+### Seed
+
+`nestor-seed-superadmin-csvcp` succeeded. Identity Platform holds **exactly one account**:
+`yanick@agenic.be`, claims `{"role":"superadmin","space_id":null}`. **Zero client users exist.**
+The initial password is Secret Manager `nestor-superadmin-initial-password` (v1 = the password
+the user was created with; v2 was a stale regeneration and is DESTROYED; v3 = a copy of v1 so
+`latest` resolves). Sign-in verified by `accounts:signInWithPassword` with `latest` — idToken
+issued — and the invalid-credential path observed on v2, so the failure is distinguishable.
+
+### Nine findings from the stand-up, all fixed in code and committed
+
+1. A placeholder image tag fails at CREATE, not at readiness (`Image '...:<capture-after-first-deploy>' parsing failed`). The nine Cloud Run resources were created by targeted `terraform apply` with real tags, never `gcloud run deploy`. **Terraform is the source of truth for the client env** — unlike dev.
+2. **Fresh-DB migration gap closed** by `infra/db-bootstrap.yaml`. Two rounds: `CREATE SCHEMA … AUTHORIZATION` needs role membership a `cloudsqlsuperuser` member lacks (→ admin-owned schema + `GRANT ALL`), and `CREATE SCHEMA IF NOT EXISTS` checks `CREATE ON DATABASE` *before* existence (→ an extra grant). Builds `d00e9ad7`, `c2ac8af6` SUCCESS.
+3. **Percent-encoded DSN passwords break alembic's ConfigParser** (`invalid interpolation syntax … %2A`). `app_user`/`worker_user` rotated to URL-safe passwords; `ignore_changes=[password]` keeps Terraform quiet; `DATABASE_URL{,_WORKER}` at v2.
+4. The frontend `PORT` env is **reserved by Cloud Run** — removed from the resource (`161cfb0`).
+5. Terraform never emitted `CORS_ALLOWED_ORIGINS` on the API (dev has carried it by hand since Phase 12) — now `jsonencode(var.cors_allowed_origins)` (`30bcceb`).
+6. The worker came up with **cpu-throttling ON** despite `cpu_idle = false` in config; corrected by a second targeted apply (rev `00002-ckx`). Read back `false` on both tribunal services.
+7. **The idle gate as `nestor-run@` exits 90 on the client** — the accessor on `DATABASE_URL_WORKER` is bound to `tribunal-run@` by Terraform. As `tribunal-run@` → SUCCESS (build `42b3128a`, 0 rows). `promote.sh` now defaults its gate SA to `tribunal-run@` with a `GATE_SA` override (`91fa4dd`). ⚠ The worker was applied while the gate had only answered 90; the queue was empty *by construction* (fresh project, `tribunal.run` freshly created) and the gate confirmed idle afterwards. That is an explanation, not a precedent.
+8. Both runtime SAs needed `roles/logging.logWriter` for Cloud Build step output; added in Terraform.
+9. **Perpetual cosmetic diff:** every `google_cloud_run_v2_service` reads back a service-level `scaling { min_instance_count = 0, manual_instance_count = 0 }` the config omits, so `terraform plan` shows 4 in-place changes that change nothing. **Expect these on every client plan** and do not read them as drift.
+
+### Second-pass wiring, all read back
+
+`nestor-api`: `NESTOR_ADMIN_EMAIL=yanick@agenic.be` (operator ruling 2026-09-16 — ops mail goes
+to the superadmin on the client env), `APP_BASE_URL`, `CORS_ALLOWED_ORIGINS` = the frontend
+origin, `TRIBUNAL_SERVICE_URL` with no path. A CORS preflight from the frontend origin returned
+200 echoing the origin. `tribunal-api`'s `TRIBUNAL_SERVICE_URL` is byte-identical.
+Identity Platform `authorizedDomains` set by admin API PATCH and read back — **no console step
+was needed**. Uploads-bucket CORS: one rule, the frontend origin, GET,
+Content-Disposition/Content-Type, 3600s. Firebase web app
+`1:38458006743:web:c554d4f5e0a195ecaa2492`, `authDomain=nestor-pulse-prod.firebaseapp.com`.
+
+### What this stand-up does NOT prove
+
+* **Nothing here was walked in a browser by the author of this record.** The 23.4-03 Task 3
+  browser walkthrough and proving run were operator work; the proving run happened 2026-09-14
+  and the first real client run `7784e71c` on 2026-09-18 ($36.87, `completed_degraded`).
+* The tribunal alembic head is inferred, not read (see Migrations above).
+* No backup has ever been **restored** on either project, and `nestor-pg` is **ZONAL** (no HA).
+
+### ⛔ Still open, and still owed, as of 2026-09-22
+
+* **Rotate the superadmin password.** `nestor-superadmin-initial-password` is still the seeded
+  value and has been read in-session.
+* **Rotate the client Anthropic key.** It was pasted into a chat by the operator before being
+  stored in Secret Manager. A v2 was rolled on 2026-09-22 (revisions `nestor-api-00006-6hj`,
+  `tribunal-api-00003-xhj`, `tribunal-worker-00003-mn5`), **but the exposed value must still be
+  revoked** — a new version does not disable the old key at the provider.
+* `infra/BOOTSTRAP.md` (the "how to stand up environment N+1" document) was plan 23.4-05's other
+  deliverable and does **not** exist. The image-retention rule it was to carry is recorded here
+  instead: **never delete an image in the dev registry that any client revision still
+  references** — the dev registry is the client's rollback target.
+
+---
+
+## Phase 23.5 — tester remarks round 1 (`nestor-api` + `nestor-frontend` + `tribunal-api` + `tribunal-worker` REBUILD, **NO migration**, **NO new secret**, **ONE dev research run ~$40**)
+
+> ⛔ **THE TRIBUNAL HALF OF THIS RELEASE IS THE SENSITIVE PART, AND IT SHIPS TURNED OFF.**
+> Two environment kill switches (D-23.5-04) default to today's behaviour byte for byte. A
+> deploy that never mentions them changes nothing about what a paid run writes. They are
+> flipped on in **dev only**, a human reads **one** real run against five fixed acceptance
+> numbers, and only then does prod get them. **Reverting is a config flip, never a rollback.**
+>
+> ⛔ **`tribunal-worker` IS LAST.** Unchanged from Phase 23.3 and from every incident before it:
+> a worker config change creates a revision, a revision BOOTS the container, and the poll loop
+> **CLAIMS FIRST AND SLEEPS LAST**. `--min-instances=0` is NOT protection. An empty queue is the
+> only protection, and on dev a booting instance claims up to **M×K = 2×4 = 8** runs at once.
+
+**What is being shipped, and by which plan:**
+
+| Plan | Lands | In |
+|---|---|---|
+| 23.5-01 | `POST /intakes/{id}/status` — superadmin status override, any status except `in_research`, audited | `nestor-api` + `nestor-frontend` |
+| 23.5-02 | real archive + hard delete guarded by `research_runs` (409), GCS cascade, `intake.deleted` audit row | `nestor-api` + `nestor-frontend` |
+| 23.5-03 | naming: client name → **project** name, space → **client**, nl/fr/en | `nestor-frontend` (locales only) |
+| 23.5-04 | citation mechanisms 1 + 2 (skeptic fan-out, per-URL title + grade) | `tribunal-worker` **and** `tribunal-api` |
+| 23.5-05 | citation mechanisms 3 + 5 (primary anchor, numberable-only ledger) | `tribunal-worker` **and** `tribunal-api` |
+| 23.5-06 | Sources renderer prints `resolved_url`; ONE continuation call on `max_tokens` | `tribunal-worker` **and** `tribunal-api` |
+| 23.5-07 | this section, `infra/variables.tf`, `infra/main.tf`, both var-files | infra |
+
+### The flag surface, DERIVED BY IMPORT — and why `tribunal-api` is on it
+
+This project has been bitten in both directions. A substring match once pulled a money-risk
+worker into a deploy surface; an import-graph derivation once correctly kept `tribunal-worker`
+OUT of a release. So the surface below was derived by walking each deployed entrypoint's
+transitive imports — module-level **and** function-level, because the DEF-23.3-01 worker bug
+was a lazy import — and asking which graphs reach `nestor_pulse_sdk/runtime_flags.py`.
+
+| service | entrypoint | reaches `runtime_flags`? | carries the env |
+|---|---|---|---|
+| `tribunal-worker` | `python -m nestor_pulse_sdk.runs.worker_main` | **yes** — `runs/worker.py` → `runs/adapter.py` → `pipeline/tribunal/pipeline.py` → `runtime_flags`; also `pipeline/orchestrator.py` → `citations/extractor.py` | **YES** |
+| `tribunal-api` | `uvicorn nestor_pulse_sdk.server:app` | **yes** — `server.py` → `citations/__init__.py` → `citations/extractor.py` → `runtime_flags` at module level, **and at request time** `runs/api.py` → `verification/report.py` → `citations/numbering.py` | **YES** |
+| `nestor-api` | `backend/app/main.py` | **no** — `grep -rn nestor_pulse backend/app/` returns only comments and docstrings. There is no Python import of the SDK from the backend; the two talk over HTTP. | no |
+| `nestor-frontend` | Nitro SSR | **no** — not Python. | no |
+
+**`tribunal-api` is the one a careless derivation gets wrong.** "The worker runs the pipeline"
+is true and is not the whole answer. `GET /api/runs/{run_id}/verification` in
+`runs/api.py` lazily imports `verification/report.py`, which calls
+`citations/numbering.py::number_citations(...)`, which reads `citations_v2()`,
+`primary_anchor()` and `render_resolved()` **at call time**. With the flag on the worker and
+off the API, that endpoint would renumber the very report the worker wrote and one `[n]` would
+resolve to two different sources depending on which service you asked.
+
+**So: `grep -c 'NESTOR_CITATIONS_V2' infra/main.tf` must be 2, and the two services' values
+must always be equal.** If a future change makes them differ, that is a defect, not a knob.
+
+The five fine-grained switches — `NESTOR_CITATIONS_SKEPTIC_AS_EVIDENCE`,
+`NESTOR_CITATIONS_PER_URL_META`, `NESTOR_CITATIONS_PRIMARY_ANCHOR`,
+`NESTOR_CITATIONS_LEDGER_NUMBERABLE_ONLY`, `NESTOR_CITATIONS_RENDER_RESOLVED` — have **no**
+Terraform variable, on purpose. They default `true` in code and are ANDed with the master, so
+they are inert until `nestor_citations_v2` is on. Their only job is bisecting a bad dev run in
+place:
+
+```bash
+# EMERGENCY BISECTION ONLY. Creates IaC drift — see the warning under it.
+gcloud run services update tribunal-worker --region=europe-west1 \
+  --update-env-vars NESTOR_CITATIONS_PER_URL_META=false \
+  --project=<PROJECT> --account=tools@dotto.be
+```
+
+⚠ **That command creates drift Terraform does not know about.** In the client environment,
+where Terraform IS the source of truth, the next `apply` will not remove the variable (it is
+not declared, so Terraform leaves it) but the running config no longer matches any committed
+file. Either revert it the same way (`--remove-env-vars NESTOR_CITATIONS_PER_URL_META`) or
+promote it into `infra/variables.tf` and both var-files. Do not leave it floating.
+
+### ⚠ Pre-apply checklist — read before EITHER environment
+
+1. **`min_instance_count` — DEF-23.3-14.** The old warning said `infra/main.tf:381` carried a
+   hardcoded `min_instance_count = 0` on `nestor-api`. **That is no longer true and the line
+   number has moved.** At this commit the four scaling blocks are `main.tf:435`
+   (`var.api_min_instances`), `:749` (`var.frontend_min_instances`), `:1141`
+   (`var.tribunal_worker_min_instances`) and `:1289` (`var.tribunal_api_min_instances`) —
+   all variables. **The risk therefore moved from the code to the var-file.** Check the values
+   you are about to apply, not the file:
+   `grep -n min_instances infra/env/client.tfvars` must show `api_min_instances = 1` (at 0 the
+   phase-23.3 orphaned-run reconciler never ticks and a paid run can strand silently) and
+   `tribunal_worker_min_instances = 1` (at 0 the poll loop stops and queued paid runs sit
+   unclaimed). `terraform plan` will tell you if an apply would move either — read it.
+2. **Expect four cosmetic in-place diffs** on the client plan (finding 9 of the 23.4 record).
+   Four, on the four `google_cloud_run_v2_service` resources, changing nothing. **Five is not
+   four** — if the count differs, stop and read the plan line by line.
+3. **`gcloud config` reverts mid-session** and four accounts are authenticated on this box.
+   Pin `--account=tools@dotto.be` and `--project=<id>` on **every** command. Do not
+   `gcloud config set` and trust it.
+4. **Never read a build result through a pipe.** `gcloud builds submit | tail` reports the
+   PIPE's status, so a FAILED build exits 0. Confirm with
+   `gcloud builds describe <FULL-UUID> --format='value(status,statusDetail)'`. A short id
+   returns nothing. `QUEUED`, `WORKING`, `EXPIRED` and `CANCELLED` are not results.
+5. **The operator's terminal times out at 2 minutes while the build keeps running.** Poll by
+   full build id. **Never resubmit** — a second `builds submit` builds and deploys a second time.
+
+### ⛔ Step 23.5.a — DEV IS NOT TERRAFORM-MANAGED. Do not apply `env/dev.tfvars`.
+
+This is the one instruction in this section that contradicts a naive reading of the plan.
+
+`infra/env/dev.tfvars` says so in its own header and `infra/env/dev.gcs.tfbackend` says it
+twice: **the dev project has no Terraform state anywhere.** Its Cloud SQL instance, Cloud Run
+services, buckets, service accounts and secret containers were created by hand across phases
+2–23. An `init` against an empty state followed by a `plan` shows **every resource as a
+CREATE**; applying that would 409 on most of them and half-apply the rest, and
+`google_sql_database_instance.main` carries `deletion_protection`. Dev needs an `import` pass
+first, and that pass has not been done.
+
+**On dev the flags are set IN PLACE**, on the two services the derivation named, with the
+queue gate before the worker:
+
+```bash
+DEV=project-cb01b861-cb4a-438d-b9a
+# tribunal-api FIRST (no poll loop, so no claim risk).
+gcloud run services update tribunal-api --region=europe-west1 \
+  --update-env-vars NESTOR_CITATIONS_V2=true,NESTOR_SYNTHESIS_CONTINUE_TRUNCATED=true \
+  --project=$DEV --account=tools@dotto.be
+
+# THE GATE, then the worker. Exit 0 is the only pass; 90/91/92/93 are all refusals.
+# --no-source is REQUIRED: the gate SA cannot read the Cloud Build source bucket.
+gcloud builds submit --no-source --config=infra/queue-check.yaml \
+  --substitutions=_PROJECT=$DEV \
+  --service-account=projects/$DEV/serviceAccounts/nestor-run@$DEV.iam.gserviceaccount.com \
+  --project=$DEV --account=tools@dotto.be
+gcloud builds describe <FULL-UUID> --project=$DEV --account=tools@dotto.be \
+  --format='value(status,steps[0].exitCode,failureInfo.detail)'
+
+gcloud run services update tribunal-worker --region=europe-west1 \
+  --update-env-vars NESTOR_CITATIONS_V2=true,NESTOR_SYNTHESIS_CONTINUE_TRUNCATED=true \
+  --project=$DEV --account=tools@dotto.be
+```
+
+`--update-env-vars` is **additive**: it leaves the other seven `NESTOR_*` names and every
+`secret_key_ref` alone. It is also **sticky** — a later `gcloud run services update --image`
+(which is what `promote.sh` does) preserves it, so the flags survive the next dev deploy.
+
+⚠ On **dev** the idle gate runs as `nestor-run@` (the hand-built `DATABASE_URL_WORKER`
+accessor grant lives there). On any **Terraform-built** environment it is `tribunal-run@`.
+Wrong identity is exit 90 or 91 — a refusal, not a pass. The gate's answer is in the build's
+**exit code**, never its stdout: `nestor-run@` has no `logging.logWriter` on dev, so
+`gcloud builds log` comes back empty and that is expected, not a failure.
+
+### Step 23.5.b — Build and deploy DEV
+
+Run the three suites on the merged tree first — not taken on report from the plan summaries.
+`backend`: `python -m pytest -q`. `tribunal`: `python -m pytest nestor_pulse_sdk/tests -q`.
+`frontend`: `npm ci && npx tsc --noEmit && npx vitest run && node scripts/i18n-audit.mjs && npm run build`.
+⚠ `npm run build` rewrites `frontend/src/routeTree.gen.ts`'s line endings on a CRLF checkout —
+check `git status --porcelain frontend/src/routeTree.gen.ts` and restore it before committing.
+
+Recover the Firebase web key from a prior successful dev build rather than typing it. It is a
+public identifier, but the agent permission classifier blocks the literal and a committed copy
+would outlive its rotation:
+
+```bash
+DEV=project-cb01b861-cb4a-438d-b9a
+gcloud builds list --project=$DEV --account=tools@dotto.be --limit=20 \
+  --filter='status=SUCCESS' --format='value(id,createTime,substitutions._FB_PROJECT_ID)'
+# pick a row whose _FB_PROJECT_ID is the DEV project, then:
+FB_API_KEY="$(gcloud builds describe <FULL-UUID> --project=$DEV --account=tools@dotto.be \
+  --format='value(substitutions._FB_API_KEY)')"
+[ -n "$FB_API_KEY" ] && echo "recovered ${#FB_API_KEY} chars" || echo "EMPTY — pick another build"
+```
+
+Then the one build that does everything (`cloudbuild.deploy-dev.yaml` builds the three
+promotable images and calls `promote.sh` with SOURCE == TARGET == dev, so the client's release
+path is exercised here):
+
+```bash
+gcloud builds submit . --config=cloudbuild.deploy-dev.yaml \
+  --substitutions=_PROJECT=$DEV,_IMAGE_TAG=$(git rev-parse --short HEAD),_API_BASE_URL=https://nestor-api-1055853212188.europe-west1.run.app,_FB_API_KEY=$FB_API_KEY,_FB_AUTH_DOMAIN=project-cb01b861-cb4a-438d-b9a.firebaseapp.com,_FB_PROJECT_ID=project-cb01b861-cb4a-438d-b9a \
+  --project=$DEV --account=tools@dotto.be
+```
+
+### Step 23.5.c — Read the flags back off DEV. Do not assume the update applied.
+
+```bash
+for S in tribunal-worker tribunal-api; do
+  echo "== $S"
+  gcloud run services describe $S --region=europe-west1 --project=$DEV --account=tools@dotto.be \
+    --format='value(spec.template.spec.containers[0].env)' | tr ',' '\n' | grep -i 'CITATIONS_V2\|CONTINUE_TRUNCATED'
+  gcloud run services describe $S --region=europe-west1 --project=$DEV --account=tools@dotto.be \
+    --format='value(status.latestReadyRevisionName,status.imageDigest)'
+done
+```
+
+**EXPECT** `NESTOR_CITATIONS_V2=true` and `NESTOR_SYNTHESIS_CONTINUE_TRUNCATED=true` on
+**both**, and the same value on both. Record each revision name and its `status.imageDigest` —
+`containers[0].image` is a **MUTABLE TAG**; the digest is the release identity and the thing
+the prod promotion must match.
+
+### Step 23.5.d — The five acceptance numbers, from ONE dev research run (~$40)
+
+Start exactly one run on a `decomposed` dev intake, with the queue otherwise empty. Record the
+run id and the start time. When it finishes, read its `## Sources` section and its chapters:
+
+| # | Figure | Expected | Where to read it |
+|---|---|---|---|
+| 1 | source labels that are not the URL's host | **0** | the rendered `## Sources` list; redirects excepted, where the label is the provider's label |
+| 2 | anchors resolving to a URL that is not one of that claim's own provider URLs | **0** | join `claim_source` → `source` for the numbered claims |
+| 3 | stripped anchors (the "matched no claim" warning) | **0** | the run log |
+| 4 | numbered redirect URLs rendered opaque while a `resolved_url` exists | **0** | the rendered list vs the `source.resolved_url` column |
+| 5 | total numbered sources | **MEASURED, not predicted** | run `7784e71c` had **2,681**; expect a collapse toward the count of distinct provider URLs |
+
+Also read the chapters end to end: **no section may stop mid-sentence**, and any section that
+was still cut must carry the one-line notice in the run's own language.
+
+**Two things not to misread.** (a) With the flags on, the ledger shrinks for **more** than the
+159 sourceless claims of run 7784e71c — mechanisms 1 and 5 interact, so fewer claim→source rows
+means fewer numberable claims. That is the fix working, not over-filtering. (b) `per_url_meta`
+can replace a `wikipedia.org` label with `en.wikipedia.org`, because the label is now the
+URL's actual host including subdomain. Expect it; it is not a regression.
+
+**If any figure misses: STOP. Do not promote.** Set the master back to `false` on dev, re-read,
+and bisect with the five fine-grained switches — that is precisely why they exist and why no
+rebuild is needed to use them.
+
+### Step 23.5.e — Promote to PROD, by digest, worker last
+
+Tag the tested commit and push it: the tag, not the branch, is the promotion boundary.
+**Rehearse first** — `DRY_RUN=1` makes zero outbound calls and prints the whole ordering:
+
+```bash
+DRY_RUN=1 SOURCE_PROJECT=project-cb01b861-cb4a-438d-b9a TARGET_PROJECT=nestor-pulse-prod \
+  IMAGE_TAG=<the dev tag> GCLOUD_ACCOUNT=tools@dotto.be SKIP_FRONTEND=1 bash infra/promote.sh
+```
+
+Then the real promotion through `cloudbuild.promote-client.yaml` from the tagged commit, with
+the **CLIENT** substitutions (`_API_BASE_URL` = `https://nestor-api-zqd5qncdnq-ew.a.run.app`,
+`_FB_AUTH_DOMAIN` = `nestor-pulse-prod.firebaseapp.com`, `_FB_PROJECT_ID` = `nestor-pulse-prod`,
+`_FB_API_KEY` recovered from a prior **client** frontend build). It builds **no** backend image;
+it moves digests. **The frontend is REBUILT inside `promote.sh` — a promoted dev frontend image
+would point the client's browser at the dev API.**
+
+`promote.sh` runs the idle gate at steps **2 and 7** and deploys the worker at step **8**. Do
+not shortcut it. Any non-zero gate exit stops the promotion, including 90 (unknown) and 91
+(wrong identity) — those are refusals, not passes.
+
+Only then flip the flags:
+
+```bash
+# infra/env/client.tfvars: both -> "true"
+terraform -chdir=infra apply -var-file=env/client.tfvars
+```
+
+Read back for all four prod services: revision name, `status.imageDigest`, and — on the two
+tribunal services — both flag values. **The three promotable BACKEND digests must be byte-equal
+to the dev digests recorded in Step 23.5.c**; the frontend's will differ, by design, because it
+was rebuilt. Smoke on `/readyz` (200) for `nestor-api` and `tribunal-api` — `/healthz` 404s
+upstream — and `/auth/login` + `/admin` (200) on the frontend. Watch each new revision for
+ERROR lines for ten minutes. **Start no research run on prod:** the client's first run after
+this release is theirs.
+
+### ⛔ REVERT — the tribunal change reverts by CONFIG, with NO rollback and NO rebuild
+
+This is the entire point of D-23.5-04, so it is stated as a command rather than a principle.
+
+```bash
+# infra/env/client.tfvars: nestor_citations_v2 = "false"
+terraform -chdir=infra apply -var-file=env/client.tfvars
+```
+
+or, if a Terraform apply is not available in the moment:
+
+```bash
+gcloud run services update tribunal-worker --region=europe-west1 \
+  --update-env-vars NESTOR_CITATIONS_V2=false \
+  --project=nestor-pulse-prod --account=tools@dotto.be
+# and the same on tribunal-api — the two MUST agree
+```
+
+Either form restores the prior citation behaviour **byte for byte** (pinned by the flags-off
+goldens in `tests/test_citation_replay.py`, `tests/test_citation_replay_anchors.py` and
+`tests/test_sources_render.py`). `nestor_synthesis_continue_truncated = "false"` is the
+independent lever for the continuation call. **No image changes, no revision is rolled back,
+and a run in flight is unaffected until its next section.** Note that flipping either one on
+the worker DOES create a revision and therefore boots the poll loop — run the idle gate first,
+exactly as for a deploy.
+
+Everything else in this release reverts the ordinary way: route traffic back to the previous
+revision per service (prod before this release: `nestor-api-00006-6hj`,
+`tribunal-api-00003-xhj`, `tribunal-worker-00003-mn5`).
+
+### Step 23.5.f — Deploy record (fill in, or the attribution is gone)
+
+Copy the `### 23.3 DEPLOY RECORD` shape: what shipped, the derived surface, the gates re-run
+with their numbers, the commands actually run, the read-back proofs verbatim, the revert
+levers, and an explicit **"what this deploy does NOT prove"** section. For this release that
+last part must at minimum say: no browser has exercised the client environment after the
+promotion, and exactly one research run — on **dev** — is the entire evidence base for the
+citation change.

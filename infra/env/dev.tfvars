@@ -108,3 +108,29 @@ tribunal_audit_bucket_name = ""
 
 # Read verbatim from the live nestor-api TRIBUNAL_SERVICE_URL env.
 tribunal_service_url = "https://tribunal-api-ybkr7metoq-ew.a.run.app"
+
+# ------------------------------------------------- phase 23.5 kill switches (D-23.5-04)
+# DEV IS WHERE THE TWO SWITCHES ARE PROVEN. Both "true" here — this is the INTENT
+# for the dev environment, and the values a future import-and-apply pass must
+# converge on.
+#
+# ⚠ READ THE HEADER OF THIS FILE BEFORE ACTING ON THESE TWO LINES. There is no
+# Terraform state for dev, so `terraform apply -var-file=env/dev.tfvars` is NOT
+# the way to make them live and must not be run (it would plan every dev resource
+# as a CREATE). On dev the flags are set IN PLACE, on the two services the import
+# derivation named, with the command in § Phase 23.5 of infra/DEPLOY-RUNBOOK.md:
+#
+#   gcloud run services update tribunal-worker --region=europe-west1 \
+#     --update-env-vars NESTOR_CITATIONS_V2=true,NESTOR_SYNTHESIS_CONTINUE_TRUNCATED=true \
+#     --project=project-cb01b861-cb4a-438d-b9a --account=tools@dotto.be
+#   ...and the same for tribunal-api. `--update-env-vars` is additive: it leaves
+#   the other seven NESTOR_* names and every secret_key_ref alone.
+#
+# ⛔ The worker command CREATES A REVISION, and a worker revision BOOTS the poll
+# loop, which claims first and sleeps last. Run infra/queue-check.yaml green
+# FIRST, exactly as promote.sh does at its steps 2 and 7, and do the worker LAST.
+#
+# These two lines therefore describe the intended dev state; they become a
+# read-back of it only after that command has run and been described.
+nestor_citations_v2                 = "true"
+nestor_synthesis_continue_truncated = "true"

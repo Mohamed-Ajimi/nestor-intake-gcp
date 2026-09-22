@@ -131,3 +131,28 @@ tribunal_audit_bucket_name = "nestor-pulse-prod-nestor-audit"
 # services. Captured from `gcloud run services describe tribunal-api` after its
 # first deploy — never guessed, never with a path (Phase 14 Pitfall 4).
 tribunal_service_url = "https://tribunal-api-zqd5qncdnq-ew.a.run.app" # 23.4-03 second-pass wiring
+
+# ------------------------------------------------- phase 23.5 kill switches (D-23.5-04)
+# BOTH "false" — TODAY'S BEHAVIOUR, BYTE FOR BYTE. This is the phase's deliberate
+# gate, not an oversight and not a leftover.
+#
+# The engine change these two switches carry is the sensitive part of phase 23.5:
+# nothing about it is proven by tests alone. The tests prove the OFF path is
+# byte-identical and that the ON path holds offline over the recorded rows of run
+# 7784e71c; only a real run proves the numbers a reader will see. So prod stays on
+# today's behaviour until a human has read ONE dev research run against the five
+# acceptance figures in § Phase 23.5 of infra/DEPLOY-RUNBOOK.md.
+#
+# WHO FLIPS THEM, AND WHEN: plan 23.5-07 Task 3, AFTER the dev run has been read
+# and AFTER the promotion has put the tested digests on prod. Change both to
+# "true" and run `terraform -chdir=infra apply -var-file=env/client.tfvars`
+# (the client environment DOES have Terraform state — 52 resources in
+# gs://nestor-pulse-prod-tfstate — so an apply here is the correct mechanism,
+# unlike dev). Then read both values back off the live revisions; do not assume
+# the plan applied what it printed.
+#
+# REVERTING IS THESE TWO LINES. Set either back to "false" and apply: no
+# rollback, no rebuild, no image change. That property is the entire reason the
+# switches exist (D-23.5-04).
+nestor_citations_v2                 = "false" # flipped to "true" by plan 23.5-07 Task 3, after the dev run is read
+nestor_synthesis_continue_truncated = "false" # same gate; independent lever (money: one extra call per truncated section)

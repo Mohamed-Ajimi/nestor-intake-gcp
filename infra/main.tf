@@ -1199,6 +1199,23 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
         name  = "NESTOR_WORKER_STALE_MINUTES"
         value = var.tribunal_worker_stale_minutes
       }
+      # Phase 23.5 kill switches (D-23.5-04). BOTH default "false" = today's behaviour.
+      # This service is on the surface because its entrypoint
+      # (`python -m nestor_pulse_sdk.runs.worker_main`) reaches
+      # `nestor_pulse_sdk.runtime_flags` through runs/worker.py -> runs/adapter.py ->
+      # pipeline/tribunal/pipeline.py, and it is the process that EXECUTES the pipeline —
+      # it writes the claim_source rows and renders the ## Sources section.
+      # Keep these two values IDENTICAL to tribunal-api's below: the API re-runs the same
+      # numbering code on GET /api/runs/{id}/verification, so a split would make one run
+      # report two different citation orderings.
+      env {
+        name  = "NESTOR_CITATIONS_V2"
+        value = var.nestor_citations_v2
+      }
+      env {
+        name  = "NESTOR_SYNTHESIS_CONTINUE_TRUNCATED"
+        value = var.nestor_synthesis_continue_truncated
+      }
       # AUDIT_GCS_BUCKET: the audit-body bucket name. Injected from the secret purely for
       # uniformity with the DB/provider secrets (the value is the non-secret bucket name).
       env {
@@ -1332,6 +1349,25 @@ resource "google_cloud_run_v2_service" "tribunal_api" {
       env {
         name  = "INTAKE_RUNTIME_SA_EMAIL"
         value = google_service_account.runtime.email
+      }
+      # Phase 23.5 kill switches (D-23.5-04). BOTH default "false" = today's behaviour.
+      # This service is on the surface for a reason that a "the worker runs the pipeline"
+      # reading would have MISSED: tribunal-api does not merely import the flag module, it
+      # EXECUTES flag-reading code on a request. `GET /api/runs/{run_id}/verification`
+      # (runs/api.py) lazily imports `verification/report.py`, which imports
+      # `citations/numbering.py` and calls `number_citations(...)` — and that function reads
+      # `runtime_flags.citations_v2()`, `primary_anchor()` and `render_resolved()` at call
+      # time to choose the claim->source ordering. If this service ran the flag OFF while the
+      # worker ran it ON, the verification endpoint would renumber the very report the worker
+      # wrote and one [n] would mean two different sources.
+      # KEEP THESE TWO VALUES IDENTICAL TO tribunal-worker's.
+      env {
+        name  = "NESTOR_CITATIONS_V2"
+        value = var.nestor_citations_v2
+      }
+      env {
+        name  = "NESTOR_SYNTHESIS_CONTINUE_TRUNCATED"
+        value = var.nestor_synthesis_continue_truncated
       }
       env {
         name = "AUDIT_GCS_BUCKET"
