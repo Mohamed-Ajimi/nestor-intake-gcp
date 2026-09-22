@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-11T11:25:47.442Z"
+last_updated: "2026-09-22T07:39:42.272Z"
 last_activity: 2026-09-11 -- Phase 23.4 execution started
 progress:
-  total_phases: 24
+  total_phases: 25
   completed_phases: 18
   total_plans: 183
-  completed_plans: 177
-  percent: 75
+  completed_plans: 181
+  percent: 72
 ---
 
 # Project State
@@ -27,7 +27,9 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 23.4 (client-environment-stand-up-the-fresh-nestor-pulse-prod-proj) — EXECUTING
 Plan: 1 of 5
-**→ CURRENT PHASE: 23.4 — client environment (`nestor-pulse-prod`), inserted 2026-09-11. Next: `/gsd-plan-phase 23.4 --skip-research`.** Decision 2026-09-11: the client gets a FRESH project; `project-cb01b861-cb4a-438d-b9a` becomes the dev environment.
+**→ CURRENT PHASE: 23.5 — tester remarks round 1 (inserted 2026-09-22 after Nestor testing). Next: `/gsd-plan-phase 23.5 --skip-research`.** 23.4 is live on `nestor-pulse-prod` (proving run 09-14, handover 09-17, first real run 09-18); its plan 05 (runbook/records) is still open and folds into 23.5 wave 4.
+
+(previous pointer) **Phase: 23.4 — client environment (`nestor-pulse-prod`), inserted 2026-09-11. Next: `/gsd-plan-phase 23.4 --skip-research`.** Decision 2026-09-11: the client gets a FRESH project; `project-cb01b861-cb4a-438d-b9a` becomes the dev environment.
 
 ✅ **CLOUD SQL BACKUPS + PITR ARE ON (2026-09-07) — and now codified so an `apply` cannot revert
 them.** `nestor-pg`: `backupConfiguration.enabled = true`, PITR on, 7 retained backups, 7 days of
@@ -533,6 +535,7 @@ Progress: [██████████] 100%
 - Phase 21 added 2026-08-10: Research Run Feed Completion. Operator UAT of the run page found four defects, three of which trace to ONE root cause — Phase 15.3 shipped the run-event contract but wired only 4 of 13 stages (measured: `deep_research` 24 emit sites, `own_research` 7, `workshop` 2, `research_division` 2, and **zero** for `distill`/`merge`/`gate`/`verify`/`adjudicate`/`coverage`/`conflict`/`synthesize`). The silent stages render as a label with nothing under it, and their empty bodies are also why the "Show more" toggle reveals nothing. Separately: `RunFeed.tsx` renders `agent_run` with a perpetual spinner because the feed is append-only (start and finish are two rows, not one row updating), and `VerificationReport` exists but is wired only to the intake card, never to the run page. **Sequenced BEFORE the first measured run** so the ~$45 validates the engine changes and the feed together. (URGENT)
 - Phase 23.1 inserted after Phase 23: Platform hardening: authorization boundary, space deactivation cascade, AI cost control, tribunal run ownership, and CI coverage (URGENT)
 - Phase 23.4 inserted after Phase 23: client environment: fresh nestor-pulse-prod project from existing Terraform + recorded manual wiring, seed client space, prove with one run, dev-to-client promotion pipeline (build once, promote by digest, worker idle gate, smoke) + consolidated bootstrap runbook (URGENT)
+- Phase 23.5 inserted after Phase 23: tester remarks round 1 (Nestor, 2026-09-18/22): superadmin status override, real archive + guarded hard delete, project-name/client wording, Sources-list + truncated-chapter fixes in tribunal behind a kill switch (URGENT)
 
 ### Decisions
 

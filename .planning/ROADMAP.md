@@ -854,6 +854,16 @@ Plans:
 
 ⛔ **Plan 23.4-03 is the only one that SPENDS** — the proving run is roughly $25-45 uncapped, plus the AI skills ahead of it. Every other plan is code, config or documentation.
 
+### Phase 23.5: tester remarks round 1 — superadmin status override, real archive and guarded hard delete, project-name and client wording, and the Sources-list and truncated-chapter fixes in the tribunal report stage behind a kill switch (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 23
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23.5 to break down)
+
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
 **Goal:** A superadmin can deliberately re-run deep research on an intake that already succeeded, steer that re-run with a note asking for something different from previous runs, see every version of an intake's research, and read the actual cited passage grouped under its link instead of a bare URL.
