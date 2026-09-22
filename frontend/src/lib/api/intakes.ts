@@ -105,6 +105,63 @@ export function overrideIntakeStatus(
 }
 
 // ---------------------------------------------------------------------------
+// Hard delete — the guarded, irreversible destruction (Plan 23.5-02 / D-23.5-02)
+// ---------------------------------------------------------------------------
+//
+// Archive (`overrideIntakeStatus(id, "archived")`) is the REVERSIBLE destructive action
+// and the only one available once an intake has had research. These two are the
+// irreversible path, and they are deliberately a PAIR: the eligibility read tells the UI
+// whether to offer the affordance at all, and the delete re-checks the same wall
+// server-side. Never call `deleteIntake` on the strength of a stale `getIntakeDeletable`
+// answer alone — the backend is the authority and will 409.
+
+/**
+ * Whether an intake may be hard-deleted, mirroring the backend `DeletableView`.
+ *
+ * `reason` is a stable MACHINE TOKEN (`"has_research_runs"`), never a display string —
+ * the UI renders its own nl/fr/en copy off it. `null` when `deletable` is true.
+ */
+export type IntakeDeletable = {
+  deletable: boolean;
+  reason: string | null;
+};
+
+/**
+ * Ask whether this intake may be hard-deleted — `GET /intakes/{id}/deletable`.
+ *
+ * `{ deletable: false, reason: "has_research_runs" }` means the intake has had at least
+ * one Tribunal research run: paid work with an audit chain behind it, which D-23.5-02
+ * protects structurally. Archive is what remains available for those.
+ *
+ * Superadmin-only server-side; a non-superadmin gets an existence-hidden 404, surfaced
+ * here as `{ success: false }` — NOT as `{ deletable: false }`. Callers must treat a
+ * failed read as "do not offer the affordance", never as "deletion is blocked".
+ */
+export function getIntakeDeletable(
+  id: string,
+): Promise<ApiResult<IntakeDeletable>> {
+  return apiFetch<IntakeDeletable>(`/intakes/${id}/deletable`, { method: "GET" });
+}
+
+/**
+ * IRREVERSIBLY destroy an intake — `DELETE /intakes/{id}`.
+ *
+ * Takes the intake and everything hanging off it: answers, skill runs, uploaded sources,
+ * transcripts, artifacts and the matching objects in storage. There is no undo and no
+ * second override that brings it back — which is why the UI gates this behind a TYPED
+ * confirmation rather than a single click.
+ *
+ * Refused with 409 when ANY research run exists (D-23.5-02). The deletion itself is
+ * recorded as an `intake.deleted` audit row that survives the delete.
+ *
+ * Returns `ApiResult<null>`: the backend answers 204 with no body, which the transport
+ * already tolerates (`client.ts` reads an empty body as `undefined`).
+ */
+export function deleteIntake(id: string): Promise<ApiResult<null>> {
+  return apiFetch<null>(`/intakes/${id}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
 // Report delivery — the human-report deliver / replace / read verbs (Plan 18-01)
 // ---------------------------------------------------------------------------
 //

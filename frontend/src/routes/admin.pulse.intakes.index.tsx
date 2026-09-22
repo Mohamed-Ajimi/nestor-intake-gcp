@@ -49,6 +49,10 @@ function IntakesPage() {
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
  const [statusFilter, setStatusFilter] = useState<string>("all");
+ // 23.5-02 (remark 3): archived intakes leave the default list. Archive is what an
+ // operator reaches for INSTEAD of deleting a researched intake, so archived rows
+ // accumulate — they must be out of the way by default, and still reachable.
+ const [showArchived, setShowArchived] = useState(false);
  const [search, setSearch] = useState("");
  // Source of truth for whether a superadmin has narrowed to a single space. The backend
  // now honors ?space_id for a superadmin (threaded via withActiveSpace in listIntakes), so
@@ -101,15 +105,27 @@ function IntakesPage() {
 
  const filtered = useMemo(() => {
  const q = search.trim().toLowerCase();
+ // An EXPLICIT status=archived selection shows archived rows regardless of the toggle.
+ // Written as its own named condition rather than left as a side effect of the filter
+ // order: an operator who clicked "archived" asked for archived intakes, and making
+ // them also find the checkbox would be a filter that silently contradicts itself.
+ const archivedExplicitlySelected = statusFilter === "archived";
  return intakes.filter((r) => {
  if (statusFilter !== "all" && (r.status ?? "") !== statusFilter) return false;
+ if (
+ r.status === "archived" &&
+ !showArchived &&
+ !archivedExplicitlySelected
+ ) {
+ return false;
+ }
  if (q) {
  const hay = `${r.client_name ?? ""} ${r.space_name}`.toLowerCase();
  if (!hay.includes(q)) return false;
  }
  return true;
  });
- }, [intakes, statusFilter, search]);
+ }, [intakes, statusFilter, showArchived, search]);
 
  return (
  <div>
@@ -146,6 +162,20 @@ function IntakesPage() {
             </button>
           ))}
         </div>
+        {/* 23.5-02 (remark 3): archived rows are hidden by default and come back here.
+            Disabled while the status filter IS `archived`, because that selection
+            already shows them and a toggle that looks live but changes nothing is
+            worse than one that says why it is inert. */}
+        <label className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-ink/60">
+          <input
+            type="checkbox"
+            checked={showArchived || statusFilter === "archived"}
+            disabled={statusFilter === "archived"}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="h-3.5 w-3.5 accent-ink"
+          />
+          {t("intakesList.showArchived")}
+        </label>
         <div className="relative ml-auto w-full max-w-xs">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink/40" />
           <Input

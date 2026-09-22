@@ -136,7 +136,6 @@
       "intakeNotLoaded": "Intake not loaded yet",
       "aiReviewNotLoaded": "AI review is not loaded yet — please wait.",
       "sendFailed": "Send failed",
-      "statusUnavailable": "Status change not available via the API.",
       "statusNotUpdated": "Status not updated",
       "reviewOutputMissing": "Could not load the AI output — run the intake skill again.",
       "statusUpdated": "Status updated",
@@ -166,6 +165,16 @@
       "body": "The project will be closed and removed from the active intake list. The intake becomes read-only; the client's results page remains available.",
       "confirm": "Archive",
       "cancel": "Cancel"
+    },
+    "delete": {
+      "button": "Delete",
+      "title": "delete intake permanently?",
+      "body": "This cannot be undone. The intake, its answers, its AI runs, its uploads and its files are destroyed for good. If you only want it out of the way, archive it instead.",
+      "confirmWord": "DELETE",
+      "confirmPlaceholder": "Type DELETE to confirm",
+      "blockedResearch": "This intake has had research and can no longer be deleted — archive it instead.",
+      "done": "Intake deleted",
+      "failed": "Deletion failed"
     }
   },
   "clientDrawer": {
@@ -446,6 +455,7 @@
       "archived": "Archived"
     },
     "searchPlaceholder": "Search client or name…",
+    "showArchived": "Show archived",
     "colClient": "Client",
     "colName": "Name",
     "colStatus": "Status",

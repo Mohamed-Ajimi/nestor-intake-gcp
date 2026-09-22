@@ -117,6 +117,41 @@ class TenantRepository(Generic[M]):
         )
         return result.rowcount
 
+    def delete(self, row_id):
+        """Delete the in-scope row by id; return rowcount (0 → handler 404, D-07).
+
+        The scoped-DELETE idiom, copied verbatim from
+        :meth:`IntakeSourceRepository.delete_by_storage_path`: the statement goes through
+        :meth:`_scope`, so a ``user`` can only ever remove a row in THEIR own space (the
+        explicit ``WHERE space_id = self._space_id`` wall, D-01) and a superadmin's
+        cross-tenant reach comes from the ``app_superadmin`` engine + the 0003 bypass
+        policy, never from an app-layer branch here.
+
+        ``rowcount == 0`` is the EXISTENCE-HIDDEN outcome and is deliberately ambiguous:
+        the row does not exist, OR it belongs to another space. Both are 0, both become
+        the same 404 in the handler (D-07). A caller that must tell them apart would have
+        to re-read, and no caller does.
+
+        THE CHILDREN ARE NOT REMOVED BY THIS METHOD. Every child of ``nestor.intakes``
+        declares ``ForeignKey(..., ondelete="CASCADE")`` at the DB level
+        (``intake_answers``, ``skill_runs``, ``intake_sources``, ``transcripts``,
+        ``research_artifacts``, ``research_runs``, ``decompositions``,
+        ``research_questions``, ``extracted_insights``, ``artifact_embeddings``,
+        ``findings``), so ONE ``DELETE FROM nestor.intakes`` fans out through the DB's own
+        referential-integrity machinery. That is on purpose: RI cascades are exempt from
+        row security, run inside the same statement, and cannot half-finish — an
+        application-side loop over eleven tables could. ``tests/test_intake_delete.py``
+        pins both the ``ondelete`` declarations and the observed cascade.
+
+        ``synchronize_session=False`` matches the sibling scoped delete: there is no
+        in-Python session state worth syncing when the row and its whole subtree are gone.
+        """
+        stmt = self._scope(delete(self.model).where(self.model.id == row_id))
+        result = self._s.execute(
+            stmt, execution_options={"synchronize_session": False}
+        )
+        return result.rowcount
+
     def patch_if(self, row_id, expected: dict, **values):
         """Conditional twin of :meth:`patch` — update by id ONLY IF the row still
         matches ``expected``; return rowcount (D-23.1-05 compare-and-swap).
@@ -584,6 +619,30 @@ class ResearchArtifactRepository(TenantRepository[ResearchArtifact]):
                 .limit(1)
             )
         ).scalar_one_or_none()
+
+    def list_for_intake(self, intake_id):
+        """Return ALL of this intake's artifacts within scope — no ``source`` filter.
+
+        The deliberate counterpart to the two context-pack readers below. Those filter on
+        ``source == "context-pack-generator"`` because a DISPLAY endpoint must not surface
+        research-evidence or report rows (T-7-09-05). This one must see EVERYTHING: its
+        caller is the hard-delete handler (D-23.5-02), which collects every GCS object key
+        the intake owns before destroying it. A ``source``-filtered read there would leave
+        the delivered report PDF orphaned in the bucket with no DB row left pointing at it.
+
+        Mirrors :meth:`ResearchRunRepository.list_for_intake`. A cross-tenant / missing
+        intake matches the scoped ``WHERE`` against nothing → an empty list (the handler
+        renders that as an existence-hidden empty read, D-07).
+        """
+        return (
+            self._s.execute(
+                self._scope(
+                    select(self.model).where(self.model.intake_id == intake_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     def list_context_packs_for_intake(self, intake_id):
         """Return this intake's context-pack artifacts within scope (newest first)."""

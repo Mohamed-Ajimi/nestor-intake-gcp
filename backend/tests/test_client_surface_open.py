@@ -728,6 +728,13 @@ def test_storage_signed_url_open_to_user(engine, set_space, monkeypatch, fake_gc
 # rows and deliberately so.
 _PINNED_INTAKE_ROUTES = frozenset(
     {
+        # OPERATOR verbs, not client routes (plan 23.5-02 / D-23.5-02): the guarded hard
+        # delete and its eligibility read. Both gated by superadmin_gate and audited in
+        # _GATED_VERBS (tests/test_operator_verb_gate.py); their denial arms live in
+        # tests/test_intake_delete.py, so they are pinned here WITHOUT a 2xx client
+        # reachability test on purpose.
+        ("DELETE", "/intakes/{intake_id}"),
+        ("GET", "/intakes/{intake_id}/deletable"),
         ("DELETE", "/intakes/{intake_id}/storage/objects"),
         ("GET", "/intakes"),
         ("GET", "/intakes/research/runs/{run_id}/locate"),
