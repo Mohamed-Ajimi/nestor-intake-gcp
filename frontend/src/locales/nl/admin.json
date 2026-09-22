@@ -172,7 +172,7 @@
       "body": "Dit kan niet ongedaan gemaakt worden. De intake, de antwoorden, de AI-runs, de uploads en de bestanden worden voorgoed vernietigd. Wil je hem alleen uit de weg hebben, archiveer hem dan.",
       "confirmWord": "DELETE",
       "confirmPlaceholder": "Typ DELETE om te bevestigen",
-      "blockedResearch": "Deze intake heeft onderzoek gehad en kan niet meer verwijderd worden — archiveer hem in plaats daarvan.",
+      "blockedResearch": "Er loopt onderzoek voor deze intake — wacht tot het klaar is, of annuleer het, voordat je verwijdert.",
       "done": "Intake verwijderd",
       "failed": "Verwijderen mislukt"
     }
@@ -463,6 +463,21 @@
     "colActions": "Acties",
     "emptyTitle": "Nog geen intakes",
     "emptyBody": "Klik 'Nieuwe intake' om er één aan te maken.",
-    "open": "Open"
+    "open": "Open",
+    "bulk": {
+      "selectAll": "Selecteer alles",
+      "selectRow": "Selecteer intake",
+      "selected": "{{n}} geselecteerd",
+      "archive": "Archiveer",
+      "delete": "Verwijder",
+      "clear": "Wis",
+      "cancel": "Annuleer",
+      "working": "Bezig…",
+      "archiveNone": "Niets te archiveren — elke geselecteerde intake is al gearchiveerd.",
+      "archiveDone": "{{done}} gearchiveerd, {{failed}} mislukt",
+      "deleteTitle": "{{n}} intakes definitief verwijderen?",
+      "deleteBody": "Dit kan niet ongedaan gemaakt worden. Deze intakes, hun antwoorden, hun AI-runs, hun uploads en hun bestanden worden voorgoed vernietigd. Intakes waarvan het onderzoek nog loopt, worden overgeslagen.",
+      "deleteDone": "{{done}} verwijderd, {{blocked}} geblokkeerd (onderzoek loopt), {{failed}} mislukt"
+    }
   }
 }
