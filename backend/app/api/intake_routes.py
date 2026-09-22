@@ -44,9 +44,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 import anyio
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -75,8 +75,10 @@ from app.db.repository import (
     IntakeRepository,
     IntakeSourceRepository,
     ResearchArtifactRepository,
+    ResearchRunRepository,
     SkillRunRepository,
 )
+from app.storage import gcs
 from app.mail import render as mail_render
 from app.mail import resend as mail_resend
 
@@ -155,6 +157,25 @@ class StatusOverride(BaseModel):
     """
 
     status: str
+
+
+class DeletableView(BaseModel):
+    """Answer of ``GET /intakes/{id}/deletable`` — may this intake be hard-deleted?
+
+    ``reason`` is a stable MACHINE TOKEN (``"has_research_runs"``), never prose. The
+    frontend renders its own nl/fr/en copy off it, so rewording an English sentence here
+    must not be able to change what the UI keys on. ``None`` when ``deletable`` is True.
+    """
+
+    deletable: bool
+    reason: str | None = None
+
+
+#: The 409 detail when a hard delete is refused because research exists (D-23.5-02).
+#: A module constant rather than an inline literal because it is a two-sided contract:
+#: the server raises it and ``tests/test_intake_delete.py`` pins it, so a reword is a
+#: visible change instead of a silent break.
+_DELETE_BLOCKED_DETAIL = "Intake has research runs and cannot be deleted"
 
 
 class AnswerView(BaseModel):
@@ -1788,6 +1809,219 @@ def override_status(
     if updated is None:  # pragma: no cover - patched row is in-scope by construction
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
     return _view(updated)
+
+
+# ---------------------------------------------------------------------------
+# The guarded hard delete (D-23.5-02, phase 23.5 tester remark 3)
+# ---------------------------------------------------------------------------
+#
+# Archive (``override_status`` -> ``archived``) is the REVERSIBLE destructive action and
+# is the only one available once an intake has had research. THIS is the irreversible one,
+# and it is deliberately narrow: an intake that has never had a ``research_runs`` row.
+#
+# Paid research drags an audit chain behind it — findings, claims, sources, the run's audit
+# bundle in GCS, and the ``audit_log`` trail of who started it and what it cost. Destroying
+# the intake would strand or erase all of that, so the wall is structural (a 409 checked
+# before anything else happens) rather than a warning in the UI.
+
+
+def _has_research_runs(session, identity: Identity, intake_id) -> bool:
+    """True when ANY ``research_runs`` row exists for this intake, within scope.
+
+    Repo constructed inline on the handler's existing session — the
+    ``_create_report_artifact`` idiom — so this read shares the request's ONE transaction
+    and its tenant scope rather than opening a second one. Status is NOT considered: a
+    ``failed`` or ``cancelled`` run was still billed and still wrote audit rows, so it
+    protects the intake exactly as a ``completed`` one does.
+    """
+    return bool(ResearchRunRepository(session, identity).list_for_intake(intake_id))
+
+
+def _collect_intake_object_keys(
+    session, identity: Identity, intake
+) -> tuple[list[str], int]:
+    """Return ``(prefix_valid_keys, skipped_count)`` for every object this intake owns.
+
+    ENUMERATED FROM THE DATABASE, NEVER FROM A BUCKET LISTING. ``app.storage.gcs`` exposes
+    upload / signed-url / download / delete and NO list function, and this plan added none
+    on purpose: a "list everything under this prefix" helper would be a brand-new
+    cross-tenant READ surface, reachable from any handler that could be tricked into
+    passing a different prefix. Reading ``storage_path`` off rows the tenant repo already
+    walled is strictly narrower.
+
+    THE PREFIX WALL (T-delete-cascade). Every candidate must start with
+    ``{space_id}/{intake_id}/`` — the same assert ``storage_routes.delete_objects`` and
+    ``_assert_report_key`` apply. A key that fails is DROPPED, counted and logged; it is
+    NOT a reason to refuse the delete (a forged or legacy row must not be able to make an
+    intake undeletable) and it NEVER reaches the seam. A row whose ``storage_path`` is NULL
+    — a text-only artifact — has no object at all and is neither deleted nor counted.
+
+    Keys are de-duplicated: the same object may legitimately be referenced by both a source
+    row and an artifact row, and ``delete_object`` is idempotent anyway.
+    """
+    prefix = f"{intake.space_id}/{intake.id}/"
+    candidates: list[str] = []
+    for row in IntakeSourceRepository(session, identity).list_for_intake(intake.id):
+        if row.storage_path:
+            candidates.append(row.storage_path)
+    for row in ResearchArtifactRepository(session, identity).list_for_intake(intake.id):
+        if row.storage_path:
+            candidates.append(row.storage_path)
+
+    keys: list[str] = []
+    seen: set[str] = set()
+    skipped = 0
+    for key in candidates:
+        if not key.startswith(prefix):
+            skipped += 1
+            _log.warning(
+                "intake %s: storage_path %r sits outside its own prefix %r — NOT deleted",
+                intake.id,
+                key,
+                prefix,
+            )
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys, skipped
+
+
+def _delete_objects_best_effort(keys: list[str]) -> None:
+    """Delete each key through the GCS seam, logging and continuing on any failure.
+
+    Runs as a BACKGROUND task — i.e. AFTER the handler's transaction has committed — for
+    the same reason the deliver verb sends its mail last: the DB delete is the primary
+    effect. An object left behind is an orphan a sweep can find later (the keys are in the
+    ``intake.deleted`` audit row's count and the warning log); a committed object delete
+    against a rolled-back intake delete would be unrecoverable data loss on a live row.
+
+    Every key here has ALREADY passed the prefix assert in
+    :func:`_collect_intake_object_keys`. This function performs no validation of its own
+    and must never be called with an unvalidated list.
+    """
+    for key in keys:
+        try:
+            gcs.delete_object(key)  # idempotent on an already-gone object
+        except Exception:  # noqa: BLE001 -- best-effort cleanup; never re-raise
+            _log.warning("failed to delete object %r after intake delete", key)
+
+
+@intake_router.get("/{intake_id}/deletable")
+def intake_deletable(
+    intake_id: str,
+    identity: Identity = Depends(superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> DeletableView:
+    """Report whether this intake may be hard-deleted — the UI's eligibility read.
+
+    ``{"deletable": true, "reason": null}`` when the intake has NO ``research_runs`` row;
+    ``{"deletable": false, "reason": "has_research_runs"}`` when any exists. The reason is
+    a machine token, not prose (see :class:`DeletableView`).
+
+    This is a PURE READ with no side effects, but it is SUPERADMIN-ONLY all the same
+    (T-23.5-02-I). An ungated version would answer "this intake exists, and it has had
+    research" to anyone holding an id — an existence oracle dressed as a convenience
+    endpoint. The out-of-scope answer is therefore the same existence-hidden 404 every
+    other intake route gives, never ``{"deletable": false}``.
+
+    The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and a null-space
+    caller gets that 404 rather than the repo's null-space 403 (the ordering contract in
+    ``app/auth/gates.py``; pinned by ``tests/test_operator_verb_gate.py``).
+
+    THE ANSWER IS ADVISORY, NOT AUTHORITATIVE. ``delete_intake`` re-checks the wall itself
+    inside its own transaction; a run queued between this read and the delete is refused
+    there. This endpoint exists so the UI can hide an affordance, not so the server can
+    trust it.
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    if _has_research_runs(repo.session, identity, intake_id):
+        return DeletableView(deletable=False, reason="has_research_runs")
+    return DeletableView(deletable=True, reason=None)
+
+
+@intake_router.delete("/{intake_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_intake(
+    intake_id: str,
+    background: BackgroundTasks,
+    identity: Identity = Depends(superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> Response:
+    """Destroy an intake that has never had a research run — irreversibly (D-23.5-02).
+
+    THE SEQUENCE BELOW IS LOAD-BEARING. Each step exists because doing it later would
+    leave a half-destroyed intake or a destroyed one with no trace:
+
+    1. ``repo.get`` -> ``None`` -> **404** ``"Intake not found"``. Ownership first, so a
+       caller aimed at a foreign/absent id learns nothing about research or objects.
+    2. ANY ``research_runs`` row -> **409** ``_DELETE_BLOCKED_DETAIL``. This is D-23.5-02's
+       wall: a Tribunal run costs real money and drags an audit chain behind it, so once
+       research exists the only destructive action left is ARCHIVE. The check runs BEFORE
+       key collection and BEFORE the audit write, so a refused delete is a true no-op —
+       nothing moved in the DB and nothing was handed to GCS.
+    3. Collect the object keys from ``intake_sources`` + ``research_artifacts``, read out
+       of the DATABASE (never a bucket listing — see
+       :func:`_collect_intake_object_keys`).
+    4. Prefix-assert every key against ``{space_id}/{intake_id}/``; a failure is dropped,
+       counted and logged, not a refusal.
+    5. Write the ``intake.deleted`` audit row on ``repo.session`` BEFORE the row delete.
+       ``audit_log`` has NO foreign key to ``nestor.intakes`` (``models/audit.py`` — a
+       plain nullable ``space_id``, no FK), so the row is NOT taken by the cascade and the
+       trail outlives its subject. ``tests/test_intake_delete.py`` asserts both the schema
+       fact and the surviving row rather than assuming either.
+    6. ``repo.delete(intake_id)``; ``rowcount == 0`` -> 404. ONE ``DELETE FROM
+       nestor.intakes`` fans out through eleven ``ON DELETE CASCADE`` foreign keys —
+       answers, skill runs, sources, transcripts, artifacts, decompositions, questions,
+       insights, embeddings, findings, runs. The DB does it inside the statement; an
+       application-side loop could half-finish.
+    7. ONLY THEN, as a BACKGROUND task (i.e. after this transaction commits), delete the
+       objects best-effort. An orphaned object is recoverable; a half-deleted intake is
+       not.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02), declared
+    BEFORE ``get_tenant_repo`` so a null-space caller gets the gate's 404 rather than the
+    repo's 403, which would leak that this endpoint exists.
+
+    RETURNS 204 with no body. The plan sketched reporting a skipped-object count in the
+    response; a 204 cannot carry one, and inventing a 200 body for a destruction verb would
+    be worse than the alternative — so the counts live in the audit row's metadata
+    (``objects`` / ``objects_skipped``), where they are durable and greppable rather than
+    thrown away with the response.
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    if _has_research_runs(repo.session, identity, intake_id):
+        # D-23.5-02. Not a permission problem and not a validation problem — a CONFLICT
+        # with state that must survive. Archive is the action that is still available.
+        raise HTTPException(status.HTTP_409_CONFLICT, _DELETE_BLOCKED_DETAIL)
+
+    keys, skipped = _collect_intake_object_keys(repo.session, identity, intake)
+
+    audit.log(
+        repo.session,
+        actor_uid=identity.uid,
+        event_type="intake.deleted",
+        target=str(intake_id),
+        space_id=intake.space_id,
+        metadata={
+            "status": intake.status,
+            "objects": len(keys),
+            "objects_skipped": skipped,
+        },
+    )
+
+    if repo.delete(intake_id) == 0:  # pragma: no cover - in scope by construction above
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    # AFTER the transaction (background), and only over prefix-asserted keys.
+    background.add_task(_delete_objects_best_effort, keys)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
