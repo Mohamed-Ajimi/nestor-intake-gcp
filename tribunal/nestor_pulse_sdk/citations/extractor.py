@@ -45,6 +45,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nestor_pulse_sdk import runtime_flags
 from nestor_pulse_sdk.db.models import Claim, ClaimSource, Source
 from nestor_pulse_sdk.db.rls import set_tenant_context
 
@@ -685,8 +686,21 @@ def _plan_claim_sources(
     # import graph entirely.
     from nestor_pulse_sdk.citations.redirect_resolver import is_redirect_url
 
+    # THE display-domain derivation, borrowed rather than forked. `numbering`
+    # owns it, the renderer's fallback label is computed with it, and a second
+    # copy here would mean "the title matches the host" could be true for this
+    # function and false for the thing that prints the label.
+    from nestor_pulse_sdk.citations.numbering import _domain
+
     if not isinstance(claim, dict):
         return []
+
+    # Read ONCE per claim, at CALL time. `runtime_flags` is imported as a MODULE
+    # so every call site below reads `runtime_flags.<switch>()` and says out loud
+    # that it is a switch; a from-import would still read the environment at call
+    # time but would hide that at the point of use.
+    drop_skeptic_sources = runtime_flags.skeptic_as_evidence()
+    meta_per_url = runtime_flags.per_url_meta()
 
     verdicts_by_claim = verdicts_by_claim or {}
     # An empty map is the "never attempted" case and is read exactly like None:
@@ -724,6 +738,15 @@ def _plan_claim_sources(
             if url and isinstance(url, str):
                 own_urls.append(url)
 
+    # The urls the claim itself DECLARED as its sources -- `source_urls` only,
+    # not `evidence_refs`. Used by `per_url_meta()` below as the one set the
+    # claim's own scalar grade may speak for.
+    declared_source_urls = {
+        url.strip()
+        for url in _as_list(claim.get("source_urls"))
+        if url and isinstance(url, str)
+    }
+
     # The SKEPTIC's urls, reached through the verdict(s) -- SAME normalisation
     # the verdict writes use, via `_verdicts_for`, so the two views of
     # `verdicts_by_claim` cannot diverge either.
@@ -756,6 +779,30 @@ def _plan_claim_sources(
             continue
         seen_urls.add(url)
 
+        # MECHANISM 1 (`skeptic_as_evidence`, phase 23.5, D-23.5-04).
+        #
+        # The verdict-derived urls are still WALKED above -- one ordering code
+        # path, not two, because the order is what the first-seen dedupe and the
+        # citation numbering depend on -- and are simply not EMITTED here.
+        #
+        # WHY. A skeptic's `citations` list is every `web_search` RESULT url and
+        # every `web_fetch` url of the WHOLE group session
+        # (`skeptic.py::_collect_citation_urls`), and
+        # `group_skeptic.py::_parse_group_verdict` puts that one list on EVERY
+        # member claim's verdict. It is the evidence for the GROUP's verdict, not
+        # a citation of each member claim. Copying it onto every member is what
+        # turned 586 claims into 4,999 `claim_source` rows on run 7784e71c --
+        # median 1 per claim, max 58 -- and left 232 of 427 sourced claims
+        # anchored to a host they have nothing to do with.
+        #
+        # THE EVIDENCE IS NOT LOST. It stays on the verdict row, which
+        # `_insert_verdict` already writes and which this change does not touch.
+        # `group_skeptic.py` is deliberately not modified: the fan-out is
+        # corrected here, at the persist boundary, so the verdict keeps saying
+        # exactly what the skeptic looked at.
+        if drop_skeptic_sources and origin == "skeptic":
+            continue
+
         # D-V01-11. THREE STATES, and they are not interchangeable:
         #   NULL         the URL was never a resolution candidate (an ordinary
         #                publisher URL) or no map was supplied at all -- nothing
@@ -781,11 +828,47 @@ def _plan_claim_sources(
         else:
             resolution_status = "unresolved"
 
+        # MECHANISM 2 (`per_url_meta`, phase 23.5, D-23.5-04). Title and grade
+        # are decided PER URL instead of once per claim.
+        #
+        # TITLE. `source_domain` is ONE display domain for the whole claim, and
+        # the old code stamped it on every url the claim touched. Because
+        # `_upsert_source` dedupes by `(tenant_id, content_hash)` and the FIRST
+        # writer's title wins, whichever claim reached a url first named it --
+        # 1,824 of run 7784e71c's 2,681 numbered sources carried a label that was
+        # not their own host (Wikipedia 125, ebay.de 44, ah.nl 29). The label is
+        # now applied only where it can be true:
+        #   * a grounding redirect, where the url's own host is
+        #     `vertexaisearch.cloud.google.com` and the provider's display label
+        #     is the ONLY honest thing to print; or
+        #   * a url that really is on that host.
+        # Anything else gets NULL, and `build_graded_sources_section` falls back
+        # to the url's own display domain -- which is honest by construction.
+        #
+        # GRADE. Same shape, same fix. `quality_by_url` holds what the provider
+        # that SUPPLIED each url said about it. The claim's scalar
+        # `provider_quality` is its own single-provider grade, so it may speak
+        # only for urls the claim itself DECLARED in `source_urls`. A url the
+        # claim did not supply gets NULL and falls through to
+        # `derive_quality_tier`'s domain heuristic at render time. Stamping
+        # "official" on an ebay listing because another url of the same claim was
+        # graded that way is the defect, not a convenience.
+        entry_title = source_title
+        entry_quality = quality_by_url.get(url) or claim_quality
+        if meta_per_url:
+            if source_title and not (
+                is_redirect_url(url) or _domain(url) == source_title
+            ):
+                entry_title = None
+            entry_quality = quality_by_url.get(url)
+            if entry_quality is None and url in declared_source_urls:
+                entry_quality = claim_quality
+
         planned.append(
             {
                 "url": url,
-                "title": source_title,
-                "provider_quality": quality_by_url.get(url) or claim_quality,
+                "title": entry_title,
+                "provider_quality": entry_quality,
                 "resolved_url": resolved_target,
                 "resolution_status": resolution_status,
                 "origin": origin,
