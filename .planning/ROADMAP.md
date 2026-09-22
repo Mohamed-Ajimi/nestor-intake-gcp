@@ -856,13 +856,27 @@ Plans:
 
 ### Phase 23.5: tester remarks round 1 — superadmin status override, real archive and guarded hard delete, project-name and client wording, and the Sources-list and truncated-chapter fixes in the tribunal report stage behind a kill switch (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** A superadmin can set an intake to any status except `in_research`, really archive or (when no research run ever ran) hard-delete an intake, reads "project" and "client" where the product means them in all three languages, and receives a research report whose `## Sources` list actually matches its claims and whose chapters do not stop mid-sentence — with every tribunal change behind an environment kill switch that defaults to today's behaviour.
+**Requirements**: TR1-STATUS, TR2-SOURCES, TR2B-TRUNCATION, TR3-ARCHIVE-DELETE, TR4-NAMING, SHIP-23.5 (derived from the four tester remarks; none registered in REQUIREMENTS.md — this phase was inserted 2026-09-22 after Nestor's first week on `nestor-pulse-prod`)
 **Depends on:** Phase 23
-**Plans:** 0 plans
+**Authority:** `.planning/phases/23.5-*/23.5-CONTEXT.md` — operator rulings D-23.5-01..05.
+**Plans:** 7 plans in 4 waves
+
+- Wave 1: 01 (status override) + 04 (tribunal persist) — the tribunal track depends on NOTHING outside tribunal and shares no file with the backend/frontend track.
+- Wave 2: 02 (archive + guarded hard delete) + 05 (tribunal numbering/ledger)
+- Wave 3: 03 (naming) + 06 (tribunal renderer + truncation continuation)
+- Wave 4: 07 (ship checkpoint — dev deploy, browser walkthrough, ONE ~$40 dev run read against the acceptance numbers, then promotion by digest with the worker last)
+- ⛔ NO alembic migration in this phase — `0019` belongs to Phase 24 / DEF-22-06.
+- ⛔ Nothing under `tribunal/nestor_pulse_sdk/runs/`, `audit/` or `alembic/` is touched (the D-23.1-06 fence); `research_router` stays mounted (D-23.1-10).
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 23.5 to break down)
+- [ ] 23.5-01-PLAN.md — POST /intakes/{id}/status superadmin override + the detail-page select
+- [ ] 23.5-02-PLAN.md — archive wiring + DELETE /intakes/{id} with the research-run 409 and the GCS prefix wall
+- [ ] 23.5-03-PLAN.md — project/client naming in nl/fr/en + the AI context header (label-only, D-23.5-03)
+- [ ] 23.5-04-PLAN.md — kill switches, offline replay fixture, flags-off golden, skeptic fan-out + per-URL label/grade
+- [ ] 23.5-05-PLAN.md — primary-URL anchor ordering (beside the pinned SQL) + numberable-only fact ledger
+- [ ] 23.5-06-PLAN.md — render `resolved_url` + one-shot continuation for truncated chapters
+- [ ] 23.5-07-PLAN.md — ship: Terraform flag surface, dev run read against the acceptance numbers, promotion by digest
 
 ### Phase 24: Deep research re-runs — version history, superadmin steering note, real citation excerpts and per-link grouping
 
