@@ -914,6 +914,25 @@ def list_intake_sources(
 
 # The Dutch subject lines, ported verbatim from the legacy send-pulse-mail.ts (:61-77) —
 # the parity source. `{client}` is the intake's client_name display value.
+#
+# D-23.5-03 AUDIT (2026-09-22) — every subject below was read individually against the
+# "client name" -> "project name" relabel, and every one is DELIBERATELY UNCHANGED.
+# `{client}` is `intake.client_name or "team"`, which under D-23.5-03 is the PROJECT
+# name. In each of these subjects the value sits in a SUBJECT-OF-A-SENTENCE slot
+# ("onderzoeksvragen voor X", "resultaten klaar — X", "(X)"), where a project name reads
+# correctly and nothing in the surrounding words asserts that X is a client. The one
+# string that DID label the value as the client was the admin_validated mail BODY
+# (`app/mail/templates/admin_validated.html.j2`), and that one was reworded.
+# `_SUBJECT_ADMIN_VALIDATED` itself is fine: "Klant heeft gevalideerd" names the ACTOR
+# (the real client organisation), and `— {client}` after the dash is the project. Both
+# halves are true. The placeholder is NOT renamed to `{project}`: that would churn
+# `_subject_for`'s format kwarg and all four locale rows for zero visible gain.
+#
+# Not a subject, recorded here because it is the next reader's question: the locale
+# BODIES interpolate `project_title` and already say "project"/"projet"/"project" — they
+# were already correct. They also pass `first_name=client`, so a body greets "Hi <project
+# name>". That is a separate defect (a greeting slot fed a non-person), NOT a mislabel,
+# and it is out of D-23.5-03's label-only scope — deferred, see deferred-items.md.
 _SUBJECT_VALIDATION = "Even valideren — onderzoeksvragen voor {client}"
 _SUBJECT_REMINDER = "Herinnering — onderzoeksvragen wachten op validatie ({client})"
 _SUBJECT_RESULTS = "Onderzoeksresultaten klaar — {client}"

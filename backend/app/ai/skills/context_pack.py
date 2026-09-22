@@ -105,10 +105,17 @@ def _refusal_message(observed_status: str | None, artifact_id: Any) -> str:
 
 def _format_intake_markdown(client_name: str | None, answers: list[dict[str, Any]]) -> str:
     """Render the intake answers as the markdown the context-pack generator consumes."""
+    # `client_name` is `intakes.client_name` — the PROJECT name (D-23.5-03), not the
+    # client organisation. The organisation reaches the model as the client's own answer
+    # `client_info.client_name` further down, so the context-pack prompt's own title
+    # placeholder (`prompts.py:172`) stays satisfiable from the answers and is
+    # deliberately left BYTE-UNCHANGED. No prompt and no parser reads this header:
+    # `app/ai/prompts.py` and `app/ai/parsing.py` were grepped for the old label before
+    # the edit and returned nothing (recorded in the 23.5-03 SUMMARY).
     lines = [
         f"# Intake — {client_name or ''}",
         "",
-        f"**Klantnaam**: {client_name or ''}",
+        f"**Projectnaam**: {client_name or ''}",
         "",
         "---",
         "",

@@ -90,10 +90,19 @@ def _format_intake_markdown(client_name: str | None, answers: list[dict[str, Any
     shared product config), so this renders ``field_key: value`` pairs in answer order —
     enough for the decomposer, and the system prompt carries the strict-JSON contract.
     """
+    # `client_name` is `intakes.client_name` — the operator's free-text label for THIS
+    # intake, i.e. the PROJECT name (D-23.5-03). It is NOT the client organisation; that
+    # comes from the client's own answer `client_info.client_name`
+    # (`app/data/pulse_intake_v1.json:101`), which reaches the model below as a normal
+    # `field_key` line. The previous header used the Dutch word for a client's name, so
+    # it told the model that the project name WAS the client's name. Safe to relabel:
+    # before the edit, `app/ai/prompts.py` and `app/ai/parsing.py` were grepped for the
+    # old header and returned nothing, so no prompt instructs the model to look for it
+    # and no parser reads it — this is context, not a parsed key (23.5-03 SUMMARY).
     lines = [
-        f"# Intake — {client_name or '(onbekende klant)'}",
+        f"# Intake — {client_name or '(naamloos project)'}",
         "",
-        f"**Klantnaam**: {client_name or ''}",
+        f"**Projectnaam**: {client_name or ''}",
         "",
         "---",
         "",
