@@ -190,7 +190,11 @@ def _row_value(row: Any, key: str) -> Any:
             return None
 
 
-def build_ledger(claim_rows: list[dict] | None) -> list[dict]:
+def build_ledger(
+    claim_rows: list[dict] | None,
+    *,
+    numberable_claim_ids: set | None = None,
+) -> list[dict]:
     """Turn ordered claim rows into ledger entries (order preserved).
 
     Input rows: `{"claim_id", "text", "facet", "position"}`, already ordered by
@@ -202,9 +206,40 @@ def build_ledger(claim_rows: list[dict] | None) -> list[dict]:
     whose prefix is ambiguous (see `collision_free_prefixes`) and rows with empty
     text are skipped -- a fact with no text cannot be cited, and an ambiguous
     prefix must never reach the model.
+
+    `numberable_claim_ids` (phase 23.5, mechanism 5) is the third skip, and it is
+    OPT-IN:
+
+    * `None` -- no filter at all. Today's behaviour, and the default.
+    * a set -- only claims whose id is IN it are offered.
+    * THE EMPTY SET MEANS NOTHING IS NUMBERABLE, and the ledger comes back
+      empty. It does NOT mean "no filter". Writing `if not numberable_claim_ids`
+      here would collapse those two, and would do it at exactly the moment the
+      run has no citations at all -- which is precisely when offering the writer
+      an anchor for every claim does the most damage. The distinction is `is
+      None`, and it has its own test.
+
+    WHY THE FILTER EXISTS. This function shows the writing model an anchor for
+    EVERY claim, while `number_citations_with_claims` can only map the claims
+    that have a `claim_source` row. On run 7784e71c 159 claims had none --
+    mostly `distiller_fallback`, which zeroes `source_domain` and carries no
+    usable url. They were offered, the model dutifully anchored them, and
+    `apply_citation_anchors` then deleted those anchors from the deliverable:
+    108 statements silently lost their citation, in a run where the three
+    previous runs had lost none. Offering only what can be numbered is the fix.
+
+    The alternative -- carrying a source url through the distiller fallback so
+    those claims BECOME numberable -- is a producer-side change and is NOT in
+    this phase.
+
+    Ids are compared AS STRINGS, so a caller holding `uuid.UUID` keys (or a mix)
+    filters correctly instead of silently withholding everything.
     """
     rows = list(claim_rows or [])
     usable = collision_free_prefixes(_row_value(r, "claim_id") for r in rows)
+    numberable = (
+        None if numberable_claim_ids is None else {str(cid) for cid in numberable_claim_ids}
+    )
 
     out: list[dict] = []
     seen: set[str] = set()
@@ -214,6 +249,8 @@ def build_ledger(claim_rows: list[dict] | None) -> list[dict]:
             continue
         pfx = claim_prefix(cid)
         if usable.get(pfx) != cid:
+            continue
+        if numberable is not None and cid not in numberable:
             continue
         text_value = str(_row_value(row, "text") or "").strip()
         if not text_value:

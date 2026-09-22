@@ -4382,6 +4382,7 @@ async def _load_citation_context(
     than carried on the `synthesis_cache` bundle, a resumed run gets the same
     citations with no bundle schema change.
     """
+    from nestor_pulse_sdk import runtime_flags
     from nestor_pulse_sdk.citations.anchors import anchor_number_map, build_ledger
     from nestor_pulse_sdk.citations.numbering import (
         list_run_claims,
@@ -4396,7 +4397,13 @@ async def _load_citation_context(
                 await set_tenant_context(session, tenant_id)
                 claim_rows = await list_run_claims(session, run_id)
                 numbered, claim_to_n = await number_citations_with_claims(session, run_id)
-        return build_ledger(claim_rows), numbered, anchor_number_map(claim_to_n)
+        # Phase 23.5 mechanism 5: offer the writer only claims that can be
+        # numbered, so no anchor it emits is stripped back out later. `None`
+        # keeps today's behaviour; an empty `claim_to_n` correctly yields an
+        # empty ledger rather than an unfiltered one.
+        only = set(claim_to_n) if runtime_flags.ledger_numberable_only() else None
+        ledger = build_ledger(claim_rows, numberable_claim_ids=only)
+        return ledger, numbered, anchor_number_map(claim_to_n)
     except Exception as exc:  # noqa: BLE001 — citations degrade, runs do not fail
         log.warning(
             "tribunal_pipeline: _load_citation_context failed, the report will carry "

@@ -19,10 +19,13 @@ are pure, the rows are hand-built or projected from the plan-04 fixture, and the
 flags are flipped in-process (which is the entire reason `runtime_flags` reads
 `os.environ` at CALL time rather than at import).
 
-`render_fact_ledger` is deliberately NOT used anywhere in this file. Its
-`NESTOR_TRIBUNAL_ANCHORS` read happens at IMPORT time (`anchors.py:87`), which is
-why `test_citation_anchors.py` has to `skipif` rather than assert -- a test that
-skips proves nothing, and the RED assertions here have to be able to FAIL.
+THE PROMPT-BLOCK RENDERER IS DELIBERATELY NOT CALLED ANYWHERE IN THIS FILE. The
+function in `anchors.py` that renders the ledger block -- the one that returns
+`""` whenever `NESTOR_TRIBUNAL_ANCHORS` is not "true" -- reads that variable at
+IMPORT time (`anchors.py:87`), which is why `test_citation_anchors.py` has to
+`skipif` rather than assert both states. A test that SKIPS proves nothing, and
+the RED assertions here have to be able to FAIL. So this file drives
+`build_ledger` and `anchor_token` directly and never touches the renderer.
 """
 
 from __future__ import annotations
@@ -432,6 +435,30 @@ class TestMechanism5StrippedAnchors:
         assert _claim_id_for("c01_sourceless_no_verdict") in withheld
         assert _claim_id_for("c07_distiller_fallback_unnumberable") in withheld
 
+    def test_a_claim_whose_only_urls_came_from_the_group_is_also_withheld(
+        self, monkeypatch
+    ):
+        """Mechanisms 1 and 5 INTERACT, and this pins the interaction.
+
+        `c04c` has no `source_urls` of its own -- every url it carried arrived
+        through the shared group verdict. Plan 04's mechanism 1 stops emitting
+        those as its `claim_source` rows, so with the master on the claim becomes
+        unnumberable, and mechanism 5 then withholds it from the writer.
+
+        That is the RIGHT direction: a claim with no evidence of its own is no
+        longer offered as citable, instead of being offered, anchored and
+        stripped. But it means the flags-on ledger is smaller for a reason
+        BEYOND the sourceless claims, and plan 07's dev run should expect that
+        rather than read it as over-filtering.
+        """
+        _, claim_to_n, ledger = _replay(monkeypatch, flags_on=True)
+        c04c = _claim_id_for("c04c_group_member_three_no_own_url")
+        assert c04c not in claim_to_n
+        assert c04c not in {e["claim_id"] for e in ledger}
+        # Its two siblings, which DO have their own urls, are still offered.
+        for sibling in ("c04a_group_member_one", "c04b_group_member_two"):
+            assert _claim_id_for(sibling) in {e["claim_id"] for e in ledger}
+
 
 class TestBuildLedgerFilter:
     def test_none_means_no_filter(self):
@@ -457,7 +484,46 @@ class TestBuildLedgerFilter:
         assert build_ledger(rows, numberable_claim_ids=as_uuids) == build_ledger(rows)
 
 
+def _foreign_anchor_claims(monkeypatch, *, flags_on: bool) -> list[str]:
+    """Fixture ids whose `[n]` resolves to a url the claim's own provider never
+    supplied -- the CONTEXT's acceptance number, as a list rather than a count so
+    a failure names the shape that broke."""
+    numbered, claim_to_n, _ = _replay(monkeypatch, flags_on=flags_on)
+    by_n = {e["n"]: e for e in numbered}
+    violations = []
+    for claim in CLAIMS:
+        cid = _claim_id_for(claim["fixture_id"])
+        if cid not in claim_to_n:
+            continue
+        own = {
+            e["url"]
+            for e in _plan_claim_sources(claim, VERDICTS_BY_CLAIM, RESOLVED_MAP)
+            if e["origin"] == "provider"
+        }
+        if by_n[claim_to_n[cid]]["url"] not in own:
+            violations.append(claim["fixture_id"])
+    return violations
+
+
 class TestMechanism3OverTheFixture:
+    def test_flags_off_most_sourced_claims_anchor_to_a_foreign_url(self, monkeypatch):
+        """RED, and the reason mechanism 3 is in this phase at all.
+
+        Six of the ten numberable claims anchor to a url their own provider
+        never supplied -- the fixture's echo of the measured 232 of 427 on run
+        7784e71c. Deterministic: the synthetic source ids come from a fixed
+        uuid5 namespace, so this list is the same on every machine.
+        """
+        violations = _foreign_anchor_claims(monkeypatch, flags_on=False)
+        assert len(violations) > 0
+        assert "c05_foreign_hosts_one_title" in violations
+
+    def test_flags_on_every_anchor_resolves_to_a_url_of_that_claim_by_helper(
+        self, monkeypatch
+    ):
+        """GREEN, same measurement, other branch."""
+        assert _foreign_anchor_claims(monkeypatch, flags_on=True) == []
+
     def test_flags_on_every_anchor_resolves_to_a_url_of_that_claim(self, monkeypatch):
         """The CONTEXT's acceptance number: anchors resolving to a url that is NOT
         among the claim's own provider urls = 0."""
