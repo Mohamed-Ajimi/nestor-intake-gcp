@@ -765,6 +765,12 @@ _PINNED_INTAKE_ROUTES = frozenset(
         ("POST", "/intakes/{intake_id}/research/{run_id}/verify-chain"),
         ("POST", "/intakes/{intake_id}/review"),
         ("POST", "/intakes/{intake_id}/skills/apply"),
+        # OPERATOR verb, not a client route (plan 23.5-01 / D-23.5-01): the superadmin
+        # status override. Gated by superadmin_gate and audited in _GATED_VERBS
+        # (tests/test_operator_verb_gate.py); its denial arms live in
+        # tests/test_status_override.py, so it is pinned here WITHOUT a 2xx client
+        # reachability test on purpose.
+        ("POST", "/intakes/{intake_id}/status"),
         ("POST", "/intakes/{intake_id}/skills/context-pack"),
         ("POST", "/intakes/{intake_id}/skills/extract-insights"),
         ("POST", "/intakes/{intake_id}/skills/structure-answers"),

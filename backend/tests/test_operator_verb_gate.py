@@ -980,6 +980,10 @@ _GATED_VERBS = (
     ("POST", "/intakes/{intake_id}/review"),
     ("POST", "/intakes/{intake_id}/deliver"),
     ("POST", "/intakes/{intake_id}/report/replace"),
+    # Verb 9 (plan 23.5-01 / D-23.5-01) — the superadmin status override. It is listed here
+    # so BOTH structural audits below (shared gate + gate-before-repo ordering) cover it
+    # automatically; its behavioural denial arms live in tests/test_status_override.py.
+    ("POST", "/intakes/{intake_id}/status"),
 )
 
 
@@ -1069,7 +1073,9 @@ def test_all_eight_operator_verbs_depend_on_the_shared_gate():
                 )
                 break
 
-    assert checked == 8, f"expected to audit exactly 8 operator verbs, audited {checked}"
+    assert checked == len(_GATED_VERBS), (
+        f"expected to audit exactly {len(_GATED_VERBS)} operator verbs, audited {checked}"
+    )
     assert not missing, (
         "SEC-01 / D-23.1-02 VIOLATION: superadmin_gate is absent from the RESOLVED "
         "dependency tree of these operator verbs, so a role=user caller can still drive "
@@ -1125,5 +1131,7 @@ def test_gate_is_declared_before_the_repo_on_every_gated_intake_route():
             )
 
     # Guards the guard: a rename or a refactor that stops the gate resolving here would
-    # otherwise leave this test green while checking nothing.
-    assert checked == 8, f"expected 8 gated intake routes, found {checked}"
+    # otherwise leave this test green while checking nothing. The count is the number of
+    # gated verbs on intake_router itself — 8 through phase 23.1, 9 since plan 23.5-01
+    # added POST /intakes/{intake_id}/status (D-23.5-01).
+    assert checked == 9, f"expected 9 gated intake routes, found {checked}"

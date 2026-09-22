@@ -77,6 +77,33 @@ export function reviewIntake(id: string): Promise<ApiResult<Intake>> {
   return apiFetch<Intake>(`/intakes/${id}/review`, { method: "POST" });
 }
 
+/**
+ * The SUPERADMIN STATUS OVERRIDE (D-23.5-01) — set the status to any value directly.
+ *
+ * Hits `POST /intakes/{id}/status` (intake_routes.override_status). It accepts every
+ * `nestor.intake_status` value EXCEPT `in_research`, which answers 409: that status is
+ * written only by the research-start verb, because entering it queues a paid Tribunal run,
+ * and hand-setting it would leave an intake claiming research is in flight with nothing
+ * behind it. An unknown status is 422. A non-superadmin caller gets an existence-hidden
+ * 404 — the backend gate is the authority, not this seam.
+ *
+ * NOT a replacement for the two named verbs above. `submitIntake` / `reviewIntake` stay the
+ * path for the three NATURAL forward moves (draft→submitted, reviewed→validated_by_client,
+ * submitted→reviewed) because only they run the submit COMPLETENESS check and fire the
+ * `admin_validated` ops mail. This one performs no check and sends nothing — it is the
+ * correction/archive tool, which is why `delivered` → `reviewed` and anything → `archived`
+ * (previously reachable from nowhere) now work.
+ */
+export function overrideIntakeStatus(
+  id: string,
+  status: string,
+): Promise<ApiResult<Intake>> {
+  return apiFetch<Intake>(`/intakes/${id}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Report delivery — the human-report deliver / replace / read verbs (Plan 18-01)
 // ---------------------------------------------------------------------------

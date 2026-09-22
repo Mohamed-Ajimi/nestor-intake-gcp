@@ -139,6 +139,24 @@ class IntakePatch(BaseModel):
     client_name: str | None = None
 
 
+class StatusOverride(BaseModel):
+    """Body of the superadmin status override (D-23.5-01) — a single target ``status``.
+
+    DELIBERATELY NOT a field on :class:`IntakePatch`. ``patch_intake``'s refusal to carry a
+    status is the TENANT-02 / INTAKE-05 shape the whole module is written around, and the
+    override is a SEPARATE, role-gated, audited verb precisely so that refusal never has to
+    be relaxed. Anything that widens ``IntakePatch`` has misread this model.
+
+    ``status`` is a plain ``str`` and is validated against the allow-list in the handler
+    (``_OVERRIDE_STATUSES`` / ``_OVERRIDE_FORBIDDEN``), not by a pydantic Enum: the
+    ``in_research`` case must answer **409** ("known status, refused") and a genuinely
+    unknown value **422**, and an Enum field would collapse both into one 422 and lose the
+    money wall's distinct signal.
+    """
+
+    status: str
+
+
 class AnswerView(BaseModel):
     """Read-shaped view of one answer row (the section batch save round-trips this)."""
 
@@ -1470,6 +1488,44 @@ _REVIEW_TRANSITIONS: dict[str, str] = {
 # gated by CI (mirrors _SUBMIT_TRANSITIONS / _REVIEW_TRANSITIONS).
 _DELIVER_TRANSITIONS: dict[str, str] = {"in_research": "delivered"}
 
+# --- The superadmin override (D-23.5-01, phase 23.5 tester remark 1) -------------------
+#
+# The three maps above are EDGES: each names one lawful step, and everything else 409s.
+# That is right for the lifecycle — it is what keeps ``submit`` from skipping review and
+# ``deliver`` from firing on an intake with no run behind it — but it also meant an
+# operator could not correct a mis-set status, and left ``archived`` reachable from
+# NOWHERE. ``override_status`` is the parallel, superadmin-only, audited verb that can.
+# The maps are untouched by it: an override is a DIFFERENT act, recorded as such
+# (``metadata["override"] is True``), not a widened transition.
+#
+# WHY ``in_research`` IS EXCLUDED — it is the one status that costs money. It is written
+# by exactly one call site, ``research_routes._RESEARCH_TRANSITIONS``
+# (``{"decomposed": "in_research"}``), which queues a real Tribunal research run (~$40 at
+# the 2026-09 figures). An override able to set it would let an operator hand-place an
+# intake into a state with NO queued run behind it: the client page would show research in
+# flight, the worker would never pick anything up, and nothing would ever complete. The
+# exclusion is therefore about truthfulness of the status, not about permission — a
+# superadmin who wants a run starts one through the research verb, which charges for it.
+#: The SEVEN override-able statuses — every ``nestor.intake_status`` value except
+#: ``in_research``. A ``frozenset`` (not a dict) because an override has no notion of a
+#: source status: any allowed value may follow any other, backwards included.
+_OVERRIDE_STATUSES: frozenset[str] = frozenset(
+    {
+        "draft",
+        "submitted",
+        "reviewed",
+        "validated_by_client",
+        "decomposed",
+        "delivered",
+        "archived",
+    }
+)
+#: Known statuses the override REFUSES (409, not 422 — see ``StatusOverride``). Kept as its
+#: own constant rather than implied by absence from the allow-list so the refusal is an
+#: explicit, greppable decision with a reason attached, and so a future status added to the
+#: enum defaults to 422 ("unknown") rather than silently becoming override-able.
+_OVERRIDE_FORBIDDEN: frozenset[str] = frozenset({"in_research"})
+
 
 def _next_submit_status(current: str) -> str:
     """Return the submit-transition target for ``current``, or 409 if not allow-listed."""
@@ -1640,6 +1696,93 @@ def review_intake(
               event_type="intake.status_changed", target=str(intake_id),
               space_id=intake.space_id,
               metadata={"from": old_status, "to": new_status})
+
+    updated = repo.get(intake_id)
+    if updated is None:  # pragma: no cover - patched row is in-scope by construction
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+    return _view(updated)
+
+
+@intake_router.post("/{intake_id}/status")
+def override_status(
+    intake_id: str,
+    body: StatusOverride,
+    identity: Identity = Depends(superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> IntakeView:
+    """Set an intake's status to ANY allow-listed value — the superadmin override (D-23.5-01).
+
+    This is NOT a fourth lifecycle transition. ``/submit`` / ``/review`` / ``/deliver`` each
+    walk one named edge and refuse everything else; this verb walks none of them and may go
+    BACKWARDS (``delivered`` -> ``reviewed``) or sideways (anything -> ``archived``, which
+    no other route can reach at all). It exists because an operator had no way to correct a
+    mis-set status and no way to archive, and it is deliberately a separate route so the
+    three allow-lists above stay exactly as narrow as they are.
+
+    OUTCOMES, in this precedence order:
+
+    * the intake is not in scope (``repo.get`` -> ``None``) -> **404** ``"Intake not found"``;
+    * the target is in ``_OVERRIDE_FORBIDDEN`` (``in_research``) -> **409**. Known status,
+      refused: entering it spends money and it has exactly one lawful writer,
+      ``research_routes._RESEARCH_TRANSITIONS``;
+    * the target is not in ``_OVERRIDE_STATUSES`` -> **422** ``"Unknown status"``. The
+      allow-list — not the DB enum — is the wall, so a mistyped status is a refusal rather
+      than a driver-level exception surfacing as a 500.
+
+    The ownership check runs FIRST so a refused override on a foreign/absent intake never
+    reveals which statuses the endpoint would have accepted, and both refusals run BEFORE
+    ``repo.patch`` so the row is untouched.
+
+    SUPERADMIN-ONLY via ``superadmin_gate`` (existence-hidden 404, D-23.1-02), declared
+    BEFORE ``get_tenant_repo`` so the gate resolves first and a null-space caller gets that
+    404 rather than the repo's null-space 403, which would leak that this endpoint exists
+    (the ordering contract in ``app/auth/gates.py``; pinned by
+    ``tests/test_operator_verb_gate.test_gate_is_declared_before_the_repo_...``).
+
+    AUDIT. Exactly one ``intake.status_changed`` row per accepted call, written on
+    ``repo.session`` so it commits or rolls back WITH the status change (one-tx, QA-04 /
+    Pitfall 2). ``metadata`` is ``{"from", "to", "override": True}`` — structured only,
+    never a link or token (T-06-09). The ``override`` marker is load-bearing, not
+    decoration: it is the only thing that lets the trail tell an operator's hand off a
+    lifecycle verb, and a ``delivered`` -> ``reviewed`` row with no marker would read as a
+    transition the allow-lists could never have produced.
+
+    A SAME-STATUS call (``from == to``) is accepted and audited like any other move. One
+    behaviour, no special case — the trail then records that an operator asserted the
+    status, which is information, not noise.
+
+    SIDE EFFECTS: NONE beyond the status flip and its audit row. This verb sends NO mail and
+    links NO artifact. In particular an override to ``delivered`` does NOT do what
+    ``POST /{intake_id}/deliver`` does — no report artifact is staged or linked and the
+    client results mail is not sent — and an override to ``submitted`` /
+    ``validated_by_client`` skips the completeness check and the ``admin_validated`` ops
+    mail that ``POST /{intake_id}/submit`` runs. Use the named verbs for the natural forward
+    moves; this one is the correction tool.
+    """
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    new_status = body.status
+    if new_status in _OVERRIDE_FORBIDDEN:
+        # The detail names the status LITERALLY rather than interpolating ``new_status``:
+        # it is a client-facing contract string the frontend keys a specific toast off, and
+        # a literal is greppable from both sides of the seam. ``_OVERRIDE_FORBIDDEN`` has
+        # exactly one member and ``tests/test_status_override.py`` pins that it stays that
+        # way, so the message cannot drift out of step with the set.
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot override status to 'in_research'",
+        )
+    if new_status not in _OVERRIDE_STATUSES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown status")
+
+    old_status = intake.status
+    repo.patch(intake_id, status=new_status)
+    audit.log(repo.session, actor_uid=identity.uid,
+              event_type="intake.status_changed", target=str(intake_id),
+              space_id=intake.space_id,
+              metadata={"from": old_status, "to": new_status, "override": True})
 
     updated = repo.get(intake_id)
     if updated is None:  # pragma: no cover - patched row is in-scope by construction

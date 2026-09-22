@@ -14,6 +14,7 @@ import {
   getIntake,
   submitIntake,
   reviewIntake,
+  overrideIntakeStatus,
   sendIntakeMail,
   type IntakeMailType,
 } from "@/lib/api/intakes";
@@ -151,6 +152,18 @@ const STATUS_VALUES = [
  "delivered",
  "archived",
 ] as const;
+
+// The three NATURAL forward moves, keyed `${from}>${to}`. These MIRROR the backend's
+// _SUBMIT_TRANSITIONS / _REVIEW_TRANSITIONS (backend/app/api/intake_routes.py): the named
+// verbs are kept for exactly these edges because only they run the submit COMPLETENESS
+// check and fire the admin_validated ops mail. Anything NOT in this map goes to the
+// superadmin override (POST /intakes/{id}/status, D-23.5-01), which performs no check and
+// sends no mail — it is the correction/archive path.
+const NAMED_TRANSITIONS: Record<string, "submit" | "review"> = {
+ "draft>submitted": "submit",
+ "reviewed>validated_by_client": "submit",
+ "submitted>reviewed": "review",
+};
 
 // Status banners/hints that exist in the catalog. A value absent from these sets has no
 // banner/hint (guards the render sites, which only show when a catalog entry exists).
@@ -554,29 +567,41 @@ function IntakeDetailPage() {
 
  const handleStatusChange = async (newStatus: string) => {
  if (!intake) return;
- // Status moves only via the allow-listed transition verbs (<= decomposed). Targets
- // past the milestone ceiling are intentionally unreachable from the seam (INTAKE-05).
+ // Two paths, decided by NAMED_TRANSITIONS above. A natural forward move keeps its named
+ // verb (completeness check + admin_validated mail); everything ELSE — backwards moves,
+ // jumps, and `archived`, which used to be reachable from nowhere — goes to the
+ // superadmin override (D-23.5-01). The old `statusUnavailable` dead end is gone.
+ //
+ // `in_research` never arrives here: the <select> renders that option disabled (the only
+ // writer is the research-start verb, which pays for a run). The backend 409s it anyway —
+ // this is the second wall, not the only one.
+ const named = NAMED_TRANSITIONS[`${intake.status}>${newStatus}`];
  setUpdatingStatus(true);
  let res;
- if (newStatus === "reviewed") {
+ if (named === "review") {
  res = await reviewIntake(intake.id);
- } else if (newStatus === "submitted" || newStatus === "validated_by_client") {
+ } else if (named === "submit") {
  res = await submitIntake(intake.id);
  } else {
- setUpdatingStatus(false);
- toast.error(t("intakeDetail.toast.statusUnavailable"));
- return;
+ res = await overrideIntakeStatus(intake.id, newStatus);
  }
  setUpdatingStatus(false);
  if (!res.success) {
  const codeKey = resolveErrorKey(res.code);
- toast.error(
- codeKey ? t(codeKey) : `${t("intakeDetail.toast.statusNotUpdated")}: ${res.error}`,
- );
+ const fallback = named
+ ? t("intakeDetail.toast.statusNotUpdated")
+ : t("intakeDetail.toast.statusOverrideFailed");
+ toast.error(codeKey ? t(codeKey) : `${fallback}: ${res.error}`);
  return;
  }
  setIntake({ ...intake, status: res.data.status });
- toast.success(t("intakeDetail.toast.statusUpdated"));
+ toast.success(
+ named
+ ? t("intakeDetail.toast.statusUpdated")
+ : t("intakeDetail.toast.statusOverridden", {
+ status: t(`intakeDetail.status.${res.data.status}`),
+ }),
+ );
  };
 
  // Read intakeId through a ref so loadSkillRuns can have a stable (empty) dep array.
@@ -1111,7 +1136,19 @@ function IntakeDetailPage() {
  className="border border-ink bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-ink focus:outline-none"
  >
  {STATUS_VALUES.map((value) => (
- <option key={value} value={value}>
+ // `in_research` is VISIBLE but unreachable: research_routes._RESEARCH_TRANSITIONS
+ // is its only writer (starting a run costs money). Still selectable when it IS the
+ // current status, so the select can display where the intake actually is.
+ <option
+ key={value}
+ value={value}
+ disabled={value === "in_research" && intake.status !== "in_research"}
+ title={
+ value === "in_research" && intake.status !== "in_research"
+ ? t("intakeDetail.toast.statusInResearchBlocked")
+ : undefined
+ }
+ >
  {t(`intakeDetail.status.${value}`)}
  </option>
  ))}
