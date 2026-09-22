@@ -344,9 +344,11 @@ API_REVISION=""
 if [ -z "${DRY_RUN}" ]; then
   readback="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${API_SERVICE}" \
               --region="${REGION}" --project="${TARGET_PROJECT}" \
-              --format='value(status.latestReadyRevisionName,status.imageDigest)' 2>/dev/null || true)"
+              --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
   API_REVISION="$(printf '%s' "${readback}" | awk '{print $1}')"
-  live_digest="$(printf '%s' "${readback}" | awk '{print $2}')"
+  # 2026-09-22 (23.5-07): the SERVICE-level status.imageDigest is empty on both projects;
+  # the REVISION carries the resolved image ref. Read it there (repo/image@sha256:...).
+  live_digest="$(gcloud "${ACCOUNT_ARGS[@]}" run revisions describe "${API_REVISION}"               --region="${REGION}" --project="${TARGET_PROJECT}"               --format='value(status.imageDigest)' 2>/dev/null || true)"
   live_digest="${live_digest#*sha256:}"
   if [ "${live_digest}" != "${DIGEST_BACKEND}" ]; then
     die "${API_SERVICE} read back digest '${live_digest}' but the release is 'sha256:${DIGEST_BACKEND}'. The running image is not the promoted image."
@@ -434,9 +436,11 @@ else
 
   ta_readback="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${TRIB_API_SERVICE}" \
                  --region="${REGION}" --project="${TARGET_PROJECT}" \
-                 --format='value(status.latestReadyRevisionName,status.imageDigest)' 2>/dev/null || true)"
+                 --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
   TRIB_API_REVISION="$(printf '%s' "${ta_readback}" | awk '{print $1}')"
-  ta_digest="$(printf '%s' "${ta_readback}" | awk '{print $2}')"
+  # 2026-09-22 (23.5-07): the SERVICE-level status.imageDigest is empty on both projects;
+  # the REVISION carries the resolved image ref. Read it there (repo/image@sha256:...).
+  ta_digest="$(gcloud "${ACCOUNT_ARGS[@]}" run revisions describe "${TRIB_API_REVISION}"               --region="${REGION}" --project="${TARGET_PROJECT}"               --format='value(status.imageDigest)' 2>/dev/null || true)"
   ta_digest="${ta_digest#*sha256:}"
   [ "${ta_digest}" = "${DIGEST_TRIB_API}" ] \
     || die "${TRIB_API_SERVICE} is running digest '${ta_digest}', not the promoted 'sha256:${DIGEST_TRIB_API}'. The tag moved under the release."
@@ -470,9 +474,11 @@ else
 
   tw_readback="$(gcloud "${ACCOUNT_ARGS[@]}" run services describe "${TRIB_WORKER_SERVICE}" \
                  --region="${REGION}" --project="${TARGET_PROJECT}" \
-                 --format='value(status.latestReadyRevisionName,status.imageDigest)' 2>/dev/null || true)"
+                 --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
   TRIB_WORKER_REVISION="$(printf '%s' "${tw_readback}" | awk '{print $1}')"
-  tw_digest="$(printf '%s' "${tw_readback}" | awk '{print $2}')"
+  # 2026-09-22 (23.5-07): the SERVICE-level status.imageDigest is empty on both projects;
+  # the REVISION carries the resolved image ref. Read it there (repo/image@sha256:...).
+  tw_digest="$(gcloud "${ACCOUNT_ARGS[@]}" run revisions describe "${TRIB_WORKER_REVISION}"               --region="${REGION}" --project="${TARGET_PROJECT}"               --format='value(status.imageDigest)' 2>/dev/null || true)"
   tw_digest="${tw_digest#*sha256:}"
   [ "${tw_digest}" = "${DIGEST_TRIB_WORKER}" ] \
     || die "${TRIB_WORKER_SERVICE} is running digest '${tw_digest}', not the promoted 'sha256:${DIGEST_TRIB_WORKER}'."
