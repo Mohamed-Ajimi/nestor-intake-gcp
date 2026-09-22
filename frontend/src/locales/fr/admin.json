@@ -136,7 +136,6 @@
       "intakeNotLoaded": "Intake pas encore chargé",
       "aiReviewNotLoaded": "La révision IA n'est pas encore chargée — patientez.",
       "sendFailed": "Échec de l'envoi",
-      "statusUnavailable": "Changement de statut non disponible via l'API.",
       "statusNotUpdated": "Statut non mis à jour",
       "reviewOutputMissing": "Impossible de charger la sortie IA — relancez le skill d'intake.",
       "statusUpdated": "Statut mis à jour",
@@ -166,6 +165,16 @@
       "body": "Le projet sera clôturé et disparaîtra de la liste des intakes actifs. L'intake passe en lecture seule ; la page de résultats du client reste accessible.",
       "confirm": "Archiver",
       "cancel": "Annuler"
+    },
+    "delete": {
+      "button": "Supprimer",
+      "title": "supprimer définitivement l'intake ?",
+      "body": "Cette action est irréversible. L'intake, ses réponses, ses exécutions IA, ses téléversements et ses fichiers sont détruits définitivement. Si vous voulez seulement l'écarter, archivez-le.",
+      "confirmWord": "DELETE",
+      "confirmPlaceholder": "Tapez DELETE pour confirmer",
+      "blockedResearch": "Cet intake a fait l'objet d'une recherche et ne peut plus être supprimé — archivez-le à la place.",
+      "done": "Intake supprimé",
+      "failed": "Échec de la suppression"
     }
   },
   "clientDrawer": {
@@ -446,6 +455,7 @@
       "archived": "Archivé"
     },
     "searchPlaceholder": "Rechercher un client ou un nom…",
+    "showArchived": "Afficher les archivés",
     "colClient": "Client",
     "colName": "Nom",
     "colStatus": "Statut",

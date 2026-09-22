@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useActiveSkillRun, useSkillRunFull, type ActiveSkillRun } from "@/components/intake/SkillRunProgress";
@@ -9,12 +9,14 @@ import { getDateLocale } from "@/lib/i18n/date-locale";
 import { resolveErrorKey } from "@/lib/i18n/error-codes";
 import { classifyTriggerOutcome } from "@/lib/research/triggerOutcome";
 import { toast } from "sonner";
-import { ArrowLeft, Clock, Copy, Loader2, Pencil, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Clock, Copy, Loader2, Pencil, Trash2, X, Save, Sparkles, ChevronDown, ChevronRight } from "lucide-react";
 import {
   getIntake,
   submitIntake,
   reviewIntake,
   overrideIntakeStatus,
+  getIntakeDeletable,
+  deleteIntake,
   sendIntakeMail,
   type IntakeMailType,
 } from "@/lib/api/intakes";
@@ -570,7 +572,8 @@ function IntakeDetailPage() {
  // Two paths, decided by NAMED_TRANSITIONS above. A natural forward move keeps its named
  // verb (completeness check + admin_validated mail); everything ELSE — backwards moves,
  // jumps, and `archived`, which used to be reachable from nowhere — goes to the
- // superadmin override (D-23.5-01). The old `statusUnavailable` dead end is gone.
+ // superadmin override (D-23.5-01). The old "status change not available via the API"
+ // dead end is gone, and its now-false locale key was deleted with it (23.5-02).
  //
  // `in_research` never arrives here: the <select> renders that option disabled (the only
  // writer is the research-start verb, which pays for a run). The backend 409s it anyway —
@@ -712,6 +715,22 @@ function IntakeDetailPage() {
   const [mailPickerType, setMailPickerType] = useState<IntakeMailType | null>(null);
   // S3: house-style archive confirmation dialog (replaces the native confirm()).
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  // 23.5-02 (D-23.5-02): the HARD DELETE affordance.
+  //
+  // `deletable` is fetched once per intake from GET /intakes/{id}/deletable and starts as
+  // `null` = "not answered yet". Three states, not two, on purpose: `null` renders NO
+  // delete control at all, so a slow or failed eligibility read can never be mistaken for
+  // "deletion is allowed". A 404 (non-superadmin, or an intake the caller cannot see)
+  // leaves it `null` for the same reason.
+  const [deletable, setDeletable] = useState<
+    { deletable: boolean; reason: string | null } | null
+  >(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  // What the operator has typed into the confirmation input. The confirm button stays
+  // disabled until it matches `intakeDetail.delete.confirmWord` EXACTLY.
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
   // 260716-ji9: Intake-info moved out of the page flow into a header-triggered modal.
   const [infoModalOpen, setInfoModalOpen] = useState(false);
   // Map each mail type to the busy key NextStepBanner already reads.
@@ -890,6 +909,55 @@ function IntakeDetailPage() {
     setBusyKey("archive", true);
     await handleStatusChange("archived");
     setBusyKey("archive", false);
+  };
+
+  // ============== Hard delete (D-23.5-02) ==============
+  //
+  // Ask the backend ONCE per intake whether this one may be destroyed. A failed read
+  // leaves `deletable` at null, which renders no control — "we could not ask" must never
+  // render as "yes". The cancel flag is the page's standard unmounted-async guard.
+  const deletableIntakeId = intake?.id;
+  useEffect(() => {
+    if (!deletableIntakeId) return;
+    let cancelled = false;
+    setDeletable(null);
+    void (async () => {
+      const res = await getIntakeDeletable(deletableIntakeId);
+      if (cancelled) return;
+      // On failure stay at null: a 404 here is the existence-hidden denial for a
+      // non-superadmin, and a network blip is not evidence about research runs.
+      setDeletable(res.success ? res.data : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deletableIntakeId]);
+
+  const onDelete = () => {
+    if (!intake) return;
+    setDeleteConfirmText("");
+    setDeleteConfirmOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!intake) return;
+    // The typed word is re-checked HERE as well as on the button's disabled state: a
+    // disabled attribute is a UI affordance, not a guard, and this action has no undo.
+    if (deleteConfirmText.trim() !== t("intakeDetail.delete.confirmWord")) return;
+    setDeleting(true);
+    const res = await deleteIntake(intake.id);
+    setDeleting(false);
+    if (!res.success) {
+      const codeKey = resolveErrorKey(res.code);
+      toast.error(
+        codeKey ? t(codeKey) : `${t("intakeDetail.delete.failed")}: ${res.error}`,
+      );
+      return;
+    }
+    setDeleteConfirmOpen(false);
+    toast.success(t("intakeDetail.delete.done"));
+    // The intake this page is about no longer exists — leave, do not re-render it.
+    void navigate({ to: "/admin/pulse/intakes" });
   };
 
   // When the polled run flips to 'succeeded' for a run we haven't consumed yet,
@@ -1154,6 +1222,27 @@ function IntakeDetailPage() {
  ))}
  </select>
  </div>
+
+ {/* 23.5-02 (D-23.5-02): hard delete. Rendered ONLY once the eligibility read has
+     answered — `deletable === null` (unanswered, failed, or the non-superadmin 404)
+     renders nothing at all, so "we could not ask" never looks like "yes". When the
+     backend says no, the control is shown DISABLED with the reason rather than
+     hidden: an operator who wonders why they cannot delete gets an answer instead
+     of a missing button. */}
+ {deletable !== null && (
+ <button
+ type="button"
+ onClick={onDelete}
+ disabled={!deletable.deletable || deleting}
+ title={
+ deletable.deletable ? undefined : t("intakeDetail.delete.blockedResearch")
+ }
+ className="inline-flex items-center gap-1.5 border border-red-700 bg-paper px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-red-700 hover:border-2 disabled:cursor-not-allowed disabled:border-ink/30 disabled:text-ink/40"
+ >
+ <Trash2 className="h-3.5 w-3.5" />
+ {t("intakeDetail.delete.button")}
+ </button>
+ )}
 
  {!editMode ? (
  <button
@@ -1571,6 +1660,59 @@ function IntakeDetailPage() {
                className="bg-ink px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-ink/85"
              >
                {t("intakeDetail.archiveDialog.confirm")}
+             </button>
+           </div>
+         </div>
+       </div>
+     )}
+
+     {/* 23.5-02: hard-delete confirmation — the archive dialog's shape, plus a TYPED
+         confirmation. Archive is one click because an override can undo it; this one
+         cannot be undone by anything, so the operator has to write the word out. Same
+         house overlay convention. */}
+     {deleteConfirmOpen && (
+       <div
+         className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+         onClick={() => setDeleteConfirmOpen(false)}
+       >
+         <div
+           role="alertdialog"
+           className="w-full max-w-md border border-red-700 bg-paper p-6 shadow-lg"
+           onClick={(e) => e.stopPropagation()}
+         >
+           <h2 className="font-serif text-2xl font-normal lowercase text-red-700">
+             {t("intakeDetail.delete.title")}
+           </h2>
+           <p className="mt-3 font-sans text-sm leading-relaxed text-ink/70">
+             {t("intakeDetail.delete.body")}
+           </p>
+           <input
+             type="text"
+             value={deleteConfirmText}
+             autoFocus
+             onChange={(e) => setDeleteConfirmText(e.target.value)}
+             placeholder={t("intakeDetail.delete.confirmPlaceholder")}
+             className="mt-4 w-full border border-ink bg-paper px-3 py-2 font-mono text-sm tracking-wider text-ink focus:outline-none"
+           />
+           <div className="mt-6 flex justify-end gap-2">
+             <button
+               type="button"
+               onClick={() => setDeleteConfirmOpen(false)}
+               className="border border-ink bg-paper px-4 py-2 font-mono text-xs uppercase tracking-wider text-ink hover:border-2"
+             >
+               {t("intakeDetail.archiveDialog.cancel")}
+             </button>
+             <button
+               type="button"
+               onClick={confirmDelete}
+               disabled={
+                 deleting ||
+                 deleteConfirmText.trim() !== t("intakeDetail.delete.confirmWord")
+               }
+               className="inline-flex items-center gap-1.5 bg-red-700 px-4 py-2 font-mono text-xs uppercase tracking-wider text-paper hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-ink/25"
+             >
+               {deleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+               {t("intakeDetail.delete.button")}
              </button>
            </div>
          </div>

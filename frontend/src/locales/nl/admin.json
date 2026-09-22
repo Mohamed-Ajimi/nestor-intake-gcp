@@ -136,7 +136,6 @@
       "intakeNotLoaded": "Intake nog niet geladen",
       "aiReviewNotLoaded": "AI-review is nog niet geladen — wacht even.",
       "sendFailed": "Versturen mislukt",
-      "statusUnavailable": "Statuswijziging niet beschikbaar via de API.",
       "statusNotUpdated": "Status niet bijgewerkt",
       "reviewOutputMissing": "AI-output kon niet geladen worden — draai de intake-skill opnieuw.",
       "statusUpdated": "Status bijgewerkt",
@@ -166,6 +165,16 @@
       "body": "Het project wordt afgesloten en verdwijnt uit de actieve intake-lijst. De intake wordt alleen-lezen; de resultaten-pagina van de klant blijft bereikbaar.",
       "confirm": "Archiveer",
       "cancel": "Annuleer"
+    },
+    "delete": {
+      "button": "Verwijder",
+      "title": "intake definitief verwijderen?",
+      "body": "Dit kan niet ongedaan gemaakt worden. De intake, de antwoorden, de AI-runs, de uploads en de bestanden worden voorgoed vernietigd. Wil je hem alleen uit de weg hebben, archiveer hem dan.",
+      "confirmWord": "DELETE",
+      "confirmPlaceholder": "Typ DELETE om te bevestigen",
+      "blockedResearch": "Deze intake heeft onderzoek gehad en kan niet meer verwijderd worden — archiveer hem in plaats daarvan.",
+      "done": "Intake verwijderd",
+      "failed": "Verwijderen mislukt"
     }
   },
   "clientDrawer": {
@@ -446,6 +455,7 @@
       "archived": "Gearchiveerd"
     },
     "searchPlaceholder": "Zoek klant of naam…",
+    "showArchived": "Toon gearchiveerd",
     "colClient": "Klant",
     "colName": "Naam",
     "colStatus": "Status",
