@@ -56,16 +56,25 @@ TENANT_ID = uuid.UUID("00000000-0000-4000-8000-0000000000bb")
 #: The section body the model returns when the cap bites. Two COMPLETE
 #: paragraphs and then the half one the cap cut — modelled on the measured
 #: "Tw" ending.
+#:
+#: ⚠ THE SENTINELS ARE LOAD-BEARING. The continuation legitimately RESTATES the
+#: paragraph the cap cut, so it naturally opens with the same words the fragment
+#: opened with. Written that way, `HALF_PARAGRAPH not in report` matches a
+#: PREFIX of the correct continuation and fails on working code — the substring
+#: trap, observed here on the first GREEN run. `ZZFRAGMENT` appears ONLY in the
+#: cut text and `ZZWHOLE` ONLY in the rewrite, so "the fragment was dropped" and
+#: "the paragraph was rewritten" are distinguishable facts rather than one
+#: string test that cannot tell them apart.
 TRUNCATED_SECTION = (
     "## The one question\n\n"
     "First complete paragraph, with a number: 41% of the market.\n\n"
     "Second complete paragraph, naming a case and a date.\n\n"
-    "And then the sentence stops at Tw"
+    "Third paragraph, ZZFRAGMENT, and then the sentence stops at Tw"
 )
-HALF_PARAGRAPH = "And then the sentence stops at Tw"
+HALF_PARAGRAPH = "ZZFRAGMENT, and then the sentence stops at Tw"
 SECTION_CONTINUATION = (
-    "And then the sentence stops at Twente, where the third complete paragraph "
-    "finishes the thought.\n\n"
+    "Third paragraph, ZZWHOLE, restated in full and carried through to Twente, "
+    "where it finishes the thought.\n\n"
     "### What this means\n\nDo the thing."
 )
 
@@ -242,8 +251,11 @@ async def test_a_truncated_section_gets_exactly_one_continuation_and_is_spliced(
     assert len(fake.calls) == 3  # + the one wrap call
 
     # The half-sentence the cap produced is GONE, replaced by the continuation's
-    # full restatement of that paragraph.
+    # full restatement of that paragraph — and the two are told apart by their
+    # sentinels, not by a prefix that both of them share.
     assert HALF_PARAGRAPH not in report
+    assert "ZZFRAGMENT" not in report
+    assert "ZZWHOLE" in report
     assert "finishes the thought" in report
     # The complete paragraphs before it are untouched, and not duplicated.
     assert report.count("First complete paragraph") == 1
@@ -377,9 +389,12 @@ def test_the_notice_map_covers_exactly_the_four_norm_lang_keys():
 
 def test_the_splice_drops_the_half_paragraph_and_keeps_everything_before_it():
     out = _splice_continuation(TRUNCATED_SECTION, SECTION_CONTINUATION)
+    assert "ZZFRAGMENT" not in out
     assert HALF_PARAGRAPH not in out
     assert "Second complete paragraph, naming a case and a date." in out
     assert out.endswith("Do the thing.")
+    # Exactly ONE paragraph was replaced, not two.
+    assert out.count("First complete paragraph") == 1
 
 
 def test_the_splice_keeps_a_single_paragraph_whole():

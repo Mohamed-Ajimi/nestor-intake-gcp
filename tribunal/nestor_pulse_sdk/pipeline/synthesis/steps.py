@@ -840,6 +840,138 @@ _SECTION_STRINGS: dict[str, dict[str, str]] = {
 }
 
 
+#: The one line a reader sees when a chapter was cut short and the single
+#: continuation call (below) was not enough to finish it. Keyed by the SAME four
+#: `_norm_lang` keys as `_SECTION_STRINGS`, so adding a language stays the same
+#: one-entry map edit in both places and cannot go half-done.
+#:
+#: WHY IT IS VISIBLE AT ALL. Run 7784e71c delivered two chapters that stop
+#: mid-word — one at "Tw" — with nothing in the report saying so. A reader who
+#: cannot tell a cut-off chapter from a finished one has no way to know which
+#: conclusions are missing, and phase rule 6 forbids a silent loss. Italic and
+#: one line: it names the loss without becoming a section of its own.
+_TRUNCATION_NOTICE: dict[str, str] = {
+    "english": "*This section was cut short by an output limit.*",
+    "dutch": "*Dit onderdeel is afgebroken door een limiet op de uitvoer.*",
+    "german": "*Dieser Abschnitt wurde durch ein Ausgabelimit abgeschnitten.*",
+    "french": "*Cette section a été écourtée par une limite de sortie.*",
+}
+
+#: The delimiter that opens the partial text inside a continuation prompt. A
+#: NAMED CONSTANT because the tests classify a recorded call by it — a literal
+#: copied into the test file could drift from the one actually sent, and the
+#: "exactly one continuation" assertion would then be counting the wrong calls.
+_CONTINUATION_MARKER = "--- TEXT YOU ALREADY WROTE (an output limit cut it off) ---"
+
+
+def _splice_continuation(partial: str, continuation: str) -> str:
+    """Join a cut-off section to its continuation at the last paragraph break.
+
+    THE TRAILING FRAGMENT IS DROPPED ON PURPOSE. The continuation call asks the
+    model to restart from the last COMPLETE paragraph, so the half-paragraph the
+    cap produced is about to be written again in full — keeping it would deliver
+    a sentence and a half twice, which reads worse than the truncation it is
+    meant to repair.
+
+    Two cases, and the second is why this is not a one-liner:
+
+    * there IS a paragraph break — everything up to it is kept, the fragment
+      after it is dropped, and the continuation takes its place.
+    * there is NO paragraph break (a single-paragraph section, or a cap that bit
+      in the opening lines) — there is no "last complete paragraph" to restart
+      from, so the partial is kept WHOLE. Dropping it would throw away the only
+      content the section has.
+
+    An empty continuation (the call raised, or was refused) returns the partial
+    unchanged: a failure costs the improvement, never content the client paid
+    for.
+    """
+    partial = (partial or "").rstrip()
+    continuation = (continuation or "").strip()
+    if not continuation:
+        return partial
+    head, sep, _fragment = partial.rpartition("\n\n")
+    if sep:
+        return f"{head.rstrip()}\n\n{continuation}"
+    return f"{partial}\n\n{continuation}"
+
+
+async def _continue_truncated(
+    audited: "AuditedLLMClient",
+    *,
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    base_prompt: str,
+    partial: str,
+    max_tokens: int,
+) -> tuple[str, bool]:
+    """ONE more call to finish a section the output cap cut off. NEVER RAISES.
+
+    Returns `(continuation_text, still_truncated)`. `still_truncated` is True
+    when this call ALSO came back at the cap, when it was refused, and when it
+    failed — the three states in which the caller must tell the reader the
+    chapter is short rather than pretend it is whole.
+
+    EXACTLY ONE CALL. There is no loop and no retry here, and the caller must
+    not add one: the bound is what keeps a pathological run from buying
+    `max_tokens` of output over and over (T-23.5-06-D), and it is the whole cost
+    story of this switch (T-23.5-06-COST — worst case one extra call per
+    truncated section plus one for the wrap).
+
+    NO NEW DATA REACHES THE MODEL (T-continuation). The prompt is the section's
+    OWN `base_prompt` plus the text the SAME model just produced from it; there
+    is no second source, and nothing here that the first call did not already
+    have.
+
+    THE SDK BOUND IS NOT TOUCHED. This uses the same `_synthesis_kwargs` helper
+    and the same `FINAL_SYNTHESIS_MODEL` as the call it is continuing, and it
+    passes no per-call deadline kwarg and does not use the streaming entry
+    point. Both of those are RECORDED AND NOT BUILT above `_SECTION_MAX_TOKENS`
+    — this function is not permission to build either of them, and raising the
+    cap remains out of scope.
+    """
+    prompt = (
+        f"{base_prompt}\n\n"
+        f"{_CONTINUATION_MARKER}\n"
+        f"{partial}\n"
+        "--- END OF THE TEXT YOU ALREADY WROTE ---\n\n"
+        "CONTINUE that text. Start again from its LAST COMPLETE PARAGRAPH: the "
+        "final paragraph above may stop mid-sentence and will be discarded, so "
+        "write that paragraph out in full and carry on from there to the end of "
+        "the section. Do NOT repeat any earlier paragraph, do NOT re-emit the "
+        "section heading, and do NOT summarise what you already wrote. Output "
+        "the continuation and nothing else."
+    )
+    try:
+        response = await audited.anthropic_messages(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            model=FINAL_SYNTHESIS_MODEL,
+            **_synthesis_kwargs(prompt, max_tokens),
+        )
+        text, refused = _synthesis_text(response)
+        if refused:
+            # T-dn8-05 again: a refusal can arrive WITH partial content, and
+            # that content is exactly what must not be pasted.
+            log.warning(
+                "synthesize_report: the continuation call was REFUSED "
+                "(stop_reason=refusal) — the section stays truncated"
+            )
+            return "", True
+        still_truncated = getattr(response, "stop_reason", None) == "max_tokens"
+        if still_truncated:
+            log.warning(
+                "synthesize_report: the continuation ALSO hit the output cap "
+                "(max_tokens=%d) — no second continuation is issued; the reader "
+                "gets the notice instead",
+                max_tokens,
+            )
+        return (text or "").strip(), still_truncated
+    except Exception as exc:  # noqa: BLE001 — a continuation never fails a run
+        log.warning("synthesize_report: the continuation call failed: %r", exc)
+        return "", True
+
+
 def _truncated_items(items: list[str], strings: dict) -> list[str]:
     """Apply `_SECTION_MAX_ITEMS` and, when it bites, NAME the loss in words.
 
@@ -1298,6 +1430,13 @@ async def synthesize_report(
             "2-4 concrete, prioritised actions or conclusions for the client, each "
             "tied to a well-supported finding above, each with its main condition "
             "or risk in the same sentence.\n"
+            # Run 7784e71c emitted literal "### BOTTOM LINE" and "### ANALYSE"
+            # headings, read straight off this contract. Prompt wording only —
+            # nothing else in the contract moves.
+            "Items 1-3 describe how to STRUCTURE the section; they are labels for "
+            "you, not headings — never print 'BOTTOM LINE', 'ANALYSIS' or "
+            "'DECISION FRAMEWORK' as a heading or as a line of the section. The "
+            "only sub-heading this section carries is the one item 3 asks for.\n"
             "\n"
             "Answer ONLY this focus area (other sections are written separately).\n"
             f"{anchor_rule}"
@@ -1339,6 +1478,24 @@ async def synthesize_report(
                 fa,
                 _SECTION_MAX_TOKENS,
             )
+            # Remark 2b, behind its OWN master (default off): one continuation
+            # call, spliced at the last complete paragraph. ONCE. Never in a
+            # loop — see `_continue_truncated`.
+            if runtime_flags.synthesis_continue_truncated():
+                continuation, still_truncated = await _continue_truncated(
+                    audited,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    base_prompt=prompt,
+                    partial=text,
+                    max_tokens=_SECTION_MAX_TOKENS,
+                )
+                text = _splice_continuation(text, continuation)
+                if still_truncated:
+                    notice = _TRUNCATION_NOTICE[
+                        _norm_lang((mission_brief or {}).get("language"))
+                    ]
+                    text = f"{text.rstrip()}\n\n{notice}"
         text = (text or "").strip()
         if not text:
             log.error("synthesize_report: section %r returned empty text", fa)
@@ -1416,6 +1573,25 @@ async def synthesize_report(
                 "(stop_reason=max_tokens, max_tokens=%d) — it is TRUNCATED",
                 _WRAP_MAX_TOKENS,
             )
+            # Spliced HERE, before the exec/tail split below, so that split
+            # still sees a complete document: a wrap cut mid-heading would
+            # otherwise put the boundary in the wrong place for the whole
+            # report, not just for the sentence that was cut.
+            if runtime_flags.synthesis_continue_truncated():
+                continuation, still_truncated = await _continue_truncated(
+                    audited,
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    base_prompt=wrap_prompt,
+                    partial=wrap_text,
+                    max_tokens=_WRAP_MAX_TOKENS,
+                )
+                wrap_text = _splice_continuation(wrap_text, continuation)
+                if still_truncated:
+                    notice = _TRUNCATION_NOTICE[
+                        _norm_lang((mission_brief or {}).get("language"))
+                    ]
+                    wrap_text = f"{wrap_text.rstrip()}\n\n{notice}"
         wrap_text = (wrap_text or "").strip()
         # The exec summary opens the report; the other wrap sections close it.
         # Headings may be translated into the report's language, so split on
