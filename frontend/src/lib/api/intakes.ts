@@ -105,11 +105,11 @@ export function overrideIntakeStatus(
 }
 
 // ---------------------------------------------------------------------------
-// Hard delete — the guarded, irreversible destruction (Plan 23.5-02 / D-23.5-02)
+// Hard delete — the guarded, irreversible destruction (Plan 23.5-02 / D-23.5-06)
 // ---------------------------------------------------------------------------
 //
-// Archive (`overrideIntakeStatus(id, "archived")`) is the REVERSIBLE destructive action
-// and the only one available once an intake has had research. These two are the
+// Archive (`overrideIntakeStatus(id, "archived")`) is the REVERSIBLE destructive action,
+// and the only one available while research is actually RUNNING. These two are the
 // irreversible path, and they are deliberately a PAIR: the eligibility read tells the UI
 // whether to offer the affordance at all, and the delete re-checks the same wall
 // server-side. Never call `deleteIntake` on the strength of a stale `getIntakeDeletable`
@@ -118,8 +118,12 @@ export function overrideIntakeStatus(
 /**
  * Whether an intake may be hard-deleted, mirroring the backend `DeletableView`.
  *
- * `reason` is a stable MACHINE TOKEN (`"has_research_runs"`), never a display string —
- * the UI renders its own nl/fr/en copy off it. `null` when `deletable` is true.
+ * `reason` is a stable MACHINE TOKEN (`"research_in_flight"` —
+ * `intake_routes._DELETE_BLOCKED_REASON`), never a display string; the UI renders its own
+ * nl/fr/en copy off it. `null` when `deletable` is true.
+ *
+ * ⛔ The token CHANGED with D-23.5-06 (2026-09-22). It used to be `"has_research_runs"`,
+ * back when ANY research run blocked the delete forever. Do not reintroduce that literal.
  */
 export type IntakeDeletable = {
   deletable: boolean;
@@ -129,9 +133,14 @@ export type IntakeDeletable = {
 /**
  * Ask whether this intake may be hard-deleted — `GET /intakes/{id}/deletable`.
  *
- * `{ deletable: false, reason: "has_research_runs" }` means the intake has had at least
- * one Tribunal research run: paid work with an audit chain behind it, which D-23.5-02
- * protects structurally. Archive is what remains available for those.
+ * `{ deletable: false, reason: "research_in_flight" }` means a Tribunal run is ALIVE right
+ * now (`queued` / `running` / `needs_report_spec`): a worker is writing to rows the delete
+ * would cascade away. A run that has STOPPED — completed, degraded, failed, cancelled,
+ * parked, needs_input — does NOT block, because its cost record and hash-chained audit
+ * blobs live on the tribunal side and survive the delete regardless (D-23.5-06).
+ *
+ * The answer is ADVISORY and, now that the blocker is transient, genuinely perishable:
+ * the backend re-checks in its own transaction and 409s a run queued between the two.
  *
  * Superadmin-only server-side; a non-superadmin gets an existence-hidden 404, surfaced
  * here as `{ success: false }` — NOT as `{ deletable: false }`. Callers must treat a
@@ -151,7 +160,7 @@ export function getIntakeDeletable(
  * second override that brings it back — which is why the UI gates this behind a TYPED
  * confirmation rather than a single click.
  *
- * Refused with 409 when ANY research run exists (D-23.5-02). The deletion itself is
+ * Refused with 409 only while a research run is IN FLIGHT (D-23.5-06). The deletion is
  * recorded as an `intake.deleted` audit row that survives the delete.
  *
  * Returns `ApiResult<null>`: the backend answers 204 with no body, which the transport

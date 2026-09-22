@@ -1,16 +1,33 @@
-"""Guarded hard-delete suite (D-23.5-02) — plan 23.5-02.
+"""Guarded hard-delete suite (D-23.5-02, narrowed by D-23.5-06) — plans 23.5-02 / 23.5-08.
 
 WHAT THIS FILE PROVES. Tester remark 3 of phase 23.5 is "be able to archive/delete a
 project". Archive is remark 1's override verb reaching ``archived`` (plan 23.5-01). THIS
 file covers the other half: ``DELETE /intakes/{id}`` — an irreversible destruction — and
 its eligibility read ``GET /intakes/{id}/deletable``.
 
-THE WALL THAT DEFINES THE VERB (D-23.5-02). An intake with ANY ``research_runs`` row can
-NEVER be hard-deleted. A Tribunal run costs real money (~$40 at the 2026-09 figures) and
-drags a whole audit chain behind it — findings, claims, sources, the audit bundle in GCS.
-Archive is the only destructive action available once research exists. The 409 is checked
-BEFORE any object key is collected and BEFORE the audit row is written, so a refused
-delete has ZERO side effects: nothing in the DB moved and nothing was handed to GCS.
+THE WALL THAT DEFINES THE VERB — AND THE DAY IT MOVED. Plan 23.5-02 built it as "ANY
+``research_runs`` row blocks forever" (D-23.5-02). The operator tested that on dev on
+**2026-09-22** and ruled it too wide: "even ones who had research or intake being done
+need to be able to be deleted" (**D-23.5-06**). The wall is now IN-FLIGHT ONLY — the
+status set of migration 0016's partial unique index, ``{queued, running,
+needs_report_spec}``, exposed as ``app.research.run_status.RESEARCH_IN_FLIGHT``.
+
+Why that is the right wall rather than a weakening of the old one: a TERMINAL run's cost
+and audit chain live on the TRIBUNAL side, in the ``tribunal`` schema with no foreign key
+into ``nestor`` and with its hash-chained blobs in the audit bucket. Deleting the intake
+never touched them, so refusing the delete protected nothing. An IN-FLIGHT run is a
+different thing entirely: a worker is actively writing to rows this DELETE would cascade
+away, and the reconciler is scanning for exactly those three statuses.
+
+The one real cost of that retention is closed here too: ``research_runs.tribunal_run_id``
+is a plain ``String`` with NO foreign key, so once the nestor row is gone nothing points
+at the retained tribunal run. The ``intake.deleted`` audit row therefore carries
+``research_runs`` (how many were destroyed) and ``tribunal_run_ids`` (their non-null
+pointers), written BEFORE the cascade takes them.
+
+The 409 is still checked BEFORE any object key is collected and BEFORE the audit row is
+written, so a refused delete has ZERO side effects: nothing in the DB moved and nothing
+was handed to GCS.
 
 | Test family                          | Proves                                            |
 |--------------------------------------|---------------------------------------------------|
@@ -18,9 +35,13 @@ delete has ZERO side effects: nothing in the DB moved and nothing was handed to 
 |                                      | sources + transcripts + artifacts are ALL gone —  |
 |                                      | the DB's ``ON DELETE CASCADE`` fans the one       |
 |                                      | DELETE out through every child table.             |
-| ``*_blocked_by_research_run``        | 409 and EVERY row above still exists.             |
+| ``*_terminal_run*``                  | a run that has STOPPED never blocks: 204, and     |
+|                                      | the ``research_runs`` rows go with the intake.    |
+| ``*_in_flight*``                     | 409 and EVERY row above still exists.             |
 | ``*_deletable_*``                    | the eligibility read agrees with the wall, and    |
 |                                      | never becomes an existence oracle.                |
+| ``*_research_in_flight_*`` (no DB)   | the app constant IS migration 0016's index        |
+|                                      | predicate, read off ``ResearchRun.__table__``.    |
 | ``*_audit_row_survives``             | an ``intake.deleted`` row exists AFTER the        |
 |                                      | cascade — ``audit_log`` has no FK to              |
 |                                      | ``nestor.intakes`` so the trail outlives its      |
@@ -79,6 +100,8 @@ identity_mod = pytest.importorskip("app.auth.identity")
 session_mod = pytest.importorskip("app.db.session")
 ai_session_mod = pytest.importorskip("app.db.ai_session")
 audit_models = pytest.importorskip("app.db.models.audit")
+run_status_mod = pytest.importorskip("app.research.run_status")
+research_routes_mod = pytest.importorskip("app.api.research_routes")
 
 get_current_identity = dependencies.get_current_identity
 Identity = identity_mod.Identity
@@ -104,6 +127,41 @@ _CASCADE_CHILD_TABLES = (
     "intake_sources",
     "transcripts",
     "research_artifacts",
+)
+
+#: The NINE measured Tribunal run statuses. This is the ONE set in this file typed out as
+#: literals, and deliberately so: ``mirror_tick`` writes ``metrics.get("status")`` VERBATIM
+#: into a plain ``String`` with no CHECK constraint, so no app constant enumerates them.
+#: The list is migration 0016's own (``0016_research_runs_single_inflight.py``, "The
+#: predicate is DERIVED, not guessed"). Every OTHER status set below is IMPORTED — a test
+#: that re-types ``{"queued", "running", "needs_report_spec"}`` pins a copy of the rule
+#: instead of the rule.
+_MEASURED_RUN_STATUSES = frozenset(
+    {
+        "queued",
+        "running",
+        "cancelled",
+        "needs_input",
+        "failed",
+        "completed",
+        "needs_report_spec",
+        "completed_degraded",
+        "parked",
+    }
+)
+
+
+#: The three statuses that REFUSE a delete (D-23.5-06). Read off the app module at import
+#: time and NOT defaulted: at HEAD this attribute does not exist, so the whole file fails to
+#: collect — which is the loudest, least-gameable RED available. A ``getattr(..., default)``
+#: would leave the parametrized arms with an EMPTY id list and pass vacuously.
+_RESEARCH_IN_FLIGHT = run_status_mod.RESEARCH_IN_FLIGHT
+
+#: Every status a run may hold and STILL allow the delete — computed from the two app sets
+#: rather than typed out, so adding a status to either one moves this suite automatically
+#: instead of leaving it asserting yesterday's rule.
+_DELETABLE_RUN_STATUSES = frozenset(
+    run_status_mod.RESEARCH_TERMINAL | research_routes_mod._RETRYABLE_RUN_STATUSES
 )
 
 
@@ -290,17 +348,38 @@ def _insert_artifact(conn, set_space, space_id, intake_id, storage_path, source=
     return artifact_id
 
 
-def _insert_research_run(conn, set_space, space_id, intake_id, status: str = "completed"):
+def _insert_research_run(
+    conn,
+    set_space,
+    space_id,
+    intake_id,
+    status: str = "completed",
+    tribunal_run_id: str | None = None,
+):
+    """Seed ONE research run at an explicit status, optionally carrying its tribunal id.
+
+    ``tribunal_run_id`` is a plain nullable ``String`` with NO foreign key (the tribunal
+    rows live in their own schema and are deliberately RETAINED), so a run may or may not
+    carry one. Both shapes are seeded by the audit-metadata arm, because the handler must
+    list the non-null ones and silently drop the rest.
+    """
     from sqlalchemy import text
 
     run_id = uuid.uuid4()
     set_space(conn, space_id)
     conn.execute(
         text(
-            f"INSERT INTO {SCHEMA}.research_runs (id, space_id, intake_id, status, attempt) "
-            "VALUES (:id, :space_id, :intake_id, :status, 1)"
+            f"INSERT INTO {SCHEMA}.research_runs "
+            "(id, space_id, intake_id, status, attempt, tribunal_run_id) "
+            "VALUES (:id, :space_id, :intake_id, :status, 1, :tribunal_run_id)"
         ),
-        {"id": run_id, "space_id": space_id, "intake_id": intake_id, "status": status},
+        {
+            "id": run_id,
+            "space_id": space_id,
+            "intake_id": intake_id,
+            "status": status,
+            "tribunal_run_id": tribunal_run_id,
+        },
     )
     return run_id
 
@@ -453,6 +532,12 @@ def _scenario(
     get an identity scoped to the intake's OWN space. That scoping is the point: a
     cross-space user is already 404'd by ``repo.get``, so only an OWN-SPACE user proves
     the ROLE gate.
+
+    ``with_research_run`` threads a STATUS rather than only a boolean, because after
+    D-23.5-06 the status is the whole rule: ``True`` seeds one ``completed`` run (the
+    old default, now on the ALLOWED side of the wall), and any other truthy value is read
+    as a sequence of statuses so the both-runs case — one terminal, one in flight — has a
+    single seeding path instead of two.
     """
     space_id = uuid.uuid4()
     intake_id = uuid.uuid4()
@@ -486,7 +571,15 @@ def _scenario(
                 conn, set_space, space_id, intake_id, None, source="context-pack-generator"
             )
             if with_research_run:
-                _insert_research_run(conn, set_space, space_id, intake_id)
+                statuses = (
+                    ("completed",)
+                    if with_research_run is True
+                    else tuple(with_research_run)
+                )
+                for run_status in statuses:
+                    _insert_research_run(
+                        conn, set_space, space_id, intake_id, run_status
+                    )
 
         _patch_engine_factories(monkeypatch, engine)
         if sa_engine is not None:
@@ -531,11 +624,109 @@ def test_delete_blocked_detail_is_a_single_module_constant():
     affordance off the eligibility read, and the 409 is the server-side twin). Pinning it
     here means a reword is a deliberate, visible change rather than a silent break of the
     two consumers.
+
+    The literal MOVED with D-23.5-06: the old wording ("has research runs") was a statement
+    about HISTORY and is now simply false as a reason, because a finished run no longer
+    blocks anything. The new one is a statement about a LIVE run.
     """
     routes = pytest.importorskip("app.api.intake_routes")
 
     assert routes._DELETE_BLOCKED_DETAIL == (
-        "Intake has research runs and cannot be deleted"
+        "Research is in flight for this intake and it cannot be deleted"
+    )
+
+
+def test_delete_blocked_reason_is_one_token_shared_by_both_routes():
+    """``_DELETE_BLOCKED_REASON`` is the ONE machine token, and it is ``research_in_flight``.
+
+    Two consumers key off it: ``DeletableView.reason`` (which the frontend renders its own
+    nl/fr/en copy from) and the 409 path. A second literal spelled out at either site is
+    exactly how the two drift apart, so the constant is pinned rather than the strings.
+    ``has_research_runs`` is the OLD token and must be gone — a UI still keyed on it would
+    silently stop matching and fall through to a generic error.
+    """
+    routes = pytest.importorskip("app.api.intake_routes")
+
+    assert routes._DELETE_BLOCKED_REASON == "research_in_flight"
+    assert routes._DELETE_BLOCKED_REASON != "has_research_runs"
+
+
+def test_research_in_flight_is_the_three_literals_and_tolerates_none():
+    """``RESEARCH_IN_FLIGHT`` is exactly migration 0016's ``_INFLIGHT`` tuple.
+
+    ``needs_report_spec`` is the member that is easy to miss and the one that matters: a
+    run sitting there is ALIVE, awaiting an operator's report spec, and ``POST
+    /report-spec`` re-queues that SAME run. Dropping it would let a DELETE cascade away
+    rows a worker still owns.
+    """
+    assert _RESEARCH_IN_FLIGHT == frozenset({"queued", "running", "needs_report_spec"})
+    assert run_status_mod.is_research_in_flight("running") is True
+    assert run_status_mod.is_research_in_flight("needs_report_spec") is True
+    # ``needs_input`` is RETRYABLE — the app already treats it as a finished run that may
+    # be re-triggered — so it is NOT in flight and must NOT block a delete.
+    assert run_status_mod.is_research_in_flight("needs_input") is False
+    assert run_status_mod.is_research_in_flight(None) is False
+    # POSITIVE by design: an unknown future engine status counts as NOT in flight, which
+    # fails toward ALLOWING the delete. That is the correct direction here for the same
+    # reason 0016 gives — the alternative makes an intake undeletable forever with no
+    # operator remedy, and the operator's whole ruling is that they must be able to delete.
+    assert run_status_mod.is_research_in_flight("some_status_from_2027") is False
+
+
+def test_the_three_status_sets_partition_the_nine_measured_statuses():
+    """in-flight / terminal / retryable together cover the nine, and in-flight overlaps neither.
+
+    This is the derivation D-23.5-06 quotes, asserted rather than trusted. If the engine
+    grows a tenth status, this test goes red and FORCES the decision — which is the point:
+    a status nobody classified silently becomes "deletable" under the positive predicate,
+    and that should be a deliberate choice, not a default nobody noticed.
+    """
+    retryable = frozenset(research_routes_mod._RETRYABLE_RUN_STATUSES)
+    terminal = frozenset(run_status_mod.RESEARCH_TERMINAL)
+
+    assert not (_RESEARCH_IN_FLIGHT & terminal), (
+        f"in-flight and terminal overlap on {sorted(_RESEARCH_IN_FLIGHT & terminal)} — a "
+        "run cannot be both stopped and running."
+    )
+    assert not (_RESEARCH_IN_FLIGHT & retryable), (
+        f"in-flight and retryable overlap on {sorted(_RESEARCH_IN_FLIGHT & retryable)} — "
+        "a re-trigger must never be offered for a live run."
+    )
+    assert (_RESEARCH_IN_FLIGHT | terminal | retryable) == _MEASURED_RUN_STATUSES, (
+        "the three sets no longer cover the nine measured statuses; unclassified: "
+        f"{sorted(_MEASURED_RUN_STATUSES - (_RESEARCH_IN_FLIGHT | terminal | retryable))}, "
+        f"unexpected: {sorted((_RESEARCH_IN_FLIGHT | terminal | retryable) - _MEASURED_RUN_STATUSES)}"
+    )
+    assert _DELETABLE_RUN_STATUSES == _MEASURED_RUN_STATUSES - _RESEARCH_IN_FLIGHT
+
+
+def test_research_in_flight_equals_the_single_inflight_index_predicate():
+    """The app constant IS the DB invariant — read off the MODEL, never off a source grep.
+
+    ``uq_research_runs_one_inflight_per_intake`` is what actually stops two concurrent
+    ~$45 triggers (D-23.2-12). If the delete wall and that index ever disagree about what
+    "in flight" means, one of two bad things happens: a DELETE cascades away a run the
+    index still considers live, or an intake stays undeletable while the DB would happily
+    accept a fresh trigger. Comparing against ``ResearchRun.__table__`` — the declaration
+    the ORM and migration 0016 share byte-for-byte — is the only comparison that cannot go
+    stale, because a grep of the source file matches a comment just as happily as code.
+    """
+    import re
+
+    pytest.importorskip("sqlalchemy")
+    from app.db.models.research_runs import ResearchRun
+
+    matching = [
+        i
+        for i in ResearchRun.__table__.indexes
+        if i.name == "uq_research_runs_one_inflight_per_intake"
+    ]
+    assert matching, "the single-in-flight index is gone from the model (D-23.2-12)"
+    where = str(matching[0].dialect_options["postgresql"]["where"])
+    assert set(re.findall(r"'([a-z_]+)'", where)) == set(_RESEARCH_IN_FLIGHT), (
+        f"the index predicate is {where!r} but RESEARCH_IN_FLIGHT is "
+        f"{sorted(_RESEARCH_IN_FLIGHT)} — the delete wall and the concurrency invariant "
+        "disagree about what 'in flight' means."
     )
 
 
@@ -705,19 +896,20 @@ def test_deletable_is_true_for_an_intake_with_no_research_runs(
 
 
 # ===========================================================================
-# (b) the money wall — any research run means 409, with zero side effects
+# (a2) D-23.5-06 — a run that has STOPPED never blocks the delete
 # ===========================================================================
 
 
-def test_delete_is_409_when_a_research_run_exists_and_nothing_is_destroyed(
-    engine, set_space, monkeypatch, superadmin_engine, fake_gcs
+@pytest.mark.parametrize("run_status", sorted(_DELETABLE_RUN_STATUSES))
+def test_deletable_is_true_for_every_stopped_run_status(
+    engine, set_space, monkeypatch, superadmin_engine, run_status
 ):
-    """409, and the intake, its children, its run row and its objects ALL survive.
+    """``completed`` / ``completed_degraded`` / ``failed`` / ``cancelled`` / ``parked`` /
+    ``needs_input`` all answer ``{"deletable": true}``.
 
-    D-23.5-02: paid research and its audit chain must survive. The status code alone is
-    the weak form of this test — the assertions that matter are that NOTHING moved. The
-    run check is placed before key collection and before the audit write precisely so a
-    refused delete is a no-op rather than a partially-executed destruction.
+    This is the ruling, arm by arm. Before D-23.5-06 every one of these six answered
+    ``false`` and the operator was left with nothing but archive for an intake whose
+    research had long since stopped.
     """
     with _scenario(
         engine,
@@ -725,27 +917,146 @@ def test_delete_is_409_when_a_research_run_exists_and_nothing_is_destroyed(
         monkeypatch,
         _superadmin(),
         sa_engine=superadmin_engine,
-        with_research_run=True,
+        with_research_run=(run_status,),
+    ) as s:
+        resp = s.client().get(f"/intakes/{s.intake_id}/deletable", headers=_HDR)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"deletable": True, "reason": None}, (
+            f"a {run_status!r} run has STOPPED; its cost and audit chain live on the "
+            "tribunal side and survive the delete, so it must not block one (D-23.5-06)."
+        )
+
+
+def test_delete_succeeds_with_a_terminal_run_and_takes_the_research_rows(
+    engine, set_space, monkeypatch, superadmin_engine, fake_gcs
+):
+    """204 for an intake whose only run is ``completed`` — and the run rows go with it.
+
+    The pre-assertion is load-bearing: without it, a scenario that failed to seed the run
+    would make the "zero afterwards" assertion vacuously true and this arm would prove
+    nothing about the cascade at all.
+    """
+    with _scenario(
+        engine,
+        set_space,
+        monkeypatch,
+        _superadmin(),
+        sa_engine=superadmin_engine,
+        with_research_run=("completed",),
+    ) as s:
+        assert _count_research_runs(engine, set_space, s.space_id, s.intake_id) == 1, (
+            "the scenario did not seed the research run — the post-assertion below would "
+            "be vacuously true."
+        )
+
+        resp = s.client().delete(f"/intakes/{s.intake_id}", headers=_HDR)
+
+        assert resp.status_code == 204, (
+            f"a terminal-run intake must delete with 204 (D-23.5-06), got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+        assert not _intake_exists(engine, set_space, s.space_id, s.intake_id)
+        assert _count_research_runs(engine, set_space, s.space_id, s.intake_id) == 0, (
+            "research_runs declares ondelete='CASCADE' to nestor.intakes, so the run rows "
+            "must go with the intake. The TRIBUNAL-side rows are a different schema and "
+            "are deliberately retained — that is what the audit row's tribunal_run_ids "
+            "are for."
+        )
+
+
+def test_delete_audit_row_records_the_destroyed_runs_and_their_tribunal_ids(
+    engine, set_space, monkeypatch, superadmin_engine, fake_gcs
+):
+    """The ``intake.deleted`` metadata carries ``research_runs`` and ``tribunal_run_ids``.
+
+    ``research_runs.tribunal_run_id`` is a plain ``String`` with NO foreign key, and the
+    tribunal rows live in their own schema with their own alembic line — they SURVIVE this
+    delete on purpose (the cost record and the hash-chained audit blobs). The consequence
+    is that once the nestor row is cascaded away, nothing points at the retained run any
+    more. This audit row is the only thing that still can. Retaining a record nobody can
+    find is not retention.
+
+    The ``parked`` run is seeded WITHOUT a tribunal id deliberately: the handler must list
+    the non-null pointers and drop the rest rather than emitting a ``null`` into the trail.
+    """
+    with _scenario(
+        engine, set_space, monkeypatch, _superadmin(), sa_engine=superadmin_engine
+    ) as s:
+        with engine.begin() as conn:
+            _insert_research_run(
+                conn,
+                set_space,
+                s.space_id,
+                s.intake_id,
+                "completed",
+                tribunal_run_id="trib-completed-1",
+            )
+            _insert_research_run(
+                conn, set_space, s.space_id, s.intake_id, "parked", tribunal_run_id=None
+            )
+
+        resp = s.client().delete(f"/intakes/{s.intake_id}", headers=_HDR)
+        assert resp.status_code == 204, resp.text
+
+        rows = _delete_audit_rows(engine, s.space_id, s.intake_id)
+        assert len(rows) == 1, f"expected exactly one intake.deleted row, got {rows!r}"
+        meta = rows[0]
+        assert meta.get("research_runs") == 2, (
+            f"the trail must say how many research runs the cascade destroyed, got {meta!r}"
+        )
+        assert meta.get("tribunal_run_ids") == ["trib-completed-1"], (
+            "the trail must carry the RETAINED tribunal run ids and nothing else — a "
+            f"null pointer is not a pointer; got {meta!r}"
+        )
+        # The plan-02 metadata is untouched by the addition.
+        assert meta.get("objects") == 3 and meta.get("objects_skipped") == 1
+
+
+# ===========================================================================
+# (b) the money wall — a run IN FLIGHT means 409, with zero side effects
+# ===========================================================================
+
+
+@pytest.mark.parametrize("run_status", sorted(_RESEARCH_IN_FLIGHT))
+def test_delete_is_409_when_research_is_in_flight_and_nothing_is_destroyed(
+    engine, set_space, monkeypatch, superadmin_engine, fake_gcs, run_status
+):
+    """409, and the intake, its children, its run row and its objects ALL survive.
+
+    D-23.5-06: an IN-FLIGHT run means a worker is actively writing to rows this DELETE
+    would cascade away, and the reconciler (``app/research/reconcile.py``) is scanning for
+    exactly these three statuses. The status code alone is the weak form of this test —
+    the assertions that matter are that NOTHING moved. The run check is placed before key
+    collection and before the audit write precisely so a refused delete is a no-op rather
+    than a partially-executed destruction.
+    """
+    with _scenario(
+        engine,
+        set_space,
+        monkeypatch,
+        _superadmin(),
+        sa_engine=superadmin_engine,
+        with_research_run=(run_status,),
     ) as s:
         before = _child_counts(engine, set_space, s.space_id, s.intake_id)
 
         resp = s.client().delete(f"/intakes/{s.intake_id}", headers=_HDR)
 
         assert resp.status_code == 409, (
-            f"an intake with a research run must be refused with EXACTLY 409, got "
-            f"{resp.status_code} ({resp.text!r})"
+            f"an intake with a {run_status!r} research run must be refused with EXACTLY "
+            f"409, got {resp.status_code} ({resp.text!r})"
         )
         assert resp.json()["detail"] == (
-            "Intake has research runs and cannot be deleted"
+            "Research is in flight for this intake and it cannot be deleted"
         )
         assert _intake_exists(engine, set_space, s.space_id, s.intake_id), (
-            "the 409 leaked through — the researched intake was destroyed."
+            "the 409 leaked through — an intake with a live run was destroyed."
         )
         assert _child_counts(engine, set_space, s.space_id, s.intake_id) == before, (
             "a refused delete must leave every child row exactly as it was."
         )
         assert _count_research_runs(engine, set_space, s.space_id, s.intake_id) == 1, (
-            "the research_runs row — the paid work and its audit chain — is gone."
+            "the research_runs row — the run a worker is still writing to — is gone."
         )
         assert fake_gcs["deletes"] == [], (
             f"a refused delete must hand NOTHING to the storage seam, got "
@@ -756,14 +1067,16 @@ def test_delete_is_409_when_a_research_run_exists_and_nothing_is_destroyed(
         )
 
 
-def test_deletable_is_false_with_reason_when_a_research_run_exists(
-    engine, set_space, monkeypatch, superadmin_engine
+def test_delete_is_409_when_a_terminal_and_an_in_flight_run_coexist(
+    engine, set_space, monkeypatch, superadmin_engine, fake_gcs
 ):
-    """The eligibility read agrees with the wall on the refused side, and says WHY.
+    """The wall is "ANY row in flight", never "the NEWEST row".
 
-    The ``reason`` is a stable machine token (``has_research_runs``), not prose: the
-    frontend renders its own localized copy off it, so a reworded English sentence must
-    never change what the UI can key on.
+    A retriggered intake legitimately holds a ``failed`` run and a ``running`` one at the
+    same time. Reading only the latest run — the shape ``latest_for_intake`` invites —
+    would answer on whichever happened to be newest, and a ``failed`` row created after a
+    resume would open the delete on a live run. Both rows are seeded so ordering cannot
+    make this pass by luck.
     """
     with _scenario(
         engine,
@@ -771,11 +1084,43 @@ def test_deletable_is_false_with_reason_when_a_research_run_exists(
         monkeypatch,
         _superadmin(),
         sa_engine=superadmin_engine,
-        with_research_run=True,
+        with_research_run=("running", "failed"),
+    ) as s:
+        assert _count_research_runs(engine, set_space, s.space_id, s.intake_id) == 2
+
+        resp = s.client().delete(f"/intakes/{s.intake_id}", headers=_HDR)
+
+        assert resp.status_code == 409, (
+            f"one in-flight row among terminal ones must still refuse, got "
+            f"{resp.status_code} ({resp.text!r})"
+        )
+        assert _intake_exists(engine, set_space, s.space_id, s.intake_id)
+        assert _count_research_runs(engine, set_space, s.space_id, s.intake_id) == 2
+
+
+@pytest.mark.parametrize("run_status", sorted(_RESEARCH_IN_FLIGHT))
+def test_deletable_is_false_with_reason_when_research_is_in_flight(
+    engine, set_space, monkeypatch, superadmin_engine, run_status
+):
+    """The eligibility read agrees with the wall on the refused side, and says WHY.
+
+    The ``reason`` is a stable machine token (``research_in_flight``), not prose: the
+    frontend renders its own localized copy off it, so a reworded English sentence must
+    never change what the UI can key on. It is asserted as the literal here and pinned to
+    ``_DELETE_BLOCKED_REASON`` separately, so the wire format and the constant cannot
+    drift apart in opposite directions and still look green.
+    """
+    with _scenario(
+        engine,
+        set_space,
+        monkeypatch,
+        _superadmin(),
+        sa_engine=superadmin_engine,
+        with_research_run=(run_status,),
     ) as s:
         resp = s.client().get(f"/intakes/{s.intake_id}/deletable", headers=_HDR)
         assert resp.status_code == 200, resp.text
-        assert resp.json() == {"deletable": False, "reason": "has_research_runs"}
+        assert resp.json() == {"deletable": False, "reason": "research_in_flight"}
 
 
 # ===========================================================================

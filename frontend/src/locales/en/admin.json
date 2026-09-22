@@ -172,7 +172,7 @@
       "body": "This cannot be undone. The intake, its answers, its AI runs, its uploads and its files are destroyed for good. If you only want it out of the way, archive it instead.",
       "confirmWord": "DELETE",
       "confirmPlaceholder": "Type DELETE to confirm",
-      "blockedResearch": "This intake has had research and can no longer be deleted — archive it instead.",
+      "blockedResearch": "Research is running for this intake — wait for it to finish, or cancel it, before deleting.",
       "done": "Intake deleted",
       "failed": "Deletion failed"
     }
@@ -463,6 +463,21 @@
     "colActions": "Actions",
     "emptyTitle": "No intakes yet",
     "emptyBody": "Click 'New intake' to create one.",
-    "open": "Open"
+    "open": "Open",
+    "bulk": {
+      "selectAll": "Select all",
+      "selectRow": "Select intake",
+      "selected": "{{n}} selected",
+      "archive": "Archive",
+      "delete": "Delete",
+      "clear": "Clear",
+      "cancel": "Cancel",
+      "working": "Working…",
+      "archiveNone": "Nothing to archive — every selected intake is already archived.",
+      "archiveDone": "{{done}} archived, {{failed}} failed",
+      "deleteTitle": "delete {{n}} intakes permanently?",
+      "deleteBody": "This cannot be undone. These intakes, their answers, their AI runs, their uploads and their files are destroyed for good. Any intake whose research is still running is skipped.",
+      "deleteDone": "{{done}} deleted, {{blocked}} blocked (research running), {{failed}} failed"
+    }
   }
 }
