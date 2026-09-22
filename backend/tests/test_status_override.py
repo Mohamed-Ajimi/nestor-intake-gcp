@@ -334,6 +334,67 @@ def _assert_denied(resp, label: str) -> None:
 
 
 # ===========================================================================
+# (0) the constants themselves — no DB, so these run on any box
+# ===========================================================================
+
+
+def test_override_allow_list_is_the_eight_statuses_minus_in_research():
+    """``_OVERRIDE_STATUSES`` is exactly the ``nestor.intake_status`` enum minus the money one.
+
+    Derived from the ORM enum rather than retyped, so ADDING a ninth status to the enum
+    turns this red and forces a decision about whether an operator may hand-set it — the
+    silent-default failure mode ("new status is override-able because nobody looked") is
+    exactly what a literal list here would allow.
+    """
+    routes = pytest.importorskip("app.api.intake_routes")
+    intake_model = pytest.importorskip("app.db.models.intake")
+
+    all_statuses = set(intake_model.intake_status_enum.enums)
+    assert all_statuses == set(_ALLOWED) | {"in_research"}, (
+        f"the intake_status enum changed: {sorted(all_statuses)}. Decide whether the new "
+        "value may be hand-set by an operator, then update _OVERRIDE_STATUSES and _ALLOWED."
+    )
+    assert routes._OVERRIDE_STATUSES == frozenset(_ALLOWED)
+    assert "in_research" not in routes._OVERRIDE_STATUSES, (
+        "in_research must never be override-able — entering it queues a paid research run "
+        "(research_routes._RESEARCH_TRANSITIONS is its sole lawful writer)."
+    )
+
+
+def test_override_forbidden_set_has_exactly_one_member():
+    """``_OVERRIDE_FORBIDDEN == {"in_research"}`` — the 409 detail string depends on it.
+
+    ``override_status`` raises the LITERAL detail ``"Cannot override status to
+    'in_research'"`` rather than interpolating the rejected value (it is a contract string
+    the frontend keys a toast off). That is only truthful while the set has one member, so
+    the invariant is pinned here instead of left to a comment.
+    """
+    routes = pytest.importorskip("app.api.intake_routes")
+
+    assert routes._OVERRIDE_FORBIDDEN == frozenset({"in_research"})
+    assert not (routes._OVERRIDE_FORBIDDEN & routes._OVERRIDE_STATUSES), (
+        "a status cannot be both allow-listed and forbidden"
+    )
+
+
+def test_intake_patch_still_carries_no_status_field():
+    """``IntakePatch`` gained NO status field — the override is a separate, gated verb.
+
+    ``patch_intake``'s refusal to carry a status is the TENANT-02 / INTAKE-05 shape the
+    module is written around. The whole reason ``StatusOverride`` is its own body model is
+    so that refusal never has to be relaxed; this asserts nobody took the shortcut.
+    """
+    routes = pytest.importorskip("app.api.intake_routes")
+
+    assert set(routes.IntakePatch.model_fields) == {"client_name"}, (
+        f"IntakePatch must declare exactly one field (client_name), got "
+        f"{sorted(routes.IntakePatch.model_fields)} — a status field here would bypass the "
+        "superadmin gate and the override audit marker entirely."
+    )
+    assert set(routes.StatusOverride.model_fields) == {"status"}
+
+
+# ===========================================================================
 # (a) the transition matrix — every allowed (from, to), backwards included
 # ===========================================================================
 
