@@ -452,6 +452,27 @@
 # and could go red for the wrong reason too. TIGHTEN THAT ASSERTION TO AN AST
 # CHECK FIRST, THEN ADD THE PATH AND BUMP THE COUNT IN THE SAME EDIT. Recorded
 # by plan 15.8-13 as OWED, not as done.
+#
+# PHASE 23.5 added FIVE files and registered them, 45 -> 50, path list and
+# EXPECTED_FILES in the SAME edit and the SAME commit, per the rule above:
+#     23.5-04 -> test_runtime_flags.py (the kill switches: the parser, the
+#                master AND over the five fine-grained switches, and that an
+#                empty or unrecognised value falls back to the documented
+#                default rather than reading as false)
+#     23.5-04 -> test_citation_replay.py (the offline replay over the recorded
+#                shapes of run 7784e71c, including the flags-OFF golden)
+#     23.5-05 -> test_citation_replay_anchors.py (primary anchor, numberable-only
+#                ledger; the pinned determinism contract left intact)
+#     23.5-06 -> test_sources_render.py (resolved_url printed, redirect fallback)
+#     23.5-06 -> test_synthesis_continuation.py (one continuation call on
+#                max_tokens, the paragraph-boundary splice, the one-line notice)
+# All five are PURE: no Postgres, no provider key, no network. They were found
+# unregistered by plan 23.5-06 and recorded as DEF-23.5-06-01: 125 tests, all
+# green locally, defending nothing in CI. The plans that wrote them did not
+# declare this file, so the registration was deferred to the ship wave. This is
+# that registration. Precedent: quick task 260806-dn8 did exactly the same thing
+# for the same reason (see 43 -> 44 above) — a new test file that no config
+# names is the silent skip this whole preamble exists to prevent.
 # ---------------------------------------------------------------------------
 # ONE list, read TWICE: `ls` collects from it and the assertion below
 # reconciles against it. The names live in a variable rather than
@@ -526,13 +547,18 @@ steps:
                     nestor_pulse_sdk/tests/test_workshop_round_yield.py \
                     nestor_pulse_sdk/tests/test_synthesis_opus5.py \
                     nestor_pulse_sdk/tests/test_citation_dedupe.py \
-                    nestor_pulse_sdk/tests/test_suite_hygiene.py"
+                    nestor_pulse_sdk/tests/test_suite_hygiene.py \
+                    nestor_pulse_sdk/tests/test_runtime_flags.py \
+                    nestor_pulse_sdk/tests/test_citation_replay.py \
+                    nestor_pulse_sdk/tests/test_citation_replay_anchors.py \
+                    nestor_pulse_sdk/tests/test_sources_render.py \
+                    nestor_pulse_sdk/tests/test_synthesis_continuation.py"
             # Change this number and the list above TOGETHER. It is not a
             # decoration: it is the whole difference between a gate and a green
             # tick. There is deliberately NO early `exit 0` for an empty
             # collection any more — an empty collection is the WORST case of the
             # false green, and it now fails here like every other shortfall.
-            EXPECTED_FILES=45
+            EXPECTED_FILES=50
             FILES=$$(ls $$WANTED 2>/dev/null || true)
             COLLECTED=$$(echo $$FILES | wc -w)
             if [ "$$COLLECTED" -ne "$$EXPECTED_FILES" ]; then
