@@ -59,3 +59,39 @@ declared surface, and one of them (`test_scrub_research`) sits over `pipeline/`,
 which the phase's own guard requires to stay untouched. Worth a small dedicated
 plan: per-test unique org slugs, and `asyncio.run` in place of
 `get_event_loop().run_until_complete`.
+
+## DEF-23.5-06-01 — phase 23.5's four new tribunal test files are in NO Cloud Build gate
+
+**Found:** 2026-09-22, during plan 23.5-06 Task 1.
+**Status:** OUT OF SCOPE for plans 04/05/06 — each declares its files and
+`tribunal/cloudbuild.test-engine.yaml` is not among them.
+
+`cloudbuild.test-engine.yaml` runs an EXPLICIT `WANTED` list of 45 paths and
+asserts `EXPECTED_FILES=45` so that a missing file fails the gate instead of
+silently shrinking it. That list is a closed set: a new test file is not picked
+up by adding it to `tests/`, it has to be NAMED.
+
+Not named, and therefore not run by any gate:
+
+| File | Plan | Tests |
+|---|---|---|
+| `tests/test_runtime_flags.py` | 23.5-04 | 26 |
+| `tests/test_citation_replay.py` | 23.5-04 | 41 |
+| `tests/test_citation_replay_anchors.py` | 23.5-05 | 29 |
+| `tests/test_sources_render.py` | 23.5-06 | 13 |
+| `tests/test_synthesis_continuation.py` | 23.5-06 | 16 |
+
+125 tests, all pure (no DB, no network, no provider call), all green locally,
+none of them defending anything in CI. That is precisely the shape
+`test_suite_hygiene.py`'s own preamble calls false assurance: the gate is green
+and says nothing about the code these files cover.
+
+**Fix when someone owns it:** add the five paths to `WANTED` and change
+`EXPECTED_FILES` from 45 to 50 IN THE SAME EDIT — the config says in words that
+the number and the list move together. One file, two lines. The natural home is
+the phase's ship wave (plan 23.5-07), which already touches build and deploy.
+
+**Why not done here:** `cloudbuild.test-engine.yaml` is outside the declared
+surface of all three tribunal plans, and this is the sensitive wave. Changing a
+gate's own assertion count is not something to slip into a plan that did not
+name it.
