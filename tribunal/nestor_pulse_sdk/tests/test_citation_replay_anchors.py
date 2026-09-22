@@ -27,12 +27,27 @@ skips proves nothing, and the RED assertions here have to be able to FAIL.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
+from nestor_pulse_sdk.citations.anchors import (
+    anchor_number_map,
+    anchor_token,
+    apply_citation_anchors,
+    build_ledger,
+    claim_prefix,
+)
+from nestor_pulse_sdk.citations.extractor import _plan_claim_sources
 from nestor_pulse_sdk.citations.numbering import (
     _CLAIM_SOURCE_SQL,
     _assign_numbers,
     _claim_source_sql,
+)
+from nestor_pulse_sdk.tests.fixtures.citations_replay import (
+    CLAIMS,
+    RESOLVED_MAP,
+    VERDICTS_BY_CLAIM,
 )
 
 #: Every phase-23.5 flag. Cleared before every test in this module so a
@@ -277,3 +292,194 @@ class TestMechanism3TheAnchorPicksAProviderUrl:
             first = _assign_numbers(ordered, include_resolved=True)
             second = _assign_numbers(ordered, include_resolved=True)
             assert first == second
+
+
+# ---------------------------------------------------------------------------
+# The fixture replay: mechanism 5, the stripped anchors.
+#
+# `build_ledger` shows the writing model an anchor for EVERY claim;
+# `number_citations_with_claims` can only map the claims that have a
+# `claim_source` row. On run 7784e71c 159 claims had none -- mostly
+# `distiller_fallback`, which zeroes `source_domain` and carries no usable url --
+# so they were offered, anchored, and then deleted from the deliverable by
+# `apply_citation_anchors`. 108 statements lost their citation silently.
+#
+# The RED assertion below is as load-bearing as the GREEN one. A fixture that
+# cannot reproduce the defect proves nothing whatsoever about the fix.
+# ---------------------------------------------------------------------------
+
+#: A fixed namespace so the synthetic ids below are the SAME on every machine and
+#: every run. Nothing here is, or is derived from, a production id.
+_NS = uuid.UUID("23500000-0000-4000-8000-000000000005")
+
+
+def _claim_id_for(fixture_id: str) -> str:
+    return str(uuid.uuid5(_NS, "claim:" + fixture_id))
+
+
+def _source_id_for(url: str) -> str:
+    """One id per url. `_upsert_source` dedupes by url, so two claims citing the
+    same url reach ONE source row -- and that is what makes a claim's `[n]`
+    contestable in the first place."""
+    return str(uuid.uuid5(_NS, "source:" + url))
+
+
+def _claim_rows() -> list[dict]:
+    """The `list_run_claims` projection of the plan-04 fixture, in ledger order."""
+    return [
+        {
+            "claim_id": _claim_id_for(claim["fixture_id"]),
+            "text": claim["claim_text"],
+            "facet": claim.get("facet"),
+            "position": claim.get("position"),
+        }
+        for claim in CLAIMS
+    ]
+
+
+def _replay(monkeypatch, *, flags_on: bool):
+    """Run the whole offline path for ONE flag state.
+
+    Returns `(numbered, claim_to_n, ledger)`. The flag is set here rather than in
+    each test because it governs BOTH halves -- which `claim_source` rows the
+    persist loop would plan AND how the ledger is filtered -- and setting it in
+    one place is what stops a test from replaying half of each branch.
+    """
+    if flags_on:
+        monkeypatch.setenv("NESTOR_CITATIONS_V2", "true")
+    else:
+        monkeypatch.delenv("NESTOR_CITATIONS_V2", raising=False)
+
+    rows: list[dict] = []
+    for claim in CLAIMS:
+        cid = _claim_id_for(claim["fixture_id"])
+        for entry in _plan_claim_sources(claim, VERDICTS_BY_CLAIM, RESOLVED_MAP):
+            rows.append(
+                {
+                    "claim_id": cid,
+                    "position": claim.get("position"),
+                    "source_id": _source_id_for(entry["url"]),
+                    "title": entry["title"],
+                    "url": entry["url"],
+                    "resolved_url": entry["resolved_url"],
+                    "provider": claim.get("found_by"),
+                    "fetched_at": None,
+                    "provider_quality": entry["provider_quality"],
+                }
+            )
+
+    numbered, claim_to_n = _assign_numbers(
+        _order_rows(rows, primary_first=flags_on), include_resolved=flags_on
+    )
+    ledger = build_ledger(
+        _claim_rows(),
+        numberable_claim_ids=set(claim_to_n) if flags_on else None,
+    )
+    return numbered, claim_to_n, ledger
+
+
+def _writer_output(ledger: list[dict]) -> str:
+    """A writing model that obeys the prompt PERFECTLY: one anchor per offered
+    fact, copied character for character. Every strip below is therefore the
+    system's doing, not the model's."""
+    return " ".join(
+        f"Statement {i}.{anchor_token(entry['claim_id'])}"
+        for i, entry in enumerate(ledger, start=1)
+    )
+
+
+def test_the_synthetic_claim_prefixes_do_not_collide():
+    """`collision_free_prefixes` drops ambiguous prefixes. That must not be what
+    drives the counts below -- otherwise this file would measure the wrong thing."""
+    prefixes = [claim_prefix(_claim_id_for(c["fixture_id"])) for c in CLAIMS]
+    assert len(set(prefixes)) == len(prefixes)
+
+
+class TestMechanism5StrippedAnchors:
+    def test_flags_off_the_writer_loses_citations(self, monkeypatch):
+        """RED. Run 7784e71c's 108 stripped anchors, in miniature."""
+        _, claim_to_n, ledger = _replay(monkeypatch, flags_on=False)
+        text, n_unresolved = apply_citation_anchors(
+            _writer_output(ledger), anchor_number_map(claim_to_n)
+        )
+        assert n_unresolved > 0
+        # And it is exactly the offered claims that have no `claim_source` row.
+        offered = {e["claim_id"] for e in ledger}
+        assert n_unresolved == len(offered - set(claim_to_n))
+        # Silent, too: no marker is left behind for a reader to notice.
+        assert "[[c:" not in text
+
+    def test_flags_on_no_anchor_is_ever_stripped(self, monkeypatch):
+        """GREEN. The ledger offers only what can be numbered."""
+        _, claim_to_n, ledger = _replay(monkeypatch, flags_on=True)
+        _, n_unresolved = apply_citation_anchors(
+            _writer_output(ledger), anchor_number_map(claim_to_n)
+        )
+        assert n_unresolved == 0
+
+    def test_flags_on_the_ledger_still_offers_every_numberable_claim(self, monkeypatch):
+        """The filter must not be a blunt instrument: nothing citable is withheld."""
+        _, claim_to_n, ledger = _replay(monkeypatch, flags_on=True)
+        assert ledger
+        assert {e["claim_id"] for e in ledger} == set(claim_to_n)
+
+    def test_flags_on_the_sourceless_claims_are_the_ones_withheld(self, monkeypatch):
+        """Shapes 1 and 7 of the fixture are mechanism 5's drivers, by name."""
+        _, _, ledger = _replay(monkeypatch, flags_on=True)
+        withheld = {_claim_id_for(c["fixture_id"]) for c in CLAIMS} - {
+            e["claim_id"] for e in ledger
+        }
+        assert _claim_id_for("c01_sourceless_no_verdict") in withheld
+        assert _claim_id_for("c07_distiller_fallback_unnumberable") in withheld
+
+
+class TestBuildLedgerFilter:
+    def test_none_means_no_filter(self):
+        rows = _claim_rows()
+        assert build_ledger(rows, numberable_claim_ids=None) == build_ledger(rows)
+
+    def test_an_empty_set_means_nothing_is_numberable(self):
+        """NOT "no filter". `if not numberable_claim_ids` would re-introduce the
+        defect at exactly the moment the run has no citations at all."""
+        assert build_ledger(_claim_rows(), numberable_claim_ids=set()) == []
+
+    def test_the_filter_preserves_order_and_shape(self):
+        rows = _claim_rows()
+        full = build_ledger(rows)
+        keep = {full[0]["claim_id"], full[-1]["claim_id"]}
+        filtered = build_ledger(rows, numberable_claim_ids=keep)
+        assert filtered == [e for e in full if e["claim_id"] in keep]
+
+    def test_the_filter_compares_as_strings(self):
+        """A caller holding `uuid.UUID` keys must not silently filter EVERYTHING."""
+        rows = _claim_rows()
+        as_uuids = {uuid.UUID(r["claim_id"]) for r in rows}
+        assert build_ledger(rows, numberable_claim_ids=as_uuids) == build_ledger(rows)
+
+
+class TestMechanism3OverTheFixture:
+    def test_flags_on_every_anchor_resolves_to_a_url_of_that_claim(self, monkeypatch):
+        """The CONTEXT's acceptance number: anchors resolving to a url that is NOT
+        among the claim's own provider urls = 0."""
+        numbered, claim_to_n, _ = _replay(monkeypatch, flags_on=True)
+        by_n = {e["n"]: e for e in numbered}
+        violations = []
+        for claim in CLAIMS:
+            cid = _claim_id_for(claim["fixture_id"])
+            if cid not in claim_to_n:
+                continue
+            own = {
+                e["url"]
+                for e in _plan_claim_sources(claim, VERDICTS_BY_CLAIM, RESOLVED_MAP)
+                if e["origin"] == "provider"
+            }
+            if by_n[claim_to_n[cid]]["url"] not in own:
+                violations.append(claim["fixture_id"])
+        assert violations == []
+
+    def test_flags_on_the_numbered_entries_carry_resolved_url(self, monkeypatch):
+        """Plan 06 renders this key, so it has to arrive."""
+        numbered, _, _ = _replay(monkeypatch, flags_on=True)
+        assert numbered
+        assert all("resolved_url" in e for e in numbered)
+        assert any(e["resolved_url"] for e in numbered)
