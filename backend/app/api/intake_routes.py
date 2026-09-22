@@ -78,6 +78,7 @@ from app.db.repository import (
     ResearchRunRepository,
     SkillRunRepository,
 )
+from app.research.run_status import RESEARCH_IN_FLIGHT
 from app.storage import gcs
 from app.mail import render as mail_render
 from app.mail import resend as mail_resend
@@ -162,20 +163,35 @@ class StatusOverride(BaseModel):
 class DeletableView(BaseModel):
     """Answer of ``GET /intakes/{id}/deletable`` — may this intake be hard-deleted?
 
-    ``reason`` is a stable MACHINE TOKEN (``"has_research_runs"``), never prose. The
-    frontend renders its own nl/fr/en copy off it, so rewording an English sentence here
-    must not be able to change what the UI keys on. ``None`` when ``deletable`` is True.
+    ``reason`` is a stable MACHINE TOKEN — :data:`_DELETE_BLOCKED_REASON`, i.e.
+    ``"research_in_flight"`` — never prose. The frontend renders its own nl/fr/en copy off
+    it, so rewording an English sentence here must not be able to change what the UI keys
+    on. ``None`` when ``deletable`` is True.
+
+    The token CHANGED with D-23.5-06 (2026-09-22): it used to be ``"has_research_runs"``,
+    a statement about history. The wall is now about a LIVE run, so the old token would
+    have been a lie that still matched.
     """
 
     deletable: bool
     reason: str | None = None
 
 
-#: The 409 detail when a hard delete is refused because research exists (D-23.5-02).
-#: A module constant rather than an inline literal because it is a two-sided contract:
-#: the server raises it and ``tests/test_intake_delete.py`` pins it, so a reword is a
-#: visible change instead of a silent break.
-_DELETE_BLOCKED_DETAIL = "Intake has research runs and cannot be deleted"
+#: The ONE machine token the blocked answer carries (D-23.5-06). Used in BOTH places —
+#: ``DeletableView.reason`` and the 409 path — because the frontend keys its localized
+#: copy off it and a second spelled-out literal at either site is exactly how the two
+#: drift apart.
+_DELETE_BLOCKED_REASON = "research_in_flight"
+
+#: The 409 detail when a hard delete is refused because research is IN FLIGHT (D-23.5-06,
+#: narrowing D-23.5-02). A module constant rather than an inline literal because it is a
+#: two-sided contract: the server raises it and ``tests/test_intake_delete.py`` pins it,
+#: so a reword is a visible change instead of a silent break.
+#
+# The wording moved with the rule. It used to read "Intake has research runs and cannot be
+# deleted" — a statement about HISTORY, which is now simply false as a reason: a finished
+# run no longer blocks anything. This one is a statement about a live run.
+_DELETE_BLOCKED_DETAIL = "Research is in flight for this intake and it cannot be deleted"
 
 
 class AnswerView(BaseModel):
@@ -1831,29 +1847,70 @@ def override_status(
 
 
 # ---------------------------------------------------------------------------
-# The guarded hard delete (D-23.5-02, phase 23.5 tester remark 3)
+# The guarded hard delete (D-23.5-02, NARROWED by D-23.5-06 — phase 23.5 remark 3)
 # ---------------------------------------------------------------------------
 #
-# Archive (``override_status`` -> ``archived``) is the REVERSIBLE destructive action and
-# is the only one available once an intake has had research. THIS is the irreversible one,
-# and it is deliberately narrow: an intake that has never had a ``research_runs`` row.
+# Archive (``override_status`` -> ``archived``) is the REVERSIBLE destructive action.
+# THIS is the irreversible one.
 #
-# Paid research drags an audit chain behind it — findings, claims, sources, the run's audit
-# bundle in GCS, and the ``audit_log`` trail of who started it and what it cost. Destroying
-# the intake would strand or erase all of that, so the wall is structural (a 409 checked
-# before anything else happens) rather than a warning in the UI.
+# D-23.5-02 (the original rule, SUPERSEDED — kept here because a later reader needs to
+# see why the wall moved rather than find it silently wider than the comment):
+#   "an intake that has ever had a ``research_runs`` row can never be hard-deleted. Paid
+#    research drags an audit chain behind it — findings, claims, sources, the run's audit
+#    bundle in GCS — and destroying the intake would strand or erase all of that."
+#
+# D-23.5-06 (2026-09-22, operator ruling after testing the dev deploy: "even ones who had
+# research or intake being done need to be able to be deleted"). The premise above was
+# WRONG about where the audit chain lives. ``tribunal.run`` and its cascaded claims /
+# sources / verdicts / outputs sit in the ``tribunal`` SCHEMA, on their own alembic line,
+# with NO foreign key into ``nestor`` — and the hash-chained audit blobs sit in the audit
+# bucket, whose keys this handler never enumerates (it only ever reads ``intake_sources``
+# / ``research_artifacts`` rows, prefix-asserted to ``{space_id}/{intake_id}/``). All of
+# it SURVIVES the delete. Refusing the delete for a run that had already stopped therefore
+# protected nothing; it only left the operator with a list of test intakes they could not
+# clear.
+#
+# An IN-FLIGHT run is a different thing entirely, and that is the wall now: a worker is
+# actively writing to rows this DELETE would cascade away, and the reconciler
+# (``app/research/reconcile.py``) is scanning for exactly those statuses. The set is
+# ``RESEARCH_IN_FLIGHT`` — the SAME three literals migration 0016's partial unique index
+# enforces, so the delete wall and the single-in-flight concurrency invariant cannot
+# disagree about what "in flight" means.
+#
+# The one real cost of retention is closed in step 5: ``research_runs.tribunal_run_id`` is
+# a plain ``String`` with no FK, so once the nestor row is cascaded away nothing points at
+# the retained tribunal run. The audit row carries those ids. Retaining a record nobody
+# can find is not retention.
 
 
-def _has_research_runs(session, identity: Identity, intake_id) -> bool:
-    """True when ANY ``research_runs`` row exists for this intake, within scope.
+def _research_runs_for_intake(session, identity: Identity, intake_id) -> list:
+    """Every ``research_runs`` row for this intake, within scope (newest first).
 
     Repo constructed inline on the handler's existing session — the
     ``_create_report_artifact`` idiom — so this read shares the request's ONE transaction
-    and its tenant scope rather than opening a second one. Status is NOT considered: a
-    ``failed`` or ``cancelled`` run was still billed and still wrote audit rows, so it
-    protects the intake exactly as a ``completed`` one does.
+    and its tenant scope rather than opening a second one.
+
+    The delete path reads this ONCE and derives both the wall and the audit metadata from
+    the same snapshot. Two separate reads could disagree — a run inserted between them
+    would make the audit row describe a state that never existed, or worse, let the wall
+    pass on a list the metadata then contradicts.
     """
-    return bool(ResearchRunRepository(session, identity).list_for_intake(intake_id))
+    return list(ResearchRunRepository(session, identity).list_for_intake(intake_id))
+
+
+def _inflight_research_runs(session, identity: Identity, intake_id) -> list:
+    """The IN-FLIGHT rows among this intake's research runs — empty list means deletable.
+
+    ANY row in flight refuses the delete; this is deliberately NOT "the newest row". A
+    retriggered intake legitimately holds a ``failed`` run and a ``running`` one at the
+    same time, and answering on whichever happened to be newest would open the delete on
+    a live run.
+    """
+    return [
+        run
+        for run in _research_runs_for_intake(session, identity, intake_id)
+        if run.status in RESEARCH_IN_FLIGHT
+    ]
 
 
 def _collect_intake_object_keys(
@@ -1935,31 +1992,35 @@ def intake_deletable(
 ) -> DeletableView:
     """Report whether this intake may be hard-deleted — the UI's eligibility read.
 
-    ``{"deletable": true, "reason": null}`` when the intake has NO ``research_runs`` row;
-    ``{"deletable": false, "reason": "has_research_runs"}`` when any exists. The reason is
-    a machine token, not prose (see :class:`DeletableView`).
+    ``{"deletable": true, "reason": null}`` unless a research run is IN FLIGHT, in which
+    case ``{"deletable": false, "reason": "research_in_flight"}`` (D-23.5-06). The reason
+    is a machine token, not prose (see :class:`DeletableView`). A run that has STOPPED —
+    ``completed``, ``completed_degraded``, ``failed``, ``cancelled``, ``parked``,
+    ``needs_input`` — never blocks: its cost record and audit chain live on the tribunal
+    side and survive the delete regardless.
 
     This is a PURE READ with no side effects, but it is SUPERADMIN-ONLY all the same
-    (T-23.5-02-I). An ungated version would answer "this intake exists, and it has had
-    research" to anyone holding an id — an existence oracle dressed as a convenience
-    endpoint. The out-of-scope answer is therefore the same existence-hidden 404 every
-    other intake route gives, never ``{"deletable": false}``.
+    (T-23.5-02-I). An ungated version would answer "this intake exists, and research is
+    running on it right now" to anyone holding an id — an existence oracle dressed as a
+    convenience endpoint. The out-of-scope answer is therefore the same existence-hidden
+    404 every other intake route gives, never ``{"deletable": false}``.
 
     The gate is declared BEFORE ``get_tenant_repo`` so it resolves first and a null-space
     caller gets that 404 rather than the repo's null-space 403 (the ordering contract in
     ``app/auth/gates.py``; pinned by ``tests/test_operator_verb_gate.py``).
 
-    THE ANSWER IS ADVISORY, NOT AUTHORITATIVE. ``delete_intake`` re-checks the wall itself
-    inside its own transaction; a run queued between this read and the delete is refused
-    there. This endpoint exists so the UI can hide an affordance, not so the server can
-    trust it.
+    THE ANSWER IS ADVISORY, NOT AUTHORITATIVE, and under D-23.5-06 that matters MORE than
+    it did before: the blocking condition is now a transient one. ``delete_intake``
+    re-checks the wall itself inside its own transaction, so a run queued between this
+    read and the delete is refused there. This endpoint exists so the UI can hide an
+    affordance, not so the server can trust it.
     """
     intake = repo.get(intake_id)
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
-    if _has_research_runs(repo.session, identity, intake_id):
-        return DeletableView(deletable=False, reason="has_research_runs")
+    if _inflight_research_runs(repo.session, identity, intake_id):
+        return DeletableView(deletable=False, reason=_DELETE_BLOCKED_REASON)
     return DeletableView(deletable=True, reason=None)
 
 
@@ -1970,18 +2031,28 @@ def delete_intake(
     identity: Identity = Depends(superadmin_gate),
     repo: IntakeRepository = Depends(get_tenant_repo),
 ) -> Response:
-    """Destroy an intake that has never had a research run — irreversibly (D-23.5-02).
+    """Destroy an intake and everything hanging off it — irreversibly (D-23.5-06).
 
     THE SEQUENCE BELOW IS LOAD-BEARING. Each step exists because doing it later would
     leave a half-destroyed intake or a destroyed one with no trace:
 
     1. ``repo.get`` -> ``None`` -> **404** ``"Intake not found"``. Ownership first, so a
        caller aimed at a foreign/absent id learns nothing about research or objects.
-    2. ANY ``research_runs`` row -> **409** ``_DELETE_BLOCKED_DETAIL``. This is D-23.5-02's
-       wall: a Tribunal run costs real money and drags an audit chain behind it, so once
-       research exists the only destructive action left is ARCHIVE. The check runs BEFORE
-       key collection and BEFORE the audit write, so a refused delete is a true no-op —
-       nothing moved in the DB and nothing was handed to GCS.
+    2. ANY research run whose status is in ``RESEARCH_IN_FLIGHT`` -> **409**
+       ``_DELETE_BLOCKED_DETAIL``, reason token ``_DELETE_BLOCKED_REASON``.
+
+       This is D-23.5-06's wall and it REPLACED D-23.5-02's "any run at all" one on
+       2026-09-22. A TERMINAL run no longer blocks: its cost record and hash-chained
+       audit blobs live on the tribunal side — a separate schema with no FK into
+       ``nestor``, plus an audit bucket this handler never enumerates — and they survive
+       the delete regardless, so refusing protected nothing. An IN-FLIGHT run is the real
+       hazard: a worker is writing to rows this DELETE would cascade away and the
+       reconciler is scanning for exactly those statuses.
+
+       The check runs BEFORE key collection and BEFORE the audit write, so a refused
+       delete is a true no-op — nothing moved in the DB and nothing was handed to GCS.
+       The run list is read ONCE (:func:`_research_runs_for_intake`) and feeds both this
+       wall and step 5's metadata, so the two cannot describe different states.
     3. Collect the object keys from ``intake_sources`` + ``research_artifacts``, read out
        of the DATABASE (never a bucket listing — see
        :func:`_collect_intake_object_keys`).
@@ -1992,6 +2063,13 @@ def delete_intake(
        plain nullable ``space_id``, no FK), so the row is NOT taken by the cascade and the
        trail outlives its subject. ``tests/test_intake_delete.py`` asserts both the schema
        fact and the surviving row rather than assuming either.
+
+       Its metadata carries ``research_runs`` and ``tribunal_run_ids`` for the reason
+       D-23.5-06 creates: ``research_runs.tribunal_run_id`` is a plain ``String`` with NO
+       foreign key, and the tribunal rows are deliberately RETAINED in their own schema,
+       so once this cascade takes the nestor-side row NOTHING points at the retained run
+       any more. This audit row is the only thing left that can. Retaining a record nobody
+       can find is not retention.
     6. ``repo.delete(intake_id)``; ``rowcount == 0`` -> 404. ONE ``DELETE FROM
        nestor.intakes`` fans out through eleven ``ON DELETE CASCADE`` foreign keys —
        answers, skill runs, sources, transcripts, artifacts, decompositions, questions,
@@ -2015,9 +2093,15 @@ def delete_intake(
     if intake is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
 
-    if _has_research_runs(repo.session, identity, intake_id):
-        # D-23.5-02. Not a permission problem and not a validation problem — a CONFLICT
-        # with state that must survive. Archive is the action that is still available.
+    # ONE read, two consumers (the wall below and the audit metadata further down). Two
+    # separate reads inside the same handler could disagree, and the audit row would then
+    # describe a state that never existed.
+    runs = _research_runs_for_intake(repo.session, identity, intake_id)
+
+    if any(run.status in RESEARCH_IN_FLIGHT for run in runs):
+        # D-23.5-06. Not a permission problem and not a validation problem — a CONFLICT
+        # with a LIVE run. The operator's remedy is to wait for it or cancel it; archive
+        # is also still available. "Any row in flight", never "the newest row".
         raise HTTPException(status.HTTP_409_CONFLICT, _DELETE_BLOCKED_DETAIL)
 
     keys, skipped = _collect_intake_object_keys(repo.session, identity, intake)
@@ -2032,6 +2116,12 @@ def delete_intake(
             "status": intake.status,
             "objects": len(keys),
             "objects_skipped": skipped,
+            # The nestor-side run rows go with the cascade. These two fields are what
+            # keeps the RETAINED tribunal record reachable afterwards — tribunal_run_id
+            # has no FK and lives in another schema, so this is the last pointer. Nulls
+            # are dropped: a run that never got a tribunal id points at nothing.
+            "research_runs": len(runs),
+            "tribunal_run_ids": [r.tribunal_run_id for r in runs if r.tribunal_run_id],
         },
     )
 
