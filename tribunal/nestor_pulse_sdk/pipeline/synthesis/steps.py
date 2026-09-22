@@ -54,6 +54,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional, TYPE_CHECKING
 
+from nestor_pulse_sdk import runtime_flags
 from nestor_pulse_sdk.citations.anchors import (
     ANCHOR_RE,
     ANCHOR_RULE_SECTION,
@@ -505,6 +506,27 @@ def build_graded_sources_section(numbered: Optional[list[dict]], *texts: str) ->
     numbered set is still listed, under a line saying in words that it carries no
     verified claim link. A URL that `_extract_sources_section` would have shown
     today is never lost.
+
+    RESOLVED REDIRECTS (phase 23.5, mechanism 4 of run 7784e71c), behind
+    `runtime_flags.render_resolved()` — master `NESTOR_CITATIONS_V2`, default
+    OFF, so the shipped default is byte-for-byte this function's previous output
+    and `golden_sources_flags_off.md` pins that.
+
+    A grounding redirect is still THE CITATION and is still what `source.url`
+    stores: `_upsert_source` says so explicitly and is not changed here. But the
+    redirect is opaque to the reader and it EXPIRES roughly 30 days after the
+    run, so printing it delivers a link nobody can read today and nobody can
+    open next month. `resolved_url` was already resolved and stored by D-V01-11
+    and had simply never been read — 21 of run 7784e71c's 27 redirects had a
+    publisher URL sitting unused while the report showed the redirect.
+
+    So with the switch on the LINK TARGET becomes `resolved_url` when one is
+    stored and non-empty, the label falls back to the RESOLVED url's display
+    domain rather than `vertexaisearch.cloud.google.com`, and BOTH spellings go
+    into `numbered_urls` so the rescue below cannot list the same document a
+    second time under the other one. A redirect that was never resolved still
+    renders exactly as before: a citation is never dropped for failing to
+    resolve.
     """
     # Anchors are STILL PRESENT in `texts` here: the post-pass runs later, in
     # pipeline.py. `_MD_LINK_RE` needs `](` adjacency, so an anchor the model
@@ -518,10 +540,20 @@ def build_graded_sources_section(numbered: Optional[list[dict]], *texts: str) ->
 
     lines: list[str] = []
     numbered_urls: set[str] = set()
+    # Read ONCE per call, not once per entry: the switch must not be able to
+    # change halfway down a single Sources list.
+    show_resolved = runtime_flags.render_resolved()
     for entry in numbered:
         url = str((entry or {}).get("url") or "").strip()
+        # `.get`, never `[...]`: plan 23.5-05 adds the key only on the flags-on
+        # path, so on every stale row and on the whole flags-off path it is
+        # ABSENT rather than None. `or url` covers None and "" alike — a failed
+        # resolution must fall back to the redirect, never to a blank link.
+        url_out = url
+        if show_resolved and url:
+            url_out = str((entry or {}).get("resolved_url") or "").strip() or url
         title = str((entry or {}).get("title") or "").strip()
-        label = title or _domain(url) or url or "source"
+        label = title or _domain(url_out) or url_out or "source"
         tier = _TIER_LABELS.get((entry or {}).get("quality_tier"), "other source")
         published = (entry or {}).get("publication_date")
         date = str(published)[:10] if published else "date unknown"
@@ -531,8 +563,14 @@ def build_graded_sources_section(numbered: Optional[list[dict]], *texts: str) ->
         meta = " · ".join(segments)
         n = (entry or {}).get("n")
         if url:
+            # BOTH spellings. The prose cites whichever one the model was
+            # handed, and the rescue below must recognise the document under
+            # either — otherwise the fix would create a duplicate entry instead
+            # of removing one. With the switch off `url_out is url`, so this is
+            # the same one-element set it always was.
             numbered_urls.add(url)
-            lines.append(f"{n}. [{label}]({url}) — {meta}")
+            numbered_urls.add(url_out)
+            lines.append(f"{n}. [{label}]({url_out}) — {meta}")
         else:
             lines.append(f"{n}. {label} — {meta}")
 
