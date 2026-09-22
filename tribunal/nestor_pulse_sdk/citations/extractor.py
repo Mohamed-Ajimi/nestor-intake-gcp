@@ -637,6 +637,164 @@ def _as_list(value: object) -> list:
     return []
 
 
+def _plan_claim_sources(
+    claim: dict,
+    verdicts_by_claim: dict,
+    resolved_map: Optional[dict] = None,
+) -> list[dict]:
+    """What ONE claim would write to `source` + `claim_source`, as data.
+
+    This is the persist loop's decision, lifted out of the loop and made pure so
+    it can be replayed with no database, no network and no provider call
+    (`tests/test_citation_replay.py`). Before phase 23.5 these decisions lived
+    inline inside `persist_tribunal_claims`, where the only way to observe them
+    was to run a paid research run and then query the rows it wrote -- which is
+    how run 7784e71c shipped 4,999 `claim_source` rows for 586 claims, a median
+    of 1 per claim and a max of 58, without anything failing.
+
+    Returns one dict per URL that would be upserted and linked, in the order the
+    loop would write them, each carrying:
+
+        url                the stripped URL, the `source.url` / `snapshot_text`
+        title              `source.title`, the provider's own display label
+        provider_quality   `claim_source.provider_quality`, the PROVIDER's word
+        resolved_url       `source.resolved_url`, from the Stage-7 pre-pass
+        resolution_status  `source.resolution_status`: None / resolved / unresolved
+        origin             "provider" (the claim's own two url fields) or
+                           "skeptic" (a url reached through a verdict)
+
+    `origin` is NEW information and is deliberately not something the flags-off
+    golden speaks for -- it records WHERE a url came from, which the old inline
+    code never distinguished and which is exactly the distinction mechanism 1
+    needs.
+
+    ORDER IS LOAD-BEARING. The walk is: the claim's own `source_urls`, then its
+    `evidence_refs`, then -- per verdict, via `_verdicts_for` -- that verdict's
+    `evidence_refs`, then its `citations`. The first-seen dedupe and the citation
+    numbering both depend on that order, so it is the SAME order, with the SAME
+    `_as_list` and `isinstance(url, str)` guards, that `_gather_source_urls` has
+    always used. Dedupe is by stripped url, first-seen, PER CALL.
+
+    Nothing raises. A claim that is not a dict, a verdict that is not a dict, a
+    citation of an unexpected shape and a non-string URL are each skipped: every
+    one of these values is model-authored and arrives on the path of a paid run.
+    """
+    # Same function-local import, and for the same reason, as the one this
+    # module has always used: a pure predicate over a string, with no client and
+    # no I/O, so the resolver package's request path stays out of this module's
+    # import graph entirely.
+    from nestor_pulse_sdk.citations.redirect_resolver import is_redirect_url
+
+    if not isinstance(claim, dict):
+        return []
+
+    verdicts_by_claim = verdicts_by_claim or {}
+    # An empty map is the "never attempted" case and is read exactly like None:
+    # no URL is a member, so every `resolution_status` below comes out NULL.
+    resolved_map = resolved_map or {}
+
+    # D-13 per-URL grading. `provider_quality_by_url` is the map `_dedupe_claims`
+    # builds when two streams' versions of one fact merge -- it keeps each URL
+    # graded by the provider that SUPPLIED it. The scalar `provider_quality` is
+    # the un-merged single-provider case.
+    quality_by_url = claim.get("provider_quality_by_url")
+    if not isinstance(quality_by_url, dict):
+        quality_by_url = {}
+    claim_quality = claim.get("provider_quality")
+
+    # D-13 `source.title`. WHY THIS MATTERS: for the Gemini streams EVERY url is
+    # a `https://vertexaisearch.cloud.google.com/grounding-api-redirect/...`
+    # redirect, so the graded `## Sources` renderer's domain fallback would label
+    # every single Gemini source `vertexaisearch.cloud.google.com` -- actively
+    # misleading, not merely unhelpful. `source_domain` is the display domain
+    # 15.2-04 resolved from the provider's OWN markdown link label, so it is the
+    # provider's label and never an invented title. (`title` is NOT part of
+    # `content_hash`, so supplying it cannot change source dedupe, and an
+    # existing row keeps the title it already had.)
+    source_title = str(claim.get("source_domain") or "").strip() or None
+    if source_title:
+        source_title = source_title[:_SOURCE_TITLE_MAX_CHARS]
+
+    # The claim's OWN urls. `_as_list` guard: these keys are model-authored, and
+    # a STRING here would otherwise be iterated CHARACTER BY CHARACTER, so
+    # `"unknown"` silently became seven one-character source rows.
+    own_urls: list[str] = []
+    for url_field in ("source_urls", "evidence_refs"):
+        for url in _as_list(claim.get(url_field)):
+            if url and isinstance(url, str):
+                own_urls.append(url)
+
+    # The SKEPTIC's urls, reached through the verdict(s) -- SAME normalisation
+    # the verdict writes use, via `_verdicts_for`, so the two views of
+    # `verdicts_by_claim` cannot diverge either.
+    skeptic_urls: list[str] = []
+    for claim_verdict in _verdicts_for(claim, verdicts_by_claim):
+        for ref in _as_list(claim_verdict.get("evidence_refs")):
+            if ref and isinstance(ref, str):
+                skeptic_urls.append(ref)
+        for citation in _as_list(claim_verdict.get("citations")):
+            if isinstance(citation, dict):
+                url = citation.get("url") or citation.get("source_url") or ""
+            elif isinstance(citation, str):
+                url = citation
+            else:
+                url = ""
+            # `isinstance` guard: a citation dict whose `url` is model-authored
+            # and not a string used to reach `.strip()` and raise inside the
+            # persistence step of a paid run.
+            if url and isinstance(url, str):
+                skeptic_urls.append(url)
+
+    walked: list[tuple[str, str]] = [(u, "provider") for u in own_urls]
+    walked += [(u, "skeptic") for u in skeptic_urls]
+
+    seen_urls: set[str] = set()
+    planned: list[dict] = []
+    for raw_url, origin in walked:
+        url = raw_url.strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        # D-V01-11. THREE STATES, and they are not interchangeable:
+        #   NULL         the URL was never a resolution candidate (an ordinary
+        #                publisher URL) or no map was supplied at all -- nothing
+        #                was ever attempted for it;
+        #   'resolved'   a redirect whose publisher URL came back;
+        #   'unresolved' a redirect that WAS attempted and did not resolve.
+        #
+        # The last two must never collapse into the first. `'unresolved'` is a
+        # citation whose publisher URL is about to be lost when the redirect
+        # expires ~30 days after the run; NULL is a citation that never needed
+        # one. Recording both as NULL would erase the difference and make the
+        # loss unfindable.
+        #
+        # AND THE ROW IS PLANNED EITHER WAY. Resolution failing NEVER skips the
+        # entry: the redirect itself is still the citation. That is D-V01-11's
+        # rule verbatim -- keep the redirect and mark it unresolved, never drop a
+        # citation.
+        resolved_target = resolved_map.get(url)
+        if url not in resolved_map or not is_redirect_url(url):
+            resolution_status = None
+        elif resolved_target:
+            resolution_status = "resolved"
+        else:
+            resolution_status = "unresolved"
+
+        planned.append(
+            {
+                "url": url,
+                "title": source_title,
+                "provider_quality": quality_by_url.get(url) or claim_quality,
+                "resolved_url": resolved_target,
+                "resolution_status": resolution_status,
+                "origin": origin,
+            }
+        )
+
+    return planned
+
+
 def _gather_source_urls(claims: list[dict], verdicts_by_claim: dict) -> list[str]:
     """Every source URL `claims` would upsert, de-duplicated, in first-seen order.
 
@@ -662,55 +820,27 @@ def _gather_source_urls(claims: list[dict], verdicts_by_claim: dict) -> list[str
 
     Nothing raises: a claim that is not a dict, a verdict that is not a dict, a
     citation of an unexpected shape and a non-string URL are each skipped.
+
+    SINCE PHASE 23.5 THIS IS THE URL PROJECTION OF `_plan_claim_sources`, and the
+    extraction it performs lives there. That is the same anti-drift argument one
+    level down: the pre-pass and the loop must not merely call the same function,
+    they must call the function that MAKES THE DECISION. If this kept its own
+    copy of the walk, a change to what the loop persists -- which is exactly what
+    phase 23.5 makes, behind a switch -- would silently leave the pre-pass
+    resolving a different set, and that gap is invisible until a report cites a
+    redirect that nobody ever tried to resolve.
+
+    `resolved_map` is deliberately not threaded through: this function answers
+    "which urls", never "what is known about them".
     """
-    verdicts_by_claim = verdicts_by_claim or {}
-    source_urls: list[str] = []
-
-    for claim in claims or []:
-        if not isinstance(claim, dict):
-            continue
-
-        # From the claim dict (e.g., source_urls or evidence_refs added by
-        # intake/distiller).
-        #
-        # `_as_list` guard added with the extraction: these keys are
-        # model-authored, and a STRING here used to be iterated CHARACTER BY
-        # CHARACTER, so `"unknown"` silently became seven one-character source
-        # rows. A shape that is not a list is not a list of URLs.
-        for url_field in ("source_urls", "evidence_refs"):
-            for url in _as_list(claim.get(url_field)):
-                if url and isinstance(url, str):
-                    source_urls.append(url)
-
-        # From skeptic verdict(s) for this claim -- SAME normalisation the
-        # verdict writes use, via `_verdicts_for`, so the two views of
-        # verdicts_by_claim cannot diverge either.
-        for claim_verdict in _verdicts_for(claim, verdicts_by_claim):
-            for ref in _as_list(claim_verdict.get("evidence_refs")):
-                if ref and isinstance(ref, str):
-                    source_urls.append(ref)
-            for citation in _as_list(claim_verdict.get("citations")):
-                if isinstance(citation, dict):
-                    url = citation.get("url") or citation.get("source_url") or ""
-                elif isinstance(citation, str):
-                    url = citation
-                else:
-                    url = ""
-                # `isinstance` guard added with the extraction: a citation dict
-                # whose `url` is model-authored and not a string used to reach
-                # the `.strip()` below and raise inside the persistence step of
-                # a paid run.
-                if url and isinstance(url, str):
-                    source_urls.append(url)
-
-    # De-duplicate while preserving order.
     seen_urls: set[str] = set()
     deduped_urls: list[str] = []
-    for url in source_urls:
-        url = url.strip()
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            deduped_urls.append(url)
+    for claim in claims or []:
+        for entry in _plan_claim_sources(claim, verdicts_by_claim, None):
+            url = entry["url"]
+            if url not in seen_urls:
+                seen_urls.add(url)
+                deduped_urls.append(url)
     return deduped_urls
 
 
@@ -934,14 +1064,16 @@ async def persist_tribunal_claims(
 
         `research_gap_count` is ADDITIVE — the four pre-existing keys are unchanged.
     """
-    # D-V01-11. `is_redirect_url` is imported FUNCTION-LOCALLY and it is the only
-    # thing this module ever takes from the resolver package: a pure predicate
-    # over a string, with no client, no request and no I/O. The resolver's own
-    # entry point is deliberately NOT imported anywhere in this file, and a test
-    # asserts that it is not — so no future edit can start resolving inside the
-    # caller's transaction by adding one line here. The import is function-local
-    # so `httpx` is not pulled into this module's import graph either.
-    from nestor_pulse_sdk.citations.redirect_resolver import is_redirect_url
+    # D-V01-11. `is_redirect_url` is the ONLY thing this module ever takes from
+    # the resolver package: a pure predicate over a string, with no client, no
+    # request and no I/O. Since phase 23.5 it is imported function-locally by
+    # `_plan_claim_sources`, which is the one place that reads the resolution
+    # map, rather than here — the import moved with the code that uses it. The
+    # resolver's own entry point is deliberately NOT imported anywhere in this
+    # file, and a test asserts that it is not, so no future edit can start
+    # resolving inside the caller's transaction by adding one line. The import
+    # stays function-local so the resolver's HTTP client is not pulled into this
+    # module's import graph either.
 
     await set_tenant_context(session, tenant_id)
 
@@ -1033,74 +1165,28 @@ async def persist_tribunal_claims(
                 )
             )
 
-        # Gather source URLs from the claim itself + from skeptic verdicts.
-        # THE SAME function the resolution pre-pass called over the whole run's
-        # claims before this transaction was opened (D-V01-11) — called here
-        # with a single-element list so the two views cannot drift.
-        deduped_urls = _gather_source_urls([claim], verdicts_by_claim)
-
-        # D-13 per-URL grading. `provider_quality_by_url` is the map
-        # `_dedupe_claims` builds when two streams' versions of one fact merge —
-        # it keeps each URL graded by the provider that SUPPLIED it. The scalar
-        # `provider_quality` is the un-merged single-provider case. A URL that
-        # neither covers (a skeptic's own web_fetch citation, say) is graded
-        # NULL and falls through to `derive_quality_tier`'s domain heuristic.
-        quality_by_url = claim.get("provider_quality_by_url")
-        if not isinstance(quality_by_url, dict):
-            quality_by_url = {}
-        claim_quality = claim.get("provider_quality")
-
-        # D-13 `source.title`. WHY THIS MATTERS: for the Gemini streams EVERY
-        # url is a `https://vertexaisearch.cloud.google.com/grounding-api-
-        # redirect/...` redirect, so the graded `## Sources` renderer's domain
-        # fallback would label every single Gemini source
-        # `vertexaisearch.cloud.google.com` — actively misleading, not merely
-        # unhelpful. `source_domain` is the display domain 15.2-04 resolved from
-        # the provider's OWN markdown link label, so it is the provider's label
-        # and never an invented title. 15.2-05 added the parameter and left it
-        # unused by production callers; this is the plan that supplies it.
-        # (`title` is NOT part of `content_hash`, so supplying it cannot change
-        # source dedupe, and an existing row keeps the title it already had.)
-        source_title = str(claim.get("source_domain") or "").strip() or None
-        if source_title:
-            source_title = source_title[:_SOURCE_TITLE_MAX_CHARS]
+        # WHAT THIS CLAIM WRITES, decided as data before anything is written.
+        #
+        # `_plan_claim_sources` owns every one of these decisions — which urls,
+        # in which order, with which title, grade and resolution status. The
+        # Stage-7 resolution pre-pass reaches the SAME function through
+        # `_gather_source_urls` (D-V01-11), so the set this loop upserts and the
+        # set the pre-pass resolved cannot drift. The loop below does no
+        # deciding at all: it iterates the plan.
+        planned_sources = _plan_claim_sources(claim, verdicts_by_claim, resolved_map)
 
         # Upsert source rows + link claim_source rows
-        for url in deduped_urls:
-            # D-V01-11. THREE STATES, and they are not interchangeable:
-            #   NULL         the URL was never a resolution candidate (an
-            #                ordinary publisher URL) or no map was supplied at
-            #                all -- nothing was ever attempted for it;
-            #   'resolved'   a redirect whose publisher URL came back;
-            #   'unresolved' a redirect that WAS attempted and did not resolve.
-            #
-            # The last two must never collapse into the first. `'unresolved'` is
-            # a citation whose publisher URL is about to be lost when the
-            # redirect expires ~30 days after the run; NULL is a citation that
-            # never needed one. Recording both as NULL would erase the
-            # difference and make the loss unfindable.
-            #
-            # AND THE ROW IS WRITTEN EITHER WAY. Resolution failing NEVER skips
-            # the upsert: the redirect itself is still the citation. That is
-            # D-V01-11's rule verbatim -- keep the redirect and mark it
-            # unresolved, never drop a citation.
-            resolved_target = resolved_map.get(url)
-            if url not in resolved_map or not is_redirect_url(url):
-                resolution_status = None
-            elif resolved_target:
-                resolution_status = "resolved"
-            else:
-                resolution_status = "unresolved"
-
+        for entry in planned_sources:
+            url = entry["url"]
             sid = await _upsert_source(
                 session,
                 tenant_id=tenant_id,
                 url=url,
                 provider="tribunal_skeptic",
                 snapshot_text=url,  # minimal snapshot; Phase 2 can enrich
-                title=source_title,
-                resolved_url=resolved_target,
-                resolution_status=resolution_status,
+                title=entry["title"],
+                resolved_url=entry["resolved_url"],
+                resolution_status=entry["resolution_status"],
             )
             source_ids.append(sid)
             await _link_claim_source(
@@ -1108,7 +1194,7 @@ async def persist_tribunal_claims(
                 tenant_id=tenant_id,
                 claim_id=claim_id,
                 source_id=sid,
-                provider_quality=quality_by_url.get(url) or claim_quality,
+                provider_quality=entry["provider_quality"],
             )
 
     # ------------------------------------------------------------------------
