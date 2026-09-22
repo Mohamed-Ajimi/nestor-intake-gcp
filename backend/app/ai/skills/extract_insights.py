@@ -116,9 +116,15 @@ def run_extract_insights(identity: Identity, intake_id: Any, run_id: Any) -> dic
             for row in TranscriptRepository(session, identity).list_for_intake(intake_id)
         ]
 
-        lines: list[str] = ["# Klantcontext"]
+        # These two lines used the Dutch word for "client"; `client_name` is
+        # `intakes.client_name` — the operator's free-text label for this intake, i.e.
+        # the PROJECT name (D-23.5-03). The client organisation reaches the model
+        # through the answers below (`client_info.client_name`). No prompt and no parser
+        # reads either line: `app/ai/prompts.py` and `app/ai/parsing.py` were grepped
+        # for the old labels before the edit and returned nothing (23.5-03 SUMMARY).
+        lines: list[str] = ["# Projectcontext"]
         if client_name:
-            lines.append(f"Klant: {client_name}")
+            lines.append(f"Projectnaam: {client_name}")
         lines.append("")
         lines.append("# Antwoorden uit de intake")
         for answer in answers:

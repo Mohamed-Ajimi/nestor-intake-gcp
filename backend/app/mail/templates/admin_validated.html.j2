@@ -6,7 +6,20 @@
 {% block tag %}Nestor Pulse — Admin{% endblock %}
 {% block content %}
 <h1>Klant heeft gevalideerd</h1>
-<p><strong>{{ client_name }}</strong> heeft de intake gevalideerd voor project &ldquo;{{ project_title }}&rdquo;.</p>
+{#
+  D-23.5-03. This line used to read
+  `<strong>{{ client_name }}</strong> heeft de intake gevalideerd voor project "{{ project_title }}"`,
+  which rendered the SAME value twice and labelled it as the validating party: the
+  call site (`intake_routes._send_admin_validated`) passes `intake.client_name` to
+  BOTH `client_name` and `project_title`, and `intakes.client_name` is the operator's
+  free-text PROJECT label. So the mail said `Acme herpositionering heeft de intake
+  gevalideerd voor project "Acme herpositionering"`. The actor is now named as "de
+  klant" in prose and the value is rendered once, in the slot where it is true.
+  `client_name` stays in `render_admin_validated`'s signature (jinja ignores unused
+  context) so no caller and no test has to change; it is unrendered, not lost. When a
+  real client/space name becomes available here, put it back in the actor slot.
+#}
+<p>De klant heeft de intake gevalideerd voor project &ldquo;<strong>{{ project_title }}</strong>&rdquo;.</p>
 <p>Status: <code>validated_by_client</code></p>
 <p>Volgende stap: Context Pack genereren en research starten.</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open intake in admin →</a></p>

@@ -84,7 +84,7 @@
   },
   "route": {
     "loadFailed": "Impossible de charger l'intake. Actualisez la page.",
-    "noTemplate": "Aucun modèle d'intake disponible pour cet espace.",
+    "noTemplate": "Aucun modèle d'intake disponible.",
     "loading": "Chargement…",
     "backToOverview": "Retour à l'aperçu",
     "logout": "Se déconnecter"
@@ -167,7 +167,7 @@
   },
   "resultsRoute": {
     "loadFailed": "Impossible de charger l'intake. Actualisez la page.",
-    "noTemplate": "Aucun modèle d'intake disponible pour cet espace.",
+    "noTemplate": "Aucun modèle d'intake disponible.",
     "loading": "Chargement…",
     "backToOverview": "Retour à l'aperçu",
     "brand": "Agenic",
@@ -320,7 +320,7 @@
     "loadFailed": "Échec du chargement des membres : {{error}}",
     "recipientsLabel": "Destinataires",
     "loadError": "Les membres n'ont pas pu être chargés.",
-    "noMembers": "⌀ Aucun membre actif dans cet espace",
+    "noMembers": "⌀ Aucun membre actif pour ce client",
     "inviteFirst": "Invitez d'abord quelqu'un.",
     "noName": "(sans nom)",
     "cancel": "Annuler",

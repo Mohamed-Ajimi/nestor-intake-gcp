@@ -13,7 +13,7 @@
     "salesNewProject": "Nieuw project",
     "salesProjects": "Projecten",
     "manageUsers": "gebruikers",
-    "manageSpaces": "spaces"
+    "manageSpaces": "klanten"
   },
   "home": {
     "title": "kies een product",
@@ -26,7 +26,7 @@
     }
   },
   "intakeDetail": {
-    "unknownClient": "Onbekende klant",
+    "unknownClient": "Naamloos project",
     "status": {
       "draft": "Concept",
       "submitted": "Ingediend",
@@ -204,12 +204,12 @@
     "saved": "Klant opgeslagen"
   },
   "spaces": {
-    "title": "spaces",
-    "subtitle": "Beheer client-spaces — aanmaken, naam/slug bewerken en deactiveren.",
-    "new": "+ Nieuwe space",
+    "title": "klanten",
+    "subtitle": "Beheer klanten — aanmaken, naam/slug bewerken en deactiveren.",
+    "new": "+ Nieuwe klant",
     "empty": {
-      "title": "Nog geen spaces",
-      "body": "Maak de eerste space aan om gebruikers en templates te beheren."
+      "title": "Nog geen klanten",
+      "body": "Maak de eerste klant aan om gebruikers en templates te beheren."
     },
     "table": {
       "name": "Naam",
@@ -228,17 +228,17 @@
       "cancel": "Annuleren"
     },
     "confirm": {
-      "title": "Space deactiveren?",
-      "body": "De space wordt verborgen voor gebruikers. Gegevens blijven bewaard en de space kan later opnieuw geactiveerd worden."
+      "title": "Klant deactiveren?",
+      "body": "De klant wordt verborgen voor gebruikers. Gegevens blijven bewaard en de klant kan later opnieuw geactiveerd worden."
     },
     "toast": {
       "reactivated": "Opnieuw geactiveerd",
-      "deactivated": "Space gedeactiveerd"
+      "deactivated": "Klant gedeactiveerd"
     }
   },
   "spaceForm": {
-    "createTitle": "nieuwe space",
-    "editTitle": "space bewerken",
+    "createTitle": "nieuwe klant",
+    "editTitle": "klant bewerken",
     "name": "Naam",
     "slug": "Slug",
     "slugPlaceholder": "bv. acme-corp",
@@ -256,7 +256,7 @@
   },
   "invite": {
     "invalidEmail": "Ongeldig e-mailadres",
-    "chooseSpace": "Kies een space",
+    "chooseSpace": "Kies een klant",
     "invalidInput": "Ongeldige invoer",
     "duplicateAccount": "Er bestaat al een account voor dit e-mailadres.",
     "inviteFailed": "Uitnodiging mislukt. Probeer opnieuw.",
@@ -276,8 +276,8 @@
     "close": "Sluiten",
     "formTitle": "gebruiker uitnodigen",
     "emailLabel": "E-mailadres",
-    "spaceLabel": "Space",
-    "spacePlaceholder": "Kies een space…",
+    "spaceLabel": "Klant",
+    "spacePlaceholder": "Kies een klant…",
     "roleFixed": "Rol: gebruiker",
     "cancel": "Annuleren",
     "creating": "Aanmaken…",
@@ -291,12 +291,12 @@
     "mailSent": "Uitnodigingsmail verstuurd",
     "deactivated": "Gebruiker gedeactiveerd",
     "title": "gebruikers",
-    "subtitle": "Gebruikers per space — uitnodigen, deactiveren en heractiveren.",
+    "subtitle": "Gebruikers per klant — uitnodigen, deactiveren en heractiveren.",
     "inviteUser": "+ Gebruiker uitnodigen",
-    "emptyTitle": "⌀ Nog geen gebruikers in deze space",
+    "emptyTitle": "⌀ Nog geen gebruikers bij deze klant",
     "emptyBody": "Nodig de eerste gebruiker uit om te beginnen.",
     "colEmail": "E-mail",
-    "colSpace": "Space",
+    "colSpace": "Klant",
     "colStatus": "Status",
     "colActions": "Acties",
     "statusActive": "ACTIEF",
@@ -341,14 +341,14 @@
   },
   "templates": {
     "title": "templates",
-    "subtitle": "Kloon een standaard-template in een space en bewerk het schema (JSON).",
+    "subtitle": "Kloon een standaard-template voor een klant en bewerk het schema (JSON).",
     "cloneCta": "+ Template klonen",
-    "spaceLabel": "Space",
-    "spacePlaceholder": "Kies een space…",
-    "emptyTitle": "⌀ Nog geen templates in deze space",
+    "spaceLabel": "Klant",
+    "spacePlaceholder": "Kies een klant…",
+    "emptyTitle": "⌀ Nog geen templates bij deze klant",
     "emptyBody": "Kloon een standaard-template om te beginnen.",
     "editSchema": "schema bewerken →",
-    "chooseSpace": "Kies een space.",
+    "chooseSpace": "Kies een klant.",
     "nameRequired": "Naam is verplicht.",
     "cloned": "Template gekloond",
     "cloneTitle": "template klonen",
@@ -369,17 +369,18 @@
     "saveSchema": "Schema opslaan"
   },
   "intakesNew": {
-    "clientNameRequired": "Geef een klantnaam op.",
+    "clientNameRequired": "Geef een projectnaam op.",
     "createdTitle": "Intake aangemaakt",
     "createdBody": "De intake staat klaar op status 'Concept'. Open ze om de antwoorden in te vullen.",
-    "clientLabel": "Klant: {{name}}",
+    "clientLabel": "Project: {{name}}",
     "openIntake": "Open intake",
     "backToList": "← Terug naar intakes-lijst",
     "createAnother": "Nog een intake aanmaken",
     "title": "Nieuwe intake",
-    "subtitle": "Geef de klant een naam. De intake wordt aangemaakt binnen de actieve klant-ruimte.",
-    "clientNameLabel": "Klantnaam",
-    "clientNamePlaceholder": "bv. Acme NV",
+    "subtitle": "Geef het project een naam. De intake wordt aangemaakt voor de actieve klant.",
+    "clientNameLabel": "Projectnaam",
+    "clientNamePlaceholder": "bv. Marktintrede Benelux",
+    "noClientSelected": "Kies eerst een klant in de bovenbalk — een intake hoort altijd bij één klant.",
     "cancel": "← Annuleer",
     "creating": "Bezig met aanmaken…",
     "createButton": "Maak intake aan"
@@ -402,7 +403,7 @@
     "intakesFor": "intakes voor {{name}}",
     "total": "{{count}} totaal",
     "noIntakes": "Nog geen intakes voor deze klant.",
-    "colName": "Naam",
+    "colName": "Project",
     "colStatus": "Status",
     "unnamed": "Zonder naam",
     "newIntakeFor": "+ Nieuwe intake voor {{name}}"
@@ -410,7 +411,7 @@
   "clients": {
     "title": "klanten",
     "subtitle": "Alleen klanten met minstens één Pulse-project.",
-    "searchPlaceholder": "zoek op klant of naam…",
+    "searchPlaceholder": "zoek op klant of project…",
     "loading": "Laden…",
     "emptyTitle": "⌀ Nog geen klanten met Pulse-projecten",
     "emptyBody": "Klanten verschijnen hier zodra je hun eerste intake aanmaakt.",
@@ -454,10 +455,10 @@
       "delivered": "Geleverd",
       "archived": "Gearchiveerd"
     },
-    "searchPlaceholder": "Zoek klant of naam…",
+    "searchPlaceholder": "Zoek klant of project…",
     "showArchived": "Toon gearchiveerd",
     "colClient": "Klant",
-    "colName": "Naam",
+    "colName": "Project",
     "colStatus": "Status",
     "colActions": "Acties",
     "emptyTitle": "Nog geen intakes",

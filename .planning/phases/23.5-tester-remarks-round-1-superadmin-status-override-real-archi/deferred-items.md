@@ -1,5 +1,81 @@
 # Deferred items — phase 23.5
 
+## DEF-23.5-03-01 — `test_timestamp_on_success_only` is order-dependent (counts audit rows without an intake filter)
+
+**Found:** 2026-09-22, during plan 23.5-03 Task 2 verification.
+**Status:** PRE-EXISTING, out of scope for plan 03. NOT caused by this plan.
+
+`tests/test_mail_endpoints.py:207` `_count_mail_sent_audit(engine, space_id)`
+counts EVERY `audit_log` row with `event_type == "mail.sent"` visible under the
+space GUC — no intake filter, and no per-test cleanup of the shared container.
+`test_timestamp_on_success_only:319` then asserts that count `== 1`.
+
+Run in the order the plan's own acceptance command specifies
+(`test_mail_render.py test_mail_locale.py test_mail_endpoints.py
+test_intake_validate_mail.py`) it fails with `assert 7 == 1`: the sends driven by
+`test_mail_locale.py` have already written six `mail.sent` rows that the helper
+happily counts.
+
+**Proof it is pre-existing and not this plan's doing:**
+
+| Command | Result |
+|---|---|
+| FULL backend suite (`python -m pytest -q`) | **871 passed, 2 skipped** — exactly plan 23.5-02's baseline |
+| `pytest tests/test_mail_endpoints.py` | 13 passed |
+| `pytest tests/test_mail_endpoints.py tests/test_mail_locale.py` (endpoints FIRST) | 33 passed |
+| `pytest ... test_mail_locale.py test_mail_endpoints.py ...` (locale FIRST) | 1 failed, 56 passed |
+
+The only behavioural thing plan 03 changed on the mail path is one line of prose
+inside `admin_validated.html.j2`; `git diff backend/app/api/intake_routes.py`
+filtered to non-comment lines is EMPTY. Neither can create an `audit_log` row.
+The full suite runs alphabetically, so `test_mail_endpoints` sorts before
+`test_mail_locale` there and the defect stays hidden in CI.
+
+**Fix when someone owns it:** give `_count_mail_sent_audit` an `intake_id`
+parameter and filter on it (the `mail.sent` rows carry the intake), or truncate
+`audit_log` between tests. One helper, one call site. Not done here because
+`tests/test_mail_endpoints.py` is outside plan 03's declared surface and the
+scope boundary forbids fixing failures the plan's own changes did not cause.
+
+## DEF-23.5-03-02 — `ci_no_hardcoded_dutch.sh` is red on two COMMENT lines
+
+**Found:** 2026-09-22, during plan 23.5-03 Task 1 verification.
+**Status:** PRE-EXISTING, out of scope. The plan did not name this gate.
+
+`bash frontend/scripts/ci_no_hardcoded_dutch.sh` (run from the repo root — from
+`frontend/` it aborts with "scan dir does not exist: frontend/src") fails on:
+
+- `frontend/src/components/admin/adminNav.ts:6` — `// Beheer routes rely on reference equality.`
+- `frontend/src/components/admin/ProductShell.tsx:91` — `Skipped when the primary nav already IS the manage nav (Beheer pages pass the`
+
+Both are COMMENTS, in files plan 03 did not touch (`git diff --name-only`
+contains neither). The script greps source text without excluding comments, so
+these are false positives on prose, not untranslated UI copy. Note also that the
+script's own usage is undocumented: it only works from the repo root.
+
+**Fix when someone owns it:** strip `//` and `/* */` regions before matching, or
+allow-list the two lines. Two lines, one script.
+
+## DEF-23.5-03-03 — the client mails greet the recipient with the PROJECT name
+
+**Found:** 2026-09-22, during plan 23.5-03 Task 2's mail audit.
+**Status:** PRE-EXISTING defect, deliberately NOT fixed — out of D-23.5-03's
+label-only scope.
+
+`intake_routes._run_intake_send` passes `first_name=client` where
+`client = intake.client_name or "team"` — i.e. the PROJECT name — into
+`render_results` / `render_intake` / `render_validation`. The templates render
+`<h1>Hi {{ first_name or "team" }}</h1>` (and the fr/nl equivalents), so a real
+client receives "Hi Marktintrede Benelux".
+
+This is NOT a mislabel — no surrounding word claims the value is a client — so
+it fell outside the relabel audit, which is why it is recorded rather than
+changed. Fixing it needs a recipient first-name to exist (the send path resolves
+memberships, so one is reachable) and is a behaviour change, not a copy change.
+
+**Fix when someone owns it:** resolve the recipient's own name per locale group
+and pass it, or drop the name from the greeting entirely ("Hi" / "Bonjour").
+
 ## DEF-23.5-04-01 — `test_scrub_research.py` fails whenever another async test module runs first
 
 **Found:** 2026-09-22, during plan 23.5-04 Task 3 verification.

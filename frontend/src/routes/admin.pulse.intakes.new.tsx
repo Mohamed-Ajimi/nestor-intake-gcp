@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createIntake, type Intake } from "@/lib/api/intakes";
+import { useActiveSpace } from "@/lib/active-space";
+import { useAuth } from "@/lib/auth-context";
 
 export const Route = createFileRoute("/admin/pulse/intakes/new")({
  // Optional search key (`{ client_id?: string }`, not a required possibly-undefined key)
@@ -20,10 +22,25 @@ function NewIntakePage() {
  const { t } = useTranslation("admin");
  const navigate = useNavigate();
 
- // The intake's client label (free text). The owning space is injected server-side
- // from the verified identity (TENANT-02) — never sent from the browser. Superadmins
- // target a space via the global active-space switcher (plan 08), not this form.
+ // The intake's PROJECT name (free text). The variable is still called `clientName`
+ // and the API field is still `client_name` ON PURPOSE: D-23.5-03 is a LABEL change
+ // only — `intakes.client_name` is not renamed and there is no migration. Do not
+ // "fix" this mismatch; the column name and the label are deliberately out of step.
+ // The owning space is injected server-side from the verified identity (TENANT-02)
+ // — never sent from the browser. Superadmins target a space via the global
+ // active-space switcher (plan 08), not this form.
  const [clientName, setClientName] = useState("");
+
+ // The no-client-selected guard. `create_intake` (intake_routes.py) answers 422
+ // "Select a client (space) before creating an intake." for a SUPERADMIN with no
+ // `?space_id`, and ignores the param entirely for a regular user (their space comes
+ // from the verified token). So the guard mirrors the backend exactly: superadmin AND
+ // no active client. `AdminLayout` already walls off non-superadmins, which makes the
+ // role half redundant today — it is kept so the guard stays true to the backend rule
+ // rather than to the current shape of the wall above it.
+ const { activeSpaceId } = useActiveSpace();
+ const { isSuperadmin } = useAuth();
+ const noClientSelected = isSuperadmin && !activeSpaceId;
 
  const [submitting, setSubmitting] = useState(false);
  const [errors, setErrors] = useState<string[]>([]);
@@ -36,6 +53,13 @@ function NewIntakePage() {
  };
 
  const submit = async () => {
+ // Re-checked here and not only on the button's `disabled`: a disabled attribute is
+ // an affordance, not a guard (the same rule plan 23.5-02 applied to the typed-DELETE
+ // confirmation).
+ if (noClientSelected) {
+ setErrors([t("intakesNew.noClientSelected")]);
+ return;
+ }
  const errs: string[] = [];
  if (!clientName.trim()) errs.push(t("intakesNew.clientNameRequired"));
  setErrors(errs);
@@ -122,11 +146,17 @@ function NewIntakePage() {
  </div>
  )}
 
+ {noClientSelected && (
+ <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+ {t("intakesNew.noClientSelected")}
+ </div>
+ )}
+
  <div className="flex items-center justify-between border-t border-ink/15 pt-6">
  <Link to="/admin/pulse/intakes" className="font-mono text-xs uppercase tracking-wider text-ink/60 hover:text-ink">
  {t("intakesNew.cancel")}
  </Link>
- <Button onClick={submit} disabled={submitting}>
+ <Button onClick={submit} disabled={submitting || noClientSelected}>
  {submitting ? (
  <>
  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
