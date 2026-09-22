@@ -860,7 +860,7 @@ Plans:
 **Requirements**: TR1-STATUS, TR2-SOURCES, TR2B-TRUNCATION, TR3-ARCHIVE-DELETE, TR4-NAMING, SHIP-23.5 (derived from the four tester remarks; none registered in REQUIREMENTS.md — this phase was inserted 2026-09-22 after Nestor's first week on `nestor-pulse-prod`)
 **Depends on:** Phase 23
 **Authority:** `.planning/phases/23.5-*/23.5-CONTEXT.md` — operator rulings D-23.5-01..05.
-**Plans:** 7 plans in 4 waves
+**Plans:** 2/7 plans executed
 
 - Wave 1: 01 (status override) + 04 (tribunal persist) — the tribunal track depends on NOTHING outside tribunal and shares no file with the backend/frontend track.
 - Wave 2: 02 (archive + guarded hard delete) + 05 (tribunal numbering/ledger)
@@ -870,10 +870,10 @@ Plans:
 - ⛔ Nothing under `tribunal/nestor_pulse_sdk/runs/`, `audit/` or `alembic/` is touched (the D-23.1-06 fence); `research_router` stays mounted (D-23.1-10).
 
 Plans:
-- [ ] 23.5-01-PLAN.md — POST /intakes/{id}/status superadmin override + the detail-page select
+- [x] 23.5-01-PLAN.md — POST /intakes/{id}/status superadmin override + the detail-page select
 - [ ] 23.5-02-PLAN.md — archive wiring + DELETE /intakes/{id} with the research-run 409 and the GCS prefix wall
 - [ ] 23.5-03-PLAN.md — project/client naming in nl/fr/en + the AI context header (label-only, D-23.5-03)
-- [ ] 23.5-04-PLAN.md — kill switches, offline replay fixture, flags-off golden, skeptic fan-out + per-URL label/grade
+- [x] 23.5-04-PLAN.md — kill switches, offline replay fixture, flags-off golden, skeptic fan-out + per-URL label/grade
 - [ ] 23.5-05-PLAN.md — primary-URL anchor ordering (beside the pinned SQL) + numberable-only fact ledger
 - [ ] 23.5-06-PLAN.md — render `resolved_url` + one-shot continuation for truncated chapters
 - [ ] 23.5-07-PLAN.md — ship: Terraform flag surface, dev run read against the acceptance numbers, promotion by digest

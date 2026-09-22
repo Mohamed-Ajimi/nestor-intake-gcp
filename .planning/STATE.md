@@ -4,12 +4,12 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-22T07:39:42.272Z"
-last_activity: 2026-09-11 -- Phase 23.4 execution started
+last_updated: "2026-09-22T08:23:59.903Z"
+last_activity: 2026-09-22 -- Phase 23.5 execution started
 progress:
   total_phases: 25
   completed_phases: 18
-  total_plans: 183
+  total_plans: 190
   completed_plans: 181
   percent: 72
 ---
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** A logged-in superadmin can run a full deep-research cycle on a decomposed intake — Tribunal research, human-crafted report delivery, and client Q&A over the findings — on the same GCP platform, with every client's data isolated to its own space and the legally required audit trail intact.
-**Current focus:** Phase 23.4 — client-environment-stand-up-the-fresh-nestor-pulse-prod-proj
+**Current focus:** Phase 23.5 — tester-remarks-round-1-superadmin-status-override-real-archi
 
 ## Current Position
 
-Phase: 23.4 (client-environment-stand-up-the-fresh-nestor-pulse-prod-proj) — EXECUTING
-Plan: 1 of 5
+Phase: 23.5 (tester-remarks-round-1-superadmin-status-override-real-archi) — EXECUTING
+Plan: 1 of 7
 **→ CURRENT PHASE: 23.5 — tester remarks round 1 (inserted 2026-09-22 after Nestor testing). PLANNED 2026-09-22: 7 plans / 4 waves, checker 0 blockers (3 warnings fixed inline, commit follows `4ee6640`). Next: `/gsd-execute-phase 23.5`.** 23.4 is live on `nestor-pulse-prod` (proving run 09-14, handover 09-17, first real run 09-18); its plan 05 (runbook/records) is still open and folds into 23.5 wave 4.
 
 (previous pointer) **Phase: 23.4 — client environment (`nestor-pulse-prod`), inserted 2026-09-11. Next: `/gsd-plan-phase 23.4 --skip-research`.** Decision 2026-09-11: the client gets a FRESH project; `project-cb01b861-cb4a-438d-b9a` becomes the dev environment.
@@ -372,7 +372,7 @@ Phase 15.6 (Wave 3) COMPLETE, GATE-VERIFIED, NOT DEPLOYED — 7/7 plans, verific
     - WR-04: `_bound_groups_to_winners(17, …)` still raises on `list(groups or [])`.
     - Test-file code review was never run (production files only). 6 test files unreviewed.
 
-Status: Executing Phase 23.4
+Status: Executing Phase 23.5
   built — operator ruling 2026-07-29. 15.4-11 deploy plan stays PARKED and must be RE-SCOPED from
   "Wave 1 alone" to the whole redesign before it ever runs.
   OWED AT 15.8, still unpaid: the two Alembic proofs — the literal lines `Running upgrade 0015 -> 0016`
@@ -482,7 +482,7 @@ BEFORE V-01, verify by hand:
   Standing operator direction 2026-07-24 holds: ONE combined Phase-15* browser UAT against a
   live run, not piecemeal.
 Next: /gsd-plan-phase for Wave 2 (claim attribution, D-R3) off .planning/ENGINE-REDESIGN-SPEC.md § 3. Then Wave 3 (dispatch + discovery bracket), Wave 4 (creative loop), Wave 5 (yield). ONE deploy + ONE run at the end. Rotate Nestor_Claude_Temp before that run.
-Last activity: 2026-09-11 -- Phase 23.4 execution started
+Last activity: 2026-09-22 -- Phase 23.5 execution started
 
 Progress: [██████████] 100%
 
