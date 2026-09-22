@@ -1,0 +1,409 @@
+{
+  "c01_sourceless_no_verdict": [],
+  "c02_single_provider_url": [
+    {
+      "url": "https://www.rijksoverheid.nl/onderwerpen/fixture",
+      "title": "rijksoverheid.nl",
+      "provider_quality": "official",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c03_long_tail_mostly_skeptic": [
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://fd.nl/bedrijfsleven/0000001/fixture-piece",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-01.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-02.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-03.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-04.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-05.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-06.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-07.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-08.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-09.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-10.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-11.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-12.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-13.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-14.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-15.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-16.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-17.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-18.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-19.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://example-20.test/article",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "cbs.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c04a_group_member_one": [
+    {
+      "url": "https://fd.nl/bedrijfsleven/0000001/fixture-piece",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Fixture_subject",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.rijksoverheid.nl/onderwerpen/fixture",
+      "title": "fd.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c04b_group_member_two": [
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Fixture_subject",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://fd.nl/bedrijfsleven/0000001/fixture-piece",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.rijksoverheid.nl/onderwerpen/fixture",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c04c_group_member_three_no_own_url": [
+    {
+      "url": "https://en.wikipedia.org/wiki/Fixture_subject",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://fd.nl/bedrijfsleven/0000001/fixture-piece",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.rijksoverheid.nl/onderwerpen/fixture",
+      "title": "ah.nl",
+      "provider_quality": null,
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c05_foreign_hosts_one_title": [
+    {
+      "url": "https://en.wikipedia.org/wiki/Fixture_subject",
+      "title": "wikipedia.org",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "wikipedia.org",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001",
+      "title": "wikipedia.org",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c06_redirects_resolved_and_not": [
+    {
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFr3s1Kq9bWresolved0001",
+      "title": "nos.nl",
+      "provider_quality": "press",
+      "resolved_url": "https://www.nos.nl/artikel/2500001-fixture-article",
+      "resolution_status": "resolved"
+    },
+    {
+      "url": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQFr3s1Kq9bWunresolved02",
+      "title": "nos.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": "unresolved"
+    },
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "nos.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Fixture_subject",
+      "title": "nos.nl",
+      "provider_quality": "press",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c07_distiller_fallback_unnumberable": [],
+  "c08_free_text_evidence_ref": [
+    {
+      "url": "https://www.ah.nl/producten/product/wi000001 (\"we hebben het assortiment aangepast\")",
+      "title": "ah.nl",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c09_partial_quality_map": [
+    {
+      "url": "https://www.cbs.nl/nl-nl/cijfers/detail/00000",
+      "title": "cbs.nl",
+      "provider_quality": "official",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.rijksoverheid.nl/onderwerpen/fixture",
+      "title": "cbs.nl",
+      "provider_quality": "official",
+      "resolved_url": null,
+      "resolution_status": null
+    },
+    {
+      "url": "https://www.ebay.de/itm/000000000001",
+      "title": "cbs.nl",
+      "provider_quality": "official",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ],
+  "c10_overlong_source_domain": [
+    {
+      "url": "https://fd.nl/bedrijfsleven/0000001/fixture-piece",
+      "title": "verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.verylongdomainlabel.",
+      "provider_quality": "other",
+      "resolved_url": null,
+      "resolution_status": null
+    }
+  ]
+}
