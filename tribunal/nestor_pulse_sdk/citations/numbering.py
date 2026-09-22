@@ -56,6 +56,12 @@ from urllib.parse import urlparse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# Imported as a MODULE, not as names: every call site below reads
+# `runtime_flags.<switch>()` and therefore says out loud, at the point of use,
+# that it is a switch. The module holds nothing but `os` and seven functions, so
+# it is safe to import from a path this cheap.
+from nestor_pulse_sdk import runtime_flags
+
 
 # ---------------------------------------------------------------------------
 # Quality-tier heuristic (provider/domain) -- derived, NOT a stored column (A3).
@@ -158,6 +164,103 @@ _CLAIM_SOURCE_SQL = (
     "ORDER BY c.position ASC NULLS LAST, c.id ASC, s.id ASC"
 )
 
+# ---------------------------------------------------------------------------
+# THE SECOND ORDERING (phase 23.5, mechanism 3). ADDED BESIDE the constant
+# above, never in place of it -- `_CLAIM_SOURCE_SQL` is a determinism CONTRACT
+# with a test pinning it, and the flags-off path must keep executing it byte for
+# byte.
+#
+# WHAT IS WRONG WITH THE FIRST ORDERING. `_assign_numbers` maps a claim to its
+# FIRST row, and the first ordering's last key is `s.id ASC` -- the lowest source
+# UUID. A UUID is arbitrary. On run 7784e71c that arbitrariness decided the
+# citation for 232 of 427 sourced claims, which anchored to a host they have
+# nothing to do with (Wikipedia 125, ebay.de 44, ah.nl 29): the claim's own
+# provider url lost a coin toss against a url the group skeptic had merely
+# searched past.
+#
+# WHY `(s.title IS NULL)` IS THE PROXY FOR "THIS CLAIM'S OWN PROVIDER URL".
+# Under phase 23.5's `per_url_meta()` (`citations/extractor.py`), a
+# `source.title` is written for exactly two kinds of url: one the claim's OWN
+# provider supplied and labelled, and a grounding redirect, where the provider's
+# display label is the only honest thing to print. Every other url -- notably
+# every url reached through a verdict -- is stored with a NULL title. So
+# "titled first" selects a provider url OF THIS CLAIM, deterministically, using
+# a column that is already there.
+#
+# THE LIMIT, STATED HONESTLY. This selects *a* provider url of the claim, not
+# specifically `source_urls[0]`. Pinning the provider's own FIRST url would need
+# a stored rank on `claim_source`, which has columns
+# `(claim_id, source_id, tenant_id, snippet, confidence, provider_quality)` and
+# no rank, sequence or timestamp among them. Adding one is a migration, and
+# `0019` belongs to Phase 24 / DEF-22-06 -- this phase adds none. `snippet` is
+# Phase 24's UAT-22-F2 excerpt slot and `confidence` is PHASE2-05's; neither may
+# be hijacked as a rank. Recorded as a deferred item and a candidate rider for
+# that migration.
+#
+# `s.id ASC` REMAINS THE FINAL TIE-BREAK in both variants, so both orderings are
+# total and both are byte-stable across calls. The two statements differ by that
+# one ordering term and by the `resolved_url` column, and nothing else; both are
+# asserted against string literals in `tests/test_citation_replay_anchors.py`.
+# ---------------------------------------------------------------------------
+
+#: Everything up to and including the shared head of the ORDER BY. A FIXED
+#: literal: `_claim_source_sql` appends one of two FIXED tails, so no caller
+#: value is ever interpolated into a statement (T-23.5-05-T2).
+_CLAIM_SOURCE_SQL_V2_HEAD = (
+    "SELECT c.id AS claim_id, c.position AS position, "
+    "       s.id AS source_id, s.title AS title, s.url AS url, "
+    # D-V01-11's durable publisher url, SELECTed so the renderer can print it
+    # instead of an opaque grounding redirect (mechanism 4, rendered in plan 06).
+    "       s.resolved_url AS resolved_url, "
+    "       s.provider AS provider, s.fetched_at AS fetched_at, "
+    "       cs.provider_quality AS provider_quality "
+    "FROM claim c "
+    "JOIN claim_source cs ON cs.claim_id = c.id "
+    "JOIN source s ON s.id = cs.source_id "
+    # SAME run scope, SAME two joins, SAME tenant context as the pinned
+    # statement: RLS scopes claim/source/claim_source exactly as before and this
+    # opens no new cross-tenant surface (T-23.5-05-I).
+    "WHERE c.run_id = :rid "
+    "ORDER BY c.position ASC NULLS LAST, c.id ASC, "
+)
+
+
+def _claim_source_sql(primary_first: bool) -> str:
+    """The phase-23.5 claim -> source statement, in one of its two fixed forms.
+
+    `primary_first=True` inserts `(s.title IS NULL) ASC` before the `s.id ASC`
+    tie-break, so a claim is numbered from a url its own provider supplied rather
+    than from whichever linked source happens to hold the lowest UUID.
+    `primary_first=False` is the same statement with the pinned ordering, and
+    exists so `render_resolved()` can be turned on without `primary_anchor()`.
+
+    Composed from two literals chosen by a bool. Nothing is interpolated.
+    """
+    if primary_first:
+        return _CLAIM_SOURCE_SQL_V2_HEAD + "(s.title IS NULL) ASC, s.id ASC"
+    return _CLAIM_SOURCE_SQL_V2_HEAD + "s.id ASC"
+
+
+def _select_claim_sources() -> tuple[str, bool]:
+    """Which statement to execute and which entry shape to build, AT CALL TIME.
+
+    Returns `(sql, include_resolved)`. One helper, called by both
+    `number_citations` and `number_citations_with_claims`, so the `## Sources`
+    list and the body's `[n]` markers can never be built from different reads --
+    the invariant `number_citations_with_claims` exists to protect.
+
+    With `NESTOR_CITATIONS_V2` unset or false this returns the PINNED statement
+    and today's entry shape, so the shipped default is byte-identical to the
+    behaviour that has always been here.
+    """
+    if not runtime_flags.citations_v2():
+        return _CLAIM_SOURCE_SQL, False
+    return (
+        _claim_source_sql(primary_first=runtime_flags.primary_anchor()),
+        runtime_flags.render_resolved(),
+    )
+
+
 #: The ordered claim rows the fact ledger is built from. SAME ordering key as
 #: _CLAIM_SOURCE_SQL, so the ledger the model sees and the numbers Python assigns
 #: are ordered identically.
@@ -187,11 +290,23 @@ def _row_get(row: Any, key: str) -> Any:
         return None
 
 
-def _assign_numbers(rows: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def _assign_numbers(
+    rows: Any,
+    *,
+    include_resolved: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Assign `[n]` at first source appearance. PURE -- no DB, no I/O.
 
-    `rows` must already be ordered by `_CLAIM_SOURCE_SQL`'s ORDER BY; this
-    function does not sort, it only walks.
+    `rows` must already be ordered by the ORDER BY of the statement that produced
+    them (`_CLAIM_SOURCE_SQL` or `_claim_source_sql`); this function does not
+    sort, it only walks.
+
+    `include_resolved` adds ONE key, `resolved_url`, to each entry. It defaults
+    False because 15.2-05's Layer-1 tests compare WHOLE entry lists: an extra key
+    on the flags-off path would break them, and would mean the shipped default
+    was not in fact today's behaviour. Phase 23.5 passes True only under
+    `runtime_flags.render_resolved()`, and the value is read with `_row_get`, so
+    a hand-built row that has no such key yields None rather than raising.
 
     Returns `(numbered, claim_to_n)`:
 
@@ -237,24 +352,29 @@ def _assign_numbers(rows: Any) -> tuple[list[dict[str, Any]], dict[str, int]]:
             publication_date = str(fetched_at)
         url = _row_get(r, "url")
         provider = _row_get(r, "provider")
-        numbered.append(
-            {
-                "n": next_n,
-                "source_id": sid,
-                "title": _row_get(r, "title"),
-                "url": url,
-                "provider": provider,
-                "publication_date": publication_date,
-                # D-13: provider-stated wins, `derive_quality_tier` is the
-                # fallback. The entry SHAPE is deliberately unchanged -- no new
-                # key -- because 15.2-05's Layer-1 tests compare whole entry
-                # lists for byte-identical determinism. Only the VALUE moves.
-                "quality_tier": _quality_tier_for(r, provider, url),
-                "single_source": len(sources_per_claim.get(cid, ())) == 1,
-                "first_claim_id": cid,
-                "first_claim_position": _row_get(r, "position"),
-            }
-        )
+        entry: dict[str, Any] = {
+            "n": next_n,
+            "source_id": sid,
+            "title": _row_get(r, "title"),
+            "url": url,
+            "provider": provider,
+            "publication_date": publication_date,
+            # D-13: provider-stated wins, `derive_quality_tier` is the
+            # fallback. The entry SHAPE is deliberately unchanged -- no new
+            # key -- because 15.2-05's Layer-1 tests compare whole entry
+            # lists for byte-identical determinism. Only the VALUE moves.
+            "quality_tier": _quality_tier_for(r, provider, url),
+            "single_source": len(sources_per_claim.get(cid, ())) == 1,
+            "first_claim_id": cid,
+            "first_claim_position": _row_get(r, "position"),
+        }
+        if include_resolved:
+            # Phase 23.5 mechanism 4. ADDED, never substituted for `url`: the
+            # redirect IS the citation the provider gave us, and plan 06's
+            # renderer needs both to print a publisher url with the redirect
+            # still recorded behind it.
+            entry["resolved_url"] = _row_get(r, "resolved_url")
+        numbered.append(entry)
         seen_source_to_n[sid] = next_n
         next_n += 1
 
@@ -291,8 +411,13 @@ async def number_citations(
     # Pull the ordered claim -> source rows in ONE deterministic query. We order
     # by claim.position (first-appearance), then claim.id + source.id as stable
     # tie-breakers so the numbering is byte-identical across calls.
-    rows = (await session.execute(text(_CLAIM_SOURCE_SQL), {"rid": str(run_id)})).all()
-    return _assign_numbers(rows)[0]
+    #
+    # WHICH query is decided at CALL time by `_select_claim_sources`, and with
+    # `NESTOR_CITATIONS_V2` unset that is the pinned statement and today's entry
+    # shape -- this line behaves exactly as it always has.
+    sql, include_resolved = _select_claim_sources()
+    rows = (await session.execute(text(sql), {"rid": str(run_id)})).all()
+    return _assign_numbers(rows, include_resolved=include_resolved)[0]
 
 
 async def number_citations_with_claims(
@@ -303,14 +428,17 @@ async def number_citations_with_claims(
 
     One query, both halves. The list is BYTE-IDENTICAL to what
     `number_citations(session, run_id)` returns for the same run -- they share
-    `_CLAIM_SOURCE_SQL` and `_assign_numbers`, so the `## Sources` list and the
-    body's `[n]` markers can never disagree.
+    `_select_claim_sources` and `_assign_numbers`, so the `## Sources` list and
+    the body's `[n]` markers can never disagree. Phase 23.5 added a SECOND
+    statement and a SECOND entry shape; both functions choose between them
+    through that one helper, for exactly this reason.
 
     The map is what `citations/anchors.py::anchor_number_map` reduces to the
     prefix map its post-pass resolves against (D-05).
     """
-    rows = (await session.execute(text(_CLAIM_SOURCE_SQL), {"rid": str(run_id)})).all()
-    return _assign_numbers(rows)
+    sql, include_resolved = _select_claim_sources()
+    rows = (await session.execute(text(sql), {"rid": str(run_id)})).all()
+    return _assign_numbers(rows, include_resolved=include_resolved)
 
 
 async def list_run_claims(
