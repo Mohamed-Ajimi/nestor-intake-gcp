@@ -38,9 +38,9 @@ image_registry_project = ""
 # Read from `gcloud run services list` on 2026-09-11. Note that nestor-frontend
 # is deployed BY DIGEST (sha256:0e16471…); the tag below is the tag Artifact
 # Registry has attached to that exact digest, not an independent claim.
-image_tag          = "20260907-161728" # nestor-api, live
-frontend_image_tag = "20260909-101602" # nestor-frontend, live (digest sha256:0e16471…)
-tribunal_image_tag = "20260909-091435" # tribunal-api AND tribunal-worker, live
+image_tag          = "90084e5"
+frontend_image_tag = "90084e5"
+tribunal_image_tag = "90084e5"
 
 # ---------------------------------------------------------------- scaling, live
 # Read from the autoscaling.knative.dev/minScale annotations on 2026-09-11.
