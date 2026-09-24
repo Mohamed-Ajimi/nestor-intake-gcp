@@ -10,7 +10,7 @@
 {% block tag %}Nestor Pulse — Recherche{% endblock %}
 {% block content %}
 <h1>La recherche est en pause</h1>
-<p>La recherche pour <strong>{{ project_title }}</strong> est en pause et vous attend.</p>
+<p>La recherche pour <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> est en pause et vous attend.</p>
 <p>Raison : {{ park_reason }}</p>
 <p>Reprendre est gratuit : le travail déjà payé est conservé et ne sera pas refait.</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Reprendre la recherche dans l'admin →</a></p>

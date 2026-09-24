@@ -7,7 +7,7 @@
 {% block tag %}Nestor Pulse — Onderzoek{% endblock %}
 {% block content %}
 <h1>Het onderzoek is klaar</h1>
-<p>Het onderzoek voor <strong>{{ project_title }}</strong> is afgerond.</p>
+<p>Het onderzoek voor <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> is afgerond.</p>
 <ul>
   {% if duration_min is not none %}<li>Duur: {{ duration_min }} min</li>{% endif %}
   {% if cost_usd is not none %}<li>Kost: ${{ cost_usd }}</li>{% endif %}

@@ -7,7 +7,7 @@
 {% block tag %}Nestor Pulse — Recherche{% endblock %}
 {% block content %}
 <h1>La recherche a échoué</h1>
-<p>La recherche pour <strong>{{ project_title }}</strong> ne s'est pas terminée.</p>
+<p>La recherche pour <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> ne s'est pas terminée.</p>
 <p>Raison : {{ error_summary }}</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Ouvrir la recherche dans l'admin →</a></p>
 {% endblock %}

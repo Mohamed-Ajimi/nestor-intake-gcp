@@ -7,7 +7,7 @@
 {% block tag %}Nestor Pulse — Onderzoek{% endblock %}
 {% block content %}
 <h1>Het onderzoek is mislukt</h1>
-<p>Het onderzoek voor <strong>{{ project_title }}</strong> is niet afgerond.</p>
+<p>Het onderzoek voor <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> is niet afgerond.</p>
 <p>Reden: {{ error_summary }}</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open onderzoek in admin →</a></p>
 {% endblock %}

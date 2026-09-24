@@ -172,6 +172,7 @@ def render_invite(
 def render_research_complete(
     *,
     project_title: str,
+    client_name: str = "",
     duration_min: int | None,
     cost_usd: object = None,
     cta_url: str,
@@ -180,16 +181,30 @@ def render_research_complete(
 ) -> str:
     """Render the "research complete" notification body in ``locale`` (nl fallback, RUN-02).
 
-    Short body per D-11: "research for {project_title} is done" + duration + cost +
-    ONE CTA button to the admin intake route. ``cta_url`` is
+    Short body per D-11: "research for {client_name} — {project_title} is done" +
+    duration + cost + ONE CTA button to the admin intake route. ``cta_url`` is
     ``{app_base_url}/admin/pulse/intakes/{intake_id}`` — an admin app route, NEVER a
     token (NOTIF-01). Sent to the triggering superadmin (D-10). ``locale`` selects
     ``templates/{locale}/research_complete.html.j2`` — an unknown locale falls back to
     ``nl``. autoescape stays ON, so a hostile ``project_title`` cannot inject markup
     (T-16-05).
+
+    THE TWO NAMES ARE DIFFERENT THINGS (D-23.5-08). ``client_name`` is the intake's
+    SPACE name (``organizations.name``) — the real client / tenant. ``project_title``
+    is ``intakes.client_name``, the operator's free-text label for ONE intake, which
+    the UI has called the PROJECT name since plan 23.5-03 (the column was deliberately
+    not renamed). Putting the project in the client slot ships a label asserting the
+    opposite of its own value with every gate green.
+
+    ``client_name`` DEFAULTS TO ``""`` and is never required: a caller that cannot
+    resolve the space name degrades to today's project-only body instead of raising —
+    a missing client name must not cost a ~$45 run its only notification. autoescape
+    covers the new interpolation exactly as it covers ``project_title``, so a hostile
+    space name cannot inject markup (T-23.5-09-T).
     """
     return _localized_template("research_complete", locale).render(
         project_title=project_title,
+        client_name=client_name,
         duration_min=duration_min,
         cost_usd=cost_usd,
         cta_url=cta_url,
@@ -200,6 +215,7 @@ def render_research_complete(
 def render_research_failed(
     *,
     project_title: str,
+    client_name: str = "",
     error_summary: str,
     cta_url: str,
     app_base_url: str | None = None,
@@ -213,9 +229,18 @@ def render_research_failed(
     ``locale`` selects ``templates/{locale}/research_failed.html.j2`` — an unknown locale
     falls back to ``nl``. autoescape stays ON, so a hostile ``project_title`` /
     ``error_summary`` cannot inject markup (T-16-05).
+
+    THE TWO NAMES ARE DIFFERENT THINGS (D-23.5-08). ``client_name`` is the intake's
+    SPACE name (``organizations.name``) — the real client / tenant. ``project_title``
+    is ``intakes.client_name``, the operator's label for ONE intake, which the UI has
+    called the PROJECT name since plan 23.5-03. ``client_name`` defaults to ``""`` and
+    is never required: an unresolvable space name degrades to today's project-only body
+    rather than raising. autoescape covers the new interpolation exactly as it covers
+    ``project_title`` (T-23.5-09-T).
     """
     return _localized_template("research_failed", locale).render(
         project_title=project_title,
+        client_name=client_name,
         error_summary=error_summary,
         cta_url=cta_url,
         app_base_url=app_base_url,
@@ -225,6 +250,7 @@ def render_research_failed(
 def render_research_parked(
     *,
     project_title: str,
+    client_name: str = "",
     park_reason: str,
     cta_url: str,
     app_base_url: str | None = None,
@@ -251,9 +277,19 @@ def render_research_parked(
     ``error_signature()``-redacted and 400-char-clamped by the engine (15.2-16,
     T-15.2-126) — this layer ESCAPES it, it does not sanitise it a second time. There
     is exactly one redaction rule and it lives in the engine.
+
+    THE TWO NAMES ARE DIFFERENT THINGS (D-23.5-08). ``client_name`` is the intake's
+    SPACE name (``organizations.name``) — the real client / tenant. ``project_title``
+    is ``intakes.client_name``, the operator's label for ONE intake, which the UI has
+    called the PROJECT name since plan 23.5-03. ``client_name`` defaults to ``""`` and
+    is never required: an unresolvable space name degrades to today's project-only body
+    rather than raising — losing the park mail would strand a paid run with nobody
+    told. autoescape covers the new interpolation exactly as it covers ``project_title``
+    and ``park_reason`` (T-23.5-09-T).
     """
     return _localized_template("research_parked", locale).render(
         project_title=project_title,
+        client_name=client_name,
         park_reason=park_reason,
         cta_url=cta_url,
         app_base_url=app_base_url,
