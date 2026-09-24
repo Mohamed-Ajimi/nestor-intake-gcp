@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 Phase: 23.5 (tester-remarks-round-1-superadmin-status-override-real-archi) — EXECUTING
 Plan: 1 of 7
-**→ CURRENT PHASE: 23.5 — tester remarks round 1 (inserted 2026-09-22 after Nestor testing). PLANNED 2026-09-22: 7 plans / 4 waves, checker 0 blockers (3 warnings fixed inline, commit follows `4ee6640`). Next: `/gsd-execute-phase 23.5`.** 23.4 is live on `nestor-pulse-prod` (proving run 09-14, handover 09-17, first real run 09-18); its plan 05 (runbook/records) is still open and folds into 23.5 wave 4.
+**→ CURRENT PHASE: 23.5 — tester remarks round 1. SHIPPED TO PROD 2026-09-24 06:37Z at tag `261915a` (nestor-api-00007-skh / nestor-frontend-00002-84s / tribunal-api-00004-2zq / tribunal-worker-00004-z46) via `infra/release-client.sh`; plans 01–06 + gap plan 08 complete, plan 07 Tasks 2/3 partially done. TRIBUNAL FLAGS OFF ON PROD. OWED before the phase closes: (1) ONE dev research run with flags ON (dev has them on: tribunal-api-00028-29c / tribunal-worker-00015-79r) read against the five acceptance numbers; (2) the prod flip — client.tfvars both flags "true", targeted apply tribunal_api → idle gate as tribunal-run@ → tribunal_worker, read back; (3) `/gsd-execute-phase 23.5` to finish plan 07 + verification. Deploy record: infra/DEPLOY-RUNBOOK.md 23.5.f; deferred: DEF-23.5-07-01..04.**
 
 (previous pointer) **Phase: 23.4 — client environment (`nestor-pulse-prod`), inserted 2026-09-11. Next: `/gsd-plan-phase 23.4 --skip-research`.** Decision 2026-09-11: the client gets a FRESH project; `project-cb01b861-cb4a-438d-b9a` becomes the dev environment.
 
