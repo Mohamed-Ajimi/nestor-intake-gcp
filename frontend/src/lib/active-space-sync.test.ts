@@ -3,11 +3,10 @@ import { shouldSyncActiveSpace } from "@/lib/active-space-sync";
 
 // D-23.5-09 regression suite.
 //
-// The defect the client reported on the 2026-09-24 prod release: following a research
-// mail's "Open onderzoek in admin →" deep link opened the intake while the top bar still
-// showed whichever client was selected last. The page and the dropdown then disagreed
-// about who the operator was looking at — on a screen whose whole job is telling clients
-// apart.
+// The defect the client reported on the 2026-09-24 prod release: following the research
+// mail's deep link into the admin opened the intake while the top bar still showed
+// whichever client was selected last. The page and the dropdown then disagreed about who
+// the operator was looking at — on a screen whose whole job is telling clients apart.
 //
 // Three admin routes need the identical rule and this repo has NO component test harness,
 // so a predicate left inline in TSX is proven by nothing. These arms are the proof; the

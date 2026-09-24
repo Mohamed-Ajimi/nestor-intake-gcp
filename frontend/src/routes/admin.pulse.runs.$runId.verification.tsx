@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getIntake } from "@/lib/api/intakes";
+import { useActiveSpace } from "@/lib/active-space";
+import { shouldSyncActiveSpace } from "@/lib/active-space-sync";
 import { locateResearchRun } from "@/lib/api/research";
 import { VerificationReport } from "@/components/intake/VerificationReport";
 
@@ -90,17 +92,31 @@ function VerificationReportPage() {
 
   // The client name for the header. Purely cosmetic — a failure leaves the crumb out and must
   // never block the report itself from rendering.
+  //
+  // The same read also points the top-bar client dropdown at this run's client (D-23.5-09),
+  // through the shared predicate in `@/lib/active-space-sync`. The `cancelled` guard above
+  // it stays: a sync after unmount is pointless.
+  //
+  // `activeSpaceId` is deliberately NOT in this effect's dependency array. The effect is
+  // keyed on the RUN's intake; adding the value its own callback mutates is how a
+  // re-entrant effect gets written by accident.
+  const { activeSpaceId, setActiveSpace } = useActiveSpace();
   const [clientName, setClientName] = useState<string | null>(null);
   useEffect(() => {
     if (!intakeId) return;
     let cancelled = false;
     void getIntake(intakeId).then((res) => {
       if (cancelled) return;
-      if (res.success) setClientName(res.data?.client_name ?? null);
+      if (res.success) {
+        setClientName(res.data?.client_name ?? null);
+        if (shouldSyncActiveSpace(activeSpaceId, res.data?.space_id))
+          setActiveSpace(res.data.space_id);
+      }
     });
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intakeId]);
 
   if (locating) {
