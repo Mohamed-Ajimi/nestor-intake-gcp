@@ -180,7 +180,14 @@ def _install_context(monkeypatch):
         # intake_id is load-bearing for the Phase-17 completion path — it is one of
         # the two space-scoped segments of the server-authored bundle object key.
         "intake_id": str(uuid.uuid4()),
+        # The two names are DIFFERENT things (D-23.5-08):
+        #   project_title = intakes.client_name — the operator's label for ONE intake
+        #                   (the UI calls it the PROJECT since 23.5-03). "dit intake" is
+        #                   the real fallback the driver uses for an unnamed intake, kept
+        #                   here on purpose so this stub stays honest.
+        #   client_name   = organizations.name — the real CLIENT owning the space.
         "project_title": "dit intake",
+        "client_name": "Acme NV",
         "service_url": "https://tribunal.example",
         "app_base_url": "https://app.example",
         "attempt": 1,
@@ -1417,18 +1424,26 @@ def _exploding_resend(monkeypatch) -> list:
 # The three terminal branches of write_fn, their driving metrics script and the
 # subject each one mails. Keyed so the outage test below iterates ALL THREE — a
 # fix applied to only the completion branch cannot pass (T-23.2-04-02).
+#
+# The qualifier is D-23.5-08: " — <client> / <project>", composed from the ctx
+# _install_context installs ("Acme NV" / "dit intake"). SPELLED OUT rather than
+# computed by calling _research_subject — a test that builds its expectation from
+# the code under test agrees with that code by construction and proves nothing.
+# Note the two separators differ on purpose: em dash attaches the qualifier, the
+# slash separates client from project INSIDE it.
 _OUTAGE_TERMINALS = {
     "completed": (
         [
             {"status": "running", "current_stage": "delegation"},
             {"status": "completed", "current_stage": "report"},
         ],
-        "Je onderzoek is klaar",
+        "Je onderzoek is klaar — Acme NV / dit intake",
     ),
-    "parked": (None, "Je onderzoek staat op pauze"),  # None -> _park_script()
+    # None -> _park_script()
+    "parked": (None, "Je onderzoek staat op pauze — Acme NV / dit intake"),
     "failed": (
         [{"status": "running"}, {"status": "failed"}],
-        "Je onderzoek is mislukt",
+        "Je onderzoek is mislukt — Acme NV / dit intake",
     ),
 }
 
@@ -1574,14 +1589,20 @@ def test_pending_mail_ordering_nothing_is_sent_before_write_fn_returns(
     )
     mail = pending[0]
     assert mail["to"] == [ctx["acting_email"]], mail["to"]
-    assert mail["subject"] == "Je onderzoek is klaar", mail["subject"]
+    # D-23.5-08: the subject names the CLIENT and the PROJECT, in that order.
+    assert mail["subject"] == "Je onderzoek is klaar — Acme NV / dit intake", (
+        mail["subject"]
+    )
     assert mail["html"], "the html must be rendered inside write_fn (pure, no I/O)"
 
     assert len(fake_resend["calls"]) == 1, (
         "the mail must still actually be SENT after the commit; got "
         f"{len(fake_resend['calls'])} sends."
     )
-    assert fake_resend["calls"][0]["subject"] == "Je onderzoek is klaar"
+    assert (
+        fake_resend["calls"][0]["subject"]
+        == "Je onderzoek is klaar — Acme NV / dit intake"
+    )
 
 
 def test_no_double_send_on_the_completed_path(
@@ -1644,4 +1665,168 @@ def test_on_error_path_logs_done_not_crashed(
     )
     assert any("DONE" in line for line in warning_sink), (
         f"the driver must still log its DONE line: {warning_sink}"
+    )
+
+
+# ===========================================================================
+# D-23.5-08 — the research mail SUBJECT names the client and the project
+#
+# The client tested the 2026-09-24 prod release and could not tell WHOSE research
+# had finished: the mail named the project alone. The subject now carries
+# " — <client> / <project>" after its base sentence.
+#
+# Two things are load-bearing and neither is cosmetic:
+#
+#  1. `_research_subject` MUST NOT RAISE. It is called from `write_fn`, and that
+#     function's own docstring records that ANY exception inside it routes to
+#     `on_error`, which rewrites a paid, COMPLETED ~$45 run as `failed`. That is
+#     why every read in it is `.get(...)` and never `ctx["client_name"]`.
+#  2. There is exactly ONE helper and ONE template expression. `reconcile.py` — the
+#     sweep that finalizes a run whose driver died — mails about the SAME run, and a
+#     second copy of the format is how the two silently drift apart. The AST arms
+#     below make "all seven call sites were swept" an ASSERTION, not a claim; the
+#     2026-08-31 localized-contract sweep missed two consumers for eight days.
+# ===========================================================================
+
+
+def _parse_research_module(name: str):
+    """Parse ``app/research/<name>.py`` into an AST, located via the imported module.
+
+    Derived from ``run_task.__file__`` rather than a cwd-relative path so these gates
+    hold wherever pytest is invoked from.
+    """
+    import ast
+    import pathlib
+
+    path = pathlib.Path(run_task.__file__).parent / f"{name}.py"
+    return ast.parse(path.read_text(encoding="utf-8"))
+
+
+def test_research_subject_composes_client_and_project():
+    """Both names present -> ``<base> — <client> / <project>`` (D-23.5-08).
+
+    The two separators differ ON PURPOSE: the em dash attaches the qualifier to the
+    base sentence, the slash separates client from project inside it.
+    """
+    assert (
+        run_task._research_subject(
+            run_task._SUBJECT_COMPLETE,
+            {"client_name": "Rocketship BV", "project_title": "Marktintrede"},
+        )
+        == "Je onderzoek is klaar — Rocketship BV / Marktintrede"
+    )
+    assert (
+        run_task._research_subject(
+            run_task._SUBJECT_PARKED,
+            {"client_name": "Rocketship BV", "project_title": "Marktintrede"},
+        )
+        == "Je onderzoek staat op pauze — Rocketship BV / Marktintrede"
+    )
+    assert (
+        run_task._research_subject(
+            run_task._SUBJECT_FAILED,
+            {"client_name": "Rocketship BV", "project_title": "Marktintrede"},
+        )
+        == "Je onderzoek is mislukt — Rocketship BV / Marktintrede"
+    )
+
+
+@pytest.mark.parametrize("absent", [{}, {"client_name": ""}, {"client_name": "   "}])
+def test_research_subject_omits_a_missing_client(absent):
+    """An unresolvable space name degrades to TODAY's subject, never a dangling slash.
+
+    A missing client name must never cost a paid run its only notification, and it must
+    never leave punctuation with nothing on one side of it.
+    """
+    ctx = {"project_title": "Marktintrede", **absent}
+    assert (
+        run_task._research_subject(run_task._SUBJECT_FAILED, ctx)
+        == "Je onderzoek is mislukt — Marktintrede"
+    )
+
+
+def test_research_subject_survives_a_context_missing_both_keys():
+    """No key, no raise — the base sentence, unchanged (T-23.5-09-R1).
+
+    This is the repudiation guard, not a formatting nicety: a KeyError here would be
+    caught by `on_error` and relabel a completed run `failed`.
+    """
+    assert (
+        run_task._research_subject(run_task._SUBJECT_COMPLETE, {})
+        == run_task._SUBJECT_COMPLETE
+    )
+    assert (
+        run_task._research_subject(
+            run_task._SUBJECT_PARKED, {"client_name": None, "project_title": None}
+        )
+        == run_task._SUBJECT_PARKED
+    )
+
+
+def test_every_research_mail_call_site_passes_client_name():
+    """ALL SEVEN render call sites carry ``client_name=`` — four here, three in the sweep.
+
+    The count is asserted, not assumed. Without it a future call site added WITHOUT the
+    keyword passes this gate by being invisible to it — which is exactly how the
+    reconciler's three sites went unnoticed when this change was first described.
+    """
+    import ast
+
+    sites = []
+    for module in ("run_task", "reconcile"):
+        tree = _parse_research_module(module)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id.startswith("render_research_")
+            ):
+                sites.append((module, node.func.id, node.lineno, node.keywords))
+
+    assert len(sites) == 7, (
+        "expected exactly 7 render_research_* call sites (4 in run_task.py: success, "
+        "parked, failed, on_error; 3 in reconcile.py) — if this count moved, sweep the "
+        f"new site before changing the number. Found: "
+        f"{[(m, n, ln) for m, n, ln, _ in sites]}"
+    )
+    missing = [
+        (m, n, ln)
+        for m, n, ln, kws in sites
+        if not any(kw.arg == "client_name" for kw in kws)
+    ]
+    assert not missing, (
+        f"these render_research_* call sites do not pass client_name=: {missing}"
+    )
+
+
+def test_reconciler_holds_no_research_subject_literal():
+    """The sweep COMPOSES its subjects through the driver's helper; it copies nothing.
+
+    A second copy of the format in `reconcile.py` is how the sweep's mail and the
+    driver's mail — about the SAME run — would drift apart. Comments and docstrings are
+    walked too: plan 23.5-03 lost a cycle to a comment that invalidated its own grep.
+    """
+    import ast
+    import pathlib
+
+    tree = _parse_research_module("reconcile")
+    literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "Je onderzoek" in node.value
+    ]
+    assert not literals, (
+        f"reconcile.py must hold NO research-subject literal of its own: {literals}"
+    )
+
+    # Docstrings are ast.Constant and covered above; `#` comments are not in the AST at
+    # all, so read the source too — the whole point is that no copy exists ANYWHERE.
+    source = (
+        pathlib.Path(run_task.__file__).parent / "reconcile.py"
+    ).read_text(encoding="utf-8")
+    assert "Je onderzoek" not in source, (
+        "reconcile.py still spells a Dutch research subject in source (comment or "
+        "string) — compose it through run_task._research_subject instead"
     )
