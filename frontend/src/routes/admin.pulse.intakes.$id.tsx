@@ -83,6 +83,8 @@ import {
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { useActiveSpace } from "@/lib/active-space";
+import { shouldSyncActiveSpace } from "@/lib/active-space-sync";
 
 export const Route = createFileRoute("/admin/pulse/intakes/$id")({
  component: IntakeDetailPage,
@@ -221,9 +223,14 @@ function IntakeDetailPage() {
  const { id } = Route.useParams();
   const { t, i18n } = useTranslation("admin");
   const { session } = useAuth();
+  const { activeSpaceId, setActiveSpace } = useActiveSpace();
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
  const [intake, setIntake] = useState<Intake | null>(null);
+ // The intake's OWN space, captured from the seam view in `load`. It cannot be read off
+ // `intake`: the local `Intake` type (`@/lib/intake-types`) has no `space_id`, and
+ // widening that shared type for one page's UX would reach into the client-facing form.
+ const [intakeSpaceId, setIntakeSpaceId] = useState<string | null>(null);
  const [client, setClient] = useState<Client | null>(null);
  const [answers, setAnswers] = useState<AnswerRow[]>([]);
  const [activeSection, setActiveSection] = useState<string | null>(null);
@@ -423,6 +430,7 @@ function IntakeDetailPage() {
  return;
  }
  const v = intakeRes.data;
+ setIntakeSpaceId(v.space_id ?? null);
 
  // The seam Intake carries status + the five phase markers; the legacy intake row
  // also carried title/product/tokens/timestamps that the backend IntakeView does not
@@ -497,6 +505,28 @@ function IntakeDetailPage() {
  cancelled = true;
  };
  }, [load]);
+
+ // D-23.5-09: the top-bar client dropdown follows the intake on screen, so arriving from
+ // a research mail's deep link can never show one client up there and another client's
+ // intake down here. The rule (including "All clients" switching too) lives in
+ // `@/lib/active-space-sync` with its own unit tests; this is one of its three call sites.
+ //
+ // NO REFETCH LOOP IS POSSIBLE HERE, verified rather than assumed. `withActiveSpace` is
+ // threaded by exactly two functions — `listIntakes` and `createIntake`
+ // (`lib/api/intakes.ts`) — and this page calls neither. `load`'s deps are `[id]`, so
+ // changing the active space cannot re-run it. The predicate's equality guard then makes
+ // the effect idempotent against its own state change.
+ //
+ // THE QUERY CACHE IS NOT FLUSHED HERE, deliberately, unlike `SpaceSwitcher`'s own
+ // handler — which does flush it because the operator is standing on a list that must
+ // re-read. This page is not: the intake list re-reads through its OWN effect keyed on the
+ // active space, and a blanket cache flush on a page that also mounts the live research-run
+ // queries is a bigger hammer than the problem. A gate below asserts that non-change, so
+ // the name of the call it forbids is deliberately NOT spelled in this comment — a gate
+ // that matches its own explanation proves nothing (plan 23.5-03, deviation 2).
+ useEffect(() => {
+ if (shouldSyncActiveSpace(activeSpaceId, intakeSpaceId)) setActiveSpace(intakeSpaceId);
+ }, [activeSpaceId, intakeSpaceId, setActiveSpace]);
 
  const answersMap = useMemo(() => {
  const m = new Map<string, AnswerRow>();

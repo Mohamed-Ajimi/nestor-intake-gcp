@@ -364,3 +364,152 @@ def test_fake_resend_captures_and_returns_fake_id(fake_resend):
     assert fake_resend["calls"] == [
         {"to": ["client@example.com"], "subject": "Even valideren", "html": "<p>hi</p>"}
     ]
+
+
+# ---------------------------------------------------------------------------
+# D-23.5-08 — the research mails name the CLIENT as well as the PROJECT.
+#
+# READ THE TWO NAMES CAREFULLY; they are not the same thing:
+#   - ``project_title`` is ``intakes.client_name`` — the operator's free-text label for
+#     ONE intake. Since plan 23.5-03 the UI calls it the PROJECT name; the column was
+#     deliberately NOT renamed (D-23.5-03, label-only).
+#   - ``client_name`` (NEW here) is ``organizations.name`` — the real client / tenant
+#     that owns the intake's space.
+# A reader who swaps them ships a label asserting the opposite of its own value with
+# every gate green. That exact shape is why plan 23.5-03 exists.
+#
+# The client half is OPTIONAL by construction: an unresolvable space name degrades to
+# today's project-only body rather than costing a ~$45 run its only notification.
+# ---------------------------------------------------------------------------
+
+#: U+2014 EM DASH — the separator D-23.5-08 puts between client and project in the BODY.
+#: Bound once here so the nine template files and every assertion below cannot disagree
+#: about which dash it is (en dash, hyphen and em dash are indistinguishable in review).
+_EM = "—"
+
+#: The ONE expression every research template must carry — one rule, nine files.
+_CLIENT_PROJECT_EXPR = (
+    "{% if client_name %}{{ client_name }} " + _EM + " {% endif %}{{ project_title }}"
+)
+
+#: The nine research templates that expression must appear in, byte-identically.
+_RESEARCH_TEMPLATES = [
+    f"app/mail/templates/{loc}/research_{kind}.html.j2"
+    for loc in ("nl", "fr", "en")
+    for kind in ("complete", "failed", "parked")
+]
+
+
+def _research_renderers(*, client_name=None):
+    """The three research renderers, pre-bound with their required kwargs.
+
+    Returns ``[(name, callable)]``; each callable takes an optional locale and returns
+    the rendered html. ``client_name=None`` OMITS the kwarg entirely — the "existing
+    caller that never heard of this key" case, which must keep working.
+    """
+    cta = f"{_BASE}/admin/pulse/intakes/{_INTAKE_ID}"
+    extra = {} if client_name is None else {"client_name": client_name}
+
+    def _complete(locale="nl"):
+        return render.render_research_complete(
+            project_title="Project Phoenix",
+            duration_min=19,
+            cost_usd="1.60",
+            cta_url=cta,
+            app_base_url=_BASE,
+            locale=locale,
+            **extra,
+        )
+
+    def _failed(locale="nl"):
+        return render.render_research_failed(
+            project_title="Project Phoenix",
+            error_summary="tribunal timed out",
+            cta_url=cta,
+            app_base_url=_BASE,
+            locale=locale,
+            **extra,
+        )
+
+    def _parked(locale="nl"):
+        return render.render_research_parked(
+            project_title="Project Phoenix",
+            park_reason="Anthropic monthly cap reached",
+            cta_url=cta,
+            app_base_url=_BASE,
+            locale=locale,
+            **extra,
+        )
+
+    return [("complete", _complete), ("failed", _failed), ("parked", _parked)]
+
+
+@pytest.mark.parametrize("locale", ["nl", "en", "fr"])
+def test_research_complete_renders_client_and_project_in_all_three_locales(locale):
+    """The completion body reads ``<client> — <project>``, in every language (D-23.5-08)."""
+    html = dict(_research_renderers(client_name="Rocketship BV"))["complete"](locale)
+    assert f"<strong>Rocketship BV {_EM} Project Phoenix</strong>" in html, html
+
+
+@pytest.mark.parametrize("locale", ["nl", "en", "fr"])
+def test_research_failed_renders_client_and_project_in_all_three_locales(locale):
+    """The failure body reads ``<client> — <project>``, in every language (D-23.5-08)."""
+    html = dict(_research_renderers(client_name="Rocketship BV"))["failed"](locale)
+    assert f"<strong>Rocketship BV {_EM} Project Phoenix</strong>" in html, html
+
+
+@pytest.mark.parametrize("locale", ["nl", "en", "fr"])
+def test_research_parked_renders_client_and_project_in_all_three_locales(locale):
+    """The park body reads ``<client> — <project>``, in every language (D-23.5-08)."""
+    html = dict(_research_renderers(client_name="Rocketship BV"))["parked"](locale)
+    assert f"<strong>Rocketship BV {_EM} Project Phoenix</strong>" in html, html
+
+
+@pytest.mark.parametrize("client_name", ["", None])
+def test_research_mails_without_a_client_render_the_project_alone(client_name):
+    """An unknown client degrades to TODAY's body — no orphan separator (D-23.5-08).
+
+    Both arms matter and they are different code paths: ``""`` is the resolved-but-empty
+    space name the driver passes when the org row is missing; ``None`` OMITS the kwarg so
+    Jinja's falsy ``Undefined`` takes the project-only branch. Neither may leave a
+    dangling em dash inside the ``<strong>``.
+    """
+    for name, render_one in _research_renderers(client_name=client_name):
+        html = render_one()
+        assert "<strong>Project Phoenix</strong>" in html, (name, html)
+        assert f"{_EM} Project Phoenix</strong>" not in html, (name, html)
+
+
+def test_research_mails_escape_a_hostile_client_name():
+    """A ``<script>`` in ``organizations.name`` is escaped, as ``project_title`` is (T-23.5-09-T).
+
+    The space name is operator-controlled data crossing into HTML that leaves the
+    platform. The new interpolation goes through the SAME autoescaped ``{{ }}``.
+    """
+    for name, render_one in _research_renderers(
+        client_name="<script>alert('x')</script>"
+    ):
+        html = render_one()
+        assert "<script>" not in html, (name, html)
+        assert "&lt;script&gt;" in html, (name, html)
+
+
+def test_every_research_template_uses_the_same_client_project_expression():
+    """ONE rule, nine files — a drifting variant is a silently different mail.
+
+    The 2026-08-31 ``localized-contract-consumer-sweep-trap``: one contract change, four
+    consumers, two swept, broken silently for eight days. This asserts the sweep instead
+    of claiming it.
+    """
+    import io
+
+    assert len(_RESEARCH_TEMPLATES) == 9, _RESEARCH_TEMPLATES
+    missing = [
+        path
+        for path in _RESEARCH_TEMPLATES
+        if _CLIENT_PROJECT_EXPR not in io.open(path, encoding="utf-8").read()
+    ]
+    assert not missing, (
+        f"these research templates do not carry the shared client/project expression "
+        f"{_CLIENT_PROJECT_EXPR!r}: {missing}"
+    )

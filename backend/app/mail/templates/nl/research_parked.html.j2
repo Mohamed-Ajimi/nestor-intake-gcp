@@ -10,7 +10,7 @@
 {% block tag %}Nestor Pulse — Onderzoek{% endblock %}
 {% block content %}
 <h1>Het onderzoek staat op pauze</h1>
-<p>Het onderzoek voor <strong>{{ project_title }}</strong> is gepauzeerd en wacht op jou.</p>
+<p>Het onderzoek voor <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> is gepauzeerd en wacht op jou.</p>
 <p>Reden: {{ park_reason }}</p>
 <p>Hervatten is gratis: het werk waarvoor al betaald is, blijft bewaard en wordt niet opnieuw gedaan.</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Hervat onderzoek in admin →</a></p>

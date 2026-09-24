@@ -58,10 +58,12 @@ import uuid
 from typing import Any
 
 import httpx
+from sqlalchemy import select
 
 from app.auth.identity import Identity
 from app.core.config import get_settings
 from app.db.ai_session import run_with_session_release, tenant_session
+from app.db.models.organization import Organization
 from app.db.repository import IntakeRepository, ResearchRunRepository
 from app.db.session import get_engine_for_pool_check
 from app.mail import resend
@@ -261,11 +263,54 @@ def load_trigger_context(
     ``research_runs`` mirror + the seam headers must carry the intake's space_id) and
     the acting-user attribution + the non-secret Tribunal service URL. Returns a plain
     dict so nothing detaches when the READ session closes (the release contract).
+
+    TWO NAMES, TWO DIFFERENT THINGS — read this before touching either (D-23.5-08):
+
+    ===================  ========================================================
+    key                  what it actually is
+    ===================  ========================================================
+    ``project_title``    ``intakes.client_name`` — the operator's free-text label
+                         for ONE intake. The UI has called it the PROJECT name
+                         since plan 23.5-03; the column was deliberately NOT
+                         renamed (D-23.5-03, label-only).
+    ``client_name``      ``organizations.name`` for the intake's space — the real
+                         CLIENT / tenant. This is the one the mails needed: a
+                         reader with several clients could not tell whose
+                         research had finished.
+    ===================  ========================================================
+
+    A later reader who assumes ``ctx["client_name"]`` is the COLUMN will put the
+    project name in the client slot and ship a label asserting the opposite of its
+    own value, with every gate green. That is the phase-23 shape this table exists
+    to prevent.
     """
     intake = IntakeRepository(session, identity).get(intake_id)
     if intake is None:
         # Existence-hidden: a cross-tenant/missing intake never reaches the seam.
         raise LookupError(f"intake {intake_id} not in scope")
+
+    # The CLIENT name for the notification mails (D-23.5-08), read on the SAME session
+    # the intake was just read from.
+    #
+    # WHY THIS RESOLVES AT ALL: ``organizations`` is the tenant ROOT and is deliberately
+    # NOT RLS-scoped — it DEFINES the boundary rather than sitting inside one
+    # (0002_rls_policies.py), and 0003/0005 grant SELECT on every table in the schema to
+    # the runtime role. So this reads fine from a superadmin session with no space GUC,
+    # which is the ONLY kind of identity that reaches this function (see the note above).
+    #
+    # WHY THIS ADDS NO TENANT SURFACE: the id is not caller-supplied. It comes off an
+    # intake the repository has just proved in scope, and the name it yields is mailed
+    # only to ``ctx["acting_email"]`` — the human who triggered the run (T-23.5-09-I).
+    #
+    # WHY ``or ""`` AND NOT A RAISE: a missing row yields the empty string and the mail
+    # simply names the project, exactly as it does today. The alternative is an exception
+    # inside the driver on a paid run, which routes to ``on_error`` and relabels it.
+    space_name = (
+        session.execute(
+            select(Organization.name).where(Organization.id == intake.space_id)
+        ).scalar_one_or_none()
+        or ""
+    )
 
     settings = get_settings()
     return {
@@ -273,7 +318,9 @@ def load_trigger_context(
         "space_id": str(intake.space_id),
         "acting_user_id": identity.uid,
         "acting_email": identity.email,
+        # The PROJECT (intakes.client_name) and the CLIENT (organizations.name).
         "project_title": intake.client_name or "dit intake",
+        "client_name": space_name,
         "intake_id": str(intake_id),
         "service_url": settings.tribunal_service_url,
         "app_base_url": settings.app_base_url,
@@ -491,6 +538,19 @@ _DEFAULT_PARK_REASON = (
     "Het onderzoek is gepauzeerd. Open de run in admin om te zien waar het is "
     "gestopt."
 )
+
+#: The three research-mail subject BASE sentences (D-23.5-08). They live here, once,
+#: because ``reconcile.py`` — the sweep that finalizes a run whose driver died — mails
+#: about the SAME run and composes its subjects through ``_research_subject`` below
+#: rather than holding a second copy. Two copies is how the driver's mail and the
+#: sweep's mail silently drift apart.
+#:
+#: Dutch-only on purpose: no caller passes ``locale=`` to the research renderers yet,
+#: so every research mail renders and subjects in ``nl``. Resolving the acting
+#: superadmin's locale (D-07) is a separate change and is deliberately NOT done here.
+_SUBJECT_COMPLETE = "Je onderzoek is klaar"
+_SUBJECT_PARKED = "Je onderzoek staat op pauze"
+_SUBJECT_FAILED = "Je onderzoek is mislukt"
 
 
 def finalize_parked(
@@ -904,6 +964,10 @@ def run_poll_driver(
             if to:
                 html = render_research_complete(
                     project_title=ctx["project_title"],
+                    # D-23.5-08 — the CLIENT (organizations.name), not the project.
+                    # ``.get`` on purpose: a KeyError here routes to on_error and
+                    # rewrites this paid, COMPLETED run as failed (T-23.5-09-R1).
+                    client_name=ctx.get("client_name", ""),
                     duration_min=_duration_min(metrics),
                     cost_usd=metrics.get("cost_usd_total"),
                     cta_url=cta_url,
@@ -912,7 +976,7 @@ def run_poll_driver(
                 pending.append(
                     {
                         "to": to,
-                        "subject": "Je onderzoek is klaar",
+                        "subject": _research_subject(_SUBJECT_COMPLETE, ctx),
                         "html": html,
                     }
                 )
@@ -973,6 +1037,10 @@ def run_poll_driver(
                 # F-03 / 16-D-10: the triggering superadmin and NOBODY else.
                 html = render_research_parked(
                     project_title=ctx["project_title"],
+                    # D-23.5-08 — the CLIENT (organizations.name). ``.get`` on purpose:
+                    # a raise here would relabel a parked run failed and destroy the
+                    # resume affordance (T-23.5-09-R1).
+                    client_name=ctx.get("client_name", ""),
                     park_reason=reason,
                     cta_url=cta_url,
                     app_base_url=ctx.get("app_base_url"),
@@ -980,7 +1048,7 @@ def run_poll_driver(
                 pending.append(
                     {
                         "to": to,
-                        "subject": "Je onderzoek staat op pauze",
+                        "subject": _research_subject(_SUBJECT_PARKED, ctx),
                         "html": html,
                     }
                 )
@@ -1000,6 +1068,9 @@ def run_poll_driver(
             if to:
                 html = render_research_failed(
                     project_title=ctx["project_title"],
+                    # D-23.5-08 — the CLIENT (organizations.name), ``.get`` for the same
+                    # no-raise reason as the two branches above (T-23.5-09-R1).
+                    client_name=ctx.get("client_name", ""),
                     error_summary=error_message,
                     cta_url=cta_url,
                     app_base_url=ctx.get("app_base_url"),
@@ -1007,7 +1078,7 @@ def run_poll_driver(
                 pending.append(
                     {
                         "to": to,
-                        "subject": "Je onderzoek is mislukt",
+                        "subject": _research_subject(_SUBJECT_FAILED, ctx),
                         "html": html,
                     }
                 )
@@ -1026,13 +1097,18 @@ def run_poll_driver(
             try:
                 html = render_research_failed(
                     project_title=ctx.get("project_title", "je onderzoek"),
+                    # D-23.5-08 — the CLIENT. Already in the ``.get`` register this
+                    # branch uses for project_title; stay in it. ``ctx`` is a dict by
+                    # here: the enclosing ``if ctx and ctx.get("acting_email")`` already
+                    # guards the None case, so do not add a second guard or widen that one.
+                    client_name=ctx.get("client_name", ""),
                     error_summary=str(exc),
                     cta_url=_admin_cta(ctx),
                     app_base_url=ctx.get("app_base_url"),
                 )
                 resend.send(
                     to=[ctx["acting_email"]],
-                    subject="Je onderzoek is mislukt",
+                    subject=_research_subject(_SUBJECT_FAILED, ctx),
                     html=html,
                 )
             except Exception:  # noqa: BLE001 - mail is best-effort on the error path
@@ -1086,6 +1162,36 @@ def _admin_cta(ctx: dict[str, Any]) -> str:
     """Compose the admin intake-route CTA (NO token — NOTIF-01)."""
     base = ctx.get("app_base_url") or ""
     return f"{base}/admin/pulse/intakes/{ctx.get('intake_id', '')}"
+
+
+def _research_subject(base: str, ctx: dict[str, Any]) -> str:
+    """Attach the client/project qualifier to a research-mail subject (D-23.5-08).
+
+    ``"Je onderzoek is klaar"`` -> ``"Je onderzoek is klaar — Rocketship BV / Marktintrede"``.
+
+    THE TWO SEPARATORS DIFFER ON PURPOSE. The em dash attaches the qualifier to the base
+    sentence; the slash separates CLIENT from PROJECT inside it. The body uses an em dash
+    between the two names instead, because there it is the only separator in the sentence.
+
+    ``ctx["client_name"]`` is ``organizations.name`` — the real client. ``project_title``
+    is ``intakes.client_name``, the operator's label for one intake (the PROJECT name
+    since 23.5-03). Either may be missing; the subject then names whichever it has, and
+    with neither it is the base sentence unchanged. No dangling separator, ever.
+
+    THIS FUNCTION MUST NEVER RAISE. It is called from ``write_fn``, whose own docstring
+    records that ANY exception there routes to ``on_error`` — which rewrites a paid,
+    COMPLETED ~$45 run as ``failed``. That is exactly why every read here is ``.get``
+    and never ``ctx["client_name"]`` (T-23.5-09-R1).
+    """
+    client = str(ctx.get("client_name") or "").strip()
+    project = str(ctx.get("project_title") or "").strip()
+    if client and project:
+        return f"{base} — {client} / {project}"
+    if project:
+        return f"{base} — {project}"
+    if client:
+        return f"{base} — {client}"
+    return base
 
 
 def _duration_min(metrics: dict[str, Any]) -> int | None:

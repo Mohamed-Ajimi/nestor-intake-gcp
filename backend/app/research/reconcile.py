@@ -459,12 +459,24 @@ def reconcile_one(row: dict[str, Any]) -> str:
                         # D-07: the completion mail sends on BOTH the verified and the
                         # broken-chain path — there is no broken-chain variant. Do not gate
                         # it on chain_status.
+                        #
+                        # The subject is COMPOSED through the driver's helper, never
+                        # copied (D-23.5-08). The sweep and the driver mail about the
+                        # SAME run; a second copy of the format here is precisely how the
+                        # two would drift apart, and this module already reaches into
+                        # `run_task` for `_admin_cta` and `_duration_min`. `client_name`
+                        # is the CLIENT (organizations.name), which `load_trigger_context`
+                        # — the same one the driver uses — put on the ctx above;
+                        # `project_title` is `intakes.client_name`, the PROJECT label.
                         pending.append(
                             {
                                 "to": to,
-                                "subject": "Je onderzoek is klaar",
+                                "subject": run_task._research_subject(
+                                    run_task._SUBJECT_COMPLETE, ctx
+                                ),
                                 "html": render_research_complete(
                                     project_title=ctx["project_title"],
+                                    client_name=ctx.get("client_name", ""),
                                     duration_min=run_task._duration_min(metrics),
                                     cost_usd=metrics.get("cost_usd_total"),
                                     cta_url=cta_url,
@@ -485,12 +497,17 @@ def reconcile_one(row: dict[str, Any]) -> str:
                         # Where the two could differ, the driver's own recorded asymmetry
                         # decides it — "a duplicate mail is a nuisance, a dropped one is the
                         # operator's only signal that a paid run stopped".
+                        # Subject COMPOSED through the driver's helper, never copied — see
+                        # the completion branch above (D-23.5-08).
                         pending.append(
                             {
                                 "to": to,
-                                "subject": "Je onderzoek staat op pauze",
+                                "subject": run_task._research_subject(
+                                    run_task._SUBJECT_PARKED, ctx
+                                ),
                                 "html": render_research_parked(
                                     project_title=ctx["project_title"],
+                                    client_name=ctx.get("client_name", ""),
                                     park_reason=reason.split("] ", 1)[-1],
                                     cta_url=cta_url,
                                     app_base_url=ctx.get("app_base_url"),
@@ -506,12 +523,17 @@ def reconcile_one(row: dict[str, Any]) -> str:
                         identity=identity,
                     )
                     if to:
+                        # Subject COMPOSED through the driver's helper, never copied — see
+                        # the completion branch above (D-23.5-08).
                         pending.append(
                             {
                                 "to": to,
-                                "subject": "Je onderzoek is mislukt",
+                                "subject": run_task._research_subject(
+                                    run_task._SUBJECT_FAILED, ctx
+                                ),
                                 "html": render_research_failed(
                                     project_title=ctx["project_title"],
+                                    client_name=ctx.get("client_name", ""),
                                     error_summary=error_message,
                                     cta_url=cta_url,
                                     app_base_url=ctx.get("app_base_url"),

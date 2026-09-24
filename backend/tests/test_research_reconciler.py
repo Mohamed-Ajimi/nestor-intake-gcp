@@ -440,7 +440,20 @@ def test_a_killed_drivers_run_is_finalized_by_the_sweep(
             "the mail must go to the ORIGINAL human recorded on the row — the sweep has no "
             f"identity of its own and must never invent one. got {mail['to']!r}"
         )
-        assert mail["subject"] == "Je onderzoek is klaar", mail["subject"]
+        # D-23.5-08 — and THIS IS THE ONLY ARM IN THE REPO that proves it end to end.
+        # Every other proof of the client name stubs something: the render tests pass the
+        # value in by hand, and the run_task tests monkeypatch `load_trigger_context`
+        # outright. Here a REAL `load_trigger_context` runs against a REAL database and
+        # reads `organizations.name` off the intake's own space — so this is the single
+        # place where "the space name reaches a rendered mail" is observed rather than
+        # asserted about a stub. `_seed_space` seeds name="Reconciler space" (the CLIENT,
+        # organizations.name) and `_seed_intake` seeds client_name="Acme" (the PROJECT,
+        # intakes.client_name — the column the UI has called the project since 23.5-03).
+        # If this arm is ever skipped for want of a Docker daemon, the claim is unproven.
+        assert mail["subject"] == "Je onderzoek is klaar — Reconciler space / Acme", (
+            mail["subject"]
+        )
+        assert "<strong>Reconciler space — Acme</strong>" in mail["html"], mail["html"]
     finally:
         _cleanup(engine, space)
 

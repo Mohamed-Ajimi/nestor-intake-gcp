@@ -7,7 +7,7 @@
 {% block tag %}Nestor Pulse — Research{% endblock %}
 {% block content %}
 <h1>The research is done</h1>
-<p>The research for <strong>{{ project_title }}</strong> is complete.</p>
+<p>The research for <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> is complete.</p>
 <ul>
   {% if duration_min is not none %}<li>Duration: {{ duration_min }} min</li>{% endif %}
   {% if cost_usd is not none %}<li>Cost: ${{ cost_usd }}</li>{% endif %}

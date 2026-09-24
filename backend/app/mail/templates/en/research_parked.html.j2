@@ -10,7 +10,7 @@
 {% block tag %}Nestor Pulse — Research{% endblock %}
 {% block content %}
 <h1>The research is paused</h1>
-<p>The research for <strong>{{ project_title }}</strong> is paused and waiting for you.</p>
+<p>The research for <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> is paused and waiting for you.</p>
 <p>Reason: {{ park_reason }}</p>
 <p>Resuming is free: the work already paid for is saved and will not be run again.</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Resume research in admin →</a></p>

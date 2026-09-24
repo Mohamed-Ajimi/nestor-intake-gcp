@@ -7,7 +7,7 @@
 {% block tag %}Nestor Pulse — Research{% endblock %}
 {% block content %}
 <h1>The research failed</h1>
-<p>The research for <strong>{{ project_title }}</strong> did not complete.</p>
+<p>The research for <strong>{% if client_name %}{{ client_name }} — {% endif %}{{ project_title }}</strong> did not complete.</p>
 <p>Reason: {{ error_summary }}</p>
 <p style="margin-top: 24px;"><a href="{{ cta_url }}" class="btn">Open research in admin →</a></p>
 {% endblock %}
