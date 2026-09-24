@@ -181,6 +181,8 @@ name it.
 
 **Found:** 2026-09-24, writing the phase 23.5 deploy record.
 **Status:** OPEN and BLOCKING the flag flip. This is the largest outstanding item in the phase.
+**Still open after the second 23.5 release** (`9bdb0fb`, 2026-09-24T21:37Z): that release
+carried gap plan 23.5-09 only and changed nothing about the flags or the acceptance run.
 
 Plan 23.5-07 Task 2 step D requires exactly one research run on a `decomposed` dev intake,
 with the queue otherwise empty and both kill switches ON, read against five fixed figures.
@@ -214,8 +216,11 @@ must carry the one-line notice in the run's own language.
 **Found:** 2026-09-24, at the prod release.
 **Status:** OPEN. Deliberate, by operator ruling — not an oversight.
 
-`nestor-pulse-prod` runs the phase 23.5 code (`261915a`) with **both kill switches `"false"`**.
-Read back on 2026-09-24 on both `tribunal-api-00004-2zq` and `tribunal-worker-00004-z46`. The
+`nestor-pulse-prod` runs the phase 23.5 code with **both kill switches `"false"`**. Read back on
+2026-09-24 on `tribunal-api-00004-2zq` / `tribunal-worker-00004-z46` at the `261915a` release,
+and again on `tribunal-api-00005-c7p` / `tribunal-worker-00005-fbf` after the `9bdb0fb` release
+later the same day — the second release retagged and re-applied the same tribunal digests and
+left both flags `"false"`, which is the intended shape. The
 citation and continuation fixes are in the images and dormant in the configuration, so **the
 client still gets the defective `## Sources` list** on any run started today.
 
@@ -270,6 +275,11 @@ targeted. `google_cloud_run_v2_job.seed_superadmin` was **not** targeted, so it 
 `backend:f5e2b9ad` while `var.image_tag` is now `261915a`. The final plan therefore reported
 **5 to change**, not the four cosmetic `scaling {}` read-backs the 23.4 record documents.
 
+⚠ **Still open after the second 23.5 release, and the gap has widened.** The `9bdb0fb` release
+(2026-09-24T21:37Z) did not target the job either. Its final untargeted plan again reported
+**5 to change**, with the same `f5e2b9ad -> <current tag>` diff on `seed_superadmin` — the job
+now trails **two** release tags instead of one.
+
 Harmless today: the job is not executed by a release, and the seeded superadmin already exists.
 It will move silently on the next untargeted `terraform apply`. Fix by adding
 `-target=google_cloud_run_v2_job.seed_superadmin` to `release-client.sh`'s step 1 alongside the
@@ -291,6 +301,49 @@ the data to select from exists and is not going away.
 Needs a ruling on scope before any plan: a plain dropdown of prior runs on the intake detail
 page, versus the fuller version-history surface phase 24 already contemplates. Recorded here so
 the question is not lost between phases.
+
+## DEF-23.5-09-01 — the research mails are Dutch-only; the fr/en templates are unreachable
+
+**Found:** 2026-09-24, during plan 23.5-09 Task 1. **Status:** OPEN, shipped this way to both
+environments in the `9bdb0fb` release. Explicitly out of scope for plan 09, not an oversight.
+
+No caller passes `locale=` to `render_research_complete` / `render_research_failed` /
+`render_research_parked`. All **seven** call sites — four in `backend/app/research/run_task.py`
+and three in `backend/app/research/reconcile.py` — render at the `nl` default, and the three
+subject bases in `run_task.py` are Dutch literals with no localized counterpart.
+
+Consequence: a French- or English-speaking superadmin receives a Dutch research notification.
+Plan 09 edited the **fr** and **en** variants of all six of those templates anyway, so the
+client-name expression would not drift between languages, and they are covered by
+`tests/test_mail_render.py`. They are **correct, tested and unreachable in production** — the
+exact shape this project already records as a trap (a gate green over copy no user can see).
+
+**Fix when someone owns it:** resolve the acting superadmin's locale on the research trigger
+path the way the intake mails already do, thread it to all seven call sites, and give the three
+subject bases nl/fr/en variants. This is a behaviour change on a paid path, not a copy change —
+it needs its own plan.
+
+## DEF-23.5-09-02 — nothing from plan 09 has been seen in an inbox or a browser
+
+**Found:** 2026-09-24, at the `9bdb0fb` release. **Status:** OPEN — an owed verification, not a
+defect.
+
+Both items of plan 09 shipped to dev and to the client environment on the day they were written,
+on unit tests alone:
+
+| Item | Covered by | NOT covered by |
+|---|---|---|
+| D-23.5-08 — client name in the research mails | `tests/test_mail_render.py`, `test_research_run_task.py`, `test_research_reconciler.py` (DB-backed arm green), an AST count pinning all 7 call sites, and a rendered string table in the plan 09 summary | **any real message.** No research run has completed since the deploy, so no `render_research_*` call has produced a mail an operator could read |
+| D-23.5-09 — the dropdown follows the intake | five vitest arms over `shouldSyncActiveSpace`, plus a grep count of 2/2/2 on the three routes | **any browser.** `/admin` returning 200 says the page boots, not that the top-bar client switches when an intake opens |
+
+**The read list already exists**: the string table under "The string table (the ship-wave read
+list)" in `23.5-09-SUMMARY.md` gives the nine body sentences and the three subjects verbatim.
+Read the Dutch rows only — see DEF-23.5-09-01.
+
+**Cheapest way to close the mail half:** it does not need a paid research run. The reconciler
+sweep renders all three mails, and `tests/test_research_reconciler.py` already drives it against
+a real Postgres; a manual send on dev against a throwaway intake would put a real message in a
+real inbox for the price of one Resend call.
 
 ## Carried operational chores — NOT closed by this phase
 

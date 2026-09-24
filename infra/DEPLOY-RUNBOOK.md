@@ -7887,3 +7887,176 @@ drift and it will move on the next untargeted apply. Tracked as DEF-23.5-07-03.
 * Everything the 23.4 record already says remains true: the superadmin password is unrotated,
   the chat-exposed client Anthropic key is unrevoked, and **no Cloud SQL backup has ever been
   restored** on either project.
+
+### 23.5 DEPLOY RECORD #2 — gap plan 23.5-09, dev + PROD 2026-09-24 (`9bdb0fb` / `client-9bdb0fb`)
+
+> This is the **second** release of phase 23.5, shipped the same day as the first. It carries
+> gap plan **23.5-09** only — the two items the client reported after testing the `261915a`
+> release. Everything the record above says about the first release still holds; this one adds
+> one backend image and two frontend images on top of it.
+
+> ⛔ **THE TWO TRIBUNAL KILL SWITCHES ARE STILL `"false"` ON PROD.** Unchanged by this release
+> and unchanged by intent. `nestor_citations_v2` and `nestor_synthesis_continue_truncated` read
+> back `false` on both prod tribunal services after the deploy. The dev acceptance run of Step
+> 23.5.d **still has not been started**, so the client's Sources-list defect remains live in
+> production exactly as the first record describes. See DEF-23.5-07-01 and DEF-23.5-07-02.
+
+**What shipped, by decision:**
+
+| Decision | Lands | Services |
+|---|---|---|
+| D-23.5-08 | research notification mails name the **client** and the **project** — `<strong>{client} — {project}</strong>` in the body of 9 templates, and ` — <client> / <project>` appended to the 3 Dutch subject bases — from **7** render call sites: 4 in `backend/app/research/run_task.py` and 3 in `backend/app/research/reconcile.py` | `nestor-api` |
+| D-23.5-09 | opening an intake in the admin switches the top-bar client dropdown to that intake's client, via one pure predicate `frontend/src/lib/active-space-sync.ts::shouldSyncActiveSpace` shared by three route call sites (intake detail, run index, run verification) | `nestor-frontend` |
+
+**Derived surface — backend and frontend ONLY.** Plan 09 touches `backend/app/research/`,
+`backend/app/mail/` and three admin routes. It touches **no file under `tribunal/`**, so the
+tribunal images were **not rebuilt**. On dev the tribunal services were left alone entirely (no
+revision, no boot of the poll loop, flags stay on). On prod the tribunal images were **retagged**
+`261915a -> 9bdb0fb` so that one tag names the whole release, and the two tribunal services were
+re-applied onto the **same digests** — a no-op in content, a new revision in Cloud Run.
+
+⚠ **Do not deploy the worker with `infra/deploy-worker.sh` in this state.** It uses
+`--set-env-vars`, which REPLACES the service environment and would strip the two flags that were
+set in place on dev with `--update-env-vars`. The prod path goes through Terraform, which owns
+the flags, and is safe.
+
+#### Gates re-run on the merged tree (at `9bdb0fb`)
+
+| Gate | Result |
+|---|---|
+| `backend` — `python -m pytest -q` | **908 passed, 2 skipped** (baseline at HEAD this session: 888 / 2, so **+20**) — Docker was up and the DB-backed reconciler arm **ran**, nothing skipped for want of a daemon |
+| `frontend` — `npx vitest run` | **557 passed, 19 files** (baseline 552 / 18, so **+5**) |
+| `frontend` — `npx tsc --noEmit` | **0 errors** |
+| `frontend` — `node scripts/i18n-audit.mjs` | **PASS — 106 advisories**, identical to the 23.5-02 baseline (two self-inflicted advisories were found and reworded before the commit) |
+| tribunal suite | **not re-run, and correctly so** — `git diff --stat tribunal/` is EMPTY for this plan |
+
+#### Commands actually run — DEV, 2026-09-24
+
+Two plain image builds at `9bdb0fb`, submitted **by the agent**:
+
+| Image | Build id | Deployed as | Digest |
+|---|---|---|---|
+| `backend:9bdb0fb` | `f8a593f7` | `nestor-api-00054-2vb` | `sha256:9e2dd526610f6b7eaa173b9d8240c17d045e9d7e437e1b97c00f29de0846a21c` |
+| `frontend:9bdb0fb` | `83cdbf11` | `nestor-frontend-00044-8kb` | `sha256:7d3d8259d1810d0aaac7e1402fb95f71c0c8460e2041fa4888671195aaa896cf` |
+
+Both services were updated **by digest**, read off the revision — not by the mutable tag. The
+dev frontend build used the **dev** substitutions (dev API url, dev Firebase); a frontend image
+is never promoted between environments.
+
+`tribunal-api` and `tribunal-worker` on dev are **untouched at `tribunal-api-00028-29c` /
+`tribunal-worker-00015-79r`**, still on the `90084e5` images, still with both flags `true`.
+Tags recorded in `infra/env/dev.tfvars` (`91bc6f3`) — note `tribunal_image_tag` deliberately
+stays `90084e5` there, because on dev the tribunal images were not retagged.
+
+#### Commands actually run — PROD, 2026-09-24
+
+1. The tribunal images were **retagged**, not rebuilt: `:261915a -> :9bdb0fb`. Step 0a of the
+   release script resolved both new tags and printed digests **byte-identical** to the ones the
+   first release deployed (`1101b070…`, `0c28f783…`).
+2. `infra/env/client.tfvars` set to `9bdb0fb` / `client-9bdb0fb`, **flags left `"false"`**
+   (`2ae35dc`).
+3. ⛔ The agent is classifier-blocked on `terraform apply` and on prod-targeting builds. The
+   **operator** ran `infra/release-client.sh` via `!` + `nohup`; log
+   `~/release-client-9bdb0fb.log`.
+
+⚠ **No git tag was cut for this release.** `release-23.5-261915a` exists; there is no
+`release-23.5-9bdb0fb`. The promotion boundary for this one is the merge commit `9bdb0fb`
+alone. If the tag is meant to be the boundary — as the first record states — it is owed here.
+
+**What the release log shows, in order:**
+
+* frontend built **for the client** (client API url + client Firebase) in build
+  `a85fc2f9-c869-4dd6-97fc-efce1bafa886` — **SUCCESS**, digest `sha256:28c0bb40…`
+* both migrate jobs repinned `261915a -> 9bdb0fb` (`0 to add, 2 to change, 0 to destroy`) and
+  executed: `nestor-migrate-w8ndm` and `tribunal-migrate-9fc5m`, both `Context impl
+  PostgresqlImpl` + `Container called exit(0)` and **no `Running upgrade` line** = already at
+  head. **This release ships no migration**, same as the first.
+* `nestor-api` · `nestor-frontend` · `tribunal-api`, each `0 to add, 1 to change, 0 to destroy`
+* **idle gate** build `4b265152-8fe9-4993-8371-5389c19ee8fe` as `tribunal-run@` — **SUCCESS
+  exit=0**, the only value that is a pass
+* `tribunal-worker` **LAST**, `0 to add, 1 to change, 0 to destroy`
+* completed **2026-09-24T21:37Z**, `RELEASE COMPLETE`
+
+#### Read-back proofs
+
+**PROD — `nestor-pulse-prod` @ `9bdb0fb` / `client-9bdb0fb`:**
+
+| service | revision | digest | smoke |
+|---|---|---|---|
+| `nestor-api` | `nestor-api-00008-mkb` | `sha256:9e2dd526610f6b7eaa173b9d8240c17d045e9d7e437e1b97c00f29de0846a21c` | `/readyz` **200** |
+| `nestor-frontend` | `nestor-frontend-00003-qr6` | `sha256:28c0bb4054ce58f0a107abdf50c4623d62ea4040d82d33cfa5aeeb41b836dc63` | `/auth/login` **200**, `/admin` **200** |
+| `tribunal-api` | `tribunal-api-00005-c7p` | `sha256:1101b070725911332994af11b59a5b7176f4fe79be8420c673d71968dd1033fc` | `/readyz` **403 anonymous**, **200 with an identity token** |
+| `tribunal-worker` | `tribunal-worker-00005-fbf` | `sha256:0c28f7831277580589f4fec9498e9b1ed33c887faee96a1264fe9a201c7bdc37` | — |
+
+⚠ **The 403 is the IAM wall working, not a failure** — the client's `tribunal-api` does not
+allow unauthenticated invocation. Do not "fix" it.
+
+**The backend digest is byte-equal to the dev one** — `9e2dd526…` is the image
+`nestor-api-00054-2vb` runs on dev. The two tribunal digests are byte-equal to what **both**
+environments have run since `90084e5`. The frontend digest differs **by design**: dev runs
+`7d3d8259…` and prod runs `28c0bb40…`, because each is built with its own API url and Firebase
+config, and a promoted dev frontend would point the client's browser at the dev API.
+
+**Flags, read back on both prod tribunal services:**
+
+```
+nestor-pulse-prod / tribunal-api      NESTOR_CITATIONS_V2 = false
+                                      NESTOR_SYNTHESIS_CONTINUE_TRUNCATED = false
+nestor-pulse-prod / tribunal-worker   NESTOR_CITATIONS_V2 = false
+                                      NESTOR_SYNTHESIS_CONTINUE_TRUNCATED = false
+```
+
+Dev at the same moment: **`true` on both services, both flags.** The two values agree within
+each environment, which is the invariant the derivation demands — one `[n]` must not mean two
+different sources depending on which service you ask.
+
+⭐ **Independently re-read while writing this record** (2026-09-24, read-only
+`gcloud run services describe` / `gcloud run revisions describe`, with `--account=tools@dotto.be`
+and `--project` pinned on every call): the four prod revision names, the four prod digests off
+the **revisions**, both prod flag pairs, and on dev `nestor-api-00054-2vb` /
+`nestor-frontend-00044-8kb` / `tribunal-api-00028-29c` / `tribunal-worker-00015-79r` with both
+flags `true` on both tribunal services. Not transcribed from the operator log alone.
+
+**Health after the release:** **zero `ERROR` log lines** on all four new prod revisions in the
+first twenty-five minutes. The final untargeted plan again reported **5 to change** — the four
+cosmetic `scaling {}` read-backs the 23.4 record documents, plus
+`google_cloud_run_v2_job.seed_superadmin` **still pinned to `backend:f5e2b9ad`**. It was not
+targeted by this release either, so **DEF-23.5-07-03 persists and its gap has widened** (the
+job now trails two release tags, not one).
+
+#### Revert levers
+
+| What | Lever |
+|---|---|
+| the mail change (D-23.5-08) | previous `nestor-api` revision **`nestor-api-00007-skh`** |
+| the dropdown sync (D-23.5-09) | previous `nestor-frontend` revision **`nestor-frontend-00002-84s`** |
+| the tribunal services | previous revisions **`tribunal-api-00004-2zq`** and **`tribunal-worker-00004-z46`** — same images, so this only undoes the revision; run the idle gate FIRST, a worker revision boots the poll loop |
+| the tribunal citation + continuation changes | **already off.** Both flags are `"false"` in `env/client.tfvars` and live. Nothing to revert until they are flipped on. |
+| the whole release | re-run `infra/release-client.sh` with `IMAGE_TAG=261915a` and `FRONTEND_TAG=client-261915a`, and their digests in the three `EXPECT_*` variables |
+
+#### ⛔ What this deploy does NOT prove
+
+* ⛔ **Nobody has seen the new mail in an inbox.** The nine template bodies and the three
+  subjects are verified by unit tests and by a rendered string table in the plan 09 summary —
+  and by **nothing else**. No research run has completed since the deploy, so no
+  `render_research_*` call has produced a real message on either environment.
+* ⛔ **The research mails are Dutch-only in production.** No caller passes `locale=` to
+  `render_research_*`, so all seven call sites render at the `nl` default and all three subjects
+  are Dutch. The French and English variants were edited and are tested, and they are
+  **unreachable**. A French- or English-speaking superadmin still receives Dutch.
+  (DEF-23.5-09-01)
+* ⛔ **The dropdown sync has never been exercised in a browser.** `shouldSyncActiveSpace` is
+  covered by vitest arms over the predicate; the three route effects that call it are covered by
+  a grep count. `/admin` returning 200 says the page boots, not that the dropdown follows the
+  intake.
+* ⛔ **The dev acceptance run of Step 23.5.d is still not started.** All five citation figures
+  remain unmeasured, on both environments. (DEF-23.5-07-01)
+* ⛔ **Prod still runs with the flags OFF**, so the client's reported Sources-list defect is
+  still present in production. (DEF-23.5-07-02)
+* ⛔ **The operator's open question about a run selector is still undecided** — an intake can
+  hold several `research_runs` and the admin surfaces one. (DEF-23.5-07-04)
+* ⚠ No git tag was cut for `9bdb0fb` (see above).
+* ⚠ `seed_superadmin` is now two release tags behind (DEF-23.5-07-03).
+* Everything the first 23.5 record and the 23.4 record say remains true: the superadmin password
+  is unrotated, the chat-exposed client Anthropic key is unrevoked, and **no Cloud SQL backup has
+  ever been restored** on either project.
