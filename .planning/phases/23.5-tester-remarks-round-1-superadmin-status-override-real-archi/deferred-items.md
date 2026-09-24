@@ -138,6 +138,11 @@ plan: per-test unique org slugs, and `asyncio.run` in place of
 
 ## DEF-23.5-06-01 — phase 23.5's four new tribunal test files are in NO Cloud Build gate
 
+> ✅ **CLOSED 2026-09-22** by plan 23.5-07 as a Rule 2 deviation: the five paths were added
+> to `WANTED` and `EXPECTED_FILES` moved **45 -> 50** in one edit, committed separately as
+> `e2c59cf`. The 125 tests are in a gate for the first time. The record below is kept for the
+> reasoning.
+
 **Found:** 2026-09-22, during plan 23.5-06 Task 1.
 **Status:** OUT OF SCOPE for plans 04/05/06 — each declares its files and
 `tribunal/cloudbuild.test-engine.yaml` is not among them.
@@ -171,3 +176,138 @@ the phase's ship wave (plan 23.5-07), which already touches build and deploy.
 surface of all three tribunal plans, and this is the sensitive wave. Changing a
 gate's own assertion count is not something to slip into a plan that did not
 name it.
+
+## DEF-23.5-07-01 — the ONE dev acceptance run was never started; all five numbers are unmeasured
+
+**Found:** 2026-09-24, writing the phase 23.5 deploy record.
+**Status:** OPEN and BLOCKING the flag flip. This is the largest outstanding item in the phase.
+
+Plan 23.5-07 Task 2 step D requires exactly one research run on a `decomposed` dev intake,
+with the queue otherwise empty and both kill switches ON, read against five fixed figures.
+**It has not been run.** Dev has been sitting with `NESTOR_CITATIONS_V2=true` and
+`NESTOR_SYNTHESIS_CONTINUE_TRUNCATED=true` since 2026-09-22 (`tribunal-api-00028-29c`,
+`tribunal-worker-00015-79r`) and nothing has exercised them.
+
+Consequence: plans 04, 05 and 06 — the entire fix for the first client defect, where roughly
+two thirds of the `## Sources` list was wrong — have shipped to **two** environments on unit
+tests, replay goldens and a flags-off byte-identity proof. No live run, on any environment,
+has ever executed that code path.
+
+**The five figures, and where each is read** (verbatim from runbook Step 23.5.d):
+
+| # | Figure | Expected | Where |
+|---|---|---|---|
+| 1 | source labels that are not the URL's host | **0** | the rendered `## Sources` list; redirects excepted |
+| 2 | anchors resolving to a URL that is not one of that claim's own provider URLs | **0** | join `claim_source` -> `source` for the numbered claims |
+| 3 | stripped anchors (the "matched no claim" warning) | **0** | the run log |
+| 4 | numbered redirect URLs rendered opaque while a `resolved_url` exists | **0** | the rendered list vs `source.resolved_url` |
+| 5 | total numbered sources | **MEASURED, not predicted** | run `7784e71c` had 2,681; expect a collapse toward the count of distinct provider URLs |
+
+Also read every chapter end to end: no section may stop mid-sentence, and any section still cut
+must carry the one-line notice in the run's own language.
+
+**Cost:** ~$40 on the dev Anthropic key, one run. **If any figure misses: set the master back to
+`false` on dev and bisect with the five fine-grained switches — no rebuild needed.**
+
+## DEF-23.5-07-02 — the prod flag flip is owed; the client's Sources defect is still live
+
+**Found:** 2026-09-24, at the prod release.
+**Status:** OPEN. Deliberate, by operator ruling — not an oversight.
+
+`nestor-pulse-prod` runs the phase 23.5 code (`261915a`) with **both kill switches `"false"`**.
+Read back on 2026-09-24 on both `tribunal-api-00004-2zq` and `tribunal-worker-00004-z46`. The
+citation and continuation fixes are in the images and dormant in the configuration, so **the
+client still gets the defective `## Sources` list** on any run started today.
+
+Blocked by DEF-23.5-07-01. Once the dev run is read and its five figures pass, the flip is:
+
+```bash
+# 1. infra/env/client.tfvars — both to "true"
+#      nestor_citations_v2                = "true"
+#      nestor_synthesis_continue_truncated = "true"
+
+TF=$HOME/AppData/Local/terraform/terraform.exe
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token --account=tools@dotto.be)"
+
+# 2. tribunal-api FIRST — no poll loop, so no claim risk
+$TF -chdir=infra apply -var-file=env/client.tfvars \
+  -target=google_cloud_run_v2_service.tribunal_api
+
+# 3. THE IDLE GATE, as tribunal-run@ (Terraform-built env). Exit 0 is the ONLY pass;
+#    90/91/92/93 are refusals. --no-source is required.
+gcloud builds submit --no-source --config=infra/queue-check.yaml \
+  --substitutions=_PROJECT=nestor-pulse-prod,_REGION=europe-west1 \
+  --service-account=projects/nestor-pulse-prod/serviceAccounts/tribunal-run@nestor-pulse-prod.iam.gserviceaccount.com \
+  --project=nestor-pulse-prod --account=tools@dotto.be
+gcloud builds describe <FULL-UUID> --project=nestor-pulse-prod --account=tools@dotto.be \
+  --format='value(status,steps[0].exitCode,failureInfo.detail)'
+
+# 4. tribunal-worker LAST — a worker revision BOOTS the poll loop, which claims first and
+#    sleeps last. This is a config change, and it still creates a revision.
+$TF -chdir=infra apply -var-file=env/client.tfvars \
+  -target=google_cloud_run_v2_service.tribunal_worker
+
+# 5. READ BACK on both services — the two values must be equal, or one [n] means two
+#    different sources depending on which service you ask.
+for S in tribunal-api tribunal-worker; do
+  gcloud run services describe $S --region=europe-west1 --project=nestor-pulse-prod \
+    --account=tools@dotto.be --format='json(spec.template.spec.containers[0].env)' \
+    | grep -A1 'CITATIONS_V2\|CONTINUE_TRUNCATED'
+done
+```
+
+⚠ The agent permission classifier blocks `terraform apply`; the operator runs this via `!`.
+⚠ Revert is the same sequence with `"false"` — config only, no rollback, no rebuild, and a run
+in flight is unaffected until its next section.
+
+## DEF-23.5-07-03 — `seed_superadmin` job still pinned to `backend:f5e2b9ad` on prod
+
+**Found:** 2026-09-24, in `release-client.sh`'s final untargeted plan.
+**Status:** OPEN, low severity, but it is real Terraform drift.
+
+The release repinned and executed both migrate jobs, and applied the four services, all
+targeted. `google_cloud_run_v2_job.seed_superadmin` was **not** targeted, so it still carries
+`backend:f5e2b9ad` while `var.image_tag` is now `261915a`. The final plan therefore reported
+**5 to change**, not the four cosmetic `scaling {}` read-backs the 23.4 record documents.
+
+Harmless today: the job is not executed by a release, and the seeded superadmin already exists.
+It will move silently on the next untargeted `terraform apply`. Fix by adding
+`-target=google_cloud_run_v2_job.seed_superadmin` to `release-client.sh`'s step 1 alongside the
+two migrate jobs, or by accepting it and updating the runbook's "expect four" check to five.
+**Note the runbook's pre-apply checklist still says "Five is not four — if the count differs,
+stop".** That check is now tripped by this known item; resolve one or the other.
+
+## DEF-23.5-07-04 — OPERATOR QUESTION OPEN: a run selector for earlier research runs
+
+**Raised:** by the operator during the 2026-09-22 dev walkthrough. **Status:** undecided — this
+is a product ruling, not a defect.
+
+An intake can accumulate several `research_runs` over time (re-runs are phase 24's subject), but
+the admin UI surfaces one. There is no way to open an earlier run's report, compare two runs, or
+even see that more than one exists. Plan 23.5-08 made the delete audit row carry
+`tribunal_run_ids` precisely because those rows are deliberately retained after a cascade — so
+the data to select from exists and is not going away.
+
+Needs a ruling on scope before any plan: a plain dropdown of prior runs on the intake detail
+page, versus the fuller version-history surface phase 24 already contemplates. Recorded here so
+the question is not lost between phases.
+
+## Carried operational chores — NOT closed by this phase
+
+These predate phase 23.5 and survived it. Repeated here so the phase's own record does not read
+as if the environment were clean.
+
+1. ⛔ **Rotate the superadmin password.** `nestor-superadmin-initial-password` on
+   `nestor-pulse-prod` is still the seeded value and has been read in-session.
+2. ⛔ **Revoke the exposed client Anthropic key.** It was pasted into a chat before being stored
+   in Secret Manager. A **v2** was rolled on 2026-09-22 and the services run it, but a new
+   secret version does **not** disable the old key at the provider. Both v1 and v2 should be
+   treated as compromised until the v1 value is revoked upstream.
+3. ⚠ **No operations mail on first submit.** A client submitting an intake for the first time
+   produces no notification to the operator; it is noticed only by someone looking.
+4. ⚠ **`source_urls[0]` primary-anchor rider for phase 24.** The primary-anchor mechanism
+   (plan 23.5-05) currently picks the anchor from the claim's `source_urls[0]`. The durable fix
+   is a first-class column, which means an intake migration — **alembic `0019`** — and phase 24
+   is the next release that ships one. Carry it there rather than opening a migration of its own.
+5. ⛔ **No Cloud SQL backup has ever been restored** on either project, and `nestor-pg` is still
+   `ZONAL` (no HA). Backups bound the data loss; they do not remove the outage.
