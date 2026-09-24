@@ -860,7 +860,7 @@ Plans:
 **Requirements**: TR1-STATUS, TR2-SOURCES, TR2B-TRUNCATION, TR3-ARCHIVE-DELETE, TR4-NAMING, SHIP-23.5 (derived from the four tester remarks; none registered in REQUIREMENTS.md — this phase was inserted 2026-09-22 after Nestor's first week on `nestor-pulse-prod`)
 **Depends on:** Phase 23
 **Authority:** `.planning/phases/23.5-*/23.5-CONTEXT.md` — operator rulings D-23.5-01..05.
-**Plans:** 8/8 plans complete
+**Plans:** 9/9 plans complete
 
 - Wave 1: 01 (status override) + 04 (tribunal persist) — the tribunal track depends on NOTHING outside tribunal and shares no file with the backend/frontend track.
 - Wave 2: 02 (archive + guarded hard delete) + 05 (tribunal numbering/ledger)
