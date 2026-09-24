@@ -50,8 +50,8 @@ image_registry_project = "project-cb01b861-cb4a-438d-b9a"
 # All three are promoted dev tags, set by plan 23.4-03 Task 1. Until that plan
 # runs there is no image in the client's pull path, so the Cloud Run services
 # created by the first apply are EXPECTED to fail to become ready.
-image_tag          = "261915a" # 23.5-07 Task 3 — phase 23.5 release (backend sha256:16916a5c…), promoted 2026-09-24
-frontend_image_tag = "client-261915a" # 23.5-07 Task 3 — rebuilt for the client env (prod API url + prod Firebase), 2026-09-24
+image_tag          = "9bdb0fb" # 23.5-09 release (client name in mails + active-client sync), 2026-09-24
+frontend_image_tag = "client-9bdb0fb" # 23.5-09 — rebuilt for the client env, 2026-09-24
 
 # ------------------------------------------------------------ nestor-api tier
 # DEF-23.3-14: 1, never 0. At 0 the phase 23.3 orphaned-run reconcile loop never
@@ -116,7 +116,7 @@ tribunal_api_min_instances    = 0
 # landed) was removed on 2026-09-09.
 tribunal_worker_stale_minutes = "60"
 
-tribunal_image_tag = "261915a" # 23.5-07 Task 3 — same digests as dev 90084e5 (tribunal-api sha256:1101b070…, worker sha256:0c28f783…); flags stay "false" until the dev acceptance run is read
+tribunal_image_tag = "9bdb0fb" # same digests as 261915a/90084e5 (tribunal untouched since); flags stay "false" until the dev acceptance run is read
 
 tribunal_gemini_secret_id = "Nestor_Gemini"
 tribunal_openai_secret_id = "Nestor_OpenAI"
