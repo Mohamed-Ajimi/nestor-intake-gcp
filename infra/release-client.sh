@@ -48,6 +48,12 @@ EXPECT_TRIB_API="${EXPECT_TRIB_API:?set EXPECT_TRIB_API (sha256:...)}"
 EXPECT_TRIB_WORKER="${EXPECT_TRIB_WORKER:?set EXPECT_TRIB_WORKER (sha256:...)}"
 FB_KEY_BUILD="${FB_KEY_BUILD:-}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-}"
+# FLAGS: the value BOTH tribunal kill switches must carry in client.tfvars ("false" keeps them
+# off; "true" is the 23.5-07 Task 3 flip, applied by steps 4 and 6). The script never edits tfvars.
+FLAGS="${FLAGS:-false}"
+case "${FLAGS}" in true|false) ;; *) echo "FLAGS must be true or false" >&2; exit 1;; esac
+# WAIT_IDLE_TRIES x 300s: how long step 0a' waits for the run queue to empty (default 36 = 3h).
+WAIT_IDLE_TRIES="${WAIT_IDLE_TRIES:-36}"
 
 CLIENT_API_URL="${CLIENT_API_URL:-https://nestor-api-zqd5qncdnq-ew.a.run.app}"
 CLIENT_FRONTEND_URL="${CLIENT_FRONTEND_URL:-https://nestor-frontend-zqd5qncdnq-ew.a.run.app}"
@@ -109,6 +115,17 @@ build_wait() {  # $1 build id -> status
   echo "TIMEOUT-WAITING"
 }
 
+idle_gate() {  # -> prints "STATUS EXIT BUILD"; SUCCESS with exit 0 is the ONLY pass
+  local gid gs gc
+  gid="$("${G[@]}" builds submit --no-source --config="${TFDIR}/queue-check.yaml" \
+          --substitutions="_PROJECT=${CLIENT},_REGION=${REGION}" \
+          --service-account="projects/${CLIENT}/serviceAccounts/tribunal-run@${CLIENT}.iam.gserviceaccount.com" \
+          --project="${CLIENT}" --async --format='value(id)' 2>/dev/null | tail -1)"
+  [ -n "${gid}" ] || { echo "NOBUILD ? none"; return 0; }
+  gs="$(for _ in $(seq 1 30); do s="$("${G[@]}" builds describe "${gid}" --project="${CLIENT}" --format='value(status)' 2>/dev/null)"; case "$s" in SUCCESS|FAILURE|CANCELLED|TIMEOUT|INTERNAL_ERROR) echo "$s"; break;; esac; sleep 10; done)"
+  gc="$("${G[@]}" builds describe "${gid}" --project="${CLIENT}" --format='value(steps[0].exitCode)' 2>/dev/null)"
+  echo "${gs:-UNKNOWN} ${gc:-0} ${gid}"
+}
 say "release-client: dev=${DEV} client=${CLIENT} tag=${IMAGE_TAG} frontend=${FRONTEND_TAG}"
 say "step 0a — the dev digests behind the tag"
 DB="$(digest_of_tag backend "${IMAGE_TAG}")";         echo "  backend        ${DB}"
@@ -122,8 +139,18 @@ say "step 0b — tfvars must carry exactly these tags"
 grep -Eq "^image_tag\s*=\s*\"${IMAGE_TAG}\""              "${TFDIR}/${VARS}" || die "image_tag in ${VARS} is not ${IMAGE_TAG}"
 grep -Eq "^tribunal_image_tag\s*=\s*\"${IMAGE_TAG}\""     "${TFDIR}/${VARS}" || die "tribunal_image_tag in ${VARS} is not ${IMAGE_TAG}"
 grep -Eq "^frontend_image_tag\s*=\s*\"${FRONTEND_TAG}\""  "${TFDIR}/${VARS}" || die "frontend_image_tag in ${VARS} is not ${FRONTEND_TAG}"
-grep -Eq '^nestor_citations_v2\s*=\s*"false"'             "${TFDIR}/${VARS}" || die "nestor_citations_v2 is not \"false\" — this script never flips the flags"
-grep -Eq '^nestor_synthesis_continue_truncated\s*=\s*"false"' "${TFDIR}/${VARS}" || die "nestor_synthesis_continue_truncated is not \"false\""
+grep -Eq "^nestor_citations_v2\s*=\s*\"${FLAGS}\""                 "${TFDIR}/${VARS}" || die "nestor_citations_v2 in ${VARS} is not \"${FLAGS}\" (FLAGS=${FLAGS})"
+grep -Eq "^nestor_synthesis_continue_truncated\s*=\s*\"${FLAGS}\"" "${TFDIR}/${VARS}" || die "nestor_synthesis_continue_truncated in ${VARS} is not \"${FLAGS}\" (FLAGS=${FLAGS})"
+
+say "step 0a' — WAIT until no tribunal run is queued or running (nothing is deployed before this passes)"
+for TRY in $(seq 1 "${WAIT_IDLE_TRIES}"); do
+  read -r GS GC GID <<<"$(idle_gate)"
+  echo "  $(date -u +%H:%MZ) gate ${GID}: ${GS} exit=${GC}"
+  [ "${GS}" = "SUCCESS" ] && break
+  [ "${TRY}" = "${WAIT_IDLE_TRIES}" ] && die "queue never emptied after ${WAIT_IDLE_TRIES} checks — nothing was deployed"
+  echo "  a run is in flight (or the gate could not tell) — waiting 5 min"
+  sleep 300
+done
 
 say "step 0c — frontend image ${FRONTEND_TAG} (built for the CLIENT: its API url + its Firebase)"
 if [ -n "${SKIP_FRONTEND_BUILD}" ] && [ -n "$(digest_of_tag frontend "${FRONTEND_TAG}")" ]; then
@@ -176,14 +203,8 @@ expect_digest tribunal-api "${DA}"
 echo "  /readyz -> $(http_code "${CLIENT_TRIB_API_URL}/readyz")"
 
 say "step 5 — idle gate as tribunal-run@ (exit 0 is the ONLY pass)"
-GID="$("${G[@]}" builds submit --no-source --config="${TFDIR}/queue-check.yaml" \
-        --substitutions="_PROJECT=${CLIENT},_REGION=${REGION}" \
-        --service-account="projects/${CLIENT}/serviceAccounts/tribunal-run@${CLIENT}.iam.gserviceaccount.com" \
-        --project="${CLIENT}" --async --format='value(id)' 2>/dev/null | tail -1)"
-[ -n "${GID}" ] || die "gate build was not created"
-GS="$(for _ in $(seq 1 30); do s="$("${G[@]}" builds describe "${GID}" --project="${CLIENT}" --format='value(status)' 2>/dev/null)"; case "$s" in SUCCESS|FAILURE|CANCELLED|TIMEOUT|INTERNAL_ERROR) echo "$s"; break;; esac; sleep 10; done)"
-GC="$("${G[@]}" builds describe "${GID}" --project="${CLIENT}" --format='value(steps[0].exitCode)' 2>/dev/null)"
-echo "  gate build ${GID}: ${GS} exit=${GC:-0}"
+read -r GS GC GID <<<"$(idle_gate)"
+echo "  gate build ${GID}: ${GS} exit=${GC}"
 [ "${GS}" = "SUCCESS" ] || die "idle gate refused (${GS}, exit ${GC:-?}) — a run may be in flight; the worker was NOT touched"
 
 say "step 6 — tribunal-worker LAST"
@@ -195,5 +216,10 @@ tf plan -var-file="${VARS}" -input=false -no-color -lock=false 2>&1 | grep -E '^
 
 say "DEPLOY RECORD — ${CLIENT} @ ${IMAGE_TAG} / ${FRONTEND_TAG} ($(date -u +%Y-%m-%dT%H:%MZ))"
 for S in nestor-api nestor-frontend tribunal-api tribunal-worker; do printf '  %-16s %s\n' "${S}" "$(revision_digest "${S}")"; done
-echo "  flags: NESTOR_CITATIONS_V2 / NESTOR_SYNTHESIS_CONTINUE_TRUNCATED = false (from ${VARS}); flip is a separate apply"
+for S in tribunal-api tribunal-worker; do
+  R="$("${G[@]}" run services describe "${S}" --region="${REGION}" --project="${CLIENT}" --format='value(status.latestReadyRevisionName)')"
+  printf '  %-16s %s\n' "${S}" "$("${G[@]}" run revisions describe "${R}" --region="${REGION}" --project="${CLIENT}" --format=json \
+     | python -c "import json,sys;e={x['name']:x.get('value') for x in json.load(sys.stdin)['spec']['containers'][0].get('env',[])};print('NESTOR_CITATIONS_V2='+str(e.get('NESTOR_CITATIONS_V2')),'NESTOR_SYNTHESIS_CONTINUE_TRUNCATED='+str(e.get('NESTOR_SYNTHESIS_CONTINUE_TRUNCATED')))" 2>/dev/null || echo 'flags: read-back failed')"
+done
+echo "  flags expected: ${FLAGS} (from ${VARS})"
 echo "RELEASE COMPLETE"
