@@ -682,12 +682,12 @@ Plans:
 **Goal:** A superadmin can start another deep-research run on an intake that already has one (same approved questions and context pack, no status step-back, no attempt cap, delivered stays delivered, refused while a run is in flight), see every run of the intake with its report and zip on the intake page, and mark one finished run as the internal chosen run (newest finished by default). Nothing client-facing changes. DEV ONLY.
 **Requirements**: RR-01 (rerun: no superadmin cap, no step-back, delivered stays delivered, 409 in flight), RR-02 (run history list), RR-03 (internal chosen-run label, newest-finished display default), RR-SHIP (dev-only deploy) — derived IDs, not in REQUIREMENTS.md
 **Depends on:** Phase 23
-**Plans:** 5 plans in 3 waves
+**Plans:** 2/5 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 23.6-01-PLAN.md — backend (TDD): migration 0018 `research_runs.chosen_at` + one-chosen-per-intake index + `set_chosen`; trigger_research: no cap for superadmin, rerun from in_research/delivered with no status change, 409 while any run in flight
-- [ ] 23.6-03-PLAN.md — frontend data layer (TDD): getResearchRuns/chooseResearchRun, pure runHistory rules, statusLabel moved to lib, 34 intakeDetail.runs.* keys x nl/fr/en
+- [x] 23.6-01-PLAN.md — backend (TDD): migration 0018 `research_runs.chosen_at` + one-chosen-per-intake index + `set_chosen`; trigger_research: no cap for superadmin, rerun from in_research/delivered with no status change, 409 while any run in flight
+- [x] 23.6-03-PLAN.md — frontend data layer (TDD): getResearchRuns/chooseResearchRun, pure runHistory rules, statusLabel moved to lib, 34 intakeDetail.runs.* keys x nl/fr/en
 
 **Wave 2**
 - [ ] 23.6-02-PLAN.md — backend (TDD): GET /intakes/{id}/research/runs + POST /intakes/{id}/research/runs/{run_id}/choose (superadmin-gated, audited, internal only); research_router pinned at 13 routes
