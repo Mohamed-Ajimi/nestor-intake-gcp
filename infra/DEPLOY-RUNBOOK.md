@@ -8105,3 +8105,13 @@ index, so the older API runs on it) and nestor-frontend back to `nestor-frontend
   `nestor-frontend-00046-5fg` (`sha256:59ff61d2…0182`). First dev rerun measured (tribunal run 48892684, 14:27→15:15Z,
   12 research calls all finishing 14:46–14:59 = 15-at-a-time confirmed): question stage ~17 min, research calls ~15 min,
   verification ~9, report ~6.
+
+### DEV 2026-09-25 16:16Z — Claude research on Opus 5.5, no search cap (quick 260925-cop, `58a6a23`)
+Worker image built on dev (`ca44caa1`, `tribunal-worker:58a6a23` → `sha256:9075ef76…ee77`); tribunal diff vs the
+previous worker image (90084e5) = only the Claude researcher + its adapter label + tests + legacy snapshot. Idle gate
+`9dbd225a` exit 0. `gcloud run services update tribunal-worker --image=@digest` (env untouched):
+`tribunal-worker-00017-lkq`, read back ANGLE_CONCURRENCY=15, both 23.5 flags true, RUN_CONCURRENCY=4; two
+`worker_started` lines, no errors. tribunal-api unchanged (does not run the researchers). PROD untouched.
+Revert: `--image=…tribunal-worker:90084e5` digest (or env NESTOR_CLAUDE_RESEARCH_MODEL won't suffice for 4.6 — git revert).
+**Not yet observed:** a run on this image — watch worker logs for `Claude deep research complete: model=claude-opus-5-5`
+(search count, request count, stop_reason) and per-angle duration in tribunal.run_event.
