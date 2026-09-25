@@ -677,6 +677,16 @@ Plans:
 
 - [x] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
 
+### Phase 23.6: Rerun deep research with run history: superadmin Rerun button (same approved questions and context pack, no status step-back, no attempt cap for superadmin), history of every run with its report and zip on the intake page, superadmin picks which finished run the client sees (newest by default). DEV ONLY. (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 23
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 23.6 to break down)
+
 ### Phase 23.1: Platform hardening: authorization boundary, space deactivation cascade, AI cost control, tribunal run ownership, and CI coverage (INSERTED)
 
 **Goal:** Close the verified authorization, cost-control and run-ownership defects found by the 2026-09-03 audit, without breaking the live client surface. Every operator-only verb is gated by ONE shared `_superadmin_gate` (existence-hidden 404) while the nine client-reachable routes stay open and pinned by test; deactivating a space actually revokes its members; a second concurrent AI skill run is refused by a DB invariant and context-pack can no longer flip an arbitrary intake to `decomposed`; a displaced Tribunal worker can no longer heartbeat or finalize a run it lost, and the two non-idempotent paid Tribunal endpoints become safe under concurrency; CI stops being blind to the non-integration suite and the frontend gates.

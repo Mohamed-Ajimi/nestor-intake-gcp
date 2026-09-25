@@ -4,14 +4,14 @@ milestone: v1.1
 milestone_name: Tribunal Integration
 status: executing
 stopped_at: context exhaustion at 83% (2026-09-03)
-last_updated: "2026-09-22T08:23:59.903Z"
+last_updated: "2026-09-25T12:27:20.278Z"
 last_activity: 2026-09-22 -- Phase 23.5 execution started
 progress:
-  total_phases: 25
-  completed_phases: 18
-  total_plans: 190
-  completed_plans: 181
-  percent: 72
+  total_phases: 26
+  completed_phases: 19
+  total_plans: 192
+  completed_plans: 190
+  percent: 73
 ---
 
 # Project State
@@ -536,6 +536,7 @@ Progress: [██████████] 100%
 - Phase 23.1 inserted after Phase 23: Platform hardening: authorization boundary, space deactivation cascade, AI cost control, tribunal run ownership, and CI coverage (URGENT)
 - Phase 23.4 inserted after Phase 23: client environment: fresh nestor-pulse-prod project from existing Terraform + recorded manual wiring, seed client space, prove with one run, dev-to-client promotion pipeline (build once, promote by digest, worker idle gate, smoke) + consolidated bootstrap runbook (URGENT)
 - Phase 23.5 inserted after Phase 23: tester remarks round 1 (Nestor, 2026-09-18/22): superadmin status override, real archive + guarded hard delete, project-name/client wording, Sources-list + truncated-chapter fixes in tribunal behind a kill switch (URGENT)
+- Phase 23.6 inserted after Phase 23.5: Rerun deep research with run history (dev only); rulings 2026-09-25: no cap for superadmin, superadmin picks delivered run, rerun button same questions
 
 ### Decisions
 
