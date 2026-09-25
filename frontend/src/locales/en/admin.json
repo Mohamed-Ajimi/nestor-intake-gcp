@@ -160,6 +160,46 @@
       "cleanupFailed": "Failed to clean up old files",
       "changesSaved": "Changes saved"
     },
+    "runs": {
+      "title": "Research runs",
+      "col": {
+        "attempt": "Attempt",
+        "status": "Status",
+        "started": "Started",
+        "duration": "Duration",
+        "cost": "Cost",
+        "actions": "Actions"
+      },
+      "startedMobile": "Started {{date}}",
+      "rerun": "Start new run",
+      "rerunStarting": "Starting…",
+      "rerunBlockedInFlight": "A run is already in progress for this intake. Wait for it to finish, or cancel it on the run page.",
+      "rerunConfirmTitle": "Start a new research run?",
+      "rerunConfirmBody": "This starts a new paid deep-research run with the same approved research questions and the same Context Pack. Expect about $40 in API costs and tens of minutes. There is no limit on the number of runs — every run is charged again. The currently chosen run stays chosen until you choose another. If you have not chosen a run, the newest finished run counts as chosen.",
+      "rerunConfirmParkedNote": "The paused run stays paused; a new run does not resume it.",
+      "rerunConfirmCancel": "Cancel",
+      "rerunConfirmConfirm": "Yes, start new run (~$40)",
+      "chosenBadge": "Chosen run",
+      "chosenBadgeMarked": "Chosen by you as the basis for the final report.",
+      "chosenBadgeDefault": "Automatic: newest finished run (none chosen yet).",
+      "noChosenRun": "No finished run to choose yet.",
+      "choose": "Use for report",
+      "chooseConfirmTitle": "Use attempt {{number}} as the basis for the report?",
+      "chooseConfirmBody": "This marks this run as the basis for the final report. It is an internal label: the client sees nothing different, no email is sent, and the client report (PDF) you uploaded is not replaced.",
+      "chooseConfirmCancel": "Cancel",
+      "chooseConfirmConfirm": "Yes, choose this run",
+      "zipOnRunPage": "Raw output: open the run to check the audit chain.",
+      "empty": "No research runs for this intake yet. Start the research from the next step above.",
+      "loadFailed": "The run history could not be loaded. Try again — the latest run is still reachable below.",
+      "retry": "Try again",
+      "toast": {
+        "rerunStarted": "New research run started. Follow it via Open run.",
+        "rerunInFlight": "A run is already in progress for this intake — no new run was started and nothing was charged.",
+        "rerunFailed": "Starting the new run failed. Nothing was charged — try again.",
+        "chooseDone": "Attempt {{number}} is now the chosen run.",
+        "chooseFailed": "Chosen run not changed. Try again."
+      }
+    },
     "archiveDialog": {
       "title": "Archive intake?",
       "body": "The project will be closed and removed from the active intake list. The intake becomes read-only; the client's results page remains available.",

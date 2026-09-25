@@ -160,6 +160,46 @@
       "cleanupFailed": "Échec du nettoyage des anciens fichiers",
       "changesSaved": "Modifications enregistrées"
     },
+    "runs": {
+      "title": "Exécutions de recherche",
+      "col": {
+        "attempt": "Tentative",
+        "status": "Statut",
+        "started": "Démarrée",
+        "duration": "Durée",
+        "cost": "Coût",
+        "actions": "Actions"
+      },
+      "startedMobile": "Démarrée le {{date}}",
+      "rerun": "Lancer une nouvelle exécution",
+      "rerunStarting": "Démarrage…",
+      "rerunBlockedInFlight": "Une exécution est déjà en cours pour cette intake. Attendez qu'elle se termine ou annulez-la sur la page de l'exécution.",
+      "rerunConfirmTitle": "Lancer une nouvelle exécution de recherche ?",
+      "rerunConfirmBody": "Cela lance une nouvelle exécution de deep research payante, avec les mêmes questions de recherche validées et le même Context Pack. Comptez environ 40 $ de coûts d'API et plusieurs dizaines de minutes. Le nombre d'exécutions n'est pas limité — chaque exécution est facturée à nouveau. L'exécution retenue actuelle le reste jusqu'à ce que vous en choisissiez une autre. Si aucune exécution n'a été retenue, la dernière exécution terminée est considérée comme retenue.",
+      "rerunConfirmParkedNote": "L'exécution en pause reste en pause ; une nouvelle exécution ne la reprend pas.",
+      "rerunConfirmCancel": "Annuler",
+      "rerunConfirmConfirm": "Oui, lancer (~40 $)",
+      "chosenBadge": "Exécution retenue",
+      "chosenBadgeMarked": "Retenue par vous comme base du rapport final.",
+      "chosenBadgeDefault": "Automatique : dernière exécution terminée (aucune retenue).",
+      "noChosenRun": "Aucune exécution terminée à retenir pour l'instant.",
+      "choose": "Retenir pour le rapport",
+      "chooseConfirmTitle": "Retenir la tentative {{number}} comme base du rapport ?",
+      "chooseConfirmBody": "Cette exécution devient la base du rapport final. C'est un marquage interne : le client ne voit aucune différence, aucun e-mail n'est envoyé et le rapport client (PDF) que vous avez téléversé n'est pas remplacé.",
+      "chooseConfirmCancel": "Annuler",
+      "chooseConfirmConfirm": "Oui, retenir cette exécution",
+      "zipOnRunPage": "Sortie brute : ouvrez l'exécution pour vérifier la chaîne d'audit.",
+      "empty": "Aucune exécution de recherche pour cette intake. Lancez la recherche via l'étape suivante ci-dessus.",
+      "loadFailed": "L'historique des exécutions n'a pas pu être chargé. Réessayez — la dernière exécution reste accessible ci-dessous.",
+      "retry": "Réessayer",
+      "toast": {
+        "rerunStarted": "Nouvelle exécution de recherche lancée. Suivez-la via Ouvrir l'exécution.",
+        "rerunInFlight": "Une exécution est déjà en cours pour cette intake — aucune nouvelle n'a été lancée et rien n'a été facturé.",
+        "rerunFailed": "Le lancement de la nouvelle exécution a échoué. Rien n'a été facturé — réessayez.",
+        "chooseDone": "La tentative {{number}} est maintenant l'exécution retenue.",
+        "chooseFailed": "L'exécution retenue n'a pas été modifiée. Réessayez."
+      }
+    },
     "archiveDialog": {
       "title": "Archiver l'intake ?",
       "body": "Le projet sera clôturé et disparaîtra de la liste des intakes actifs. L'intake passe en lecture seule ; la page de résultats du client reste accessible.",
