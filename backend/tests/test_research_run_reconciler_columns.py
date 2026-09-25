@@ -930,17 +930,26 @@ def test_the_migration_reverses_and_re_applies(engine):
     from alembic import command
 
     cfg = _alembic_cfg(engine)
-    assert _current_revision(engine) == REVISION, (
-        f"the engine fixture should have run 'alembic upgrade head' already, leaving "
-        f"{REVISION}; got {_current_revision(engine)!r}"
+    assert _current_revision(engine) is not None, (
+        "the engine fixture should have run 'alembic upgrade head' already"
     )
 
-    columns_before = _column_names(engine)
-    indexes_before = _index_names(engine)
-    assert set(RECONCILER_COLUMNS) <= columns_before
-    assert ORPHAN_INDEX in indexes_before
-
     try:
+        # ISOLATE 0017's OWN STEP. Since plan 23.6-01 the head is 0018, so a single
+        # `downgrade(0016)` would walk 0018 -> 0017 -> 0016 and the "and NOTHING else"
+        # assertions below would fire on 0018's `chosen_at` column and
+        # `uq_research_runs_one_chosen_per_intake` index — a TRUE observation about the
+        # wrong revision. Step down to 0017 first and only then read `before` (the same
+        # isolation test_research_dispatch_dedup.py applies to 0016). The `finally`
+        # restores head either way.
+        command.downgrade(cfg, REVISION)
+        assert _current_revision(engine) == REVISION
+
+        columns_before = _column_names(engine)
+        indexes_before = _index_names(engine)
+        assert set(RECONCILER_COLUMNS) <= columns_before
+        assert ORPHAN_INDEX in indexes_before
+
         command.downgrade(cfg, PREVIOUS_REVISION)
         assert _current_revision(engine) == PREVIOUS_REVISION
 
@@ -955,9 +964,15 @@ def test_the_migration_reverses_and_re_applies(engine):
             "downgrade must drop the orphan index and leave 0011's and 0016's untouched. "
             f"removed={sorted(indexes_before - indexes_after)!r}"
         )
+
+        # Back up to 0017 ONLY, not to head: `before` was read at 0017, so re-applying
+        # 0018 as well would legitimately add its column and index and make these
+        # comparisons lie. The `finally` below is what returns the schema to head.
+        command.upgrade(cfg, REVISION)
+        assert _current_revision(engine) == REVISION
+        assert _column_names(engine) == columns_before, (
+            "the re-upgrade must restore the columns"
+        )
+        assert _index_names(engine) == indexes_before, "the re-upgrade must restore the index"
     finally:
         command.upgrade(cfg, "head")
-
-    assert _current_revision(engine) == REVISION
-    assert _column_names(engine) == columns_before, "the re-upgrade must restore the columns"
-    assert _index_names(engine) == indexes_before, "the re-upgrade must restore the index"

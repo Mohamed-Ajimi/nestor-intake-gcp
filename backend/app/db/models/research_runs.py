@@ -217,6 +217,23 @@ class ResearchRun(Base):
             "the reconciler exists to end."
         ),
     )
+    #: Phase 23.6 / D-23.6-02 (migration 0018) — the INTERNAL "which run is the final
+    #: report based on" label. A flag on the RUN, not a pointer on the intake, so there is
+    #: no intakes <-> research_runs FK cycle and the D-23.5-06 intake delete is unaffected.
+    #: At most one run per intake is non-null (``uq_research_runs_one_chosen_per_intake``
+    #: below). Only ``ResearchRunRepository.set_chosen`` writes it; the newest-finished
+    #: default in the UI is display-only and never stored (UI-8).
+    chosen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "INTERNAL label: when the operator marked this run as the one the final "
+            "report is based on (D-23.6-02). At most one run per intake carries a "
+            "non-null value (enforced by a partial unique index). NULL = not "
+            "chosen; the newest-finished default shown in the UI is display-only and "
+            "is never stored. Written only by ResearchRunRepository.set_chosen."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -292,5 +309,15 @@ class ResearchRun(Base):
             "ix_research_runs_orphan_candidates",
             "driver_heartbeat_at",
             postgresql_where=text("status IN ('queued', 'running', 'needs_report_spec')"),
+        ),
+        # Phase 23.6 / D-23.6-02 (migration 0018) — at most ONE chosen run per intake,
+        # enforced by the DATABASE. Name + predicate byte-identical to 0018's; ``alembic
+        # check`` does NOT compare postgresql_where (DEF-23.2-15), so
+        # tests/test_research_run_chosen.py pins both against pg_indexes.indexdef.
+        Index(
+            "uq_research_runs_one_chosen_per_intake",
+            "intake_id",
+            unique=True,
+            postgresql_where=text("chosen_at IS NOT NULL"),
         ),
     )
