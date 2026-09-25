@@ -383,3 +383,44 @@ async def test_openai_all_retries_exhausted_returns_error(monkeypatch):
 
     assert result["status"] == "error"
     assert "error_message" in result
+
+
+# ---------------------------------------------------------------------------
+# Quick 260925-oai: the OpenAI research request carries high effort, the SAME standing
+# research instructions as the Claude stream, and the current `web_search` tool.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_openai_request_has_effort_instructions_and_current_search_tool(monkeypatch):
+    from nestor_pulse.tools.claude_deep_researcher import RESEARCH_SYSTEM_PROMPT
+
+    client_obj = _make_client()
+    queued = _openai_response("queued")
+    completed = _openai_response("completed", output_text="OpenAI report text.")
+
+    fake_client = MagicMock()
+    fake_client.responses.create = AsyncMock(return_value=queued)
+    fake_client.responses.retrieve = AsyncMock(return_value=completed)
+
+    async def fake_sleep(_):
+        pass
+
+    with patch("openai.AsyncOpenAI", return_value=fake_client), \
+         patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        monkeypatch.setattr(
+            "nestor_pulse_sdk.audit.audited_llm_client.asyncio.sleep",
+            fake_sleep,
+        )
+        result = await client_obj.openai_deep_research_raw(
+            "test query", max_attempts=2, poll_interval=0
+        )
+
+    assert result["status"] == "success"
+    kwargs = fake_client.responses.create.call_args.kwargs
+    assert kwargs["input"] == "test query"
+    assert kwargs["background"] is True
+    assert kwargs["reasoning"] == {"effort": "high"}
+    assert kwargs["instructions"] == RESEARCH_SYSTEM_PROMPT
+    assert kwargs["tools"] == [{"type": "web_search"}]
+    assert "max_tool_calls" not in kwargs  # still no search cap

@@ -206,6 +206,23 @@ OPENAI_DEEP_RESEARCH_MODEL = os.environ.get(
     "NESTOR_OPENAI_DR_MODEL", "gpt-5.6-sol"
 )
 
+# Quick 260925-oai (operator ruling 2026-09-25): the OpenAI research call gets (1) high reasoning
+# effort, (2) the SAME standing research instructions the Claude stream sends (imported from
+# nestor_pulse.tools.claude_deep_researcher.RESEARCH_SYSTEM_PROMPT — one text, never a copy), and
+# (3) the current `web_search` tool instead of `web_search_preview`. All three were probed on this
+# account on gpt-5.6-sol (background create -> completed; reasoning.effort echoed back "high").
+# Before: no instructions, provider-default effort, preview tool. No search cap either way.
+OPENAI_DEEP_RESEARCH_EFFORT = os.environ.get("NESTOR_OPENAI_DR_EFFORT", "high")
+OPENAI_DEEP_RESEARCH_TOOL = "web_search"
+
+def _openai_research_instructions() -> str:
+    """The standing research instructions, shared with the Claude stream (lazy import so this
+    module's import graph is unchanged)."""
+    from nestor_pulse.tools.claude_deep_researcher import RESEARCH_SYSTEM_PROMPT
+
+    return RESEARCH_SYSTEM_PROMPT
+
+
 # ---------------------------------------------------------------------------
 # D-A's second half: an operator must be able to READ the configuration rather
 # than infer it from seven identical per-angle failures. Emitted ONCE per process
@@ -1778,8 +1795,10 @@ class AuditedLLMClient:
                     response = await client.responses.create(
                         model=model,
                         input=query,
+                        instructions=_openai_research_instructions(),
                         background=True,
-                        tools=[{"type": "web_search_preview"}],
+                        reasoning={"effort": OPENAI_DEEP_RESEARCH_EFFORT},
+                        tools=[{"type": OPENAI_DEEP_RESEARCH_TOOL}],
                     )
                     last_exc = None
                     break
