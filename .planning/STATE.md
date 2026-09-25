@@ -25,6 +25,13 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 
 ## Current Position
 
+**→ 2026-09-25 (latest): PROD** runs `ae7c9d2` with BOTH 23.5 tribunal kill switches ON (runbook record #3,
+tag `release-23.5-ae7c9d2-flags-on`; nestor-api-00009-g99 / nestor-frontend-00003-qr6 / tribunal-api-00006-pgf /
+tribunal-worker-00006-hqn). **DEV** is ahead of prod: phase 23.6 rerun + run history (nestor-api-00058-lth,
+nestor-frontend-00046-5fg, migration 0018), research calls 15 at a time (env), and Claude research on
+claude-opus-5-5 with no search cap (tribunal-worker-00017-lkq). Phase 23.6 = 4/5 plans done; plan 05 walkthrough
+partly observed (operator ran one rerun); open follow-ups in `.planning/phases/23.6-*/deferred-items.md`.
+
 Phase: 23.5 (tester-remarks-round-1-superadmin-status-override-real-archi) — EXECUTING
 Plan: 1 of 7
 **→ CURRENT PHASE: 23.5 — tester remarks round 1. SHIPPED TO PROD 2026-09-24 — tag `261915a` 06:37Z, then tag `9bdb0fb` 21:37Z (nestor-api-00008-mkb / nestor-frontend-00003-qr6 / tribunal-api-00005-c7p / tribunal-worker-00005-fbf) via `infra/release-client.sh`; plans 01–06 + gap plans 08, 09 complete (9/9 summaries), plan 07 Tasks 2/3 partially done; git tags release-23.5-261915a, release-23.5-9bdb0fb. TRIBUNAL FLAGS OFF ON PROD. OWED before the phase closes: (1) ONE dev research run with flags ON (dev has them on: tribunal-api-00028-29c / tribunal-worker-00015-79r) read against the five acceptance numbers; (2) the prod flip — client.tfvars both flags "true", targeted apply tribunal_api → idle gate as tribunal-run@ → tribunal_worker, read back; (3) `/gsd-execute-phase 23.5` to finish plan 07 + verification. Deploy record: infra/DEPLOY-RUNBOOK.md 23.5.f; deferred: DEF-23.5-07-01..04.**
@@ -591,6 +598,9 @@ Recent decisions affecting current work (v1.1):
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260925-cop | Claude research on `claude-opus-5-5` (adaptive thinking effort=high, max_tokens 32k), web-search cap REMOVED, NEW pause_turn continuation (≤10). Tribunal suite: 0 new failures vs baseline, +6 tests. **DEV** `tribunal-worker-00017-lkq` (sha256:9075ef76…). Claude research cost still not counted. | 2026-09-25 | 58a6a23 | [260925-cop-claude-research-opus-5-5-no-search-limit](./quick/260925-cop-claude-research-opus-5-5-no-search-limit/) |
+| 260925-env | DEV research-call concurrency `NESTOR_TRIBUNAL_ANGLE_CONCURRENCY` 4 → 15 (env only, `tribunal-worker-00016-cvq`, idle gate 465b72a8). Proven on rerun 48892684: all 12 calls running by 14:43:52 (tribunal.run_event). Prod still 4. | 2026-09-25 | — | runbook |
+| 260925-nop | Rerun confirm shows NO price (operator ruling), nl/fr/en. DEV `nestor-frontend-00046-5fg`. | 2026-09-25 | c901a5e | phase 23.6 |
 | 260925-dyt | Raw-output zip keeps every angle report: `research/NN-<question>-<provider>.md` + header + `research/index.md` (was one file per provider — 2–3 of up to 15 reports survived unzip on all 13 prod bundles). Backend 916 passed / 2 skipped (not Docker). Existing prod bundles NOT rebuilt. **DEV 2026-09-25**: `nestor-api-00055-gx8` = `backend:51210b5` sha256:9950670c… (build fb763ce0, idle gate 8c4f41c6 passed, readyz 200); tribunal untouched (flags on). **PROD 2026-09-25T11:48Z** with the flag flip: `nestor-api-00009-g99` (runbook record #3, tag `release-23.5-ae7c9d2-flags-on`). | 2026-09-25 | 9cb5394 | [260925-dyt-raw-output-zip-one-file-per-angle-named-](./quick/260925-dyt-raw-output-zip-one-file-per-angle-named-/) |
 | 23.6-dev | Phase 23.6 rerun + run history on DEV: `nestor-api-00058-lth` (8b3e0daf…) + `nestor-frontend-00045-rbl` (bf391df0…), migration 0018 applied; browser walkthrough owed. | 2026-09-25 | 510bbd3 | [23.6](./phases/23.6-rerun-deep-research-with-run-history-superadmin-rerun-button/) |
 | 260925-fqt | Zip headers + index show the FULL question (expanded from the report's chapter heading; engine label stays 120). 919 passed / 2 skipped. **DEV**: `nestor-api-00057-g8f` = backend:ae7c9d2 sha256:9297b2cb… (idle gate passed, readyz 200). **PROD** 11:48Z `nestor-api-00009-g99`. | 2026-09-25 | 4535cf4 | [260925-fqt-full-question-text-in-zip-headers](./quick/260925-fqt-full-question-text-in-zip-headers/) |

@@ -8115,3 +8115,10 @@ previous worker image (90084e5) = only the Claude researcher + its adapter label
 Revert: `--image=…tribunal-worker:90084e5` digest (or env NESTOR_CLAUDE_RESEARCH_MODEL won't suffice for 4.6 — git revert).
 **Not yet observed:** a run on this image — watch worker logs for `Claude deep research complete: model=claude-opus-5-5`
 (search count, request count, stop_reason) and per-angle duration in tribunal.run_event.
+
+### DEV 2026-09-25 — research-call concurrency 4 → 15 (env only)
+`gcloud run services update tribunal-worker --update-env-vars=NESTOR_TRIBUNAL_ANGLE_CONCURRENCY=15` on dev after idle
+gate `465b72a8` → `tribunal-worker-00016-cvq` (same image; 23.5 flags still true). Read at import, so a change needs a
+new revision. Proven on rerun `48892684`: all 12 angles `running` by 14:43:52 in `tribunal.run_event`. Measured limits
+(response headers): OpenAI + Anthropic keys 10,000 RPM; Gemini not reported (shared dev+prod key). PROD still 4 — a prod
+change needs a Terraform variable on `tribunal_worker` (the env block is TF-owned there).
