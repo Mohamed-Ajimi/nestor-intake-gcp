@@ -682,7 +682,7 @@ Plans:
 **Goal:** A superadmin can start another deep-research run on an intake that already has one (same approved questions and context pack, no status step-back, no attempt cap, delivered stays delivered, refused while a run is in flight), see every run of the intake with its report and zip on the intake page, and mark one finished run as the internal chosen run (newest finished by default). Nothing client-facing changes. DEV ONLY.
 **Requirements**: RR-01 (rerun: no superadmin cap, no step-back, delivered stays delivered, 409 in flight), RR-02 (run history list), RR-03 (internal chosen-run label, newest-finished display default), RR-SHIP (dev-only deploy) — derived IDs, not in REQUIREMENTS.md
 **Depends on:** Phase 23
-**Plans:** 2/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -690,8 +690,8 @@ Plans:
 - [x] 23.6-03-PLAN.md — frontend data layer (TDD): getResearchRuns/chooseResearchRun, pure runHistory rules, statusLabel moved to lib, 34 intakeDetail.runs.* keys x nl/fr/en
 
 **Wave 2**
-- [ ] 23.6-02-PLAN.md — backend (TDD): GET /intakes/{id}/research/runs + POST /intakes/{id}/research/runs/{run_id}/choose (superadmin-gated, audited, internal only); research_router pinned at 13 routes
-- [ ] 23.6-04-PLAN.md — frontend: ResearchRunHistory component (history, chosen badge, Rerun ~$40 confirm, choose confirm) wired into the intake page on the page's one research stream
+- [x] 23.6-02-PLAN.md — backend (TDD): GET /intakes/{id}/research/runs + POST /intakes/{id}/research/runs/{run_id}/choose (superadmin-gated, audited, internal only); research_router pinned at 13 routes
+- [x] 23.6-04-PLAN.md — frontend: ResearchRunHistory component (history, chosen badge, Rerun ~$40 confirm, choose confirm) wired into the intake page on the page's one research stream
 
 **Wave 3**
 - [ ] 23.6-05-PLAN.md — ship to DEV only: gates, operator-run build + nestor-migrate (0018) + nestor-api + nestor-frontend, revision-digest read-back, deploy record, browser walkthrough (no tribunal deploy, no prod)
