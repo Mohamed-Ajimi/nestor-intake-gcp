@@ -409,6 +409,59 @@ export function cancelResearch(
 }
 
 /**
+ * One row of an intake's research-run history (Phase 23.6, contract frozen in 23.6-02).
+ * `attempt` is the backend's per-intake attempt number (NOT a list index); `chosen_at` is set
+ * only on the run the operator explicitly marked as the chosen run.
+ */
+export type ResearchRunHistoryItem = {
+  id: string;
+  attempt: number;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cost_usd_total: string | null;
+  chain_status: string | null;
+  chosen_at: string | null;
+};
+
+/** `GET /intakes/{id}/research/runs` body. `chosen_research_run_id` is null until a choice is made. */
+export type ResearchRunHistory = {
+  chosen_research_run_id: string | null;
+  runs: ResearchRunHistoryItem[];
+};
+
+/**
+ * Fetch every research run of an intake plus the explicitly chosen run id (Phase 23.6).
+ * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
+ * method GET. Superadmin-only + space-scoped server-side; a client / cross-space caller is
+ * existence-hidden as 404. Returns `ApiResult` — never throws (CLAUDE.md return-no-throw).
+ */
+export function getResearchRuns(intakeId: string): Promise<ApiResult<ResearchRunHistory>> {
+  return apiFetch<ResearchRunHistory>(`/intakes/${intakeId}/research/runs`, { method: "GET" });
+}
+
+/**
+ * Mark one finished run as the chosen run of an intake (Phase 23.6). INTERNAL LABEL ONLY
+ * (D-23.6-02 revised): it records which run the final report is based on and has NO client
+ * effect — no client route, no mail, no PDF swap. Method POST. Superadmin-only + space-scoped
+ * server-side; a client / cross-space caller is existence-hidden as 404, and a run that is not
+ * `completed`/`completed_degraded` is refused with 409. Returns `ApiResult` — never throws
+ * (CLAUDE.md return-no-throw).
+ */
+export function chooseResearchRun(
+  intakeId: string,
+  runId: string,
+): Promise<
+  ApiResult<{ chosen_research_run_id: string; previous_research_run_id: string | null }>
+> {
+  return apiFetch<{ chosen_research_run_id: string; previous_research_run_id: string | null }>(
+    `/intakes/${intakeId}/research/runs/${runId}/choose`,
+    { method: "POST" },
+  );
+}
+
+/**
  * Mint a signed download URL for a verified completed run's raw-output bundle (RUN-03 SC1).
  * A one-shot `apiFetch` over the token-attaching transport (never fork the transport),
  * method GET. Superadmin-only + space-scoped server-side; a client / cross-space caller is
