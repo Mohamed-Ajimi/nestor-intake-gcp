@@ -677,7 +677,7 @@ Plans:
 
 - [x] 23-03-PLAN.md — wave 3 — UAT-22-F4: lift the page’s single research stream into the route, split the banner branch on the live run, retire the dead key
 
-### Phase 23.6: Rerun deep research with run history: superadmin Rerun button (same approved questions and context pack, no status step-back, no attempt cap for superadmin), history of every run with its report and zip on the intake page, superadmin picks which finished run the client sees (newest by default). DEV ONLY. (INSERTED)
+### Phase 23.6: Rerun deep research with run history: superadmin Rerun button (same approved questions and context pack, no status step-back, no attempt cap for superadmin), history of every run with its report and zip on the intake page, superadmin marks one finished run as the internal "chosen run" (newest by default; client-facing unchanged). DEV ONLY. (INSERTED)
 
 **Goal:** [Urgent work - to be planned]
 **Requirements**: TBD
