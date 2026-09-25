@@ -584,6 +584,68 @@ class ResearchRunRepository(TenantRepository[ResearchRun]):
             )
         ).scalar_one_or_none()
 
+    def set_chosen(self, intake_id, run_id):
+        """Mark ``run_id`` as the intake's chosen run; return the PREVIOUSLY chosen id or ``None``.
+
+        Phase 23.6 / D-23.6-02 — the internal "which run is the final report based on"
+        label (``research_runs.chosen_at``, migration 0018). At most one run per intake may
+        carry a non-null ``chosen_at``; the DATABASE enforces that with the partial unique
+        index ``uq_research_runs_one_chosen_per_intake``.
+
+        One flush sequence on the caller's session — this method NEVER commits:
+
+        1. ``SELECT ... FOR UPDATE`` every run of the intake (through :meth:`_scope`), so
+           two concurrent chooses on the same intake serialise instead of racing into the
+           unique index.
+        2. If ``run_id`` is already the chosen run, return it and write NOTHING
+           (idempotent — its ``chosen_at`` timestamp is not bumped).
+        3. CLEAR the current mark first: the unique index is not deferrable, so setting the
+           new row before clearing the old one would raise mid-statement.
+        4. SET the target row, matched on ``id`` AND ``intake_id`` so a run id belonging to
+           another intake cannot be marked through this intake.
+
+        It does NOT validate the run's status — the route (plan 23.6-02) owns that rule.
+        Both UPDATEs go through :meth:`_scope`, exactly like :meth:`patch`, so a ``user``
+        identity can only ever touch rows in their own space (TENANT-02).
+        """
+        from sqlalchemy import func
+
+        runs = (
+            self._s.execute(
+                self._scope(
+                    select(self.model)
+                    .where(self.model.intake_id == intake_id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        previous = next((r.id for r in runs if r.chosen_at is not None), None)
+        if previous is not None and str(previous) == str(run_id):
+            return previous
+
+        self._s.execute(
+            self._scope(
+                update(self.model).where(
+                    self.model.intake_id == intake_id,
+                    self.model.chosen_at.is_not(None),
+                )
+            ).values(chosen_at=None),
+            execution_options={"synchronize_session": "fetch"},
+        )
+        self._s.execute(
+            self._scope(
+                update(self.model).where(
+                    self.model.id == run_id,
+                    self.model.intake_id == intake_id,
+                )
+            ).values(chosen_at=func.now()),
+            execution_options={"synchronize_session": "fetch"},
+        )
+        self._s.flush()
+        return previous
+
 
 class ResearchArtifactRepository(TenantRepository[ResearchArtifact]):
     """Tenant-scoped repository over ``nestor.research_artifacts`` (07-09 context-pack read).

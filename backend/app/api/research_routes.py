@@ -7,8 +7,10 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
   "start deep research" verb (NOT a generic ``PATCH status``), and the ONE verb here that
   SPENDS. Superadmin-only since 23.1-17 (D-23.1-16); it was the router's last ungated
   write and cost ~$45 a call. It flips ``decomposed →
-  in_research`` on the allow-listed transition map, enforces the 3-attempt cap (D-04),
-  composes a pause-gate-safe brief, inserts the ``research_runs`` row, audits ``{from,to}``
+  in_research`` on the allow-listed transition map, or — since 23.6 (D-23.6-03) — starts a
+  RERUN from ``in_research`` / ``delivered`` with no status change while no run of the
+  intake is in flight. The 3-attempt cap (D-04) applies to non-superadmin identities only
+  (D-23.6-01), which the gate makes unreachable today. It composes a pause-gate-safe brief, inserts the ``research_runs`` row, audits ``{from,to}``
   in the SAME tx, schedules the pool-safe poll driver, and returns ``202`` with the run id.
   The brief is composed marker-free upstream so a seam run can never opt into the
   interactive-report pause gate (SEAM-04 by composition — see :mod:`app.research.brief`).
@@ -119,7 +121,11 @@ from app.db.stream_session import (
 from app.research import brief as brief_mod
 from app.research import tribunal_client
 from app.research.bundle import build_bundle_zip
-from app.research.run_status import RESEARCH_TERMINAL, is_research_success
+from app.research.run_status import (
+    RESEARCH_IN_FLIGHT,
+    RESEARCH_TERMINAL,
+    is_research_success,
+)
 from app.research.run_task import run_poll_driver
 from app.storage import gcs
 from app.storage.keys import build_object_key
@@ -154,7 +160,21 @@ _RESEARCH_TRANSITIONS: dict[str, str] = {"decomposed": "in_research"}
 # ``parked`` is deliberately NOT a member (15.2-19): a parked run has its OWN
 # explicit Resume verb (:func:`resume_research`), and letting a re-trigger
 # supersede it would throw away every R3 checkpoint the engine already paid for.
+#
+# Since phase 23.6 this set NO LONGER GATES THE TRIGGER: a rerun is refused only while a
+# run is in ``RESEARCH_IN_FLIGHT`` (over ALL of the intake's runs, see trigger_research).
+# It is KEPT because ``tests/test_intake_delete.py`` imports it and because
+# ``app/research/run_status.py`` derives ``RESEARCH_IN_FLIGHT`` from it (the complement of
+# this set union RESEARCH_TERMINAL over the measured statuses).
 _RETRYABLE_RUN_STATUSES = {"failed", "cancelled", "needs_input"}
+
+#: D-23.6-03 — the intake statuses from which a NEW run may start with NO status change.
+#
+# ``delivered`` MUST stay ``delivered``: ``GET /intakes/{id}/report`` is an equality check
+# on ``delivered`` (``intake_routes.get_report``), so stepping the status back to start a
+# rerun would take the delivered report away from the client. ``archived`` is deliberately
+# ABSENT: unarchive with the status override first.
+_RERUN_STATUSES = frozenset({"in_research", "delivered"})
 
 #: The 3-attempt cap (D-04): a 4th trigger for an intake returns needs_investigation and
 #: makes NO seam call / schedules NO driver (a runaway retrigger must not re-charge Tribunal).
@@ -175,6 +195,25 @@ _MAX_ATTEMPTS = 3
 # (``needs_input`` is retryable but DID spend, so it still counts). One set for both would
 # drift on the first such change, silently.
 _CAP_EXEMPT_RUN_STATUSES = {"cancelled"}
+
+
+def _attempt_cap_reached(identity: Identity, prior) -> tuple[bool, int]:
+    """Return ``(capped, counted)`` for a trigger by ``identity`` over ``prior`` runs.
+
+    PURE — no DB, no side effect; unit-tested directly.
+
+    * ``identity.role == "superadmin"`` → ``(False, counted)``. D-23.6-01: a superadmin is
+      never capped. Every run still costs ~$40 and the UI confirm says so.
+    * otherwise the D-04 rule: ``counted`` = prior runs NOT in ``_CAP_EXEMPT_RUN_STATUSES``
+      (D-23.4-07), capped when ``counted >= _MAX_ATTEMPTS``.
+
+    The trigger's gate admits only superadmins, so the capped arm is unreachable in
+    production today; it is kept as defence-in-depth, like the ``create()`` arm.
+    """
+    counted = [r for r in prior if r.status not in _CAP_EXEMPT_RUN_STATUSES]
+    if identity.role == "superadmin":
+        return False, len(counted)
+    return len(counted) >= _MAX_ATTEMPTS, len(counted)
 
 
 def _next_research_status(current: str) -> str:
@@ -311,12 +350,17 @@ def trigger_research(
     * 404 for a non-superadmin caller, including a null-space one (``_superadmin_gate``,
       declared FIRST — see the signature comment).
     * 404 if the (in-scope) intake does not exist (D-07 — existence hidden; never 403/200).
-    * 409 if the current status is not ``decomposed`` (the scope-ceiling wall).
-    * When ``_MAX_ATTEMPTS`` COUNTED prior research runs already exist for the intake, the
-      next trigger returns a ``needs_investigation`` response and makes NO seam call /
-      schedules NO driver (D-04 — a runaway retrigger must not re-charge Tribunal). Runs in
-      ``_CAP_EXEMPT_RUN_STATUSES`` (``cancelled``) are NOT counted: a deliberate stop spent
-      nothing and must not cost the intake one of its three attempts (D-23.4-07). The
+    * 409 if the status is not in decomposed/in_research/delivered, or any run of the
+      intake is in ``RESEARCH_IN_FLIGHT`` (checked over ALL prior runs, not the newest
+      only), or the intake is in_research/delivered with NO prior run (a rerun requires an
+      existing run). From ``in_research`` / ``delivered`` a rerun leaves the status exactly
+      as it was (D-23.6-03): a delivered intake stays delivered.
+    * The attempt cap applies to NON-superadmin identities only (D-23.6-01, via
+      :func:`_attempt_cap_reached`). The gate makes that arm unreachable in production
+      today; it is kept as defence-in-depth like the ``create()`` arm. When it applies and
+      ``_MAX_ATTEMPTS`` COUNTED prior runs exist, the trigger returns
+      ``needs_investigation`` and makes NO seam call / schedules NO driver (D-04). Runs in
+      ``_CAP_EXEMPT_RUN_STATUSES`` (``cancelled``) are NOT counted (D-23.4-07). The
       ``attempts`` figure in the response is that same counted number, not the row count.
 
     The ``audit_log`` row is written on ``repo.session`` so it commits/rolls back together
@@ -335,10 +379,11 @@ def trigger_research(
     1. **The ``patch_if`` compare-and-swap** on the flip covers the ``decomposed ->
        in_research`` path: the second caller's precondition no longer holds, ``rowcount``
        is 0, and it gets a 409 having written nothing.
-    2. **The 0016 partial unique index** covers the RETRY path, which the CAS CANNOT. When
-       ``old_status == "in_research"`` this handler sets ``new_status = "in_research"``, so
-       a CAS of ``expected={"status": "in_research"}`` setting ``status="in_research"``
-       MATCHES for both concurrent callers — ``rowcount == 1`` twice. There the database is
+    2. **The 0016 partial unique index** covers the RETRY / RERUN path, which the CAS
+       CANNOT. When ``old_status`` is ``in_research`` or (since 23.6) ``delivered`` this
+       handler sets ``new_status = old_status``, so a CAS of
+       ``expected={"status": old_status}`` setting ``status=old_status`` MATCHES for both
+       concurrent callers — ``rowcount == 1`` twice. There the database is
        the only arbiter, and the ``except IntegrityError`` below is purely a translator.
        **This is the paragraph to read before deleting that index as "redundant".**
     3. **``attempt`` computed inside the write transaction** so two triggers cannot both
@@ -349,8 +394,7 @@ def trigger_research(
     short-circuit before the brief is assembled, and moving it into the write tx would
     change the ``needs_investigation`` response shape. What it counts on that read is the
     NON-cancelled prior runs (``counted``), not every row — ``prior`` itself is left
-    unfiltered because the retry path below reads ``prior[0]`` and a cancelled latest run is
-    a legal retry trigger.
+    unfiltered because the rerun check below must see EVERY run of the intake.
     """
     intake = repo.get(intake_id)
     if intake is None:
@@ -359,11 +403,11 @@ def trigger_research(
     # Attempt cap FIRST (D-04): count prior research runs on the same in-scope session.
     run_repo = ResearchRunRepository(repo.session, identity)
     prior = run_repo.list_for_intake(intake_id)
-    # ``counted`` is the cap's view; ``prior`` stays the TRUE newest-first list, because the
-    # retry path below reads ``prior[0]`` and a cancelled latest run is still a legal retry
-    # trigger (``_RETRYABLE_RUN_STATUSES``). Filtering ``prior`` itself would break that.
-    counted = [r for r in prior if r.status not in _CAP_EXEMPT_RUN_STATUSES]
-    if len(counted) >= _MAX_ATTEMPTS:
+    # ``prior`` stays the TRUE list (every run, newest first): the rerun check below must
+    # see ALL of them, including cancelled ones. The cap computes its own filtered view.
+    # D-23.6-01: a superadmin is never capped (see _attempt_cap_reached).
+    capped, counted = _attempt_cap_reached(identity, prior)
+    if capped:
         # No status flip, no seam call, no driver — the run is handed to a human.
         # The exempt count is logged too, so the ``attempts`` figure the operator was shown
         # can be reconciled against the row count in the database from the logs alone.
@@ -371,27 +415,37 @@ def trigger_research(
             "research attempt cap reached for intake %s (%d counted prior runs, "
             "%d exempt) — returning needs_investigation, no driver scheduled",
             intake_id,
-            len(counted),
-            len(prior) - len(counted),
+            counted,
+            len(prior) - counted,
         )
         return {
             "research_run_id": None,
             "status": "needs_investigation",
-            # SAME list the cap compared — never a number the cap did not use.
-            "attempts": len(counted),
+            # SAME number the cap compared — never a number the cap did not use.
+            "attempts": counted,
         }
 
     old_status = intake.status
-    if old_status == "in_research":
-        # Retry path: allowed ONLY when the latest run is dead (failed/cancelled)
-        # or parked (needs_input). list_for_intake orders newest-first.
-        latest = prior[0] if prior else None
-        if latest is None or latest.status not in _RETRYABLE_RUN_STATUSES:
+    if old_status in _RERUN_STATUSES:
+        # Rerun path (D-23.6-03): a NEW run on the same approved inputs, with NO status
+        # change — a delivered intake stays delivered, so the client keeps their report.
+        #
+        # A rerun requires an EXISTING run: a legacy in_research/delivered intake with no
+        # run row stays refused, exactly as before 23.6.
+        if not prior:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "No earlier research run to rerun for this intake",
+            )
+        # ALL runs, not prior[0]: an OLDER run that is still in flight must block a rerun
+        # even when a newer run has finished. This is the pre-check; the 0016 partial
+        # unique index + the IntegrityError arm below remain the race arbiter.
+        if any(r.status in RESEARCH_IN_FLIGHT for r in prior):
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "Research is already running for this intake",
             )
-        new_status = "in_research"
+        new_status = old_status
     else:
         new_status = _next_research_status(old_status)  # 409 otherwise
 

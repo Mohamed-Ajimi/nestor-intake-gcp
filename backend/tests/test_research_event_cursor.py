@@ -500,8 +500,8 @@ def test_the_cursor_column_exists_live_and_is_a_nullable_bigint(engine):
     )
 
 
-def test_the_intake_alembic_head_is_0017(engine):
-    """The INTAKE line's version table is at 0017 after ``alembic upgrade head``.
+def test_the_intake_alembic_head_is_0018(engine):
+    """The INTAKE line's version table is at 0018 after ``alembic upgrade head``.
 
     This is the direct statement the build log does not print. It also pins the line:
     the tribunal line's own head lives in a DIFFERENT version table
@@ -516,7 +516,8 @@ def test_the_intake_alembic_head_is_0017(engine):
     ``skill_runs.started_at``), then ``0015`` until plan 23.2-10 added 0016 (the
     single-in-flight-research-run partial unique index, D-23.2-12 / F-05), then ``0016``
     until plan 23.3-04 added 0017 (the four reconciler columns + the orphan-candidate
-    index, DEF-23.2-03). The literal is a DELIBERATE hardcode, not an oversight: it is
+    index, DEF-23.2-03), then 0017 until plan 23.6-01 added 0018 (research_runs.chosen_at,
+    D-23.6-02). The literal is a DELIBERATE hardcode, not an oversight: it is
     what turns "a migration landed" into a red test, so an unintended or half-applied head
     cannot pass silently. Every revision on this line therefore updates this one literal
     and this function's name — the next one does it again.
@@ -535,6 +536,6 @@ def test_the_intake_alembic_head_is_0017(engine):
             ).all()
         }
 
-    assert heads == {"0017"}, (
-        f"the intake alembic line must be at exactly 0017, found {heads}"
+    assert heads == {"0018"}, (
+        f"the intake alembic line must be at exactly 0018, found {heads}"
     )
