@@ -7,12 +7,23 @@ the report, the scrubbed per-provider ``cleaned_reports`` bundle, and the source
 list, it returns the zip bytes. The caller is responsible for all I/O (fetching
 the pieces from the seam, uploading the bytes to GCS, persisting the key).
 
-D-03 layout — exactly three kinds of entry:
+D-03 layout — four kinds of entry, in this order:
 
     report.md                        # the synthesized report (standalone → feeds
                                      #   the Phase-18 Claude-Design PDF)
-    research/<sanitized-angle>.md    # one per cleaned_reports pair
+    research/<NN>-<question-slug>-<provider>.md
+                                     # one per cleaned_reports pair; NN is shared by
+                                     #   the providers of one angle; falls back to
+                                     #   research/<NN>-<provider>.md when the entry
+                                     #   carries no angle; a -2/-3 suffix dedupes
+    research/index.md                # table of every research file (only when at
+                                     #   least one research file was written)
     sources.json                     # json.dumps of the sources list
+
+260925-dyt: entries used to be named ``research/<provider>.md``. ``cleaned_reports``
+holds one pair per (angle, provider), so the names collided (a 15-entry bundle had 3
+distinct names) and extractors dropped up to 12 of 15 reports — measured on all 13
+prod bundles on 2026-09-25. Every entry name is now unique.
 
 D-01 (discredited-content scrub): the builder receives ``cleaned_reports`` ONLY —
 the Tribunal ``/research-bundle`` endpoint (Plan 01) already excludes
@@ -41,6 +52,61 @@ from typing import Any
 from app.storage.keys import sanitize_filename
 
 
+def _str_field(meta: dict, key: str) -> str:
+    """Return ``meta[key]`` stripped when it is a non-empty string, else ``""``."""
+    value = meta.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _collapse(text: str) -> str:
+    """Collapse every whitespace run (newlines included) to one space."""
+    return " ".join(text.split())
+
+
+def _md_cell(text: str) -> str:
+    """Make ``text`` safe for one markdown table cell."""
+    return _collapse(text).replace("|", "\\|")
+
+
+def _header(nn: str, angle: str, meta: dict, provider: str) -> str:
+    """The short markdown header placed before a research report body."""
+    lines = [f"# Research report {nn}", ""]
+    if angle:
+        lines.append(f"**Question:** {_collapse(angle)}")
+    sub = _str_field(meta, "_sub_question")
+    if sub and sub != angle:
+        lines.append(f"**Sub-question:** {_collapse(sub)}")
+    client_q = _str_field(meta, "_client_question")
+    if client_q and client_q != angle and client_q != sub:
+        lines.append(f"**Client question:** {_collapse(client_q)}")
+    subs = meta.get("sub_questions")
+    if isinstance(subs, list) and subs:
+        lines.append("**Sub-questions:**")
+        for item in subs:
+            text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
+            lines.append(f"- {_collapse(text)}")
+    lines.append(f"**Provider:** {provider}")
+    return "\n".join(lines) + "\n\n---\n\n"
+
+
+def _index(rows: list[tuple[str, str, str, str]]) -> str:
+    """``research/index.md`` — one table row per research file, in write order."""
+    out = [
+        "# Research index",
+        "",
+        "Every per-provider research report in this bundle, with the question it answers.",
+        "",
+        "| # | File | Question | Provider |",
+        "|---|------|----------|----------|",
+    ]
+    for nn, filename, question, provider in rows:
+        out.append(
+            f"| {nn} | {_md_cell(filename)} | {_md_cell(question) or '(not recorded)'} "
+            f"| {_md_cell(provider)} |"
+        )
+    return "\n".join(out) + "\n"
+
+
 def build_bundle_zip(report: dict, bundle: dict, sources: list) -> bytes:
     """Return the raw-output zip bytes in the D-03 layout (pure — no I/O).
 
@@ -51,10 +117,16 @@ def build_bundle_zip(report: dict, bundle: dict, sources: list) -> bytes:
                   report endpoint returns ``sections``, not ``markdown`` — Open Q1);
                   this builder just reads ``report.get("markdown")`` and falls back
                   to an empty string.
-    ``bundle``  — ``{"cleaned_reports": [[name, {"report": text}], ...]}`` (the
-                  D-01-scrubbed per-provider research). Each pair yields
-                  ``research/<sanitize_filename(name)>.md`` with ``text`` as body. A
-                  result that is not a dict is coerced to ``str``. A missing/empty
+    ``bundle``  — ``{"cleaned_reports": [[name, {"report": text, "_angle": ...}],
+                  ...]}`` (the D-01-scrubbed per-(angle, provider) research). Each
+                  pair yields one uniquely named
+                  ``research/<NN>-<sanitize_filename(angle, max_len=60)>-<sanitize_filename(name)>.md``
+                  (``research/<NN>-<provider>.md`` without an angle; ``-2``/``-3``
+                  dedupe). NN groups by ``_corroboration_key`` (else ``_angle``). The
+                  body is a short header naming the question(s) and provider, a
+                  ``---`` separator, then ``text`` byte-identical. A result that is
+                  not a dict is coerced to ``str`` and carries no metadata.
+                  ``research/index.md`` lists every research file. A missing/empty
                   ``cleaned_reports`` yields NO ``research/`` entries (no crash).
     ``sources`` — written to ``sources.json`` via ``json.dumps(..., ensure_ascii=
                   False)`` so accented/unicode source titles stay literal.
@@ -68,10 +140,50 @@ def build_bundle_zip(report: dict, bundle: dict, sources: list) -> bytes:
         # so the entry always exists even when markdown is missing/None.
         zf.writestr("report.md", report.get("markdown") or "")
 
+        group_index: dict[str, int] = {}
+        used: set[str] = set()
+        rows: list[tuple[str, str, str, str]] = []  # (NN, filename, question, provider)
+        counter = 0
+
         for name, result in (bundle.get("cleaned_reports") or []):
-            safe = sanitize_filename(str(name))
-            text: Any = result.get("report") if isinstance(result, dict) else str(result)
-            zf.writestr(f"research/{safe}.md", text or "")
+            if isinstance(result, dict):
+                raw_body: Any = result.get("report") or ""
+                body = raw_body if isinstance(raw_body, str) else str(raw_body)
+                meta: dict = result
+            else:
+                body = str(result)
+                meta = {}
+
+            angle = _str_field(meta, "_angle")
+            group_key = _str_field(meta, "_corroboration_key") or angle
+            if group_key and group_key in group_index:
+                idx = group_index[group_key]
+            else:
+                counter += 1
+                idx = counter
+                if group_key:
+                    group_index[group_key] = idx
+            nn = f"{idx:02d}"
+
+            provider_raw = str(name)
+            provider_seg = sanitize_filename(provider_raw)
+            if angle:
+                slug = sanitize_filename(angle, max_len=60)
+                base = f"{nn}-{slug}-{provider_seg}"
+            else:
+                base = f"{nn}-{provider_seg}"
+            candidate, n = base, 1
+            while candidate in used:
+                n += 1
+                candidate = f"{base}-{n}"
+            used.add(candidate)
+            filename = f"{candidate}.md"
+
+            zf.writestr(f"research/{filename}", _header(nn, angle, meta, provider_raw) + body)
+            rows.append((nn, filename, _collapse(angle), provider_raw))
+
+        if rows:
+            zf.writestr("research/index.md", _index(rows))
 
         zf.writestr(
             "sources.json",
