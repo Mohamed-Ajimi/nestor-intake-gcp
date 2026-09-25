@@ -8060,3 +8060,25 @@ job now trails two release tags, not one).
 * Everything the first 23.5 record and the 23.4 record say remains true: the superadmin password
   is unrotated, the chat-exposed client Anthropic key is unrevoked, and **no Cloud SQL backup has
   ever been restored** on either project.
+
+### 23.5 DEPLOY RECORD #3 — zip naming + FLAG FLIP, PROD 2026-09-25T11:48Z (`ae7c9d2` / `client-9bdb0fb`, both kill switches `true`)
+
+Operator ruling 2026-09-25 after reading dev acceptance run `4e91bb85` (09:05→10:06Z): ship and monitor on prod runs.
+Operator flipped both flags in `infra/env/client.tfvars` (the agent is blocked on flag writes and on applies) and ran
+`infra/release-client.sh` with `FLAGS=true` (new: step 0a′ waits for an idle queue before ANY deploy, re-checks every 5 min).
+
+| Service | Revision | Digest | Note |
+|---|---|---|---|
+| `nestor-api` | `nestor-api-00009-g99` | `sha256:9297b2cb…66335` | quick 260925-dyt + 260925-fqt, `/readyz` 200 |
+| `nestor-frontend` | `nestor-frontend-00003-qr6` | `sha256:28c0bb40…dc63` | unchanged, `/auth/login` 200 |
+| `tribunal-api` | `tribunal-api-00006-pgf` | `sha256:1101b070…33fc` | same image; flags true; `/readyz` 403 anonymous = IAM wall |
+| `tribunal-worker` | `tribunal-worker-00006-hqn` | `sha256:0c28f783…dc37` | same image; flags true |
+
+Idle gates: step 0a′ `602eb195` exit 0 (11:42Z), step 5 `7e6ba1a2` exit 0. Migrations: no upgrade (already at head).
+Final plan `0/5/0` = the four cosmetic scaling read-backs + DEF-23.5-07-03 seed job drift. Tribunal images retagged
+`ae7c9d2` at the unchanged digests. Git tag `release-23.5-ae7c9d2-flags-on`.
+
+**Revert lever (flags):** set both to `"false"` in `client.tfvars`, rerun `release-client.sh` with `FLAGS=false` — same
+images, only the two env vars change. **Does NOT prove:** the continuation path (no chapter hit the cap on the dev run);
+Sources labels — dev showed 14/143 label≠link (11 stale stored titles from older runs, 1 stale redirect title,
+2 unresolved redirects); that fix is NOT in this release. First prod run with flags on is the observation.
