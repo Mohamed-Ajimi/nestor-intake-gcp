@@ -289,8 +289,7 @@ stop".** That check is now tripped by this known item; resolve one or the other.
 
 ## DEF-23.5-07-04 — OPERATOR QUESTION OPEN: a run selector for earlier research runs
 
-**Raised:** by the operator during the 2026-09-22 dev walkthrough. **Status:** undecided — this
-is a product ruling, not a defect.
+**Raised:** by the operator during the 2026-09-22 dev walkthrough. **Status:** CLOSED by phase 23.6 (2026-09-25, dev 510bbd3) — operator ruling D-23.6-02 revised: an internal chosen-run label plus the per-intake run history on the intake detail page; nothing client-facing. See 23.6 DEPLOY RECORD in infra/DEPLOY-RUNBOOK.md.
 
 An intake can accumulate several `research_runs` over time (re-runs are phase 24's subject), but
 the admin UI surfaces one. There is no way to open an earlier run's report, compare two runs, or

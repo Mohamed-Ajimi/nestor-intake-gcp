@@ -8082,3 +8082,22 @@ Final plan `0/5/0` = the four cosmetic scaling read-backs + DEF-23.5-07-03 seed 
 images, only the two env vars change. **Does NOT prove:** the continuation path (no chapter hit the cap on the dev run);
 Sources labels — dev showed 14/143 label≠link (11 stale stored titles from older runs, 1 stale redirect title,
 2 unresolved redirects); that fix is NOT in this release. First prod run with flags on is the observation.
+
+### 23.6 DEPLOY RECORD — rerun + run history, DEV ONLY 2026-09-25 (`510bbd3`)
+
+Surface derived by diff `c91edd1..510bbd3`: backend + frontend only; `tribunal/` 0 files, `client.tfvars`/`main.tf`/`variables.tf`
+0 files, `components/ui` 0 files → no tribunal deploy, no Terraform. Gates on merged tree: backend 960 passed / 2 skipped
+(env guards), tsc 0, vitest 596, i18n-audit PASS. Agent ran the dev builds (classifier allowed dev `builds submit`).
+
+| Step | Evidence |
+|---|---|
+| builds | backend `952471d6` → `sha256:8b3e0daf…1f5832`; frontend `802b0e06` (dev substitutions, key reused from build 83cdbf11, never printed) → `sha256:bf391df0…0578b` |
+| idle gate | `73192596` exit 0 (nestor-run@) |
+| migrate FIRST | `nestor-migrate` repinned to the backend digest, execution `nestor-migrate-s9pt6`: `Running upgrade 0017 -> 0018` |
+| nestor-api | `nestor-api-00058-lth` = `sha256:8b3e0daf…`, `/readyz` 200; `GET /intakes/{id}/research/runs` unauth → 401 (route exists) |
+| nestor-frontend | `nestor-frontend-00045-rbl` = `sha256:bf391df0…`, `/auth/login` 200 |
+
+tribunal-worker unchanged at `tribunal-worker-00016-cvq` (angle concurrency 15, both 23.5 flags true). Closes DEF-23.5-07-04.
+Revert: `gcloud run services update nestor-api --image=…backend@sha256:9297b2cb…` (0018 only ADDS a nullable column + partial
+index, so the older API runs on it) and nestor-frontend back to `nestor-frontend-00044-8kb`'s digest.
+**Does NOT prove:** nothing seen in a browser yet (operator walkthrough owed); no rerun has been started (each ~$40).
