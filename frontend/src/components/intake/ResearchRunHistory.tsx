@@ -58,7 +58,7 @@ import { cn } from "@/lib/utils";
 // `liveRun`; the newest row's status/cost/clock are overlaid from it (`mergeLiveRun`). The list
 // is refetched once when that frame's run id or status changes — never on a timer.
 //
-// SPEND ONLY FROM THE CONFIRM. The ~$40 trigger fires only from the rerun dialog's
+// SPEND ONLY FROM THE CONFIRM. The paid trigger fires only from the rerun dialog's
 // AlertDialogAction (Phase 16 D-03); the backend's 409 on an in-flight run stays the authority.
 //
 // The page renders this only for superadmins; `rerunState` still receives `isSuperadmin: true`
@@ -368,7 +368,7 @@ export function ResearchRunHistory({ intakeId, intakeStatus, liveRun, onRerunSta
         </>
       )}
 
-      {/* Rerun confirm — the ONLY place a (~$40) rerun is triggered. */}
+      {/* Rerun confirm — the ONLY place a paid rerun is triggered. */}
       <AlertDialog open={rerunOpen} onOpenChange={setRerunOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
