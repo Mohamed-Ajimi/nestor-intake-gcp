@@ -68,11 +68,48 @@ def _md_cell(text: str) -> str:
     return _collapse(text).replace("|", "\\|")
 
 
-def _header(nn: str, angle: str, meta: dict, provider: str) -> str:
-    """The short markdown header placed before a research report body."""
+#: A question label arrives from the engine cut at 120 characters (it is the engine's
+#: join key, ``workshop._LABEL_MAX_CHARS``, and must stay short there). The full
+#: question is still in the bundle: each client question is a ``## `` chapter heading
+#: of ``report.md``, and a label is a PREFIX of its question by construction. Only a
+#: label this long can have been cut, so a short label like "general" never expands.
+_MIN_TRUNCATED_LABEL = 100
+
+
+def _report_headings(markdown: str) -> list[str]:
+    """The collapsed text of every ``## `` heading in the report markdown."""
+    out = []
+    for line in (markdown or "").splitlines():
+        if line.startswith("## "):
+            text = _collapse(line[3:])
+            if text:
+                out.append(text)
+    return out
+
+
+def _full_question(label: str, headings: list[str]) -> str:
+    """The untruncated question for a cut-off label, else the label unchanged.
+
+    Display only: file names keep using the short label.
+    """
+    short = _collapse(label)
+    if len(short) < _MIN_TRUNCATED_LABEL:
+        return short
+    for heading in headings:
+        if len(heading) > len(short) and heading.startswith(short):
+            return heading
+    return short
+
+
+def _header(nn: str, angle: str, meta: dict, provider: str, question: str = "") -> str:
+    """The short markdown header placed before a research report body.
+
+    ``question`` is the display text for ``angle`` (the full question when the label
+    was cut); it defaults to the collapsed label.
+    """
     lines = [f"# Research report {nn}", ""]
     if angle:
-        lines.append(f"**Question:** {_collapse(angle)}")
+        lines.append(f"**Question:** {question or _collapse(angle)}")
     sub = _str_field(meta, "_sub_question")
     if sub and sub != angle:
         lines.append(f"**Sub-question:** {_collapse(sub)}")
@@ -139,6 +176,7 @@ def build_bundle_zip(report: dict, bundle: dict, sources: list) -> bytes:
         # report.md is standalone (feeds the Phase-18 PDF). Empty-string fallback
         # so the entry always exists even when markdown is missing/None.
         zf.writestr("report.md", report.get("markdown") or "")
+        headings = _report_headings(report.get("markdown") or "")
 
         group_index: dict[str, int] = {}
         used: set[str] = set()
@@ -179,8 +217,11 @@ def build_bundle_zip(report: dict, bundle: dict, sources: list) -> bytes:
             used.add(candidate)
             filename = f"{candidate}.md"
 
-            zf.writestr(f"research/{filename}", _header(nn, angle, meta, provider_raw) + body)
-            rows.append((nn, filename, _collapse(angle), provider_raw))
+            question = _full_question(angle, headings) if angle else ""
+            zf.writestr(
+                f"research/{filename}", _header(nn, angle, meta, provider_raw, question) + body
+            )
+            rows.append((nn, filename, question, provider_raw))
 
         if rows:
             zf.writestr("research/index.md", _index(rows))

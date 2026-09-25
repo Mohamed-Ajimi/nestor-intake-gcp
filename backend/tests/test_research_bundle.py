@@ -361,3 +361,44 @@ def test_index_md_lists_files_in_zip_order():
     names = [i.filename for i in zf.infolist()]
     assert names.index("research/index.md") == len(names) - 2
     assert names[-1] == "sources.json"
+
+
+# --- quick 260925-fqt: the engine hands over a 120-char LABEL; show the full question ---
+
+_FULL_Q = (
+    "Welke fuel retailers in Europa passen vandaag dynamic pricing toe op brandstof en/of "
+    "shopproducten, hoe wordt dit operationeel en commercieel ingezet, en welk model past?"
+)
+
+
+def _zip_names_and_read(report_md, entries):
+    zf = zipfile.ZipFile(io.BytesIO(build_bundle_zip({"markdown": report_md}, {"cleaned_reports": entries}, [])))
+    return zf
+
+
+def test_cut_label_is_expanded_from_report_heading():
+    label = _FULL_Q[:120]
+    report_md = f"## Managementsamenvatting\n\ntext\n\n## {_FULL_Q}\n\nbody\n"
+    zf = _zip_names_and_read(report_md, [["gemini", {"report": "R", "_angle": label}]])
+    research = [n for n in zf.namelist() if n.startswith("research/") and n != "research/index.md"]
+    assert len(research) == 1
+    # file name still uses the SHORT slug (length-capped)
+    assert len(research[0]) < 120
+    body = zf.read(research[0]).decode("utf-8")
+    assert f"**Question:** {_FULL_Q}\n" in body
+    assert body.endswith("R")
+    assert _FULL_Q in zf.read("research/index.md").decode("utf-8")
+
+
+def test_short_label_never_expands():
+    report_md = "## general market overview and much more text here\n\nbody\n"
+    zf = _zip_names_and_read(report_md, [["gemini", {"report": "R", "_angle": "general"}]])
+    name = [n for n in zf.namelist() if n.startswith("research/0")][0]
+    assert "**Question:** general\n" in zf.read(name).decode("utf-8")
+
+
+def test_cut_label_without_matching_heading_stays_as_is():
+    label = _FULL_Q[:120]
+    zf = _zip_names_and_read("## Something else\n", [["gemini", {"report": "R", "_angle": label}]])
+    name = [n for n in zf.namelist() if n.startswith("research/0")][0]
+    assert f"**Question:** {label}\n" in zf.read(name).decode("utf-8")
