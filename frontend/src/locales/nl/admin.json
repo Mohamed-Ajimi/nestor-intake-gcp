@@ -160,6 +160,46 @@
       "cleanupFailed": "Oude bestanden opruimen mislukt",
       "changesSaved": "Wijzigingen opgeslagen"
     },
+    "runs": {
+      "title": "Research-runs",
+      "col": {
+        "attempt": "Poging",
+        "status": "Status",
+        "started": "Gestart",
+        "duration": "Duur",
+        "cost": "Kosten",
+        "actions": "Acties"
+      },
+      "startedMobile": "Gestart {{date}}",
+      "rerun": "Nieuwe run starten",
+      "rerunStarting": "Wordt gestart…",
+      "rerunBlockedInFlight": "Er loopt al een run voor deze intake. Wacht tot hij klaar is, of annuleer hem op de run-pagina.",
+      "rerunConfirmTitle": "Nieuwe research-run starten?",
+      "rerunConfirmBody": "Dit start een nieuwe betaalde deep-research run met dezelfde goedgekeurde onderzoeksvragen en hetzelfde Context Pack. Reken op ongeveer $40 aan API-kosten en tientallen minuten. Er is geen limiet op het aantal runs — elke run wordt opnieuw aangerekend. De huidige gekozen run blijft gekozen tot jij een andere kiest. Heb je nog geen run gekozen, dan geldt de nieuwste voltooide run als gekozen.",
+      "rerunConfirmParkedNote": "De gepauzeerde run blijft gepauzeerd; een nieuwe run hervat hem niet.",
+      "rerunConfirmCancel": "Annuleren",
+      "rerunConfirmConfirm": "Ja, start nieuwe run (~$40)",
+      "chosenBadge": "Gekozen run",
+      "chosenBadgeMarked": "Door jou gekozen als basis voor het eindrapport.",
+      "chosenBadgeDefault": "Automatisch: nieuwste voltooide run (nog niets gekozen).",
+      "noChosenRun": "Nog geen voltooide run om te kiezen.",
+      "choose": "Kies als basis voor rapport",
+      "chooseConfirmTitle": "Poging {{number}} kiezen als basis voor het rapport?",
+      "chooseConfirmBody": "Dit markeert deze run als de basis voor het eindrapport. Het is een interne markering: de klant ziet niets anders, er wordt geen mail verstuurd en het klantrapport (PDF) dat je hebt geüpload, wordt niet vervangen.",
+      "chooseConfirmCancel": "Annuleren",
+      "chooseConfirmConfirm": "Ja, kies deze run",
+      "zipOnRunPage": "Ruwe output: open de run om de audit-keten te controleren.",
+      "empty": "Nog geen research-runs voor deze intake. Start de research via de volgende stap hierboven.",
+      "loadFailed": "Runhistoriek kon niet geladen worden. Probeer opnieuw — de laatste run blijft hieronder bereikbaar.",
+      "retry": "Opnieuw proberen",
+      "toast": {
+        "rerunStarted": "Nieuwe research-run gestart. Volg hem via Run openen.",
+        "rerunInFlight": "Er loopt al een run voor deze intake — er is geen nieuwe gestart en er is niets aangerekend.",
+        "rerunFailed": "Nieuwe run starten mislukt. Er is niets aangerekend — probeer opnieuw.",
+        "chooseDone": "Poging {{number}} is nu de gekozen run.",
+        "chooseFailed": "Gekozen run niet gewijzigd. Probeer opnieuw."
+      }
+    },
     "archiveDialog": {
       "title": "Intake archiveren?",
       "body": "Het project wordt afgesloten en verdwijnt uit de actieve intake-lijst. De intake wordt alleen-lezen; de resultaten-pagina van de klant blijft bereikbaar.",

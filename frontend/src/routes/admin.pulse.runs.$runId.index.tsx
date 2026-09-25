@@ -8,6 +8,7 @@ import { useActiveSpace } from "@/lib/active-space";
 import { shouldSyncActiveSpace } from "@/lib/active-space-sync";
 import { locateResearchRun, RESEARCH_TERMINAL, type RunEvent } from "@/lib/api/research";
 import { fmtCost, fmtDuration, useElapsed } from "@/lib/research/runClock";
+import { statusLabel } from "@/lib/research/statusLabel";
 import { useRunEvents } from "@/lib/research/useRunEvents";
 import { canHaveVerificationReport } from "@/lib/research/verificationGate";
 import { useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
@@ -418,32 +419,4 @@ function ResearchRunPage() {
 function eventAuditId(event: RunEvent): string | null {
   const v = event.meta?.["audit_id"];
   return typeof v === "string" && v.length > 0 ? v : null;
-}
-
-/**
- * All EIGHT run statuses (D-11), each a literal `t()` call so the i18n audit's CHECK B
- * actually covers them, plus a fallback so a status this build has never heard of still
- * renders words rather than a raw key.
- */
-function statusLabel(status: string, t: (key: string) => string): string {
-  switch (status) {
-    case "queued":
-      return t("research.runPage.status.queued");
-    case "running":
-      return t("research.runPage.status.running");
-    case "completed":
-      return t("research.runPage.status.completed");
-    case "completed_degraded":
-      return t("research.runPage.status.completedDegraded");
-    case "failed":
-      return t("research.runPage.status.failed");
-    case "cancelled":
-      return t("research.runPage.status.cancelled");
-    case "parked":
-      return t("research.runPage.status.parked");
-    case "needs_input":
-      return t("research.runPage.status.needsInput");
-    default:
-      return t("research.runPage.status.unknown");
-  }
 }
