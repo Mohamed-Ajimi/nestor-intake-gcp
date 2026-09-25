@@ -62,6 +62,7 @@ import { NextStepBanner, type BusyKey } from "@/components/intake/NextStepBanner
 // 23-03 (UAT-22-F4): the HOOK is imported here too. This page — not the link component —
 // now owns its single research stream, because the work-phase banner needs the same run.
 import { IntakeOpenRunLink, useActiveResearchRun } from "@/components/intake/ResearchRunProgress";
+import { ResearchRunHistory } from "@/components/intake/ResearchRunHistory";
 import { triggerResearch } from "@/lib/api/research";
 import { FinalReportBlock } from "@/components/intake/FinalReportBlock";
 import { ContextPackBlock } from "@/components/intake/ContextPackBlock";
@@ -222,7 +223,7 @@ function isEmptyVal(v: unknown): boolean {
 function IntakeDetailPage() {
  const { id } = Route.useParams();
   const { t, i18n } = useTranslation("admin");
-  const { session } = useAuth();
+  const { session, isSuperadmin } = useAuth();
   const { activeSpaceId, setActiveSpace } = useActiveSpace();
  const [loading, setLoading] = useState(true);
  const [error, setError] = useState<string | null>(null);
@@ -325,9 +326,17 @@ function IntakeDetailPage() {
   // direction. React's rules-of-hooks are ESLint-enforced here, so the CALL stays
   // unconditional and only its ARGUMENT carries the condition — `undefined` is the hook's own
   // documented "do not connect" argument.
+  //
+  // 23.6 (rerun): the second argument is the hook's documented `reopenKey`. It is bumped by
+  // `onRerunStarted` below — a COMPLETED operator action, never a timer — because a stream
+  // that already closed on the previous run's terminal frame would otherwise never see the
+  // new run. Still ONE call, still ONE connection: `ResearchRunHistory` opens none of its own
+  // and reads this `researchRun` through its `liveRun` prop.
+  const [researchReopenKey, setResearchReopenKey] = useState(0);
   const researchSurfaceActive = !!intake?.status && RESEARCH_SURFACE_STATUSES.has(intake.status);
   const { run: researchRun } = useActiveResearchRun(
     researchSurfaceActive ? intake?.id : undefined,
+    researchReopenKey,
   );
 
   // The phase machine must only ever see apply-intake-skill runs: enrichment skills
@@ -495,6 +504,13 @@ function IntakeDetailPage() {
  setDraft(initialMap);
  setLoading(false);
  }, [id]);
+
+  // 23.6: after a superadmin rerun (or a rerun whose start is uncertain) reload the intake
+  // and reopen the page's ONE research stream so it follows the new run.
+  const onRerunStarted = useCallback(async () => {
+    await load();
+    setResearchReopenKey((k) => k + 1);
+  }, [load]);
 
  useEffect(() => {
  let cancelled = false;
@@ -1371,10 +1387,23 @@ function IntakeDetailPage() {
            The link-only wrapper below exists because `OpenRunLink` is defined inside the
            removed component and was rendered only from its four card branches: dropping the
            element without that wrapper would leave the app with NO way into the run page. */}
+       {/* 23.6 / UI-SPEC UI-1: for superadmins the run history (every run, the chosen-run
+           label, Rerun) REPLACES the single link. Non-superadmins keep exactly the link. The
+           history's error state still renders IntakeOpenRunLink, so a failed list never
+           removes the way into the run page. */}
        {intake.status && RESEARCH_SURFACE_STATUSES.has(intake.status) && (
-            <div className="px-6 pb-6">
-              <IntakeOpenRunLink runId={researchRun?.id ?? null} />
-            </div>
+            isSuperadmin ? (
+              <ResearchRunHistory
+                intakeId={intake.id}
+                intakeStatus={intake.status}
+                liveRun={researchRun}
+                onRerunStarted={onRerunStarted}
+              />
+            ) : (
+              <div className="px-6 pb-6">
+                <IntakeOpenRunLink runId={researchRun?.id ?? null} />
+              </div>
+            )
        )}
       </div>
 
