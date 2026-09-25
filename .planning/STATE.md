@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-07-20)
 tag `release-23.5-ae7c9d2-flags-on`; nestor-api-00009-g99 / nestor-frontend-00003-qr6 / tribunal-api-00006-pgf /
 tribunal-worker-00006-hqn). **DEV** is ahead of prod: phase 23.6 rerun + run history (nestor-api-00058-lth,
 nestor-frontend-00046-5fg, migration 0018), research calls 15 at a time (env), and Claude research on
-claude-opus-5-5 with no search cap (tribunal-worker-00017-lkq). Phase 23.6 = 4/5 plans done; plan 05 walkthrough
+claude-opus-5-5 with no search cap, and OpenAI research on high effort + shared instructions + current search tool (tribunal-worker-00018-qbf). Phase 23.6 = 4/5 plans done; plan 05 walkthrough
 partly observed (operator ran one rerun); open follow-ups in `.planning/phases/23.6-*/deferred-items.md`.
 
 Phase: 23.5 (tester-remarks-round-1-superadmin-status-override-real-archi) — EXECUTING
@@ -598,6 +598,7 @@ Recent decisions affecting current work (v1.1):
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
+| 260925-oai | OpenAI research call: reasoning effort high, SAME standing research instructions as Claude, current `web_search` tool (was preview). Model still gpt-5.6-sol, no search cap. **DEV** `tribunal-worker-00018-qbf` (sha256:2ea89938…). | 2026-09-25 | 9822632 | [260925-oai-openai-research-effort-instructions-tool](./quick/260925-oai-openai-research-effort-instructions-tool/) |
 | 260925-cop | Claude research on `claude-opus-5-5` (adaptive thinking effort=high, max_tokens 32k), web-search cap REMOVED, NEW pause_turn continuation (≤10). Tribunal suite: 0 new failures vs baseline, +6 tests. **DEV** `tribunal-worker-00017-lkq` (sha256:9075ef76…). Claude research cost still not counted. | 2026-09-25 | 58a6a23 | [260925-cop-claude-research-opus-5-5-no-search-limit](./quick/260925-cop-claude-research-opus-5-5-no-search-limit/) |
 | 260925-env | DEV research-call concurrency `NESTOR_TRIBUNAL_ANGLE_CONCURRENCY` 4 → 15 (env only, `tribunal-worker-00016-cvq`, idle gate 465b72a8). Proven on rerun 48892684: all 12 calls running by 14:43:52 (tribunal.run_event). Prod still 4. | 2026-09-25 | — | runbook |
 | 260925-nop | Rerun confirm shows NO price (operator ruling), nl/fr/en. DEV `nestor-frontend-00046-5fg`. | 2026-09-25 | c901a5e | phase 23.6 |

@@ -8122,3 +8122,10 @@ gate `465b72a8` → `tribunal-worker-00016-cvq` (same image; 23.5 flags still tr
 new revision. Proven on rerun `48892684`: all 12 angles `running` by 14:43:52 in `tribunal.run_event`. Measured limits
 (response headers): OpenAI + Anthropic keys 10,000 RPM; Gemini not reported (shared dev+prod key). PROD still 4 — a prod
 change needs a Terraform variable on `tribunal_worker` (the env block is TF-owned there).
+
+### DEV 2026-09-25 16:41Z — OpenAI research: high effort, shared instructions, current search tool (quick 260925-oai, `9822632`)
+Worker image `tribunal-worker:9822632` → `sha256:2ea89938…f267` (includes 260925-cop). Idle gate passed. `--image=@digest`
+(env untouched) → `tribunal-worker-00018-qbf`; read back ANGLE_CONCURRENCY=15, both 23.5 flags true, OPENAI_DR_MODEL
+gpt-5.6-sol; three `worker_started`, no errors. OpenAI `responses.create` now sends `reasoning.effort=high`,
+`instructions=RESEARCH_SYSTEM_PROMPT` (same text as the Claude stream), `tools=[web_search]` (was `web_search_preview`).
+Probed on the account first. PROD untouched. Revert: previous digest `sha256:9075ef76…` (Opus-only) or `90084e5`.

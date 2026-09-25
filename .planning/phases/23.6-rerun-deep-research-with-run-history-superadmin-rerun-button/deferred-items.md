@@ -14,6 +14,9 @@ Next dev run: worker log `Claude deep research complete: model=claude-opus-5-5 �
 stop_reason=…`; per-angle duration from tribunal.run_event; report length vs the Sonnet 4.6 baseline (20–29k chars).
 Watch for pause_turn continuations and the 40-min per-angle timeout.
 
+## DEF-23.6-03b — First observation of the OpenAI change owed
+Next dev run: OpenAI per-angle duration (was 3–5 min) and report length; reasoning effort high now costs more.
+
 ## DEF-23.6-04 — Speed: remaining levers
 Question workshop ~17 min (sequential rounds — code change); verification concurrency
 `NESTOR_TRIBUNAL_SKEPTIC_CONCURRENCY` 8 → 16 not applied (env only). Research calls are now bounded by the slowest
@@ -23,7 +26,7 @@ Gemini call.
 No 429 seen on the first rerun. Dev load draws on the shared Gemini quota and monthly spend cap.
 
 ## DEF-23.6-06 — Prod promotion not done
-Prod still: research concurrency 4, Claude research Sonnet 4.6 capped at 10 searches, no rerun/history UI,
+Prod still: research concurrency 4, Claude research Sonnet 4.6 capped at 10 searches, OpenAI research on default effort / no instructions / preview tool, no rerun/history UI,
 migration 0018 not applied. Promotion = release-client.sh + a new env var on the prod worker (TF var needed).
 
 ## Carried from 23.5 / earlier
