@@ -154,5 +154,5 @@ tribunal_service_url = "https://tribunal-api-zqd5qncdnq-ew.a.run.app" # 23.4-03 
 # REVERTING IS THESE TWO LINES. Set either back to "false" and apply: no
 # rollback, no rebuild, no image change. That property is the entire reason the
 # switches exist (D-23.5-04).
-nestor_citations_v2                 = "false" # flipped to "true" by plan 23.5-07 Task 3, after the dev run is read
-nestor_synthesis_continue_truncated = "false" # same gate; independent lever (money: one extra call per truncated section)
+nestor_citations_v2                 = "true" # flipped to "true" by plan 23.5-07 Task 3, after the dev run is read
+nestor_synthesis_continue_truncated = "true" # same gate; independent lever (money: one extra call per truncated section)
