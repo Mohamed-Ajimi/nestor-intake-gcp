@@ -22,6 +22,19 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
   ``_MAX_ATTEMPTS`` (F-02). It re-queues the SAME engine run through the seam, so the
   R3 checkpoints are reused instead of re-charged.
 
+* ``GET /intakes/{intake_id}/research/runs`` (:func:`list_research_runs`, D-23.6-04) — the
+  operator's run HISTORY for one intake: every run (attempt DESC) with status, times, cost,
+  chain status and ``chosen_at``, plus the explicitly chosen run id (``None`` when none is
+  marked — the newest-finished default is display-only, UI-SPEC UI-8). Superadmin-only,
+  space-scoped, existence-hidden 404. A history read, never a second live-status source.
+
+* ``POST /intakes/{intake_id}/research/runs/{run_id}/choose`` (:func:`choose_research_run`,
+  D-23.6-02 revised) — marks one ``completed`` / ``completed_degraded`` run as the intake's
+  chosen run, moving the previous mark in the same transaction and auditing
+  ``research.run_chosen``. An INTERNAL label: no mail, no artifact, no intake column, no
+  client consumer. 409 for an unfinished run or an archived intake; 404 for a run of
+  another intake.
+
 * ``POST /intakes/{intake_id}/research/cancel`` (:func:`cancel_research`, D-D/ENGINE-11) —
   the operator's ONLY stop path. Superadmin-only and space-scoped (existence-hidden 404),
   with NO 409 arm and NO attempt cap: the engine treats cancelling a terminal run as an
@@ -32,8 +45,9 @@ Two surfaces, both space-scoped and bounded by the same existence-hidden 404 / n
 
 * ``GET /intakes/{intake_id}/research/stream`` (:func:`stream_research_run`, RUN-01) — the
   operator's live run feed, and the router's ELEVENTH route. Superadmin-only since 23.1-18
-  (D-23.1-16 addendum), which completes the boundary: all ELEVEN routes on this router now
-  resolve ``superadmin_gate``. It was excluded from 23.1-17 on the false premise that SSE
+  (D-23.1-16 addendum), which completed the boundary: all ELEVEN routes on this router then
+  resolved ``superadmin_gate`` — THIRTEEN since 23.6-02 added the two run-history verbs
+  above, both gated from birth. It was excluded from 23.1-17 on the false premise that SSE
   forces ``EventSource`` (the frontend opens it with ``fetch()`` + a Bearer header, and
   ``EventSource`` appears nowhere in ``frontend/src``). The
   ONE deliberate ``async def`` handler, cloned from ``intake_routes.stream_skill_runs`` with
@@ -94,7 +108,7 @@ from sqlalchemy import func
 # (D-23.2-12). Mirrors ai_session.create_running_skill_run's 23.1-12 precedent.
 from sqlalchemy.exc import IntegrityError
 
-# NOTE: this module no longer imports ``get_current_identity``. Every one of its ELEVEN
+# NOTE: this module no longer imports ``get_current_identity``. Every one of its THIRTEEN
 # routes resolves ``superadmin_gate`` instead (23.1-18 closed the last one,
 # ``stream_research_run``), and the gate itself depends on ``get_current_identity`` — so
 # the identity is still verified on every call, one level down. AUTH-01 is unaffected: the
@@ -602,6 +616,158 @@ def trigger_research(
         "research driver scheduled: research_run_id=%s attempt=%s", research_run_id, attempt
     )
     return {"research_run_id": research_run_id, "status": "queued"}
+
+
+def _run_history_item(run) -> dict:
+    """Project one ``research_runs`` row onto the frozen run-history contract (9 keys).
+
+    Plan 23.6-03 typed the frontend to exactly these keys — do not rename or add one here
+    without changing that consumer in the same change. ``status`` is the engine literal
+    VERBATIM (never remapped, D-05). ``cost_usd_total`` is ``str(Decimal)`` or ``None`` —
+    an unknown cost is NEVER rendered as ``"0"``.
+    """
+
+    def _iso(value):
+        return value.isoformat() if value is not None else None
+
+    return {
+        "id": str(run.id),
+        "attempt": run.attempt,
+        "status": run.status,
+        "created_at": _iso(run.created_at),
+        "started_at": _iso(run.started_at),
+        "completed_at": _iso(run.completed_at),
+        "cost_usd_total": (
+            str(run.cost_usd_total) if run.cost_usd_total is not None else None
+        ),
+        "chain_status": run.chain_status,
+        "chosen_at": _iso(run.chosen_at),
+    }
+
+
+@research_router.get("/{intake_id}/research/runs")
+def list_research_runs(
+    intake_id: str,
+    # ORDER IS LOAD-BEARING: the gate before the repo, so a null-space user gets the
+    # existence-hidden 404 rather than get_tenant_repo's null-space default-deny.
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Every research run of one intake, plus the explicitly chosen run id (D-23.6-04).
+
+    Superadmin-only (``superadmin_gate`` + the in-body role re-check) and space-scoped:
+    an intake that is missing or not visible to the caller is the existence-hidden 404
+    "Intake not found".
+
+    Returns ``{"chosen_research_run_id", "runs"}``; ``runs`` is ordered attempt DESC,
+    then ``created_at`` DESC, each item projected by :func:`_run_history_item`.
+    ``chosen_research_run_id`` is the run whose ``chosen_at`` is set, else ``None``.
+
+    The "newest finished run is the default choice" rule is DISPLAY-ONLY (UI-SPEC
+    UI-8): it is deliberately NOT computed or stored here, so ``None`` means "nobody has
+    marked one", never "there is nothing to choose".
+
+    This is a HISTORY read, not a second source of live status: the intake page's one SSE
+    stream stays the live authority for the in-flight run (the same D-05 reasoning as
+    :func:`locate_research_run`). A status shown from this list may lag that stream.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    runs = ResearchRunRepository(repo.session, identity).list_for_intake(intake_id)
+    ordered = sorted(runs, key=lambda r: (r.attempt, r.created_at), reverse=True)
+    items = [_run_history_item(r) for r in ordered]
+    chosen = next((item["id"] for item in items if item["chosen_at"] is not None), None)
+    return {"chosen_research_run_id": chosen, "runs": items}
+
+
+@research_router.post("/{intake_id}/research/runs/{run_id}/choose")
+def choose_research_run(
+    intake_id: str,
+    run_id: str,
+    identity: Identity = Depends(_superadmin_gate),
+    repo: IntakeRepository = Depends(get_tenant_repo),
+) -> dict:
+    """Mark one finished run as the intake's chosen run (D-23.6-02 revised).
+
+    INTERNAL LABEL ONLY. This verb sends no mail, writes no report artifact, touches no
+    intake column and has no client-facing consumer; the chosen mark is read by the
+    operator's run history and nothing else. Wiring ANY client effect onto this verb
+    needs a new operator ruling first — it is not a small follow-up.
+
+    Refusals, in order, all writing nothing:
+
+    * not a superadmin → existence-hidden 404 (gate + in-body re-check);
+    * intake missing / out of scope → 404 "Intake not found";
+    * run missing, out of scope, or belonging to ANOTHER intake → 404 "Run not found";
+    * archived intake → 409 "An archived intake is read-only";
+    * run not in ``RESEARCH_SUCCESS`` (``completed`` / ``completed_degraded``) → 409
+      "Only a finished run can be chosen".
+
+    The move itself is :meth:`ResearchRunRepository.set_chosen` (FOR UPDATE on the
+    intake's runs, clear-then-set) inside a SAVEPOINT, audited as
+    ``research.run_chosen`` in the SAME request transaction. Re-choosing the run that is
+    already chosen is a no-op: 200, ``previous_research_run_id == run_id``, no audit row.
+    The partial unique index is the last wall: an IntegrityError from it is a 409.
+    """
+    if identity.role != "superadmin":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    intake = repo.get(intake_id)
+    if intake is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intake not found")
+
+    runs_repo = ResearchRunRepository(repo.session, identity)
+    run = runs_repo.get(run_id)
+    if run is None or str(run.intake_id) != str(intake_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+
+    if intake.status == "archived":
+        raise HTTPException(status.HTTP_409_CONFLICT, "An archived intake is read-only")
+
+    if not is_research_success(run.status):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a finished run can be chosen")
+
+    # Captured BEFORE set_chosen: its synchronize_session="fetch" UPDATEs touch the
+    # identity map, and these are all the handler needs from the row afterwards.
+    chosen_id = str(run.id)
+    attempt = run.attempt
+
+    try:
+        # A SAVEPOINT, so a unique-index refusal also undoes the clear step and nothing
+        # half-written can commit with the request transaction.
+        with repo.session.begin_nested():
+            previous = runs_repo.set_chosen(intake_id, run_id)
+    except IntegrityError:
+        # A readable sentence, never the constraint name / driver text (the same rule
+        # trigger_research follows for its 0016 index).
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The chosen run changed while this request was being prepared",
+        )
+
+    previous_id = str(previous) if previous is not None else None
+    if previous_id == chosen_id:
+        # Idempotent re-choose: nothing moved, so there is nothing to audit.
+        return {"chosen_research_run_id": chosen_id, "previous_research_run_id": previous_id}
+
+    audit.log(
+        repo.session,
+        actor_uid=identity.uid,
+        event_type="research.run_chosen",
+        target=str(intake_id),
+        space_id=intake.space_id,
+        metadata={
+            "research_run_id": chosen_id,
+            "previous_research_run_id": previous_id,
+            "attempt": attempt,
+        },
+    )
+    return {"chosen_research_run_id": chosen_id, "previous_research_run_id": previous_id}
 
 
 @research_router.post(
