@@ -398,3 +398,36 @@ wrong. **"Nobody has reviewed X" is not evidence that X is broken.**
 * The 23.1 role gate has still never been observed live, across three deploys.
 * ⛔ `infra/main.tf:381` still sets `min_instance_count = 0` for `nestor-api` while live is
   `minScale=1` — a routine `terraform apply` would silently disable the reconciler (DEF-23.3-14).
+
+## 2026-09-25 — what changed today (dev and prod)
+
+**Prod (client environment):**
+- The report fixes are ON: the rewritten Sources list and the continuation for chapters that hit the length limit.
+  Released 11:48Z, after the release script waited for an empty queue. Tag `release-23.5-ae7c9d2-flags-on`.
+- The research zip keeps every research report (it used to keep 2–3 of up to 15), each file named after its question,
+  with the full question inside and an index file.
+- Known and open: about 1 in 10 Sources entries can still show another site's name (names saved by older runs);
+  the continuation has not yet been seen on a real run.
+
+**Dev only (not on prod yet):**
+- **Rerun with history** on the intake page: a "Start new run" button (same questions, no step back, no limit for
+  superadmins), a list of every run with status, times, cost, run page, report and zip, and "Use for report" to mark
+  the run the final report is based on. The client sees nothing different: they only ever get the uploaded PDF.
+  No price is shown in the rerun popup.
+- **Faster research stage:** research calls run 15 at a time instead of 4. Proven on a rerun: all 12 calls ran
+  together. The run still took 48 min because the question stage (~17 min) and the slowest Gemini call (~15 min) set
+  the pace.
+- **Claude research** now uses Opus 5.5 with no search limit and more room for the report, and continues correctly when
+  the API pauses a long request.
+- **OpenAI research** now runs at high effort, gets the same research instructions as Claude, and uses the current web
+  search tool.
+- The dev API got a new Anthropic key (the old account ran out of credit).
+
+**Still to do:**
+- Finish the dev browser checks.
+- See one dev run with the new Claude and OpenAI settings (speed, report length).
+- Claude research cost is not counted in run totals.
+- The 2026-08-13 asks not yet built: typed confirmation, steering note.
+- Yesterday's prod database connection errors.
+- Move the dev changes to prod.
+- Rotate the keys pasted in chat.

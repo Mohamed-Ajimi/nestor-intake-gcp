@@ -8129,3 +8129,10 @@ Worker image `tribunal-worker:9822632` → `sha256:2ea89938…f267` (includes 26
 gpt-5.6-sol; three `worker_started`, no errors. OpenAI `responses.create` now sends `reasoning.effort=high`,
 `instructions=RESEARCH_SYSTEM_PROMPT` (same text as the Claude stream), `tools=[web_search]` (was `web_search_preview`).
 Probed on the account first. PROD untouched. Revert: previous digest `sha256:9075ef76…` (Opus-only) or `90084e5`.
+
+### DEV 2026-09-25 ~10:30Z — dev nestor-api Anthropic key replaced (context pack failed in ~5 s)
+Cause: the account behind secret `Nestor_Claude_Temp` (dev nestor-api only) answered "Your credit balance is too low"
+(5-token probe; key never printed). Dev tribunal (`Nestor_Claude2`) and all prod services (`nestor-anthropic-api-key`)
+answered 200. Operator supplied a new key IN CHAT → probed 200 → added as `Nestor_Claude_Temp` **version 2** →
+`gcloud run services update nestor-api --update-secrets=ANTHROPIC_API_KEY=Nestor_Claude_Temp:latest` →
+`nestor-api-00056-6b2` (same image). ⛔ ROTATE this key: it is in the chat transcript.
