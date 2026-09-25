@@ -15,11 +15,22 @@ What each case proves:
 | ``trigger_wrong_status_409``           | POST on a non-decomposed intake → 409, no run inserted.   |
 | ``brief_never_opts_into_gates``        | the brief handed to create_run has NO [INTERACTIVE_REPORT]|
 |                                        | and enumerates the questions — SEAM-04 at the boundary.   |
-| ``attempt_cap_3``                      | a 4th trigger → needs_investigation, NO create_run call.  |
-| ``attempt_cap_ignores_cancelled``      | 2 failed + 1 cancelled → NOT capped: a 4th run starts.    |
-|                                        | A deliberate stop spent nothing and may not cost an       |
-|                                        | attempt (D-23.4-07).                                      |
-| ``attempt_cap_all_cancelled_never_caps``| 3 cancellations and 0 failures never cap the intake.     |
+| ``superadmin_has_no_attempt_cap``      | REPLACES ``attempt_cap_3`` (D-23.6-01): a superadmin's    |
+|                                        | 4th trigger after 3 failures starts run #4.               |
+| ``attempt_cap_still_applies_to_non_``  | PURE: the 3-attempt cap (cancelled-exempt) still binds a  |
+| ``superadmin``                         | role=user identity.                                       |
+| ``attempt_cap_ignores_cancelled``      | AS SUPERADMIN: 2 failed + 1 cancelled → a 4th run starts. |
+|                                        | Since 23.6 only proves a superadmin is never capped; the  |
+|                                        | cancelled-exempt rule is pinned by the pure test above.   |
+| ``attempt_cap_all_cancelled_never_caps``| AS SUPERADMIN: 3 cancellations never cap (same caveat).  |
+| ``rerun_after_completed_run_202``      | in_research + completed/completed_degraded → 202, run #2. |
+| ``rerun_after_parked_run_202_...``     | in_research + parked → 202; the parked row stays parked.  |
+| ``rerun_refused_when_an_older_run_...``| an OLDER running run blocks the rerun (all runs checked). |
+| ``rerun_on_delivered_intake_stays_...``| delivered → 202; still delivered after the driver ran;    |
+|                                        | audit from=delivered,to=delivered (D-23.6-03).            |
+| ``rerun_on_delivered_intake_refused_``  | delivered + queued/running/needs_report_spec → 409.      |
+| ``trigger_on_archived_intake_409``     | archived → 409 even with a finished run.                  |
+| ``rerun_with_no_prior_runs_409``       | in_research/delivered with ZERO runs → 409.               |
 | ``completion_mail_to_trigger_user``    | the completed run mails the acting user (fake_resend).    |
 | ``research_stream_terminal_set``       | the SSE stream closes on ``completed`` (does not hang) —  |
 |                                        | RESEARCH_TERMINAL, not the skill-run success set.         |
@@ -289,6 +300,64 @@ def _count_runs(engine, set_space, space_id, intake_id) -> int:
         ).scalar_one()
 
 
+def _seed_research_run_at(
+    engine, set_space, space_id, intake_id, run_id, status, *, attempt, created_at
+) -> None:
+    """Like :func:`_seed_research_run` but with an EXPLICIT ``created_at`` (ordering-safe).
+
+    A separate helper rather than a new kwarg on ``_seed_research_run``, whose signature
+    other files may import.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        conn.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.research_runs "
+                "(id, space_id, intake_id, status, attempt, created_at) "
+                "VALUES (:id, :space_id, :intake_id, :status, :attempt, :created_at)"
+            ),
+            {
+                "id": run_id,
+                "space_id": space_id,
+                "intake_id": intake_id,
+                "status": status,
+                "attempt": attempt,
+                "created_at": created_at,
+            },
+        )
+
+
+def _read_run_column(engine, set_space, space_id, run_id, column):
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        set_space(conn, space_id)
+        return conn.execute(
+            text(f"SELECT {column} FROM {SCHEMA}.research_runs WHERE id = :id"),
+            {"id": str(run_id)},
+        ).scalar_one()
+
+
+def _read_attempt(engine, set_space, space_id, run_id) -> int:
+    return _read_run_column(engine, set_space, space_id, run_id, "attempt")
+
+
+def _read_run_status(engine, set_space, space_id, run_id) -> str:
+    return _read_run_column(engine, set_space, space_id, run_id, "status")
+
+
+def _cleanup_audit(engine, space_id) -> None:
+    """audit_log is deliberately NOT space-cascaded (0006, D-07) — clear it explicitly."""
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"DELETE FROM {SCHEMA}.audit_log WHERE space_id = :id"), {"id": space_id}
+        )
+
+
 def _cleanup(engine, space_id) -> None:
     from sqlalchemy import text
 
@@ -521,10 +590,18 @@ def test_brief_never_opts_into_gates(
         _cleanup(engine, space)
 
 
-def test_attempt_cap_3(
-    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+def test_superadmin_has_no_attempt_cap(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
 ):
-    """A 4th trigger (3 prior runs) → needs_investigation, NO create_run call, no flip."""
+    """A superadmin's 4th trigger (3 prior failed runs) STARTS a run (D-23.6-01).
+
+    REPLACES ``test_attempt_cap_3``. That test asserted a superadmin's 4th trigger returned
+    ``needs_investigation``; operator ruling D-23.6-01 (phase 23.6) removed the cap for
+    ``role=superadmin``, so that assertion is now WRONG by decision, not by regression.
+    Every rerun still costs ~$40 and the UI confirm says so. The cap itself survives for
+    any non-superadmin identity and is pinned by the pure
+    ``test_attempt_cap_still_applies_to_non_superadmin`` below.
+    """
     from fastapi.testclient import TestClient
 
     space = uuid.uuid4()
@@ -532,7 +609,6 @@ def test_attempt_cap_3(
     _seed_space(engine, space)
     _seed_intake(engine, set_space, space, intake_id, status="decomposed")
     _seed_decomposition_and_questions(engine, set_space, space, intake_id)
-    # Seed 3 prior research runs → the cap is already reached.
     for i in range(3):
         _seed_research_run(
             engine, set_space, space, intake_id, uuid.uuid4(), status="failed", attempt=i + 1
@@ -547,18 +623,225 @@ def test_attempt_cap_3(
             f"/intakes/{intake_id}/research",
             headers={"Authorization": "Bearer overridden"},
         )
-        assert resp.status_code == 202, f"expected 202 wrapper, got {resp.status_code}"
+        assert resp.status_code == 202, f"expected 202, got {resp.status_code} ({resp.text!r})"
         body = resp.json()
-        assert body["status"] == "needs_investigation", (
-            f"the 4th attempt must return needs_investigation, got {body!r}"
+        assert body.get("status") != "needs_investigation", body
+        assert body["research_run_id"] is not None, body
+        assert _count_runs(engine, set_space, space, intake_id) == 4
+        assert _read_attempt(engine, set_space, space, body["research_run_id"]) == 4
+        assert len(fake_tribunal_client["create_run"]) == 1
+        assert _read_intake_status(engine, set_space, space, intake_id) == "in_research"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_attempt_cap_still_applies_to_non_superadmin():
+    """PURE (no DB): the 3-attempt cap, cancelled-exempt, still binds non-superadmins.
+
+    The trigger's gate admits only superadmins today, so this arm is unreachable in
+    production; it is kept as defence-in-depth and pinned here so relaxing the gate cannot
+    silently remove the cap too (D-23.6-01 exempts superadmins ONLY).
+    """
+    from types import SimpleNamespace
+
+    cap = research_mod._attempt_cap_reached
+    user = Identity(uid="u", email="u@x", role="user", space_id=str(uuid.uuid4()))
+    runs = lambda *statuses: [SimpleNamespace(status=s) for s in statuses]  # noqa: E731
+
+    assert cap(user, runs("failed", "failed", "failed")) == (True, 3)
+    assert cap(user, runs("failed", "failed", "cancelled")) == (False, 2)
+    assert cap(user, runs("cancelled", "cancelled", "cancelled")) == (False, 0)
+    assert cap(_superadmin(), runs(*["failed"] * 10))[0] is False
+
+
+def _post_trigger(app, intake_id):
+    from fastapi.testclient import TestClient
+
+    return TestClient(app).post(
+        f"/intakes/{intake_id}/research",
+        headers={"Authorization": "Bearer overridden"},
+    )
+
+
+def _rerun_setup(engine, set_space, monkeypatch, superadmin_engine, intake_status):
+    """Seed a space + an intake in ``intake_status`` with questions; return (space, intake, app)."""
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    _seed_space(engine, space)
+    _seed_intake(engine, set_space, space, intake_id, status=intake_status)
+    _seed_decomposition_and_questions(engine, set_space, space, intake_id)
+    _patch_engines(monkeypatch, engine)
+    _patch_superadmin_engine(monkeypatch, superadmin_engine)
+    app = _build_app()
+    app.dependency_overrides[get_current_identity] = _as(_superadmin())
+    return space, intake_id, app
+
+
+@pytest.mark.parametrize("finished", ["completed", "completed_degraded"])
+def test_rerun_after_completed_run_202(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend,
+    finished,
+):
+    """in_research + a finished (successful) run -> 202, a 2nd row, attempt 2 (D-23.6-03)."""
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "in_research"
+    )
+    try:
+        _seed_research_run(engine, set_space, space, intake_id, uuid.uuid4(), finished)
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 202, f"expected 202, got {resp.status_code} ({resp.text!r})"
+        body = resp.json()
+        assert body["status"] == "queued"
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+        assert _read_attempt(engine, set_space, space, body["research_run_id"]) == 2
+        assert _read_intake_status(engine, set_space, space, intake_id) == "in_research"
+        assert len(fake_tribunal_client["create_run"]) == 1
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_rerun_after_parked_run_202_leaves_parked_row_parked(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """in_research + a parked run -> 202; the parked row is NOT touched (its checkpoints stay)."""
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "in_research"
+    )
+    parked_id = uuid.uuid4()
+    try:
+        _seed_research_run(engine, set_space, space, intake_id, parked_id, "parked")
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 202, f"expected 202, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+        assert _read_run_status(engine, set_space, space, parked_id) == "parked"
+        assert len(fake_tribunal_client["create_run"]) == 1
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_rerun_refused_when_an_older_run_is_in_flight_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
+    """An OLDER running run + a NEWER completed run -> 409: ALL runs are checked, not prior[0]."""
+    from datetime import datetime, timedelta, timezone
+
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "in_research"
+    )
+    now = datetime.now(timezone.utc)
+    try:
+        _seed_research_run_at(
+            engine, set_space, space, intake_id, uuid.uuid4(), "running",
+            attempt=1, created_at=now - timedelta(hours=2),
         )
-        assert body["research_run_id"] is None
-        # NO new run inserted (still 3), NO status flip, NO seam call (D-04).
-        assert _count_runs(engine, set_space, space, intake_id) == 3
-        assert _read_intake_status(engine, set_space, space, intake_id) == "decomposed"
-        assert not fake_tribunal_client["create_run"], (
-            "the 4th attempt must make NO create_run call (no double-charge)."
+        _seed_research_run_at(
+            engine, set_space, space, intake_id, uuid.uuid4(), "completed",
+            attempt=2, created_at=now - timedelta(hours=1),
         )
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+        assert not fake_tribunal_client["create_run"]
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_rerun_on_delivered_intake_stays_delivered(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, fake_resend
+):
+    """delivered + a completed run -> 202; the intake is STILL delivered after the driver ran.
+
+    D-23.6-03: GET /intakes/{id}/report is an equality check on ``delivered``, so a status
+    step-back would take the delivered report away from the client. The same-tx audit row
+    is still written, with from == to == delivered (T-23.6-04).
+    """
+    from sqlalchemy import text
+
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "delivered"
+    )
+    try:
+        _seed_research_run(engine, set_space, space, intake_id, uuid.uuid4(), "completed")
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 202, f"expected 202, got {resp.status_code} ({resp.text!r})"
+        # TestClient flushed BackgroundTasks: the fake driver has run to completion.
+        assert len(fake_tribunal_client["create_run"]) == 1
+        assert _count_runs(engine, set_space, space, intake_id) == 2
+        assert _read_intake_status(engine, set_space, space, intake_id) == "delivered"
+
+        with engine.begin() as conn:
+            set_space(conn, space)
+            rows = conn.execute(
+                text(
+                    f"SELECT metadata FROM {SCHEMA}.audit_log "
+                    "WHERE target = :t AND event_type = 'intake.status_changed'"
+                ),
+                {"t": str(intake_id)},
+            ).all()
+        assert [r[0] for r in rows] == [{"from": "delivered", "to": "delivered"}], rows
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+        _cleanup_audit(engine, space)
+
+
+@pytest.mark.parametrize("in_flight", ["queued", "running", "needs_report_spec"])
+def test_rerun_on_delivered_intake_refused_while_in_flight_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, in_flight
+):
+    """delivered + a run in any RESEARCH_IN_FLIGHT status -> 409, nothing written."""
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "delivered"
+    )
+    try:
+        _seed_research_run(engine, set_space, space, intake_id, uuid.uuid4(), in_flight)
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 1
+        assert not fake_tribunal_client["create_run"]
+        assert _read_intake_status(engine, set_space, space, intake_id) == "delivered"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+def test_trigger_on_archived_intake_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
+):
+    """archived + a completed run -> 409 (unarchive with the status override first)."""
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, "archived"
+    )
+    try:
+        _seed_research_run(engine, set_space, space, intake_id, uuid.uuid4(), "completed")
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 1
+        assert not fake_tribunal_client["create_run"]
+        assert _read_intake_status(engine, set_space, space, intake_id) == "archived"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+@pytest.mark.parametrize("intake_status", ["in_research", "delivered"])
+def test_rerun_with_no_prior_runs_409(
+    engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client, intake_status
+):
+    """in_research / delivered with ZERO runs -> 409: a rerun requires an existing run."""
+    space, intake_id, app = _rerun_setup(
+        engine, set_space, monkeypatch, superadmin_engine, intake_status
+    )
+    try:
+        resp = _post_trigger(app, intake_id)
+        assert resp.status_code == 409, f"expected 409, got {resp.status_code} ({resp.text!r})"
+        assert _count_runs(engine, set_space, space, intake_id) == 0
+        assert not fake_tribunal_client["create_run"]
+        assert _read_intake_status(engine, set_space, space, intake_id) == intake_status
     finally:
         app.dependency_overrides.clear()
         _cleanup(engine, space)
@@ -568,6 +851,10 @@ def test_attempt_cap_ignores_cancelled(
     engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
 ):
     """2 failed + 1 cancelled prior runs -> NOT capped (D-23.4-07).
+
+    Runs as SUPERADMIN. Since phase 23.6 (D-23.6-01) a superadmin is never capped at all,
+    so this case now only proves that; the cancelled-exempt rule itself is pinned by the
+    pure role="user" test ``test_attempt_cap_still_applies_to_non_superadmin``.
 
     A ``cancelled`` run is a DELIBERATE stop that spent nothing, and it is already a legal
     retry trigger via ``_RETRYABLE_RUN_STATUSES``. Counting it toward a cap whose stated
@@ -617,6 +904,10 @@ def test_attempt_cap_all_cancelled_never_caps(
     engine, set_space, monkeypatch, superadmin_engine, fake_tribunal_client
 ):
     """3 cancelled runs and 0 failures -> never capped (D-23.4-07).
+
+    Runs as SUPERADMIN. Since phase 23.6 (D-23.6-01) a superadmin is never capped at all,
+    so this case now only proves that; the cancelled-exempt rule itself is pinned by the
+    pure role="user" test ``test_attempt_cap_still_applies_to_non_superadmin``.
 
     Cancelling is free and deliberate; no number of cancellations may lock an intake out of
     the research it has not yet had.
