@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
 
 PROVIDER = "anthropic"
-MODEL = "claude-sonnet-4-6"
+# The audit label must match the model the legacy researcher really calls.
+from nestor_pulse.tools.claude_deep_researcher import ANTHROPIC_MODEL as MODEL  # noqa: E402
 
 
 async def deep_research_audited(

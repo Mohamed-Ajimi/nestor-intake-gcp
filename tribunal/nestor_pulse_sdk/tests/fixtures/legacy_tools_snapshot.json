@@ -5,7 +5,7 @@
   "_regen_cmd": "sha256sum nestor_pulse/tools/{gemini,claude,openai}_deep_researcher.py",
   "files": {
     "nestor_pulse/tools/gemini_deep_researcher.py": "92db8d8fcd8da8166d2041e24ae53324c36bed9c06e7a1f5d1e63c0c001d6daa",
-    "nestor_pulse/tools/claude_deep_researcher.py": "fa03ab505f5ba9162f01eb78e1874cce077fee162711a28e4dfd190f40173d08",
+    "nestor_pulse/tools/claude_deep_researcher.py": "4153c415d515bad605e0c30ca01f0dd5b5ade8e6d4196990d60eaaa614bc2c0b",
     "nestor_pulse/tools/openai_deep_researcher.py": "ad6c8f62b2d04fd8e7fcd6a2a7cf3213f552502649f3cffa7b94e0aff7661e6b"
   }
 }
