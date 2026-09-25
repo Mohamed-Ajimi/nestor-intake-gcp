@@ -8101,3 +8101,7 @@ tribunal-worker unchanged at `tribunal-worker-00016-cvq` (angle concurrency 15, 
 Revert: `gcloud run services update nestor-api --image=…backend@sha256:9297b2cb…` (0018 only ADDS a nullable column + partial
 index, so the older API runs on it) and nestor-frontend back to `nestor-frontend-00044-8kb`'s digest.
 **Does NOT prove:** nothing seen in a browser yet (operator walkthrough owed); no rerun has been started (each ~$40).
+- **2026-09-25 follow-up (`c901a5e`):** operator ruling — no price in the rerun confirm. Dev frontend build `00eaaa02` →
+  `nestor-frontend-00046-5fg` (`sha256:59ff61d2…0182`). First dev rerun measured (tribunal run 48892684, 14:27→15:15Z,
+  12 research calls all finishing 14:46–14:59 = 15-at-a-time confirmed): question stage ~17 min, research calls ~15 min,
+  verification ~9, report ~6.
