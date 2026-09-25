@@ -223,11 +223,14 @@ def test_every_gated_research_route_resolves_the_gate_before_the_repo():
     # codebase (23.1-CONTEXT.md section 15 addendum): the frontend opens the stream with
     # ``fetch()`` + ``Authorization: Bearer``, and ``EventSource`` appears nowhere in
     # ``frontend/src``.
-    assert checked == 11, f"expected 11 gated research routes, found {checked}"
+    #
+    # Raised to 13 by plan 23.6-02 (list_research_runs, choose_research_run — both gated
+    # from birth).
+    assert checked == 13, f"expected 13 gated research routes, found {checked}"
 
 
 def test_every_research_route_is_gated():
-    """EVERY route on ``research_router`` resolves the shared gate — 11 of 11, no exceptions.
+    """EVERY route on ``research_router`` resolves the shared gate — 13 of 13, no exceptions.
 
     The count above is an anti-vacuity guard on the ordering walk: it notices when the gate
     STOPS resolving, but a twelfth route added without a gate would leave it at 11 and pass.
@@ -262,8 +265,10 @@ def test_every_research_route_is_gated():
         f"superadmin_gate: {ungated}. Every verb on this router is an operator verb — the "
         "free ones leak the engine's internals and the paid one spends ~$45 a call."
     )
-    assert total == 11, (
-        f"research_router is expected to have 11 routes, found {total}. If a route was "
+    # Raised to 13 by plan 23.6-02 (list_research_runs, choose_research_run — both gated
+    # from birth).
+    assert total == 13, (
+        f"research_router is expected to have 13 routes, found {total}. If a route was "
         "added, gate it and raise this number; if one was removed, lower it. This pins the "
         "surface so 'all routes are gated' cannot go vacuously true on an empty router."
     )

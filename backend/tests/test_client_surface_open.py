@@ -770,6 +770,13 @@ _PINNED_INTAKE_ROUTES = frozenset(
         ("POST", "/intakes/{intake_id}/research/cancel"),
         ("POST", "/intakes/{intake_id}/research/resume"),
         ("POST", "/intakes/{intake_id}/research/{run_id}/verify-chain"),
+        # OPERATOR verbs, not client routes (plan 23.6-02 / D-23.6-04, D-23.6-02 revised):
+        # the run-history list and the internal chosen-run label. Both on research_router,
+        # gated by superadmin_gate (tests/test_superadmin_gate.py pins 13 of 13); their
+        # denial arms live in tests/test_research_run_history.py, so they are pinned here
+        # WITHOUT a 2xx client reachability test on purpose.
+        ("GET", "/intakes/{intake_id}/research/runs"),
+        ("POST", "/intakes/{intake_id}/research/runs/{run_id}/choose"),
         ("POST", "/intakes/{intake_id}/review"),
         ("POST", "/intakes/{intake_id}/skills/apply"),
         # OPERATOR verb, not a client route (plan 23.5-01 / D-23.5-01): the superadmin
