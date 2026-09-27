@@ -49,3 +49,10 @@ Phase 23.6 delivered rerun + run history. From the 2026-08-13 rulings it did NOT
 - **D-RR-3 steering note**: a superadmin note that changes what the rerun researches (no length cap per ruling; the
   cost/injection risk flagged then still applies).
 - **D-RR-1 separate counters** is superseded by D-23.6-01 (no cap at all for superadmin).
+
+## DEF-23.6-09 — Dev worker process crashed on one refused DB connection (2026-09-26 03:57:31Z)
+`tribunal-worker-00018-qbf`: `claim_one` → Cloud SQL connector → `ConnectionRefusedError [Errno 111]` was NOT caught in the
+poll loop (`runs/worker.py` main → `asyncio.run(_run())`), so the whole process exited; Cloud Run restarted it 6 s later
+(`worker_started` 03:57:37). No run in flight, nothing lost; no Cloud SQL operation at that time (backups only at 00:19).
+Risk: the same blip during a run kills every run on that instance (reclaim then re-buys work). Fix: catch transient
+connection errors around `claim_one` and back off instead of exiting.
