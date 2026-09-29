@@ -383,3 +383,26 @@ async def test_openai_all_retries_exhausted_returns_error(monkeypatch):
 
     assert result["status"] == "error"
     assert "error_message" in result
+
+
+# ---------------------------------------------------------------------------
+# Quick 260929-mt8: Gemini deep research gets 60 minutes; OpenAI stays at 35.
+# ---------------------------------------------------------------------------
+def test_gemini_poll_budget_is_60_minutes_and_openai_is_unchanged():
+    import inspect
+
+    from nestor_pulse_sdk.audit import audited_llm_client as alc
+
+    g = inspect.signature(alc.AuditedLLMClient.gemini_deep_research_raw).parameters
+    assert g["max_attempts"].default * g["poll_interval"].default == 60 * 60
+    o = inspect.signature(alc.AuditedLLMClient.openai_deep_research_raw).parameters
+    assert o["max_attempts"].default * o["poll_interval"].default == 35 * 60
+
+
+def test_gemini_outer_angle_timeout_sits_above_its_poll_budget():
+    from nestor_pulse_sdk.audit import audited_llm_client as alc
+    from nestor_pulse_sdk.pipeline.tribunal import research_division as rd
+
+    poll_budget_s = alc.GEMINI_DEEP_RESEARCH_MAX_POLLS * alc.GEMINI_DEEP_RESEARCH_POLL_S
+    assert rd._PROVIDER_TIMEOUTS["gemini"] > poll_budget_s
+    assert "openai" not in rd._PROVIDER_TIMEOUTS and "claude" not in rd._PROVIDER_TIMEOUTS
