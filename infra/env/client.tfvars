@@ -116,7 +116,7 @@ tribunal_api_min_instances    = 0
 # landed) was removed on 2026-09-09.
 tribunal_worker_stale_minutes = "60"
 
-tribunal_image_tag = "ae7c9d2" # retag of the SAME digests as 9bdb0fb/261915a/90084e5 (tribunal code untouched)
+tribunal_image_tag = "5cf891d" # = ae7c9d2 + ONLY quick 260929-mt8 (Gemini 60 min), branch hotfix/prod-gemini-60; tribunal-api 5cf891d is a RETAG of the ae7c9d2 digest
 
 tribunal_gemini_secret_id = "Nestor_Gemini"
 tribunal_openai_secret_id = "Nestor_OpenAI"

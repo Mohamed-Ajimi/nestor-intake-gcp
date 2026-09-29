@@ -8143,3 +8143,14 @@ Build `2bc8c7bd` → `tribunal-worker:a5d0122` `sha256:bd74d6c30aa3d886e6a5de663
 Idle gate `02056035` (0 queued/running) → `--image=@digest`, env untouched → `tribunal-worker-00019-gfd`, clean start.
 Env knobs: `NESTOR_GEMINI_DR_TIMEOUT_MIN` (60), `NESTOR_TRIBUNAL_GEMINI_TIMEOUT_S` (3900). PROD untouched — see the
 120-min run-ceiling caveat in the quick summary before promoting. Revert: previous digest `sha256:2ea89938…f267`.
+
+### PROD 2026-09-29 — Gemini deep research 35 → 60 min ONLY (hotfix, `5cf891d`)
+Operator: "deploy only this change to prod, keep the rest". Branch `hotfix/prod-gemini-60` = prod's `ae7c9d2` + cherry-pick of
+quick 260929-mt8 (3 files; research tests 151 passed on the branch). Worker built `9495e72d` → `tribunal-worker:5cf891d`
+`sha256:86897e8f…32bc`; `tribunal-api:5cf891d` is a RETAG of the unchanged ae7c9d2 digest `sha256:1101b070…33fc`.
+client.tfvars `tribunal_image_tag` ae7c9d2 → 5cf891d (backend/frontend tags unchanged). Idle gate `6d733f6a` idle →
+targeted apply tribunal_api + tribunal_worker (plan: image lines + the known cosmetic scaling diff only) →
+`tribunal-api-00007-2pr` (same digest) / `tribunal-worker-00007-8m8` (new digest). Env read back unchanged: flags true,
+run concurrency 4, run ceiling 120, OPENAI gpt-5.6-sol; angle concurrency still 4 (default). NOT on prod: Opus Claude
+research, OpenAI changes, 15-at-a-time, rerun/history. `tribunal_migrate` job not re-applied (no migration; tag drift only).
+⚠ At 4-at-a-time a slow run may now approach the 120-min ceiling. Revert: tribunal_image_tag = "ae7c9d2" + same targeted apply.
