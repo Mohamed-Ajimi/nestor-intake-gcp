@@ -8136,3 +8136,10 @@ Cause: the account behind secret `Nestor_Claude_Temp` (dev nestor-api only) answ
 answered 200. Operator supplied a new key IN CHAT → probed 200 → added as `Nestor_Claude_Temp` **version 2** →
 `gcloud run services update nestor-api --update-secrets=ANTHROPIC_API_KEY=Nestor_Claude_Temp:latest` →
 `nestor-api-00056-6b2` (same image). ⛔ ROTATE this key: it is in the chat transcript.
+
+### DEV 2026-09-29 14:39Z — Gemini deep research 35 → 60 min (quick 260929-mt8, `a5d0122`)
+Why: prod run ec62c2be lost all 5 Gemini calls (4 × 35-min timeout, 1 × Google 503); prod lifetime 12/65 Gemini timeouts.
+Build `2bc8c7bd` → `tribunal-worker:a5d0122` `sha256:bd74d6c30aa3d886e6a5de6630bf41048d97b51ab99354e09de0cc572cb123ae`.
+Idle gate `02056035` (0 queued/running) → `--image=@digest`, env untouched → `tribunal-worker-00019-gfd`, clean start.
+Env knobs: `NESTOR_GEMINI_DR_TIMEOUT_MIN` (60), `NESTOR_TRIBUNAL_GEMINI_TIMEOUT_S` (3900). PROD untouched — see the
+120-min run-ceiling caveat in the quick summary before promoting. Revert: previous digest `sha256:2ea89938…f267`.
