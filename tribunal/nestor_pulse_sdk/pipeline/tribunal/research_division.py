@@ -402,7 +402,11 @@ _PROVIDER_TIMEOUTS: dict[str, int] = {
     # 35-minute deep-research poll. Handing it `_DEFAULT_TIMEOUT_S` would let one
     # hung stream hold the whole run open for forty minutes for no reason.
     "own": int(os.environ.get("NESTOR_TRIBUNAL_OWN_TIMEOUT_S", str(15 * 60))),
-}  # the three deep-research providers keep _DEFAULT_TIMEOUT_S
+    # Quick 260929-mt8: Gemini deep research polls for up to 60 min
+    # (NESTOR_GEMINI_DR_TIMEOUT_MIN); this outer bound must sit above it or the
+    # 40-min default would cut the poll short.
+    "gemini": int(os.environ.get("NESTOR_TRIBUNAL_GEMINI_TIMEOUT_S", str(65 * 60))),
+}  # openai and claude keep _DEFAULT_TIMEOUT_S
 
 #: ISO 639-1 -> English name. THIS MAP IS AN ALLOWLIST, not a lookup convenience:
 #: the language codes come from a model, and a code absent from this map is

@@ -179,6 +179,15 @@ GEMINI_DEEP_RESEARCH_AGENT = os.environ.get(
     # superseded. Override via NESTOR_GEMINI_DR_AGENT.
     "NESTOR_GEMINI_DR_AGENT", "deep-research-max-preview-04-2026"
 )
+# Quick 260929-mt8 (operator ruling 2026-09-29): Gemini deep research gets 60 minutes,
+# not 35. On prod 12 of 65 Gemini calls (and all 5 on run ec62c2be) hit the 35-minute
+# poll budget while Google was still working. OpenAI keeps 70 polls x 30 s = 35 min.
+# research_division's per-angle outer timeout for gemini is raised to match.
+GEMINI_DEEP_RESEARCH_POLL_S = 30
+GEMINI_DEEP_RESEARCH_TIMEOUT_MIN = float(os.environ.get("NESTOR_GEMINI_DR_TIMEOUT_MIN", "60"))
+GEMINI_DEEP_RESEARCH_MAX_POLLS = max(
+    1, int(GEMINI_DEEP_RESEARCH_TIMEOUT_MIN * 60 // GEMINI_DEEP_RESEARCH_POLL_S)
+)
 # D-A, found dead on run `d6bb3aae` (2026-07-27). This default used to be the
 # retired o4-mini deep-research id, and OpenAI shut BOTH deep-research models down
 # on 2026-07-23 — four days before that run. The engine did not break; the model
@@ -1398,8 +1407,8 @@ class AuditedLLMClient:
         query: str,
         *,
         agent: str = GEMINI_DEEP_RESEARCH_AGENT,
-        max_attempts: int = 70,
-        poll_interval: int = 30,
+        max_attempts: int = GEMINI_DEEP_RESEARCH_MAX_POLLS,
+        poll_interval: int = GEMINI_DEEP_RESEARCH_POLL_S,
         resume_job_id: str | None = None,
         on_job_started: Callable[[str], Awaitable[None]] | None = None,
     ) -> dict:
