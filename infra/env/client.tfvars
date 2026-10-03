@@ -156,3 +156,7 @@ tribunal_service_url = "https://tribunal-api-zqd5qncdnq-ew.a.run.app" # 23.4-03 
 # switches exist (D-23.5-04).
 nestor_citations_v2                 = "true" # flipped to "true" by plan 23.5-07 Task 3, after the dev run is read
 nestor_synthesis_continue_truncated = "true" # same gate; independent lever (money: one extra call per truncated section)
+
+# 2026-10-04 (operator): run ceiling 120 -> 180 min and research calls 4 -> 15 at a time.
+tribunal_worker_run_timeout_minutes = "180"
+tribunal_angle_concurrency          = "15"

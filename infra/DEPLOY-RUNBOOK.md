@@ -8154,3 +8154,11 @@ targeted apply tribunal_api + tribunal_worker (plan: image lines + the known cos
 run concurrency 4, run ceiling 120, OPENAI gpt-5.6-sol; angle concurrency still 4 (default). NOT on prod: Opus Claude
 research, OpenAI changes, 15-at-a-time, rerun/history. `tribunal_migrate` job not re-applied (no migration; tag drift only).
 ⚠ At 4-at-a-time a slow run may now approach the 120-min ceiling. Revert: tribunal_image_tag = "ae7c9d2" + same targeted apply.
+
+### PROD 2026-10-04 — run ceiling 120 → 180 min + research calls 4 → 15 at a time (env only)
+Why: run 624817e0 (Ben & Jerry's, intake 37beb8a1) was failed by `run_timed_out ceiling_minutes=120` at 13:57Z on
+2026-10-02 (a Gemini call used its full 60 min); the retry 683931b7 finished in 112 min. Both values were not TF
+variables: NEW `tribunal_worker_run_timeout_minutes` (default "120") and `tribunal_angle_concurrency` (default "4"),
+client.tfvars "180" / "15". Plan: only the two env entries (+ cosmetic scaling). Idle gate `6234f74f` idle → targeted
+apply → `tribunal-worker-00008-g9w`, SAME image `sha256:86897e8f…32bc` (5cf891d); env read back 180 / 15; clean start.
+Dev unchanged (dev ceiling still 120). Revert: remove the two tfvars lines + targeted apply.

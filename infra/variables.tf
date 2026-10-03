@@ -302,6 +302,18 @@ variable "tribunal_worker_stale_minutes" {
   default     = "60"
 }
 
+variable "tribunal_worker_run_timeout_minutes" {
+  description = "NESTOR_WORKER_RUN_TIMEOUT_MINUTES - the hard ceiling on one research run's wall clock; the run is failed when it is reached. Was hard-coded 120; raised to 180 on the client env 2026-10-04 after run 624817e0 (Ben & Jerry's) was stopped at exactly 120 min once Gemini got a 60-min budget. Keep strictly above tribunal_worker_stale_minutes."
+  type        = string
+  default     = "120"
+}
+
+variable "tribunal_angle_concurrency" {
+  description = "NESTOR_TRIBUNAL_ANGLE_CONCURRENCY - how many deep-research calls one run makes at the same time (engine default 4). 15 on the client env since 2026-10-04 (proven on dev since 2026-09-25: all 12 calls of rerun 48892684 ran together; OpenAI/Anthropic keys 10k RPM; the Gemini key is shared dev+prod)."
+  type        = string
+  default     = "4"
+}
+
 variable "tribunal_image_tag" {
   description = "Tribunal image tag in the `nestor` Artifact Registry repo (paths `.../nestor/tribunal-api:<tag>` and `.../nestor/tribunal-worker:<tag>`). Passed on apply exactly like `image_tag`; no default — the operator supplies the real tag per infra/DEPLOY-RUNBOOK.md § Phase 13 after the Cloud Build step."
   type        = string

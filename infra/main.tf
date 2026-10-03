@@ -1187,7 +1187,12 @@ resource "google_cloud_run_v2_service" "tribunal_worker" {
       }
       env {
         name  = "NESTOR_WORKER_RUN_TIMEOUT_MINUTES"
-        value = "120"
+        value = var.tribunal_worker_run_timeout_minutes
+      }
+      # Research calls run at the same time inside ONE run (read at import).
+      env {
+        name  = "NESTOR_TRIBUNAL_ANGLE_CONCURRENCY"
+        value = var.tribunal_angle_concurrency
       }
       # D-07: uncapped this phase (matches the old deploy-worker.sh env).
       env {
