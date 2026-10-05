@@ -427,15 +427,15 @@ async def test_openai_request_has_effort_instructions_and_current_search_tool(mo
 
 
 # ---------------------------------------------------------------------------
-# Quick 260929-mt8: Gemini deep research gets 60 minutes; OpenAI stays at 35.
+# Quick 260929-mt8: Gemini deep research gets 120 minutes (60 until 2026-10-05); OpenAI stays at 35.
 # ---------------------------------------------------------------------------
-def test_gemini_poll_budget_is_60_minutes_and_openai_is_unchanged():
+def test_gemini_poll_budget_is_120_minutes_and_openai_is_unchanged():
     import inspect
 
     from nestor_pulse_sdk.audit import audited_llm_client as alc
 
     g = inspect.signature(alc.AuditedLLMClient.gemini_deep_research_raw).parameters
-    assert g["max_attempts"].default * g["poll_interval"].default == 60 * 60
+    assert g["max_attempts"].default * g["poll_interval"].default == 120 * 60
     o = inspect.signature(alc.AuditedLLMClient.openai_deep_research_raw).parameters
     assert o["max_attempts"].default * o["poll_interval"].default == 35 * 60
 

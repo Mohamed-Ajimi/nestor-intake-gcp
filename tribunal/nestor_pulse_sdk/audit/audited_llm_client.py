@@ -179,12 +179,12 @@ GEMINI_DEEP_RESEARCH_AGENT = os.environ.get(
     # superseded. Override via NESTOR_GEMINI_DR_AGENT.
     "NESTOR_GEMINI_DR_AGENT", "deep-research-max-preview-04-2026"
 )
-# Quick 260929-mt8 (operator ruling 2026-09-29): Gemini deep research gets 60 minutes,
+# Quick 260929-mt8 (operator ruling 2026-09-29, raised to 120 on 2026-10-05): Gemini deep research gets 120 minutes,
 # not 35. On prod 12 of 65 Gemini calls (and all 5 on run ec62c2be) hit the 35-minute
 # poll budget while Google was still working. OpenAI keeps 70 polls x 30 s = 35 min.
 # research_division's per-angle outer timeout for gemini is raised to match.
 GEMINI_DEEP_RESEARCH_POLL_S = 30
-GEMINI_DEEP_RESEARCH_TIMEOUT_MIN = float(os.environ.get("NESTOR_GEMINI_DR_TIMEOUT_MIN", "60"))
+GEMINI_DEEP_RESEARCH_TIMEOUT_MIN = float(os.environ.get("NESTOR_GEMINI_DR_TIMEOUT_MIN", "120"))
 GEMINI_DEEP_RESEARCH_MAX_POLLS = max(
     1, int(GEMINI_DEEP_RESEARCH_TIMEOUT_MIN * 60 // GEMINI_DEEP_RESEARCH_POLL_S)
 )
