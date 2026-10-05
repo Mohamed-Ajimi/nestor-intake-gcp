@@ -8162,3 +8162,16 @@ variables: NEW `tribunal_worker_run_timeout_minutes` (default "120") and `tribun
 client.tfvars "180" / "15". Plan: only the two env entries (+ cosmetic scaling). Idle gate `6234f74f` idle → targeted
 apply → `tribunal-worker-00008-g9w`, SAME image `sha256:86897e8f…32bc` (5cf891d); env read back 180 / 15; clean start.
 Dev unchanged (dev ceiling still 120). Revert: remove the two tfvars lines + targeted apply.
+
+### DEV + PROD 2026-10-05 — Gemini 120 min, run ceiling 240, and EVERYTHING on dev promoted to prod (`c26107a`)
+Code `c26107a`: Gemini poll budget 60 → 120 min (`NESTOR_GEMINI_DR_TIMEOUT_MIN`), gemini outer angle timeout 125 min.
+Images (dev registry): tribunal-api `sha256:5fb19f0c…6754` (build c1e14ded), tribunal-worker `sha256:e6d71a9d…5d51`
+(build 97733433), backend `sha256:8b3e0daf…5832` = dev nestor-api-00058-lth RETAGGED c26107a (backend unchanged since).
+DEV: idle gate 4cbff805 → tribunal-api-00029-rxx, tribunal-worker-00020-hcr; then run ceiling 240 (env) →
+tribunal-worker-00021-h7w. PROD (operator chose "push now" knowing Opus/OpenAI research had NEVER run on dev):
+client.tfvars image_tag/tribunal_image_tag c26107a, frontend client-c26107a (build e29ae7ee, FB key from a85fc2f9),
+tribunal_worker_run_timeout_minutes 240. `release-client.sh FLAGS=true` → gate ed3e729e idle; nestor-migrate
+`Running upgrade 0017 -> 0018`; nestor-api-00010-hfq (/readyz 200), nestor-frontend-00004-522 sha256:177afb69…
+(/auth/login 200), tribunal-api-00008-gzj (403 anon = IAM wall), gate 5106d790, tribunal-worker-00009-gtv; env read
+back 240 / 15 / flags true; clean start. Final plan: cosmetic scaling + seed_superadmin job image (f5e2b9ad → c26107a,
+not applied, harmless). PROD now = DEV. Claude research cost is still not counted in run totals (DEF-23.6-02).

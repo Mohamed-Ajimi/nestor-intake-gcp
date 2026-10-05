@@ -50,8 +50,8 @@ image_registry_project = "project-cb01b861-cb4a-438d-b9a"
 # All three are promoted dev tags, set by plan 23.4-03 Task 1. Until that plan
 # runs there is no image in the client's pull path, so the Cloud Run services
 # created by the first apply are EXPECTED to fail to become ready.
-image_tag          = "ae7c9d2" # quick 260925-dyt + 260925-fqt (raw-output zip: one file per angle, full question), 2026-09-25
-frontend_image_tag = "client-9bdb0fb" # 23.5-09 — rebuilt for the client env, 2026-09-24
+image_tag          = "c26107a" # 2026-10-05 release: phase 23.6 rerun + history (migration 0018); backend digest = dev nestor-api-00058-lth
+frontend_image_tag = "client-c26107a" # 2026-10-05 — rebuilt for the client env (no-price rerun confirm)
 
 # ------------------------------------------------------------ nestor-api tier
 # DEF-23.3-14: 1, never 0. At 0 the phase 23.3 orphaned-run reconcile loop never
@@ -116,7 +116,7 @@ tribunal_api_min_instances    = 0
 # landed) was removed on 2026-09-09.
 tribunal_worker_stale_minutes = "60"
 
-tribunal_image_tag = "5cf891d" # = ae7c9d2 + ONLY quick 260929-mt8 (Gemini 60 min), branch hotfix/prod-gemini-60; tribunal-api 5cf891d is a RETAG of the ae7c9d2 digest
+tribunal_image_tag = "c26107a" # 2026-10-05: master — Gemini 120 min, Claude research Opus 5.5 no search cap, OpenAI high effort + instructions + web_search
 
 tribunal_gemini_secret_id = "Nestor_Gemini"
 tribunal_openai_secret_id = "Nestor_OpenAI"
@@ -157,6 +157,6 @@ tribunal_service_url = "https://tribunal-api-zqd5qncdnq-ew.a.run.app" # 23.4-03 
 nestor_citations_v2                 = "true" # flipped to "true" by plan 23.5-07 Task 3, after the dev run is read
 nestor_synthesis_continue_truncated = "true" # same gate; independent lever (money: one extra call per truncated section)
 
-# 2026-10-04 (operator): run ceiling 120 -> 180 min and research calls 4 -> 15 at a time.
-tribunal_worker_run_timeout_minutes = "180"
+# 2026-10-04 (operator): run ceiling 120 -> 180 min (240 on 2026-10-05, Gemini 120 min) and research calls 4 -> 15 at a time.
+tribunal_worker_run_timeout_minutes = "240"
 tribunal_angle_concurrency          = "15"
