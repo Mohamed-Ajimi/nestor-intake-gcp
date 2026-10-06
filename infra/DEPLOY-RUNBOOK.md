@@ -8192,3 +8192,18 @@ PROD untouched.
   non-scrolling box. Shell now `h-screen` (main is the real scroller). Build `5c3caab6` → `sha256:8ca6d1e3…d0c35` →
   `nestor-frontend-00048-rvn` (/auth/login 200). Affects every admin page's scrolling (sticky headers there now stick
   too). Browser check not done by the agent (Chrome extension not connected). Revert: `nestor-frontend-00047-klk`.
+
+### DEV 2026-10-06 13:40Z — Gemini model switch off 2.5 / 3.7 (quick 261006-kzr, `efaca7f`)
+Tribunal only. gates / grouping / report planner / workshop rank+evolve+admission → `gemini-3.8-flash` (thinking low);
+conflict + scrub `gemini-2.5-pro` → `gemini-3.8-flash` (thinking high); distiller `gemini-2.5-flash` →
+`gemini-3.5-flash-lite` (thinking minimal). Temperature no longer sent (Gemini 3 guidance); `thinking_level` replaces
+`thinking_budget`. Deep Research agent unchanged. Every model/thinking setting is an env var (NESTOR_TRIBUNAL_GATE_MODEL,
+_GROUP_MODEL, _PLANNER_MODEL, NESTOR_CONFLICT_MODEL, NESTOR_SCRUB_MODEL, NESTOR_DISTILLER_MODEL, *_THINKING,
+NESTOR_GEMINI_TEMPERATURE). Gates: tribunal pytest 2545 passed vs baseline 2451 (same 204 failed / 24 errors as the
+local-env baseline, identical lists); live smoke 7/7 on the dev key (~$0.006). Builds `d28cae82` worker
+`sha256:58841a77…a4e1e`, `b6999cd3` api `sha256:e58e9916…32902`. Idle gate `b3544675` idle (first attempt `10433906`
+failed: psql install, no --service-account). `tribunal-worker-00022-g74` (2 worker_started, no errors),
+`tribunal-api-00030-nf7`; env read back 15 / 240 / flags true. Revert: env vars per site (3.7: model=gemini-3.7-flash,
+thinking=off, NESTOR_GEMINI_TEMPERATURE=0), or the previous worker digest (c26107a). **Does NOT prove:** no research run
+yet on the new models; thinking tokens are billed but NOT counted in run cost (audited_llm_client reads
+candidates_token_count only) — larger with high thinking. PROD untouched.
