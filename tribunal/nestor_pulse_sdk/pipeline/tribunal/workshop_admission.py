@@ -922,7 +922,14 @@ async def classify_parent(
             # this fallback silently downgrades the classifier to the old model
             # on the one path where the import failed. Moved from
             # gemini-2.5-flash by quick task 260901-lf2 (2026-09-01).
-            model = "gemini-3.7-flash"
+            # 261006-kzr (2026-10-06): now DERIVED from
+            # gemini_config.GEMINI_FLASH_DEFAULT (the same source as
+            # _RANK_MODEL's default), not copied, so it cannot drift again.
+            from nestor_pulse_sdk.pipeline.gemini_config import (  # noqa: PLC0415
+                GEMINI_FLASH_DEFAULT,
+            )
+
+            model = GEMINI_FLASH_DEFAULT
 
     prompt = _CLASSIFY_PROMPT.format(
         questions_block=_render_block(labels),
@@ -934,7 +941,15 @@ async def classify_parent(
     try:
         from nestor_pulse_sdk.pipeline.tribunal import gates  # noqa: PLC0415
 
-        config = gates._make_config()
+        # 261006-kzr: config built for the classifier's own model at the rank
+        # thinking level (was the GATE model's config).
+        try:
+            from nestor_pulse_sdk.pipeline.tribunal.workshop_rank import (  # noqa: PLC0415
+                _RANK_THINKING as _level,
+            )
+        except Exception:  # noqa: BLE001
+            _level = "low"
+        config = gates._make_config(model=model, level=_level)
         if config is not None:
             kwargs["config"] = config
     except Exception as exc:  # noqa: BLE001 — the config is an optimisation

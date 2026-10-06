@@ -43,6 +43,18 @@ all):
   The Anthropic report path has the mirror-image rule -- see
   `_synthesis_kwargs`: on Opus 5 thinking is ON BY DEFAULT and
   `temperature` / `top_p` / `top_k` / `budget_tokens` are an HTTP 400.
+
+  261006-kzr (2026-10-06): by operator ruling the three Gemini paths left 2.5
+  (Google retires gemini-2.5-* on 2026-10-20): conflict + scrub now default to
+  gemini-3.8-flash at thinking_level "high", the distiller to
+  gemini-3.5-flash-lite at thinking_level "minimal". Gemini 3 deprecates
+  `thinking_budget` and returns HTTP 400 when it is sent together with
+  `thinking_level`, so the configs are built by `pipeline/gemini_config.py`,
+  which sends exactly one thinking field per model family and no temperature to
+  Gemini 3 (Google: <1.0 "may lead to ... looping"). The 2.5-pro rule above is
+  still true and still honoured: an env revert to gemini-2.5-pro gets no
+  thinking config at all. Models are env-overridable (NESTOR_DISTILLER_MODEL,
+  NESTOR_CONFLICT_MODEL, NESTOR_SCRUB_MODEL).
 """
 from __future__ import annotations
 
@@ -67,6 +79,11 @@ from nestor_pulse_sdk.citations.numbering import _domain
 # `claim_attribution` is stdlib-pure — `re`, `datetime`, `logging` and nothing
 # else — so it adds no weight and no cycle to this module's import graph.
 from nestor_pulse_sdk.pipeline.synthesis.claim_attribution import extract_as_of
+from nestor_pulse_sdk.pipeline.gemini_config import (
+    GEMINI_FLASH_DEFAULT,
+    GEMINI_FLASH_LITE_DEFAULT,
+    build_generate_config,
+)
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -1667,7 +1684,25 @@ chunk_guard = _phase2_stub("chunk_guard")
 #: test_factlist_fallback.py pins this literal (`_DISTILLER_MODEL ==
 #: "gemini-2.5-flash"`), so changing it here turns that test RED. That test is
 #: the guard for this comment -- read both before touching either.
-_DISTILLER_MODEL = "gemini-2.5-flash"
+#:
+#: 261006-kzr (2026-10-06): OVERRIDDEN BY OPERATOR RULING. Google retires
+#: gemini-2.5-flash on 2026-10-20, so staying is no longer an option; the default
+#: is now gemini-3.5-flash-lite at thinking_level "minimal" (env
+#: NESTOR_DISTILLER_MODEL / NESTOR_DISTILLER_THINKING; "minimal" is the lowest
+#: level the model accepts -- thinking_budget is deprecated on Gemini 3 and 400s
+#: when sent with thinking_level), with no temperature sent (Google: <1.0 "may
+#: lead to ... looping"). What still stands:
+#:  * reason 1 STILL HOLDS for 3.5-flash-lite: no evidence exists for this path on
+#:    the new model either -- this is the guess the comment above warns about,
+#:    taken knowingly because the old model is going away;
+#:  * reason 2: `_split_distiller_line` below is the separator-tolerant guard that
+#:    the V-01 incident produced, and test_distiller_separators.py still replays
+#:    the recorded responses against it.
+#: test_factlist_fallback.py now pins the NEW literal ("gemini-3.5-flash-lite").
+#: Revert with NESTOR_DISTILLER_MODEL=gemini-2.5-flash (until 2026-10-20): the
+#: helper then sends today's exact request (thinking_budget=0, temperature 0.0).
+_DISTILLER_MODEL = os.environ.get("NESTOR_DISTILLER_MODEL", GEMINI_FLASH_LITE_DEFAULT)
+_DISTILLER_THINKING = os.environ.get("NESTOR_DISTILLER_THINKING", "minimal")
 # Output ceiling per distill call — the MODEL MAXIMUM for gemini-2.5-flash
 # (fix 2026-06-11). The old 4096 silently truncated extraction at ~29 claims:
 # on the LUKOIL final run only the FIRST research report's opening got distilled
@@ -1736,33 +1771,29 @@ def _split_distiller_line(line: str) -> list[str] | None:
 
 
 def _make_distiller_config():
-    """Build a GenerateContentConfig with thinking disabled.
+    """Build the distiller's GenerateContentConfig.
 
-    gemini-2.5-flash supports ThinkingConfig(thinking_budget=0).
-    Without this, thinking tokens silently consume max_output_tokens,
-    truncating output after 2-3 lines (CLAUDE.md anti-pattern).
+    261006-kzr: it no longer "disables thinking" -- it requests the LOWEST
+    thinking level the model accepts (`_DISTILLER_THINKING`, default "minimal"
+    on gemini-3.5-flash-lite) via ``pipeline/gemini_config``. A 2.x model (env
+    revert) gets the pre-261006 request: thinking_budget=0, temperature 0.0.
+    Thinking tokens consume max_output_tokens (CLAUDE.md anti-pattern), which is
+    why the level stays at the floor and the ceiling stays at 65535. If the
+    ThinkingConfig cannot be built the helper sends NO thinking config (never
+    thinking_budget as a substitute).
 
     Plain-text line format — NOT JSON mode (citations ⊗ structured-outputs
     = HTTP 400; ADR-006 §GOTCHA).
     """
     try:
-        from google.genai import types as genai_types  # noqa: PLC0415
-        thinking_cfg = genai_types.ThinkingConfig(thinking_budget=0)
-        return genai_types.GenerateContentConfig(
+        return build_generate_config(
+            _DISTILLER_MODEL,
+            level=_DISTILLER_THINKING,
             max_output_tokens=_DISTILLER_MAX_TOKENS,
-            temperature=0.0,
-            thinking_config=thinking_cfg,
+            legacy_temperature=0.0,
         )
-    except Exception:
-        # SDK version may not support ThinkingConfig — degrade gracefully
-        try:
-            from google.genai import types as genai_types  # noqa: PLC0415
-            return genai_types.GenerateContentConfig(
-                max_output_tokens=_DISTILLER_MAX_TOKENS,
-                temperature=0.0,
-            )
-        except Exception:
-            return None
+    except Exception:  # noqa: BLE001 — degrade to the model default config
+        return None
 
 
 def _chunk_text(text: str, max_chars: int) -> list[str]:
@@ -3535,7 +3566,29 @@ topic_synthesis = _phase2_stub("topic_synthesis")
 # relative to another grounded claim when two sources disagree.
 # ---------------------------------------------------------------------------
 
-_CONFLICT_MODEL = "gemini-2.5-pro"
+#: 261006-kzr (2026-10-06): gemini-2.5-pro -> gemini-3.8-flash by operator ruling
+#: (2.5 retires 2026-10-20), thinking_level "high" (env NESTOR_CONFLICT_MODEL /
+#: NESTOR_CONFLICT_THINKING). Until now this site sent NO config at all (model
+#: default output limit, temperature and thinking); `_make_conflict_config` keeps
+#: the default output limit and sends no temperature, and adds only the explicit
+#: thinking level. An env revert to gemini-2.5-pro sends an empty config, i.e.
+#: today's request.
+_CONFLICT_MODEL = os.environ.get("NESTOR_CONFLICT_MODEL", GEMINI_FLASH_DEFAULT)
+_CONFLICT_THINKING = os.environ.get("NESTOR_CONFLICT_THINKING", "high")
+
+
+def _make_conflict_config():
+    """Conflict-detector config (261006-kzr): model-default output limit, no
+    temperature (the site never sent one), thinking per model family."""
+    try:
+        return build_generate_config(
+            _CONFLICT_MODEL,
+            level=_CONFLICT_THINKING,
+            max_output_tokens=None,
+            legacy_temperature=None,
+        )
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _extract_json_array(raw: str) -> list:
@@ -3594,12 +3647,15 @@ async def conflict_detector(
         '"note": "<one-sentence explanation>"}'
     )
 
+    config = _make_conflict_config()
+    conflict_kwargs: dict = {"config": config} if config is not None else {}
     try:
         response = await audited.gemini_generate(
             run_id=run_id,
             tenant_id=tenant_id,
             model=_CONFLICT_MODEL,
             contents=prompt,
+            **conflict_kwargs,
         )
     except Exception as exc:
         log.warning("conflict_detector: LLM call failed: %s", exc)
@@ -3646,11 +3702,33 @@ async def conflict_detector(
 # cannot ride back into the report through the raw research.
 # ---------------------------------------------------------------------------
 
-_SCRUB_MODEL = "gemini-2.5-pro"
+#: 261006-kzr (2026-10-06): gemini-2.5-pro -> gemini-3.8-flash by operator ruling
+#: (2.5 retires 2026-10-20), thinking_level "high" (env NESTOR_SCRUB_MODEL /
+#: NESTOR_SCRUB_THINKING); temperature no longer sent to Gemini 3.
+_SCRUB_MODEL = os.environ.get("NESTOR_SCRUB_MODEL", GEMINI_FLASH_DEFAULT)
+_SCRUB_THINKING = os.environ.get("NESTOR_SCRUB_THINKING", "high")
 #: The span proposal is a small JSON list — never the full research text — so a
 #: modest budget suffices and the old whole-text-regeneration truncation bug
 #: (research silently cut at the model's default output limit) cannot recur.
-_SCRUB_MAX_TOKENS = 8192
+#: 261006-kzr: 8192 -> 32768 (env NESTOR_SCRUB_MAX_TOKENS). 8192 was sized for a
+#: 2.5-pro that thinks anyway; "high" thinking on 3.8-flash spends output tokens
+#: on reasoning and must not truncate the JSON list. A ceiling only caps.
+_SCRUB_MAX_TOKENS = int(os.environ.get("NESTOR_SCRUB_MAX_TOKENS", "32768"))
+
+
+def _make_scrub_config():
+    """Scrub span-proposal config (261006-kzr) via ``pipeline/gemini_config``;
+    a 2.x-pro revert gets the pre-261006 request (max tokens, temperature 0.0,
+    no thinking config)."""
+    try:
+        return build_generate_config(
+            _SCRUB_MODEL,
+            level=_SCRUB_THINKING,
+            max_output_tokens=_SCRUB_MAX_TOKENS,
+            legacy_temperature=0.0,
+        )
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _ws_tolerant_pattern(span: str) -> "re.Pattern[str]":
@@ -3773,14 +3851,7 @@ async def scrub_research(
 
     spans: list[str] = []
     try:
-        config = None
-        try:
-            from google.genai import types as genai_types  # noqa: PLC0415
-            config = genai_types.GenerateContentConfig(
-                max_output_tokens=_SCRUB_MAX_TOKENS, temperature=0.0
-            )
-        except Exception:
-            pass
+        config = _make_scrub_config()
         kwargs: dict = {"config": config} if config is not None else {}
         response = await audited.gemini_generate(
             run_id=run_id,

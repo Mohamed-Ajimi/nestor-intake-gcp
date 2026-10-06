@@ -15,14 +15,29 @@ synthesize_report. Pure proposal — no report is written here.
 LLM invariants mirror intake.py: gemini-2.5-flash, thinking disabled, plain-text
 line format (NOT JSON — avoids the gemini structured-output truncation noted in
 CLAUDE.md), routed through audited.gemini_generate.
+
+261006-kzr (2026-10-06): now gemini-3.8-flash with thinking REQUESTED at
+thinking_level "low" instead of the deprecated thinking_budget=0, and NO
+temperature sent to Gemini 3. Why: Google retires 2.5 on 2026-10-20;
+thinking_budget is deprecated on Gemini 3 and sending it together with
+thinking_level is an HTTP 400; Google says temperature below 1.0 on Gemini 3
+"may lead to unexpected behavior, such as looping". Built by
+pipeline/gemini_config.py. Env: NESTOR_TRIBUNAL_PLANNER_MODEL /
+NESTOR_TRIBUNAL_PLANNER_THINKING. max_output_tokens raised 1536 -> 4096.
 """
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any, TYPE_CHECKING
 
 from google.genai import types as genai_types  # noqa: TC002
+
+from nestor_pulse_sdk.pipeline.gemini_config import (
+    GEMINI_FLASH_DEFAULT,
+    build_generate_config,
+)
 
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
@@ -41,8 +56,19 @@ log = logging.getLogger(__name__)
 #: PLANNER PROMPTS WAS NOT BROKEN OUT, so this specific interaction is NOT
 #: separately evidenced -- only the aggregate zero-error result is. A live run is
 #: what settles it.
-_PLANNER_MODEL = "gemini-3.7-flash"
-_MAX_OUTPUT_TOKENS = 1536
+#:
+#: 261006-kzr (2026-10-06): gemini-3.7-flash -> gemini-3.8-flash by operator ruling
+#: (2.5 retires 2026-10-20; 3.8 is priced as 3.7). Env-overridable
+#: (NESTOR_TRIBUNAL_PLANNER_MODEL); thinking requested at thinking_level "low"
+#: (NESTOR_TRIBUNAL_PLANNER_THINKING) instead of thinking_budget=0 (both together =
+#: HTTP 400 on Gemini 3); temperature no longer sent to Gemini 3. No 3.8 run yet.
+#: `_MAX_OUTPUT_TOKENS` raised 1536 -> 4096: the 3.7 note above already flagged
+#: this as the Flash site most exposed to truncation, and 3.8 now thinks at "low"
+#: by request. Raising the ceiling only caps -- it changes no output shape -- and
+#: the switch requires budgets >= current. Revert recipe: pipeline/gemini_config.py.
+_PLANNER_MODEL = os.environ.get("NESTOR_TRIBUNAL_PLANNER_MODEL", GEMINI_FLASH_DEFAULT)
+_PLANNER_THINKING = os.environ.get("NESTOR_TRIBUNAL_PLANNER_THINKING", "low")
+_MAX_OUTPUT_TOKENS = 4096
 _RESEARCH_CHAR_BUDGET = 60_000  # cap the prose fed to the planner (cost guard)
 
 LENGTH_OPTIONS = ["brief", "standard", "comprehensive"]
@@ -85,14 +111,15 @@ FOCUS: <label> | INCLUDE: <yes|no> | DEPTH: <rich|thin> | RATIONALE: <one line>
 
 
 def _make_config() -> object:
-    try:
-        thinking = genai_types.ThinkingConfig(thinking_budget=0)
-    except Exception:
-        thinking = None
-    kwargs: dict = {"max_output_tokens": _MAX_OUTPUT_TOKENS, "temperature": 0.0}
-    if thinking is not None:
-        kwargs["thinking_config"] = thinking
-    return genai_types.GenerateContentConfig(**kwargs)
+    """Planner config via ``pipeline/gemini_config`` (261006-kzr): thinking_level
+    per model family, no temperature for Gemini 3, the pre-261006 request
+    (thinking_budget=0, temperature 0.0) for a 2.x model."""
+    return build_generate_config(
+        _PLANNER_MODEL,
+        level=_PLANNER_THINKING,
+        max_output_tokens=_MAX_OUTPUT_TOKENS,
+        legacy_temperature=0.0,
+    )
 
 
 def _focus_labels(mission_brief: dict) -> list[str]:

@@ -1281,8 +1281,9 @@ class RetryAwareAudited(RecordingAudited):
 
     A retry prompt is the ONLY prompt that fences a report with
     `RETRY_REPORT_START`, so the classification is structural rather than a guess
-    at wording. `models` exists so the cheap-path requirement (gemini-2.5-flash,
-    never a deep-research entry point) is asserted rather than assumed.
+    at wording. `models` exists so the cheap-path requirement (the distiller's
+    cheap Flash model -- gemini-3.5-flash-lite since 261006-kzr, gemini-2.5-flash
+    before -- never a deep-research entry point) is asserted rather than assumed.
 
     The inherited deep-research entry points still RAISE — reaching for one is a
     test failure, not a slow test.
@@ -1736,7 +1737,10 @@ def test_no_deep_research_entry_point_gained_a_caller() -> None:
     assert calls == [], f"a deep-research entry point gained a caller: {calls}"
 
     # And the retry is pinned to the cheap model by name.
-    assert steps._DISTILLER_MODEL == "gemini-2.5-flash"
+    # 261006-kzr (2026-10-06): operator ruling moved the distiller off
+    # gemini-2.5-flash (retired by Google 2026-10-20) to gemini-3.5-flash-lite.
+    # This is the pin the steps.py "DO NOT FINISH THE JOB" comment names.
+    assert steps._DISTILLER_MODEL == "gemini-3.5-flash-lite"
     assert steps._FACT_LIST_RETRY_PROVIDERS == ("gemini",), (
         "adding a provider here is a cost decision and must be a deliberate edit"
     )

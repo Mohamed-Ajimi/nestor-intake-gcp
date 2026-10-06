@@ -1240,7 +1240,8 @@ async def meta_review(
     )
 
     out: dict[str, Any] = {}
-    config = gates._make_config()
+    # 261006-kzr: built for _META_MODEL (was the GATE model's config).
+    config = gates._make_config(model=_META_MODEL, level=workshop_rank._RANK_THINKING)
     kwargs: dict[str, Any] = {"config": config} if config is not None else {}
 
     try:

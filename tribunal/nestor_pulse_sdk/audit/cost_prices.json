@@ -73,7 +73,7 @@
     "cache_read": 0.125,
     "cache_creation_5m": 0.0
   },
-  "_gemini_2_5_flash_correction": "Quick task 260901-lf2, 2026-09-01. THREE FIELDS CORRECTED against Google published pricing (verified 2026-09-01) -- the previous row was STALE AND UNDERSTATED REAL SPEND: prompt 0.15 -> 0.30, completion 0.60 -> 2.50 (a 4.2x correction -- Google raised Flash output pricing sharply and this table never followed), cache_read 0.0375 -> 0.03. THIS IS A CORRECTION, NOT A PRICE CHANGE: the money was always being spent at these rates; the table was reporting less than the invoice. Every historical run total computed from the old row therefore UNDER-STATES its Flash cost, and cost_usd is stored per-row at write time, so those historical rows are NOT retroactively repaired by this edit. THE ROW IS DELIBERATELY RETAINED even though five of the six Flash sites moved to gemini-3.7-flash on this date: the synthesis CLAIM DISTILLER (pipeline/synthesis/steps.py `_DISTILLER_MODEL`) still calls this model, and historical audit rows reference the key. Deleting it would take the compute() unknown-model branch and write NULL cost_usd -- the booked G-7 defect.",
+  "_gemini_2_5_flash_correction": "Quick task 260901-lf2, 2026-09-01. THREE FIELDS CORRECTED against Google published pricing (verified 2026-09-01) -- the previous row was STALE AND UNDERSTATED REAL SPEND: prompt 0.15 -> 0.30, completion 0.60 -> 2.50 (a 4.2x correction -- Google raised Flash output pricing sharply and this table never followed), cache_read 0.0375 -> 0.03. THIS IS A CORRECTION, NOT A PRICE CHANGE: the money was always being spent at these rates; the table was reporting less than the invoice. Every historical run total computed from the old row therefore UNDER-STATES its Flash cost, and cost_usd is stored per-row at write time, so those historical rows are NOT retroactively repaired by this edit. THE ROW IS DELIBERATELY RETAINED even though five of the six Flash sites moved to gemini-3.7-flash on this date: the synthesis CLAIM DISTILLER (pipeline/synthesis/steps.py `_DISTILLER_MODEL`) still calls this model, and historical audit rows reference the key. Deleting it would take the compute() unknown-model branch and write NULL cost_usd -- the booked G-7 defect. 261006-kzr (2026-10-06): the claim distiller no longer calls this model by default (it moved to google/gemini-3.5-flash-lite by operator ruling); the row STAYS for historical audit rows and for the NESTOR_DISTILLER_MODEL=gemini-2.5-flash env revert path.",
   "google/gemini-2.5-flash": {
     "prompt": 0.30,
     "completion": 2.50,
@@ -85,6 +85,20 @@
     "prompt": 0.75,
     "completion": 3.75,
     "cache_read": 0.075,
+    "cache_creation_5m": 0
+  },
+  "_gemini_3_8_flash_source": "Quick task 261006-kzr, 2026-10-06. Operator ruling: gates, grouping, report_planner, workshop_rank (and through it workshop_evolve meta-review + the workshop_admission classifier), the synthesis conflict detector and the scrubber moved to this model on this date, on DEV first (Google retires gemini-2.5-* on 2026-10-20). Rates READ from Google's published Gemini API pricing page https://ai.google.dev/gemini-api/docs/pricing on 2026-10-06, Standard paid tier: input $0.75, output $3.75 (the page says 'including thinking tokens'), context caching $0.075 per 1M tokens. ⚠⚠ THESE ARE INTRODUCTORY RATES, VALID THROUGH 2026-12-31. The same page states that from 2027-01-01 they become input 1.50 / output 7.50 / caching 0.15 -- the same doubling already recorded for gemini-3.7-flash. WHEN THAT DATE PASSES, UPDATE THE THREE NUMBERS AND THIS NOTE TOGETHER. cache_creation_5m is 0 by the same convention as the 3.7 row: Google does not price a cache write per token (cache storage is billed per hour, $0.50/1M tokens/hour, which this table does not model). WHY THIS ROW IS LOAD-BEARING: compute() returns None for an unknown model, the caller writes NULL cost_usd, and SUM(cost_usd) silently skips it -- the booked G-7 defect; tests/test_gemini_sites.py asserts a row exists for every site default. NO RUN HAS EXECUTED ON 3.8 YET; only a live smoke of each site config (261006-kzr). ⚠ The audited client books completion_tokens from candidates_token_count only, so thinking tokens (billed by Google as output) are NOT costed by this table -- see 261006-kzr SUMMARY.",
+  "google/gemini-3.8-flash": {
+    "prompt": 0.75,
+    "completion": 3.75,
+    "cache_read": 0.075,
+    "cache_creation_5m": 0
+  },
+  "_gemini_3_5_flash_lite_source": "Quick task 261006-kzr, 2026-10-06. Operator ruling: the synthesis CLAIM DISTILLER (pipeline/synthesis/steps.py `_DISTILLER_MODEL`) moved from gemini-2.5-flash to this model on this date, on DEV first (Google retires gemini-2.5-* on 2026-10-20). Rates READ from Google's published Gemini API pricing page https://ai.google.dev/gemini-api/docs/pricing on 2026-10-06, Standard paid tier: input $0.30 (text / image / video / audio), output $2.50 (the page says 'including thinking tokens'), context caching $0.03 per 1M tokens. The page gives NO end date and NO future rate for this model. cache_creation_5m is 0 by the same convention as the gemini-3.7-flash row (cache storage is billed per hour, $1.00/1M tokens/hour, which this table does not model). Load-bearing for the same G-7 reason as every other row: an unknown model writes NULL cost_usd. NO RUN HAS EXECUTED ON IT YET.",
+  "google/gemini-3.5-flash-lite": {
+    "prompt": 0.30,
+    "completion": 2.50,
+    "cache_read": 0.03,
     "cache_creation_5m": 0
   },
   "google/gemini-2.5-flash-preview-04-17": {

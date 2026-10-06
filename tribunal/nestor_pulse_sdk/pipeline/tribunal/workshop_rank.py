@@ -106,6 +106,7 @@ import uuid  # noqa: F401 — used in the postponed annotations below
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
+from nestor_pulse_sdk.pipeline.gemini_config import GEMINI_FLASH_DEFAULT
 from nestor_pulse_sdk.pipeline.tribunal import (
     discovery_bracket,
     gates,
@@ -195,6 +196,19 @@ log = logging.getLogger(__name__)
 #                            rejected register. Full text with reasoning still off
 #                            is what works. DO NOT "FIX" THIS BY ENABLING
 #                            THINKING.
+#
+#                            261006-kzr (2026-10-06): by OPERATOR RULING thinking
+#                            is now REQUESTED at thinking_level "low" on
+#                            gemini-3.8-flash (NESTOR_TRIBUNAL_WORKSHOP_RANK_THINKING;
+#                            Gemini 3 deprecates thinking_budget and 400s when both
+#                            are sent), and temperature is no longer sent to
+#                            Gemini 3 (Google: <1.0 "may lead to ... looping").
+#                            BOTH pieces of evidence stand: the 2.5-era 17-18 KEEP
+#                            warning above, AND the 3.7 counter-evidence at
+#                            `_RANK_MODEL` below (3.7 thought anyway and was MORE
+#                            decisive). NO 3.8 MEASUREMENT EXISTS YET. If a 3.8 run
+#                            shows the critic going KEEP-everything, set the
+#                            THINKING env to "off" (thinking_budget=0 alone) first.
 #   _FLAW_MAX_CHARS          critique flaw text kept inside any prompt. DELIBERATELY
 #                            LEFT AT 160 while the candidate width was raised: the
 #                            judge's blindness is cured by passing it the parent
@@ -221,9 +235,18 @@ log = logging.getLogger(__name__)
 #: The KILL path the warning protects got STRONGER, not weaker.
 #: ⚠ THIS CONSTANT ALSO SETS workshop_evolve._META_MODEL BY INHERITANCE (its
 #: env default is this value), so the evolve meta-review call moves with it.
+#:
+#: 261006-kzr (2026-10-06): DEFAULT gemini-3.7-flash -> gemini-3.8-flash by
+#: operator ruling (2.5 retires 2026-10-20; 3.8 is priced as 3.7), derived from
+#: pipeline/gemini_config.GEMINI_FLASH_DEFAULT. Thinking is requested at
+#: `_RANK_THINKING` (default "low", env NESTOR_TRIBUNAL_WORKSHOP_RANK_THINKING) via
+#: gates._make_config(model=_RANK_MODEL, level=_RANK_THINKING) -- before this the
+#: critique/judge/meta/admission calls sent _RANK_MODEL but got the GATE config.
+#: No 3.8 measurement of the position bias or the critic's KEEP/KILL split exists.
 _RANK_MODEL = os.environ.get(
-    "NESTOR_TRIBUNAL_WORKSHOP_RANK_MODEL", "gemini-3.7-flash"
+    "NESTOR_TRIBUNAL_WORKSHOP_RANK_MODEL", GEMINI_FLASH_DEFAULT
 )
+_RANK_THINKING = os.environ.get("NESTOR_TRIBUNAL_WORKSHOP_RANK_THINKING", "low")
 _EVOLVE_MODEL = os.environ.get(
     "NESTOR_TRIBUNAL_WORKSHOP_EVOLVE_MODEL", "claude-sonnet-5"
 )
@@ -606,7 +629,7 @@ async def _critique_batch(
         ignore_instructions=_IGNORE_INSTRUCTIONS,
         candidates_block=_candidate_block(batch),
     )
-    config = gates._make_config()
+    config = gates._make_config(model=_RANK_MODEL, level=_RANK_THINKING)
     kwargs: dict[str, Any] = {"config": config} if config is not None else {}
 
     try:
@@ -1662,7 +1685,7 @@ async def _judge_batch(
             findings_by_label=findings_by_label,
         ),
     )
-    config = gates._make_config()
+    config = gates._make_config(model=_RANK_MODEL, level=_RANK_THINKING)
     kwargs: dict[str, Any] = {"config": config} if config is not None else {}
 
     try:

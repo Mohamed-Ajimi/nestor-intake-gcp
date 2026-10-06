@@ -30,6 +30,15 @@ cluster survival from member results, so nothing here is cluster-aware):
 Design constraints carried from the rest of the pipeline:
   - gemini-2.5-flash with thinking disabled (CLAUDE.md anti-pattern: thinking
     tokens silently truncate output).
+    261006-kzr (2026-10-06): now gemini-3.8-flash (env NESTOR_TRIBUNAL_GATE_MODEL)
+    with thinking REQUESTED at `thinking_level="low"` (env
+    NESTOR_TRIBUNAL_GATE_THINKING) instead of the deprecated `thinking_budget=0`,
+    and NO temperature sent to Gemini 3. Why: Google retires 2.5 on 2026-10-20;
+    `thinking_budget` is deprecated on Gemini 3 and sending it together with
+    `thinking_level` is an HTTP 400; Google says temperature below 1.0 on Gemini 3
+    "may lead to unexpected behavior, such as looping". The config is built by
+    `pipeline/gemini_config.py`. The truncation concern above still stands, so
+    max_output_tokens stays 4096.
   - PLAIN-TEXT line format, never JSON mode (citations (x) structured-outputs = 400).
   - All LLM egress goes through the audited client (audit hash chain, D-07).
   - THE GATE FAILS TOWARD MORE CHECKING (G-11). A missing line, a garbled line, an
@@ -62,6 +71,11 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from nestor_pulse_sdk.pipeline.gemini_config import (
+    GEMINI_FLASH_DEFAULT,
+    build_generate_config,
+)
+
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
 
@@ -84,7 +98,19 @@ log = logging.getLogger(__name__)
 #: constraint in the module docstring above is now an INTENT WE REQUEST AND DO NOT
 #: GET on this model. The feared regression did NOT occur (see workshop_rank.py),
 #: and output tokens rise 4.2x -- a cost the operator accepted (+$1.50/run).
-_GATE_MODEL = "gemini-3.7-flash"
+#:
+#: 261006-kzr (2026-10-06): gemini-3.7-flash -> gemini-3.8-flash by operator ruling
+#: (same $0.75/$3.75 price through 2026-12-31; 2.5 retires 2026-10-20). The model
+#: is now env-overridable (NESTOR_TRIBUNAL_GATE_MODEL) and thinking is REQUESTED at
+#: thinking_level "low" (NESTOR_TRIBUNAL_GATE_THINKING) instead of the deprecated
+#: thinking_budget=0 -- Gemini 3 400s if both are sent. Temperature is no longer
+#: sent to Gemini 3 (Google: <1.0 "may lead to ... looping"); NESTOR_GEMINI_TEMPERATURE
+#: restores it. No run has executed on 3.8 yet: the 3.7 position-bias measurement
+#: above is NOT evidence about 3.8. Revert to the 3.7 request with
+#: NESTOR_TRIBUNAL_GATE_MODEL=gemini-3.7-flash, NESTOR_TRIBUNAL_GATE_THINKING=off,
+#: NESTOR_GEMINI_TEMPERATURE=0 (see pipeline/gemini_config.py).
+_GATE_MODEL = os.environ.get("NESTOR_TRIBUNAL_GATE_MODEL", GEMINI_FLASH_DEFAULT)
+_GATE_THINKING = os.environ.get("NESTOR_TRIBUNAL_GATE_THINKING", "low")
 _GATE_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GATE_BATCH", "40"))
 _GATE_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GATE_CONCURRENCY", "4"))
 _GATE_RETRIES = int(os.environ.get("NESTOR_TRIBUNAL_GATE_RETRIES", "2"))
@@ -145,16 +171,24 @@ _NO_DECISION_CONTEXT = (
 )
 
 
-def _make_config():
-    """gemini-flash config with thinking disabled (mirrors the distiller)."""
+def _make_config(model: str | None = None, level: str | None = None):
+    """Gemini-flash config for the gates (and, via ``model``/``level``, for the
+    workshop rank / evolve meta-review / admission classifier calls).
+
+    261006-kzr: built by ``pipeline/gemini_config.build_generate_config`` --
+    thinking_level per model family (never thinking_budget alongside it), no
+    temperature for Gemini 3 unless NESTOR_GEMINI_TEMPERATURE is set; a 2.x model
+    gets the pre-261006 request (thinking_budget=0, temperature 0.0). Returns
+    ``None`` on failure -- callers then send no config (unchanged contract).
+    """
     try:
-        from google.genai import types as genai_types  # noqa: PLC0415
-        return genai_types.GenerateContentConfig(
+        return build_generate_config(
+            model or _GATE_MODEL,
+            level=level or _GATE_THINKING,
             max_output_tokens=4096,
-            temperature=0.0,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            legacy_temperature=0.0,
         )
-    except Exception:  # noqa: BLE001 — SDK may not support ThinkingConfig
+    except Exception:  # noqa: BLE001 — never let config building break a call
         return None
 
 

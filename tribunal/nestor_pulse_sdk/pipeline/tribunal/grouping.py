@@ -13,6 +13,14 @@ group verification itself lives in group_skeptic.py.
 Design constraints carried from the rest of the pipeline:
   - gemini-2.5-flash with thinking disabled (CLAUDE.md anti-pattern: thinking
     tokens silently truncate output).
+    261006-kzr (2026-10-06): now gemini-3.8-flash with thinking REQUESTED at
+    thinking_level "low" instead of the deprecated thinking_budget=0, and NO
+    temperature sent to Gemini 3. Why: Google retires 2.5 on 2026-10-20;
+    thinking_budget is deprecated on Gemini 3 and sending it together with
+    thinking_level is an HTTP 400; Google says temperature below 1.0 on Gemini 3
+    "may lead to unexpected behavior, such as looping". Built by
+    pipeline/gemini_config.py. Env: NESTOR_TRIBUNAL_GROUP_MODEL /
+    NESTOR_TRIBUNAL_GROUP_THINKING. max_output_tokens stays 4096.
   - PLAIN-TEXT line format, never JSON mode (citations ⊗ structured-outputs = 400).
   - Conservative / merge-happy normalization: over-merging just means one skeptic
     sees slightly more context (harmless); UNDER-merging splits a contradiction
@@ -86,6 +94,11 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from nestor_pulse_sdk.pipeline.gemini_config import (
+    GEMINI_FLASH_DEFAULT,
+    build_generate_config,
+)
+
 if TYPE_CHECKING:
     from nestor_pulse_sdk.audit.audited_llm_client import AuditedLLMClient
 
@@ -97,7 +110,15 @@ log = logging.getLogger(__name__)
 #: NOTE 3.7 THINKS ANYWAY despite thinking_budget=0, so the "thinking disabled"
 #: constraint in the module docstring above is an INTENT WE REQUEST AND DO NOT GET
 #: on this model. Output tokens rise 4.2x; the operator accepted the cost.
-_GROUPER_MODEL = "gemini-3.7-flash"
+#:
+#: 261006-kzr (2026-10-06): gemini-3.7-flash -> gemini-3.8-flash by operator ruling
+#: (2.5 retires 2026-10-20; 3.8 is priced as 3.7). Env-overridable
+#: (NESTOR_TRIBUNAL_GROUP_MODEL); thinking requested at thinking_level "low"
+#: (NESTOR_TRIBUNAL_GROUP_THINKING) instead of thinking_budget=0 (both together =
+#: HTTP 400 on Gemini 3); temperature no longer sent to Gemini 3. No 3.8 run yet.
+#: Revert recipe: see pipeline/gemini_config.py.
+_GROUPER_MODEL = os.environ.get("NESTOR_TRIBUNAL_GROUP_MODEL", GEMINI_FLASH_DEFAULT)
+_GROUPER_THINKING = os.environ.get("NESTOR_TRIBUNAL_GROUP_THINKING", "low")
 _GROUPER_BATCH = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_BATCH", "40"))
 _GROUPER_CONCURRENCY = int(os.environ.get("NESTOR_TRIBUNAL_GROUP_CONCURRENCY", "4"))
 
@@ -123,15 +144,17 @@ _STAKES_ORDER = {"low": 0, "med": 1, "high": 2}
 
 
 def _make_config():
-    """gemini-flash config with thinking disabled (mirrors the distiller)."""
+    """Grouper config via ``pipeline/gemini_config`` (261006-kzr): thinking_level
+    per model family, no temperature for Gemini 3, the pre-261006 request for a
+    2.x model. Returns ``None`` on failure (callers then send no config)."""
     try:
-        from google.genai import types as genai_types  # noqa: PLC0415
-        return genai_types.GenerateContentConfig(
+        return build_generate_config(
+            _GROUPER_MODEL,
+            level=_GROUPER_THINKING,
             max_output_tokens=4096,
-            temperature=0.0,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            legacy_temperature=0.0,
         )
-    except Exception:  # noqa: BLE001 — SDK may not support ThinkingConfig
+    except Exception:  # noqa: BLE001 — never let config building break a call
         return None
 
 

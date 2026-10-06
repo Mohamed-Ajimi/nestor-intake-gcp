@@ -40,6 +40,10 @@ def _level_value(dumped_thinking: dict) -> str:
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     monkeypatch.delenv("NESTOR_GEMINI_TEMPERATURE", raising=False)
+    # Earlier DB tests run alembic's logging.config.fileConfig, whose default
+    # disable_existing_loggers=True disables every logger already created --
+    # including this module's -- so caplog would see nothing in a full-suite run.
+    monkeypatch.setattr(gc.logger, "disabled", False)
     gc._WARNED.clear()
     yield
     gc._WARNED.clear()

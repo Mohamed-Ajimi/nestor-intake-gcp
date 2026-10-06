@@ -248,9 +248,14 @@ class TestClaimDistillerNormalPath:
     def test_audited_gemini_called_with_flash(self):
         self._call()
         assert len(self.audited.calls) >= 1
+        # 261006-kzr: compare against the constant, not a literal -- the literal
+        # pin lives in test_factlist_fallback.py and a second copy here would
+        # only duplicate it.
+        from nestor_pulse_sdk.pipeline.synthesis import steps
+
         for call in self.audited.calls:
-            assert call["model"] == "gemini-2.5-flash", (
-                f"Expected gemini-2.5-flash, got {call['model']!r}"
+            assert call["model"] == steps._DISTILLER_MODEL, (
+                f"Expected {steps._DISTILLER_MODEL}, got {call['model']!r}"
             )
 
     def test_thinking_disabled_in_kwargs(self):
