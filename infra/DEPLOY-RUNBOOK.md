@@ -8187,3 +8187,8 @@ person's first name (fallback "team"); stakeholder rows show name/role/expectati
 sections; sections nav sticky with its own scroll. Revert: nestor-api → `sha256:8b3e0daf…1f5832`, nestor-frontend →
 `nestor-frontend-00046-5fg` digest `sha256:59ff61d2…0182`. **Does NOT prove:** nothing seen in a browser yet; no mail sent.
 PROD untouched.
+- **2026-10-06 follow-up (`ed6c9f2`):** tester reported item 7 NOT working — cause: ProductShell outer `min-h-screen` +
+  `<main overflow-y-auto>` meant `<main>` never scrolled (the window did), so every page `sticky` was pinned to a
+  non-scrolling box. Shell now `h-screen` (main is the real scroller). Build `5c3caab6` → `sha256:8ca6d1e3…d0c35` →
+  `nestor-frontend-00048-rvn` (/auth/login 200). Affects every admin page's scrolling (sticky headers there now stick
+  too). Browser check not done by the agent (Chrome extension not connected). Revert: `nestor-frontend-00047-klk`.
