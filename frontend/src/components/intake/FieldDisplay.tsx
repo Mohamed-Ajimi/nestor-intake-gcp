@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/lib/i18n";
 import { getDateLocale } from "@/lib/i18n/date-locale";
 import { pick } from "@/lib/i18n/localizeSchema";
+import { objectListTextKey } from "@/lib/intake-display";
 import { Download } from "lucide-react";
 import { toast } from "sonner";
 import type { IntakeField } from "@/lib/intake-types";
@@ -162,7 +163,9 @@ function ValueRenderer({
  const isObject = item && "type" in item && (item as { type?: string }).type === "object";
  if (isObject) {
  const subFields = (item as unknown as { fields: IntakeField[] }).fields;
- const textKey = subFields.find((sf) => sf.key === "text" || sf.type === "longtext")?.key;
+ // 261006-jgn: only rows with a `text` sub-field (research questions) take the
+ // question path; stakeholder rows (name/role/expectation) render every sub-field.
+ const textKey = objectListTextKey(subFields);
  return (
  <div className="space-y-4">
  {items.map((it, i) => {
@@ -197,7 +200,7 @@ function ValueRenderer({
  );
  }
  return (
- <div key={i} className="space-y-1">
+ <div key={i} className="space-y-1 border-l-2 border-ink/15 pl-3">
  {subFields.map((sf) => (
  <FieldDisplay
  key={sf.key}

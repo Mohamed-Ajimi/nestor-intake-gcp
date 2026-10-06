@@ -31,6 +31,7 @@ import type { IntakeField, IntakeSchema, LocalizedIntakeSchema } from "@/lib/int
 import { localizeSchema } from "@/lib/i18n/localizeSchema";
 import { resolveAnswerValue } from "@/lib/i18n/resolveAnswerValue";
 import { FieldDisplay, isFieldDisplayEmpty } from "@/components/intake/FieldDisplay";
+import { deriveIntakeHeaderTitle } from "@/lib/intake-display";
 import { FieldRenderer } from "@/components/intake/FieldRenderer";
 import { StatusPill } from "@/components/intake/_status";
 import { IntakeWorkflowStepper } from "@/components/intake/IntakeWorkflowStepper";
@@ -1167,14 +1168,16 @@ function IntakeDetailPage() {
  );
  }
 
- const projectNameAnswer = answersMap.get("project_name")?.value;
- const projectNameStr =
- typeof projectNameAnswer === "string" && projectNameAnswer.trim()
- ? projectNameAnswer.trim()
- : null;
- const headerTitle = projectNameStr
- ? `${client?.name ?? t("intakeDetail.unknownClient")} — ${projectNameStr}`
- : intake.title || intake.product?.name || "";
+ // 261006-jgn (tester item 2b): "<organisation> — <project>". Organisation = the
+ // `client_name` answer (seeded with the org name by the 0008 trigger); project = the
+ // `project_name` answer, else the intake's own client_name (the create-screen value).
+ const headerTitle = deriveIntakeHeaderTitle({
+ organisation: answersMap.get("client_name")?.value,
+ project: answersMap.get("project_name")?.value,
+ intakeClientName: client?.name,
+ fallback: intake.title || intake.product?.name || "",
+ lang: i18n.language,
+ });
  const intakeUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/intake/${intake.id}`;
  const statusHint =
  intake.status && STATUS_WITH_HINT.has(intake.status)
