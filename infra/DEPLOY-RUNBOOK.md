@@ -8175,3 +8175,15 @@ tribunal_worker_run_timeout_minutes 240. `release-client.sh FLAGS=true` → gate
 (/auth/login 200), tribunal-api-00008-gzj (403 anon = IAM wall), gate 5106d790, tribunal-worker-00009-gtv; env read
 back 240 / 15 / flags true; clean start. Final plan: cosmetic scaling + seed_superadmin job image (f5e2b9ad → c26107a,
 not applied, harmless). PROD now = DEV. Claude research cost is still not counted in run totals (DEF-23.6-02).
+
+### DEV 2026-10-06 — tester feedback round (quick 261006-jgn, `059c58b`)
+Backend + frontend only (tribunal 0 files, no migration, no Terraform, `components/ui` untouched). Gates: backend
+984 passed / 2 skipped, tsc 0, vitest 605, i18n-audit PASS. Builds `25758d00` → backend `sha256:76a44218…0276f`,
+`d058c0d1` (dev substitutions, key reused from build 00eaaa02, never printed) → frontend `sha256:bcbc4787…e0c29`.
+`gcloud run services update --image=@digest`: `nestor-api-00059-vp4` (/readyz 200), `nestor-frontend-00047-klk`
+(/auth/login 200). Worker untouched (no idle gate needed). Changes: full nav on users/clients pages; project name
+seeded into the form's Projectnaam on create; header = organisation — project; client mails greet the contact
+person's first name (fallback "team"); stakeholder rows show name/role/expectation; next-step panel above the
+sections; sections nav sticky with its own scroll. Revert: nestor-api → `sha256:8b3e0daf…1f5832`, nestor-frontend →
+`nestor-frontend-00046-5fg` digest `sha256:59ff61d2…0182`. **Does NOT prove:** nothing seen in a browser yet; no mail sent.
+PROD untouched.

@@ -59,8 +59,9 @@ allow-list the two lines. Two lines, one script.
 ## DEF-23.5-03-03 — the client mails greet the recipient with the PROJECT name
 
 **Found:** 2026-09-22, during plan 23.5-03 Task 2's mail audit.
-**Status:** PRE-EXISTING defect, deliberately NOT fixed — out of D-23.5-03's
-label-only scope.
+**Status:** FIXED 2026-10-06 by quick 261006-jgn — greets the first name of the contact_name answer; template fallback when empty.
+(History: was a PRE-EXISTING defect, deliberately NOT fixed in 23.5 — out of D-23.5-03's
+label-only scope.)
 
 `intake_routes._run_intake_send` passes `first_name=client` where
 `client = intake.client_name or "team"` — i.e. the PROJECT name — into
