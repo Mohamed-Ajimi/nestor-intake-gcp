@@ -88,9 +88,11 @@ export function ProductShell({
 
         {/* Superadmin-only management section — gebruikers / spaces / templates (Phase 5).
             Hidden for non-superadmins (UX gating only; backend remains authoritative).
-            Skipped when the primary nav already IS the manage nav (Beheer pages pass the
-            same imported ADMIN_NAV constant — reference equality is intentional), so the
-            gebruikers/spaces/templates links never render twice. */}
+            Since quick 261006-jgn the manage pages pass PULSE_NAV as `items`, so this block
+            supplies users/spaces below the Pulse nav (PULSE_NAV and ADMIN_NAV share no link).
+            The guard stays: it is skipped when a caller passes the same imported ADMIN_NAV
+            constant as `items` (reference equality is intentional), so the manage links
+            never render twice. */}
         {isSuperadmin && items !== ADMIN_NAV && (
           <nav className="mt-8 flex flex-col gap-1 border-t border-ink/15 pt-4">
             <p className="px-3 pb-2 font-mono text-[10px] uppercase tracking-[0.2em] text-ink/40">

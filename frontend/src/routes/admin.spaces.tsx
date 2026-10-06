@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { ProductShell } from "@/components/admin/ProductShell";
-import { ADMIN_NAV } from "@/components/admin/adminNav";
+import { PULSE_NAV } from "@/components/admin/adminNav";
 import { SpaceFormModal } from "@/components/admin/SpaceFormModal";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -113,7 +113,7 @@ function SpacesPage() {
   }
 
   return (
-    <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
+    <ProductShell product={t("shell.productManage")} items={PULSE_NAV}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">

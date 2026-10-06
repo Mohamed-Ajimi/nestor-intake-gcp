@@ -237,6 +237,18 @@ function IntakeDetailPage() {
  const [answers, setAnswers] = useState<AnswerRow[]>([]);
  const [activeSection, setActiveSection] = useState<string | null>(null);
  const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+ // 261006-jgn (tester item 7): the sticky page header has a variable height (title wraps,
+ // status hint optional), so measure it and pin the section nav just below it.
+ const [headerEl, setHeaderEl] = useState<HTMLDivElement | null>(null);
+ const [headerH, setHeaderH] = useState(0);
+ useEffect(() => {
+ if (!headerEl || typeof ResizeObserver === "undefined") return;
+ const update = () => setHeaderH(headerEl.offsetHeight);
+ update();
+ const ro = new ResizeObserver(update);
+ ro.observe(headerEl);
+ return () => ro.disconnect();
+ }, [headerEl]);
 
  const [editMode, setEditMode] = useState(false);
  const [draft, setDraft] = useState<Record<string, unknown>>({});
@@ -1194,6 +1206,7 @@ function IntakeDetailPage() {
  <ReviewProvider parsed={reviewData?.parsed ?? {}} state={reviewState} intakeId={intake?.id} runId={reviewData?.runId}>
  <div>
  <div
+ ref={setHeaderEl}
  className={cn(
  "sticky top-0 z-20 -mx-6 -mt-8 mb-6 border-b bg-paper/90 px-6 py-4 backdrop-blur md:-mx-10 md:-mt-10 md:px-10",
  editMode ? "border-ink border-b-2" : "border-ink/10",
@@ -1410,12 +1423,13 @@ function IntakeDetailPage() {
        )}
       </div>
 
-      {/* 2-col layout: content left, sticky action rail (next step + AI tools + search) right on xl+ */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_272px] xl:gap-8 xl:items-start">
-
-        <aside className="mb-6 xl:mb-0 xl:col-start-2 xl:row-start-1 xl:sticky xl:top-[88px] xl:self-start">
-     <div className="border border-ink/15 bg-paper">
+      {/* Next-step panel (quick 261006-jgn, tester item 6): full-width block directly under
+          the workflow card — next-step banner (text left, actions right at md+), then AI tools
+          and semantic search. It used to be a 272px sticky rail on xl+, which squeezed the
+          sections content; the content below now uses the full width. */}
+     <div className="mb-8 border border-ink/15 bg-paper">
        <NextStepBanner
+         layout="horizontal"
          phase={currentPhase}
          validationLinkSentAt={intake.validation_link_sent_at}
          resultsLinkSentAt={intake.results_link_sent_at}
@@ -1440,13 +1454,15 @@ function IntakeDetailPage() {
        />
 
 
-       {/* AI enrichment skills — self-gates on status (submitted → decomposed).
-           Lives inside the workflow card as a secondary action block, not floating
-           in the content area. */}
-        <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+       {/* AI tools + semantic search share one row at md+ (stacked below md).
+           AISkillsPanel self-gates on status (submitted → decomposed). */}
+       <div className="md:flex md:items-stretch">
+        <div className="md:shrink-0">
+         <AISkillsPanel intakeId={intake.id} intakeStatus={intake.status} />
+        </div>
 
        {showSemanticSearch && (
-         <section className="border-t border-ink/10 bg-paperLight p-4">
+         <section className="border-t border-ink/10 bg-paperLight p-4 md:min-w-0 md:flex-1">
            <div className="font-mono text-[10px] uppercase tracking-wider text-ink/60 mb-2">
              {t("intakeDetail.search.title")}
            </div>
@@ -1485,11 +1501,11 @@ function IntakeDetailPage() {
            )}
          </section>
        )}
+       </div>
 
      </div>
-        </aside>
 
-        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+        <div className="min-w-0">
  {editMode && (
  <div className="mb-6 border border-ink border-l-4 border-l-agenic-yellow bg-paperLight p-4">
  <div className="mb-2 font-mono text-xs uppercase tracking-wider text-ink">
@@ -1503,7 +1519,16 @@ function IntakeDetailPage() {
 
  <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
  <aside className="hidden lg:block">
- <nav className="sticky top-28 space-y-1">
+ {/* 261006-jgn (item 7): sticky just under the measured page header (scroll container =
+     ProductShell's <main>, under the 44px TopBar); scrolls internally when taller than
+     the viewport. The aside stays stretched to the content height so sticky has travel. */}
+ <nav
+ className="sticky space-y-1 overflow-y-auto pr-1"
+ style={{
+ top: headerH + 16,
+ maxHeight: `calc(100vh - 44px - ${headerH}px - 32px)`,
+ }}
+ >
  <p className="mb-2 font-mono text-xs uppercase tracking-wider text-ink/60">
  {t("intakeDetail.sections.nav")}
  </p>
@@ -1674,8 +1699,6 @@ function IntakeDetailPage() {
  </div>
 
         </div>
-
-      </div>
 
      {/* Phase-10 recipient picker — mounted once; the active mail type controls its open state. */}
      {mailPickerType && (

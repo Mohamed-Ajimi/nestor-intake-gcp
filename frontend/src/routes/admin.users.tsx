@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ProductShell } from "@/components/admin/ProductShell";
-import { ADMIN_NAV } from "@/components/admin/adminNav";
+import { PULSE_NAV } from "@/components/admin/adminNav";
 import { InviteUserDialog } from "@/components/admin/InviteUserDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -162,7 +162,7 @@ function UsersPage() {
   }
 
   return (
-    <ProductShell product={t("shell.productManage")} items={ADMIN_NAV}>
+    <ProductShell product={t("shell.productManage")} items={PULSE_NAV}>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-normal lowercase tracking-tight text-ink">

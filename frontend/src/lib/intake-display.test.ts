@@ -42,9 +42,9 @@ describe("deriveIntakeHeaderTitle", () => {
     expect(
       deriveIntakeHeaderTitle({ ...base, organisation: undefined, project: "Marktintrede" }),
     ).toBe("Marktintrede");
-    expect(
-      deriveIntakeHeaderTitle({ ...base, organisation: "   ", project: "Marktintrede" }),
-    ).toBe("Marktintrede");
+    expect(deriveIntakeHeaderTitle({ ...base, organisation: "   ", project: "Marktintrede" })).toBe(
+      "Marktintrede",
+    );
   });
 
   it("falls back to the intake's client_name when the project answer is missing", () => {
@@ -59,19 +59,19 @@ describe("deriveIntakeHeaderTitle", () => {
   });
 
   it("collapses equal values (case-insensitive, trimmed) to the organisation's spelling", () => {
-    expect(
-      deriveIntakeHeaderTitle({ ...base, organisation: "nestor", project: " Nestor " }),
-    ).toBe("nestor");
+    expect(deriveIntakeHeaderTitle({ ...base, organisation: "nestor", project: " Nestor " })).toBe(
+      "nestor",
+    );
   });
 
   it("resolves a localized organisation via pick (lang, then nl)", () => {
     const organisation = { nl: "Acme NL", fr: "Acme FR", en: "Acme EN" };
-    expect(
-      deriveIntakeHeaderTitle({ ...base, organisation, project: "P", lang: "fr" }),
-    ).toBe("Acme FR — P");
-    expect(
-      deriveIntakeHeaderTitle({ ...base, organisation, project: "P", lang: "de" }),
-    ).toBe("Acme NL — P");
+    expect(deriveIntakeHeaderTitle({ ...base, organisation, project: "P", lang: "fr" })).toBe(
+      "Acme FR — P",
+    );
+    expect(deriveIntakeHeaderTitle({ ...base, organisation, project: "P", lang: "de" })).toBe(
+      "Acme NL — P",
+    );
   });
 
   it("returns the fallback when nothing is known", () => {

@@ -43,6 +43,10 @@ type Props = {
   onSendResultsMail: () => void;
   onCopyResultsLink: () => void;
   onArchive: () => void;
+  // 261006-jgn: "horizontal" lays the banner out text-left / actions-right at md+ (the
+  // full-width next-step block on the Pulse intake detail page). Default "stacked" is the
+  // original render, unchanged for every other caller.
+  layout?: "stacked" | "horizontal";
 };
 
 export type BusyKey =
@@ -413,26 +417,54 @@ export function NextStepBanner(props: Props) {
       return null;
   }
 
+  const titleEl = (
+    <div
+      className="mb-2 font-mono text-[11px] uppercase tracking-wider"
+      style={{ color: accentColor }}
+    >
+      {title}
+    </div>
+  );
+  const horizontal = props.layout === "horizontal";
+
   return (
     <div
       className="border-t border-ink/10 border-l-4 bg-paperLight px-6 py-5"
       style={{ borderLeftColor: accentColor }}
     >
-      <div
-        className="mb-2 font-mono text-[11px] uppercase tracking-wider"
-        style={{ color: accentColor }}
-      >
-        {title}
-      </div>
-      <div
-        className={
-          "mb-4 font-sans text-[15px] leading-relaxed " +
-          (isArchived ? "text-ink/60" : "text-ink")
-        }
-      >
-        {body}
-      </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      {horizontal ? (
+        <div className="md:flex md:items-start md:gap-6">
+          <div className="min-w-0 md:flex-1">
+            {titleEl}
+            <div
+              className={
+                "mb-4 font-sans text-[15px] leading-relaxed md:mb-0 " +
+                (isArchived ? "text-ink/60" : "text-ink")
+              }
+            >
+              {body}
+            </div>
+          </div>
+          {actions && (
+            <div className="flex flex-wrap gap-2 md:max-w-[50%] md:shrink-0 md:justify-end">
+              {actions}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {titleEl}
+          <div
+            className={
+              "mb-4 font-sans text-[15px] leading-relaxed " +
+              (isArchived ? "text-ink/60" : "text-ink")
+            }
+          >
+            {body}
+          </div>
+          {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+        </>
+      )}
 
       {/* Phase 16 (D-03): confirm gate for the deep-research trigger. The 202 fires ONLY
           when the operator clicks the confirm action — Cancel is a no-op. */}
