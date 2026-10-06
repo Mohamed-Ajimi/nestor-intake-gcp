@@ -49,6 +49,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.auth.dependencies import get_current_identity
 from app.auth.gates import superadmin_gate
@@ -59,6 +60,7 @@ from app.intake_canonical import (
     CANONICAL_TEMPLATE_NAME,
     CANONICAL_TEMPLATE_SCHEMA,
     admin_only_field_keys,
+    canonical_field,
     client_visible_schema,
 )
 from app.intake_write_policy import (
@@ -68,6 +70,7 @@ from app.intake_write_policy import (
 )
 from app.db import audit
 from app.db.ai_session import tenant_session
+from app.db.models.intake import IntakeAnswer
 from app.db.models.membership import OrganizationMembership
 from app.db.models.organization import Organization
 from app.db.repository import (
@@ -78,6 +81,7 @@ from app.db.repository import (
     ResearchRunRepository,
     SkillRunRepository,
 )
+from app.research.brief import _resolve_localized
 from app.research.run_status import RESEARCH_IN_FLIGHT
 from app.storage import gcs
 from app.mail import render as mail_render
@@ -616,7 +620,40 @@ def create_intake(
         # User path: the repo forces the caller's own space onto the row (TENANT-02);
         # any ``space_id`` query param is ignored.
         intake = repo.create(**values)
+    # Quick 261006-jgn (tester item 2a): the create-screen value IS the project name
+    # (D-23.5-03), so seed the form's ``project_name`` answer from the BODY value — never
+    # from ``intake.client_name``, which the BEFORE-INSERT trigger may have filled with the
+    # organisation name. Same session + tx-local space GUC as the create above.
+    _seed_project_name_answer(repo.session, intake, values.get("client_name"))
     return _view(intake)
+
+
+def _seed_project_name_answer(session, intake, project_name: str | None) -> None:
+    """Seed the ``project_name`` form answer with the create-screen value (261006-jgn).
+
+    A server-side seed, not a client write (no ``check_answer_batch``). ``space_id`` comes
+    from the CREATED intake row, never the request (T-jgn-03), and the insert runs on the
+    create's own session, so the tx-local ``app.current_space_id`` GUC both create paths set
+    makes RLS WITH CHECK apply. ``ON CONFLICT DO NOTHING`` — an existing answer is never
+    overwritten. A plain string goes in ``value`` (the answers API split). Blank/missing value,
+    or a template without a ``project_name`` field, seeds nothing.
+    """
+    value = (project_name or "").strip() if isinstance(project_name, str) else ""
+    if not value or canonical_field("project_name") is None:
+        return
+    stmt = (
+        pg_insert(IntakeAnswer)
+        .values(
+            space_id=intake.space_id,
+            intake_id=intake.id,
+            field_key="project_name",
+            value=value,
+            value_json=None,
+        )
+        .on_conflict_do_nothing(constraint="uq_intake_answers_intake_field")
+    )
+    session.execute(stmt)
+    session.flush()
 
 
 @intake_router.get("/templates")
@@ -946,9 +983,10 @@ def list_intake_sources(
 #
 # Not a subject, recorded here because it is the next reader's question: the locale
 # BODIES interpolate `project_title` and already say "project"/"projet"/"project" — they
-# were already correct. They also pass `first_name=client`, so a body greets "Hi <project
-# name>". That is a separate defect (a greeting slot fed a non-person), NOT a mislabel,
-# and it is out of D-23.5-03's label-only scope — deferred, see deferred-items.md.
+# were already correct. The greeting slot (`first_name`) is NOT the project: since quick
+# 261006-jgn the bodies greet the first name of the `contact_name` form answer
+# (`_contact_first_name`), and fall back to the template's own "team" / "équipe" word when
+# that answer is empty (DEF-23.5-03-03, fixed).
 _SUBJECT_VALIDATION = "Even valideren — onderzoeksvragen voor {client}"
 _SUBJECT_REMINDER = "Herinnering — onderzoeksvragen wachten op validatie ({client})"
 _SUBJECT_RESULTS = "Onderzoeksresultaten klaar — {client}"
@@ -1261,6 +1299,37 @@ def send_intake_mail(
     )
 
 
+def _greeting_first_name(raw: Any) -> str:
+    """Return the first name to greet from a ``contact_name`` answer value. PURE, never raises.
+
+    Resolves a localized ``{nl,fr,en}`` object via the brief's ``_resolve_localized`` (plain
+    str passes through; dict -> nl-first), strips, and returns the first whitespace token —
+    or ``""`` so the mail template's own fallback ("team" / "équipe") applies.
+    """
+    parts = _resolve_localized(raw).split()
+    return parts[0] if parts else ""
+
+
+def _contact_first_name(session, intake) -> str:
+    """First name of the intake's ``contact_name`` form answer, or ``""`` (261006-jgn).
+
+    The contact is the form answer "Naam primaire contactpersoon" — NOT the recipient.
+    Filtered on ``intake_id`` AND the intake's OWN ``space_id`` (T-jgn-02); callers have
+    already 404-gated the intake.
+    """
+    row = session.execute(
+        select(IntakeAnswer.value, IntakeAnswer.value_json).where(
+            IntakeAnswer.intake_id == intake.id,
+            IntakeAnswer.space_id == intake.space_id,
+            IntakeAnswer.field_key == "contact_name",
+        )
+    ).first()
+    if row is None:
+        return ""
+    raw = row[1] if row[1] is not None else row[0]
+    return _greeting_first_name(raw)
+
+
 def _run_intake_send(
     intake_id: str,
     body: MailRecipients,
@@ -1317,6 +1386,9 @@ def _run_intake_send(
         return {"success": False}
     base = settings.app_base_url.rstrip("/")
     client = intake.client_name or "team"
+    # Body greeting = the contact's first name ("" -> template fallback); subjects and
+    # project_title keep `client` (quick 261006-jgn).
+    greeting = _contact_first_name(repo.session, intake)
 
     # cta_url + mail_type + timestamp_field are locale-INDEPENDENT; only the rendered body
     # and the subject line vary per recipient locale (below).
@@ -1344,7 +1416,7 @@ def _run_intake_send(
             subject = _subject_for(locale, mail_type, client)
             if is_results:
                 html = mail_render.render_results(
-                    first_name=client,
+                    first_name=greeting,
                     project_title=client,
                     cta_url=cta_url,
                     app_base_url=settings.app_base_url,
@@ -1352,7 +1424,7 @@ def _run_intake_send(
                 )
             elif is_intake:
                 html = mail_render.render_intake(
-                    first_name=client,
+                    first_name=greeting,
                     project_title=client,
                     cta_url=cta_url,
                     app_base_url=settings.app_base_url,
@@ -1360,7 +1432,7 @@ def _run_intake_send(
                 )
             else:
                 html = mail_render.render_validation(
-                    first_name=client,
+                    first_name=greeting,
                     project_title=client,
                     cta_url=cta_url,
                     is_reminder=is_reminder,
@@ -2235,13 +2307,14 @@ def _send_report_mail(session, identity: Identity, intake, recipient_ids: list[s
         return False
     base = settings.app_base_url.rstrip("/")
     client = intake.client_name or "team"
+    greeting = _contact_first_name(session, intake)
     cta_url = f"{base}/intake/{intake.id}/report"  # /report (client report page), NOT /results
 
     try:
         for locale in sorted(emails_by_locale):
             subject = _subject_for(locale, "results", client)
             html = mail_render.render_results(
-                first_name=client,
+                first_name=greeting,
                 project_title=client,
                 cta_url=cta_url,
                 app_base_url=settings.app_base_url,
