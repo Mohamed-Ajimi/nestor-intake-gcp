@@ -50,7 +50,7 @@ image_registry_project = "project-cb01b861-cb4a-438d-b9a"
 # All three are promoted dev tags, set by plan 23.4-03 Task 1. Until that plan
 # runs there is no image in the client's pull path, so the Cloud Run services
 # created by the first apply are EXPECTED to fail to become ready.
-image_tag          = "c26107a" # 2026-10-05 release: phase 23.6 rerun + history (migration 0018); backend digest = dev nestor-api-00058-lth
+image_tag          = "4603759" # 2026-10-09 hotfix: c26107a backend + Claude skill calls stream (261009-ib5, AI-review timeouts); branch hotfix/prod-skill-stream
 frontend_image_tag = "client-c26107a" # 2026-10-05 — rebuilt for the client env (no-price rerun confirm)
 
 # ------------------------------------------------------------ nestor-api tier

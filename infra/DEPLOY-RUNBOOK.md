@@ -8207,3 +8207,21 @@ failed: psql install, no --service-account). `tribunal-worker-00022-g74` (2 work
 thinking=off, NESTOR_GEMINI_TEMPERATURE=0), or the previous worker digest (c26107a). **Does NOT prove:** no research run
 yet on the new models; thinking tokens are billed but NOT counted in run cost (audited_llm_client reads
 candidates_token_count only) — larger with high thinking. PROD untouched.
+
+### DEV + PROD 2026-10-09 — Claude skill calls stream (quick 261009-ib5) — fixes AI-review timeouts
+**Facts (prod DB, read-only build fc016937/second run as nestor-run@, app_superadmin, BEGIN READ ONLY):** skill_runs
+6bd63c35 / b7f44d5a (intake 167898b5, apply-intake-skill, claude-sonnet-4-5) failed after 543 s / 542 s with
+"Request timed out or interrupted" = 3 x the 180 s client timeout (clients.py) + SDK max_retries=2. Successful apply
+runs that day took 176 s and 180 s (9218 / 10511 output tokens) — every apply sat at the limit. Not credits.
+**Fix:** all four Claude skill calls use `clients.create_message` → `messages.stream()` + `get_final_message()`;
+180 s is now the max gap between chunks, no whole-answer cap; no re-run of a whole generation on timeout. UI unchanged.
+Gates: backend 996 passed / 2 skipped on master (cbd7410); on the prod hotfix tree the full suite was killed by the OS
+at ~55% (low memory, all passing to that point) → AI suites 97 passed.
+- DEV: build `30c388ad` (master cbd7410, includes the unreleased 261006-jgn backend) → `sha256:08565fe4…a7a4f` →
+  `nestor-api-00060-2mr` (/readyz 200).
+- PROD: branch `hotfix/prod-skill-stream` = c26107a + the two 261009-ib5 commits (4603759); build `84cb7119` →
+  `sha256:6d44de89…10735`; client.tfvars image_tag 4603759; targeted `terraform apply -target=google_cloud_run_v2_service.api`
+  (plan 0/1/0, image only) → `nestor-api-00011-5fp` (/readyz 200). Checked first: no skill run in flight (last context-pack
+  11:55→done 11:57). Research run 4c9de6a0 kept heartbeating after the swap (worker untouched). Migrate jobs NOT repinned
+  (no migration; they stay on c26107a). Revert: image_tag "c26107a" + same targeted apply.
+**Does NOT prove:** no AI review has run through the streaming path yet on either env.
