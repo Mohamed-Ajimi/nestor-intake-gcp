@@ -207,7 +207,7 @@ def run_context_pack(identity: Identity, intake_id: Any, run_id: Any) -> dict[st
         if dto.get("missing"):
             # No Claude call for a vanished intake — surface the failure to write_fn.
             return {"error": "Intake not found"}
-        message = clients.anthropic_client().messages.create(
+        message = clients.create_message(
             model=model,
             max_tokens=_CONTEXT_PACK_MAX_TOKENS,
             system=CONTEXT_PACK_SKILL_PROMPT,

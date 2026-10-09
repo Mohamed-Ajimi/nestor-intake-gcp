@@ -144,7 +144,7 @@ def run_extract_insights(identity: Identity, intake_id: Any, run_id: Any) -> dic
             # No Claude call for a vanished intake — surface the failure to write_fn.
             return {"error": "Intake not found"}
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
-        message = clients.anthropic_client().messages.create(
+        message = clients.create_message(
             model=model,
             max_tokens=_EXTRACT_MAX_TOKENS,
             system=EXTRACT_INSIGHTS_SYSTEM_PROMPT,

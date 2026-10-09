@@ -167,7 +167,7 @@ def run_structure_answers(identity: Identity, intake_id: Any, run_id: Any) -> di
             # No Claude call for a vanished intake — surface the failure to write_fn.
             return {"error": "Intake not found"}
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
-        message = clients.anthropic_client().messages.create(
+        message = clients.create_message(
             model=model,
             max_tokens=_STRUCTURE_MAX_TOKENS,
             system=STRUCTURE_ANSWERS_SYSTEM_PROMPT,

@@ -23,14 +23,23 @@ Authoritative references:
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import anthropic
 import openai
 
-# Per-request timeouts (seconds). The Claude skill calls can run 90-120s on a
-# large intake, so the Anthropic client gets a generous 180s ceiling; OpenAI
-# embeddings/transcription reuse the same ceiling for the long Whisper path.
-# (07-RESEARCH § Code Examples §1/§4: anthropic timeout=180.0, openai timeout=180.0.)
+# Per-request timeouts (seconds). OpenAI embeddings/transcription use 180 s for the
+# long Whisper path (07-RESEARCH § Code Examples §1/§4).
+#
+# Anthropic (quick 261009-ib5): every Claude skill call STREAMS through
+# ``create_message`` below, so this float becomes an httpx ``Timeout`` whose connect /
+# read / write / pool limits are each 180 s. On a stream the READ limit applies to each
+# socket read, i.e. it is the longest allowed SILENCE between two chunks — not a cap on
+# the whole answer. httpx has no whole-request (total) timeout, and none is added here,
+# so a long, healthy generation can run as long as chunks keep arriving (the API also
+# sends ``ping`` events). Before this change the call was non-streaming: the response
+# stayed silent until Claude had finished, so any answer that took > 180 s to generate
+# died with ``APITimeoutError`` (prod skill_runs 6bd63c35 / b7f44d5a: 3 x 180 s = 542 s).
 _ANTHROPIC_TIMEOUT_S = 180.0
 _OPENAI_TIMEOUT_S = 180.0
 
@@ -47,6 +56,38 @@ def anthropic_client() -> anthropic.Anthropic:
         api_key=os.environ["ANTHROPIC_API_KEY"],
         timeout=_ANTHROPIC_TIMEOUT_S,
     )
+
+
+def create_message(**kwargs: Any) -> anthropic.types.Message:
+    """Run ONE Claude call as a stream and return the final ``Message``.
+
+    The single transport every Claude skill uses (quick 261009-ib5). ``kwargs`` are the
+    ``messages`` API arguments (``model``, ``max_tokens``, ``system``, ``messages``) and
+    pass through unchanged. The return value is ``stream.get_final_message()`` — an
+    ``anthropic.types.Message`` (the SDK's ``ParsedMessage`` subclass) with the SAME
+    ``.content`` / ``.stop_reason`` / ``.usage.input_tokens`` / ``.usage.output_tokens``
+    the non-streaming call returned, so parsing, cost and the D-4 truncation guard in the
+    callers are unchanged.
+
+    The client comes from :func:`anthropic_client` at CALL TIME (module-global lookup),
+    so the key is still read per call (D-07) and the test monkeypatch seam still works.
+
+    Timeout: see ``_ANTHROPIC_TIMEOUT_S`` — 180 s between chunks, no whole-answer cap.
+
+    Retries (deliberate): only the SDK's own retries apply (``max_retries`` default 2).
+    For a stream the SDK retry loop covers the request up to the response HEADERS —
+    connection errors, a timeout before the response starts, 408/409/429/5xx/529 — i.e.
+    failures before any output exists. Once the 200 arrives, the body is read outside
+    that loop: a read timeout or a mid-stream ``error`` event raises to the caller and is
+    NOT retried. There is intentionally no app-level loop that re-runs a whole generation
+    on timeout: each attempt is a full, billed generation, and the skill's ``on_error``
+    (D-09) already finalizes the run ``failed`` with the error message so the operator
+    can re-run it deliberately.
+
+    The ``with`` block closes the stream (releases the connection) on success and on error.
+    """
+    with anthropic_client().messages.stream(**kwargs) as stream:
+        return stream.get_final_message()
 
 
 def openai_client() -> openai.OpenAI:
