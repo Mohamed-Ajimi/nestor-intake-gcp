@@ -51,20 +51,16 @@ from app.db.repository import (
 # max_tokens for the apply call. Raised from the legacy 8192
 # (apply-intake-skill.ts:229) by quick task 260831-lm4: the system prompt now
 # requires every GENERATED string in nl+fr+en, so the JSON object the model has to
-# fit is roughly 3x its old size on the authored fields.
+# fit is roughly 3x its old size on the authored fields. 20000 gives ~2.4x headroom
+# on a payload that grows by LESS than 3x, because the client's own echoed words
+# (``current`` / ``original``) deliberately stay scalar and untranslated (D-2).
 #
-# ⚠ DO NOT RAISE THIS FURTHER WITHOUT SWITCHING TO STREAMING. The call below is
-# NON-STREAMING (``messages.create``), and the Anthropic SDK REFUSES a
-# non-streaming request whose max_tokens exceeds ~21333 output tokens. 24576 (a
-# naive 3x) would therefore not be a bigger budget — it would break the call
-# outright. 20000 sits under that ceiling with ~2.4x headroom on a payload that
-# grows by LESS than 3x, because the client's own echoed words (``current`` /
-# ``original``) deliberately stay scalar and untranslated (D-2).
+# Since quick 261009-ib5 the call below STREAMS (``clients.create_message``), so the
+# ~21333-token non-streaming SDK ceiling this comment used to warn about no longer
+# applies, and a long answer is no longer killed by the 180 s client timeout (which
+# is now a between-chunks read timeout). The budget itself was deliberately left
+# unchanged by that task: raising it is a separate, cost-bearing decision.
 _APPLY_MAX_TOKENS = 20000
-
-# The SDK's non-streaming output ceiling, named so the number above is checkable
-# rather than folklore. Anything at or above this must stream instead.
-_ANTHROPIC_NON_STREAMING_MAX_TOKENS = 21333
 
 # The instruction prefix prepended to the rendered intake markdown. The legacy
 # (apply-intake-skill.ts:234) wrote it in Dutch; it is ENGLISH here because it is an
@@ -151,7 +147,7 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
             # No Claude call for a vanished intake — surface the failure to write_fn.
             return {"error": "Intake not found"}
         # Obtained through app.ai.clients at CALL TIME (test monkeypatch seam, D-07).
-        message = clients.anthropic_client().messages.create(
+        message = clients.create_message(
             model=model,
             max_tokens=_APPLY_MAX_TOKENS,
             system=NESTOR_INTAKE_SKILL_PROMPT,
@@ -168,10 +164,9 @@ def run_apply_intake_skill(identity: Identity, intake_id: Any, run_id: Any) -> d
             return {
                 "error": (
                     f"Claude response truncated: hit the max_tokens budget of "
-                    f"{_APPLY_MAX_TOKENS}, so the JSON object is incomplete. Raising "
-                    f"the budget requires switching to a streaming call — the "
-                    f"non-streaming SDK ceiling is ~"
-                    f"{_ANTHROPIC_NON_STREAMING_MAX_TOKENS} output tokens."
+                    f"{_APPLY_MAX_TOKENS}, so the JSON object is incomplete. Raise "
+                    f"_APPLY_MAX_TOKENS in app/ai/skills/apply.py to give the skill "
+                    f"more room (the call streams, so no SDK ceiling blocks it)."
                 )
             }
         return {
