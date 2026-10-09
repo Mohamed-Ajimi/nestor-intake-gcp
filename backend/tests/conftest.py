@@ -396,26 +396,58 @@ class _FakeContentBlock:
 
 
 class _FakeMessage:
-    """Mirrors the object ``Anthropic().messages.create(...)`` returns.
+    """Mirrors the final ``Message`` a Claude stream yields.
 
-    Exposes ``.content[0].text`` (the raw model output the port parses) and
-    ``.usage.input_tokens`` / ``.usage.output_tokens`` (cost/observability).
+    Quick 261009-ib5: the skills now call ``client.messages.stream(...)`` and take
+    ``stream.get_final_message()`` (via ``app.ai.clients.create_message``); that object is
+    the SAME ``anthropic.types.Message`` shape ``messages.create`` used to return.
+    Exposes ``.content[0].text`` (the raw model output the port parses),
+    ``.usage.input_tokens`` / ``.usage.output_tokens`` (cost/observability) and
+    ``.stop_reason`` (the D-4 truncation guard).
     """
 
     def __init__(self, text: str, input_tokens: int, output_tokens: int) -> None:
         self.content = [_FakeContentBlock(text)]
         self.usage = _FakeUsage(input_tokens, output_tokens)
         self.stop_reason = "end_turn"
-        self.model = None  # set by _FakeMessages.create from the request kwargs
+        self.model = None  # set by _FakeMessages.stream from the request kwargs
+
+
+class _FakeMessageStream:
+    """Mirrors ``MessageStreamManager`` + ``MessageStream`` (context manager).
+
+    ``with client.messages.stream(**kw) as s: s.get_final_message()`` — the manager and
+    the stream are one object here. ``final_message`` is exposed so a test can mutate the
+    message it will yield (e.g. ``stop_reason = "max_tokens"``); ``closed`` records that
+    the helper released the connection (``__exit__`` ran).
+    """
+
+    def __init__(self, final_message: _FakeMessage) -> None:
+        self.final_message = final_message
+        self.closed = False
+
+    def __enter__(self) -> "_FakeMessageStream":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.closed = True
+
+    def get_final_message(self) -> _FakeMessage:
+        return self.final_message
 
 
 class _FakeMessages:
-    """``client.messages`` namespace — records each ``create`` call's kwargs."""
+    """``client.messages`` namespace — records each ``stream`` call's kwargs.
+
+    There is deliberately NO ``create`` here (quick 261009-ib5): a skill that regressed to
+    the non-streaming ``messages.create`` would hit ``AttributeError`` and finalize
+    ``failed``, turning every success-path assertion red instead of passing silently.
+    """
 
     def __init__(self, parent: "_FakeAnthropicClient") -> None:
         self._parent = parent
 
-    def create(self, **kwargs: Any) -> _FakeMessage:
+    def stream(self, **kwargs: Any) -> _FakeMessageStream:
         # Record the REQUEST shape for assertions (model, max_tokens, system, messages).
         self._parent.calls.append(kwargs)
         msg = _FakeMessage(
@@ -424,15 +456,18 @@ class _FakeMessages:
             self._parent.output_tokens,
         )
         msg.model = kwargs.get("model")
-        return msg
+        manager = _FakeMessageStream(msg)
+        self._parent.streams.append(manager)
+        return manager
 
 
 class _FakeAnthropicClient:
     """A stand-in for ``anthropic.Anthropic`` with a controllable response.
 
-    ``.calls`` is the list of kwargs each ``messages.create`` was called with —
+    ``.calls`` is the list of kwargs each ``messages.stream`` was called with —
     the contract suites assert ``calls[0]["model"] == "claude-sonnet-4-5"`` and
-    ``calls[0]["max_tokens"] == 8192`` etc.
+    ``calls[0]["max_tokens"] == 8192`` etc. ``.streams`` holds the stream objects handed
+    out, so a suite can assert each was closed.
     """
 
     def __init__(self, response_text: str, input_tokens: int, output_tokens: int) -> None:
@@ -440,6 +475,7 @@ class _FakeAnthropicClient:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
         self.calls: list[dict[str, Any]] = []
+        self.streams: list[_FakeMessageStream] = []
         self.messages = _FakeMessages(self)
 
 
