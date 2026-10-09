@@ -16,6 +16,9 @@ Test Map, AI-01):
 | ``apply_truncated_fails``     | ``stop_reason == "max_tokens"`` -> status ``failed`` with a |
 |                               | budget-naming ``error_message``, never a parse error and    |
 |                               | never a half-parsed ``output_parsed`` (D-4, 260831-lm4).    |
+| ``apply_stream_timeout_fails``| a timeout raised by the Claude STREAM -> status ``failed``  |
+|                               | with the timeout's message; never stuck ``running`` and the |
+|                               | generation is NOT re-run (D-09, quick 261009-ib5).          |
 
 RED discipline (07-01 PLAN): external deps are ``importorskip`` (skip-clean when
 absent), but the IMPL modules are HARD-imported, so a missing impl is a
@@ -54,9 +57,9 @@ Identity = identity_mod.Identity
 SCHEMA = "nestor"
 APPLY_MODEL = "claude-sonnet-4-5"  # D-06 default for apply-intake-skill
 # Raised from the legacy 8192 by quick task 260831-lm4 (the skill now emits every
-# generated string in nl+fr+en). It is pinned EXACTLY, and deliberately below the
-# ~21333 non-streaming SDK ceiling that `apply.py` documents: a future "just raise
-# it" would break the non-streaming call outright rather than buy more room.
+# generated string in nl+fr+en). It is pinned EXACTLY. Since quick 261009-ib5 the call
+# STREAMS, so the old ~21333 non-streaming SDK ceiling no longer bounds it; changing the
+# budget is still a deliberate decision, which is why the number stays pinned here.
 APPLY_MAX_TOKENS = 20000
 
 
@@ -331,15 +334,16 @@ def test_apply_skill_truncated_response_fails_loudly(
     intake_id = uuid.uuid4()
     fake = fake_anthropic(json.dumps({"decision_or_goal": None}))
 
-    # Mark the response truncated without teaching the shared fixture a new knob.
-    inner_create = fake.messages.create
+    # Mark the response truncated without teaching the shared fixture a new knob: the
+    # FINAL message of the stream (quick 261009-ib5) carries stop_reason "max_tokens".
+    inner_stream = fake.messages.stream
 
-    def _truncated_create(**kwargs):
-        message = inner_create(**kwargs)
-        message.stop_reason = "max_tokens"
-        return message
+    def _truncated_stream(**kwargs):
+        manager = inner_stream(**kwargs)
+        manager.final_message.stop_reason = "max_tokens"
+        return manager
 
-    fake.messages.create = _truncated_create
+    fake.messages.stream = _truncated_stream
     monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
 
     app = _build_app()
@@ -373,6 +377,84 @@ def test_apply_skill_truncated_response_fails_loudly(
         assert output_parsed is None, (
             "a truncated response must not persist a half-parsed object, got "
             f"{output_parsed!r}."
+        )
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup(engine, space)
+
+
+# ===========================================================================
+# Case: apply_stream_timeout_fails — a stream timeout -> failed, not re-run
+# ===========================================================================
+
+
+def test_apply_skill_stream_timeout_marks_failed(
+    engine, set_space, monkeypatch, fake_anthropic, superadmin_engine
+):
+    """A timeout raised while the Claude stream is read finalizes the run ``failed``.
+
+    Quick 261009-ib5. Prod skill_runs 6bd63c35 / b7f44d5a died to ``APITimeoutError``
+    after 3 x 180 s on the non-streaming call. The call now streams; if the stream itself
+    times out (no chunk for 180 s), the D-09 terminal guard must still hold: status
+    ``failed``, the timeout's message recorded, never left ``running``. The stream is
+    opened exactly ONCE — no app-level loop re-runs a whole (billed) generation.
+    """
+    import httpx
+    from fastapi.testclient import TestClient
+
+    space = uuid.uuid4()
+    intake_id = uuid.uuid4()
+    fake = fake_anthropic(json.dumps({"decision_or_goal": None}))
+    timeout_message = "The read operation timed out"
+    inner_stream = fake.messages.stream
+
+    def _timing_out_stream(**kwargs):
+        manager = inner_stream(**kwargs)
+
+        def _raise():
+            # What httpx raises when no chunk arrives within the read timeout mid-body.
+            raise httpx.ReadTimeout(timeout_message)
+
+        manager.get_final_message = _raise
+        return manager
+
+    fake.messages.stream = _timing_out_stream
+    monkeypatch.setattr(ai_clients_mod, "anthropic_client", lambda *a, **k: fake)
+
+    app = _build_app()
+    try:
+        _seed_intake(engine, set_space, space, intake_id)
+        # FIXTURE-ONLY (plan 23.1-11): the superadmin write path needs its own engine.
+        _patch_engine_factories(monkeypatch, engine, superadmin_engine)
+        # FIXTURE-ONLY (plan 23.1-11): ai_router is superadmin-gated (D-23.1-02).
+        app.dependency_overrides[get_current_identity] = _as(_superadmin())
+        client = TestClient(app)
+
+        resp = client.post(
+            f"/intakes/{intake_id}/skills/apply",
+            headers={"Authorization": "Bearer ignored-overridden"},
+        )
+        assert resp.status_code in (200, 202), (
+            f"apply should still accept + schedule, got {resp.status_code}."
+        )
+
+        assert len(fake.calls) == 1, (
+            "a stream timeout must NOT re-run the whole generation at the app level; "
+            f"the stream was opened {len(fake.calls)} times."
+        )
+        assert fake.streams[0].closed, "the timed-out stream must be closed (connection released)."
+
+        row = _latest_skill_run(engine, set_space, space, intake_id)
+        assert row is not None, "no skill_runs row was written."
+        status_val, output_parsed, error_message, _llm_model = row
+        assert status_val == "failed", (
+            f"a stream timeout must terminate 'failed' (D-09), got {status_val!r}."
+        )
+        assert error_message and timeout_message in error_message, (
+            f"the failed run must record the timeout's message, got {error_message!r}."
+        )
+        assert output_parsed is None, (
+            f"a timed-out run must not persist a parsed object, got {output_parsed!r}."
         )
     finally:
         app.dependency_overrides.clear()
